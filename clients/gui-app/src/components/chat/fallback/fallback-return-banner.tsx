@@ -11,6 +11,7 @@ import {
 import {
   TERMINAL_ACCOUNT_LABEL,
   fallbackTupleIdentity,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
   type FallbackTupleIdentity,
 } from "./fallback-identity";
@@ -64,10 +65,25 @@ export function FallbackReturnBanner({
   readonly canAct: boolean;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
+  // The pair this banner contrasts: where the chat started and where it is
+  // now. Often two providers, so both harnesses are named.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [offer.preferredTuple.harnessId, offer.fallbackTuple.harnessId],
+    true,
+  );
   const returnToPreferred = useFallbackReturnToPreferred(client, chatId);
 
-  const preferred = fallbackTupleIdentity(offer.preferredTuple, labelFor);
-  const fallback = fallbackTupleIdentity(offer.fallbackTuple, labelFor);
+  const preferred = fallbackTupleIdentity(
+    offer.preferredTuple,
+    labelFor,
+    modelLabelFor,
+  );
+  const fallback = fallbackTupleIdentity(
+    offer.fallbackTuple,
+    labelFor,
+    modelLabelFor,
+  );
 
   const answer = useCallback(
     (action: "switch_back" | "stay" | "dismiss_for_chat") => {

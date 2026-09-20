@@ -1676,6 +1676,29 @@ const restyleExemptions = [
         pattern: "^SelectTrigger$",
         allow: ["color", "shape", "spacing", "effects"],
       },
+      // The phone filter sheet's hook for the act's own stylesheet
+      // (onboarding-import.css), which resizes the scan-window pill, the
+      // provider pills and the view toggle to the 44pt a thumb needs. Those
+      // are three DESCENDANTS of the sheet, styled from one place because they
+      // are one decision - no prop on `SheetContent` reaches them, and the
+      // same shape is why `PopoverContent` carries
+      // `onboarding-discovery-popover` below. The sheet's own box (side,
+      // height, scroll) stays in `layout`-shaped utilities beside it.
+      { pattern: "^SheetContent$", allow: ["onboarding-import-filter-sheet"] },
+    ],
+  },
+  {
+    // The discovery popover replaces Radix's default open/close animation and
+    // the plate's ring with its own scale/opacity keyframes and box-shadow
+    // (onboarding-diorama.css's sibling stylesheet, onboarding-agents.css),
+    // driven by `data-motion`/`data-visible` rather than the `layout` prop -
+    // no `layout` value expresses "cancel the ring for a hand-drawn shadow".
+    files: ["src/components/onboarding/onboarding-provider-discovery.tsx"],
+    contracts: [
+      {
+        pattern: "^PopoverContent$",
+        allow: ["shape", "onboarding-discovery-popover"],
+      },
     ],
   },
 ];
@@ -1699,6 +1722,16 @@ const epicCanvasAppWideReadExemptions = [
   // app is now pointed at - a dead tile's chat is cloned onto the effective
   // host. Reading anything else here would clone onto a host nobody chose.
   "src/components/epic-canvas/renderers/use-chat-clone-on-host-switch.ts",
+  // The Agents panel's message hits. Everything this section ACTS on is the
+  // session's: it searches `useEpicSessionHostClient`'s index and opens each
+  // hit on `useEpicSessionHostId`. The app-wide read is not a host to act on -
+  // it is the answer to "would a hostless intent land on that same host", which
+  // is the condition `routeEpicChatNotification` parks a transcript jump under
+  // when it has to open a CLOSED chat's tile. Passing the session host in its
+  // place would assert an agreement that may not hold and let another host's
+  // tile consume the jump; passing null would silently drop the jump for every
+  // hit whose chat is not already open, which is most of them.
+  "src/components/epic-canvas/sidebar/epic-sidebar-message-hits.tsx",
 ];
 
 // `src/hooks/epic/**` hooks that resolve the app-wide client BY CALLER: each is
@@ -1749,6 +1782,13 @@ const appChromeAppWideReadExemptions = [
   // searches the host the app is pointed at and routes every result to a tab
   // bound to that same host, so the effective host is the only right read.
   "src/components/chat-search/chat-search-panel.tsx",
+  // History's message-hit section, which is the same search from the other
+  // surface it is reachable from. History is a system tab / modal, not a tile
+  // and not inside an Epic session, and it lists the whole account; the hits
+  // under it come from the host the app is pointed at and open onto tabs bound
+  // to that host, so the effective host is what the header names and the only
+  // host it could honestly read.
+  "src/components/epics/history-message-hits.tsx",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because
@@ -2554,6 +2594,31 @@ export default tseslint.config(
     },
   },
   {
+    // The seeded-resend effect decides a WIRE SHAPE from live blob custody,
+    // which is an external system in the same sense as the two above: the
+    // confirmation memo in `lib/drafts/draft-blob-transport.ts` is a module
+    // Map mutated by `drafts.putBlob` acks arriving off the socket, with no
+    // subscription and no React identity. The rule's cure - compute it during
+    // render instead - is the one thing that must not happen here. Render
+    // would have to read that Map, which is neither pure nor reactive: React
+    // has no way to know an ack changed it, so the value would look stable
+    // exactly when it is not, and the hook's own contract ("recomputed, never
+    // captured: a `putBlob` confirmed while this resolution runs should let
+    // its node travel bare; a confirmation invalidated in that window must
+    // not") would be unenforceable.
+    //
+    // Only the every-hash-is-host-held early return is synchronous; the
+    // inlining path already writes from an async `commit`. Routing that early
+    // return through the async path to satisfy the rule is the deferral the
+    // block above records as having BEEN the defect, and here it would also
+    // delay the common case for nothing: the hashes are already in the host's
+    // custody, so there is no byte to fetch and nothing to wait for.
+    files: ["src/hooks/chats/use-initial-chat-handoff-driver.ts"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
     // Router -> store synchronization direction for an already-committed epic
     // route. This is the inverse of navigateToTabIntent's entry-point seam,
     // so it may read the store action directly while the rest of the app may
@@ -2781,6 +2846,13 @@ export default tseslint.config(
             "appearance-wallpaper-*", // src/components/home/appearance-wallpaper.css
             "landing-appearance-surface", // src/components/home/appearance-wallpaper.css
             "onboarding-*", // a <style> element inside onboarding-page.tsx
+            "diorama-*", // src/components/onboarding/onboarding-diorama.css
+            "session-import-*", // src/components/onboarding/onboarding-import.css
+            // src/components/settings/panels/getting-started-settings.css -
+            // a <progress>, whose fill and track are pseudo-elements, and a
+            // card whose `scroll-margin-top` lives behind a media query.
+            "settings-setup-meter",
+            "settings-setup-card",
 
             // Class names owned by a library, not by us.
             "not-prose", // @tailwindcss/typography, loaded via @plugin
@@ -2795,6 +2867,12 @@ export default tseslint.config(
             "status-ping",
             "tc-*",
             "traycer-md-*",
+            // Styled by first-task-guide.css, not by this component - the
+            // plugin only walks index.css's @import chain, and that
+            // stylesheet is imported from the guide's coachmark portal, not
+            // from a component this rule can see.
+            "first-task-coachmark",
+            "first-task-coachmark-*",
           ],
         },
       ],

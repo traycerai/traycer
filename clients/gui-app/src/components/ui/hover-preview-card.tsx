@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/hover-card";
 
 interface HoverPreviewCardProps {
+  readonly appearance?: "preview" | "tooltip";
   readonly children: React.ReactNode;
   readonly content: React.ReactNode;
   readonly side: "top" | "right" | "bottom" | "left";
@@ -35,6 +36,7 @@ export function HoverPreviewCard(props: HoverPreviewCardProps) {
     <HoverCard open={props.open} onOpenChange={props.onOpenChange}>
       <HoverCardTrigger asChild>{props.children}</HoverCardTrigger>
       <HoverCardContent
+        appearance={props.appearance}
         side={props.side}
         sideOffset={props.sideOffset}
         align={props.align}

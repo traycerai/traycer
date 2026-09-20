@@ -12,6 +12,7 @@
 import { z } from "zod";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import { autoJudgeKindSchema } from "@traycer/protocol/host/auto-mode/contracts";
+import { projectOntoFrozenLine } from "./frozen-line-projection";
 import {
   providerIdSchema,
   providerIdSchemaV10,
@@ -38,6 +39,7 @@ import {
   nativeMutationResultSchema,
   nativeMutationSchema,
   providerNativeCapabilitiesSchema,
+  providerNativeCapabilitiesSchemaV70,
   providerNativeCapabilitiesSchemaV70Preimage,
   type ModelProviderAuthAction,
   type ModelProviderAuthCancelContext,
@@ -240,6 +242,43 @@ export const providerIdSchemaV80 = z.enum([
   "reasonix",
 ]);
 export type ProviderIdV80 = z.infer<typeof providerIdSchemaV80>;
+
+/**
+ * The id set `providers.list@9.0` and `@9.1` actually shipped: v8.0's twenty
+ * plus Antigravity.
+ *
+ * Hand-written, not `providerIdSchema` by reference, for the reason the whole
+ * freeze discipline exists - and here that is not theoretical. Both lines are
+ * RELEASED (the published host `host-v1.3.2-staging.39.g3a73077` advertises
+ * canonical 9.1), and until this pin they reached the LIVE enum, so the next
+ * `/add-harness` would have added a twenty-second id to two shipped lines
+ * without anything objecting. That is the same defect the login-capability
+ * markers caused, one leaf over.
+ */
+export const providerIdSchemaV91 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+  "antigravity",
+]);
+export type ProviderIdV91 = z.infer<typeof providerIdSchemaV91>;
 
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
@@ -1051,6 +1090,100 @@ export const providerLoginCapabilitySchema = z.object({
    * `!== null && !== undefined`.
    */
   terminalLogin: z.object({}).nullable().catch(null),
+  /**
+   * Non-null when the headless `providers.startLogin` flow completes WITHOUT a
+   * loopback callback on the host - a device-code flow the user finishes in
+   * their own browser, or a paste-code page. That is what makes the sign-in
+   * drivable from a REMOTE host, where nothing on the user's machine can answer
+   * a `http://localhost:<port>` redirect the host opened.
+   *
+   * A declarative marker rather than something the client derives, and that is
+   * the whole point of putting it on the wire. The GUI's
+   * `providerLoginIsRemoteSafe` read `oauthArgs.includes("--device-auth")` -
+   * a fact about Codex's COMMAND LINE that happened to coincide with a fact
+   * about its flow. Kimi runs a device-code flow and has no such flag, so the
+   * sniff refused a provider that was always remote-safe, and inventing the
+   * flag to satisfy the sniff would break the spawn. The host owns the
+   * per-provider fact; the gate runs in the CLIENT and cannot see a host-side
+   * table, so the fact has to travel here.
+   *
+   * Deliberately NOT folded into `codePaste`, which `providerLoginIsRemoteSafe`
+   * already treats as sufficient - declaring that instead would need no schema
+   * change at all and is the wrong field: `codePaste` also flips
+   * `usesPipedStdin` in the login runner, swaps the flat deadline for the
+   * rolling code-paste one, and renders a paste form a polling device-code flow
+   * can never consume. The cheap-looking reuse buys a broken form.
+   *
+   * Shape carries no fields today - existence alone is the signal - but stays
+   * an object for the same reason `codePaste` and `terminalLogin` do.
+   *
+   * `.catch(null)` hardens a present-but-unrecognized value. Absence is a
+   * different question and is answered by the VERSION: this key rides
+   * `providers.list@9.2`, so any peer below that is parsed through its own
+   * frozen schema and filled by `providersListUpgradeV91ToV92`.
+   *
+   * So absence is ruled out by CONSTRUCTION rather than by validation, and the
+   * difference matters: a same-version pairing takes the transport fast path
+   * and returns the payload by cast, so `.catch(null)` never runs at all on
+   * the 9.2-to-9.2 leg. A reader is therefore right to fail CLOSED on an
+   * absent marker instead of assuming it cannot arrive; what it must not do is
+   * read absence as a meaningful value. `Boolean(...)` in
+   * `providerLoginIsRemoteSafe` is the sanctioned spelling for exactly that,
+   * and `!== null` is the one to avoid - it reports an absent key as
+   * remote-safe, which is the fail-OPEN direction and is how these markers
+   * went unnoticed when they were briefly added to the already-released 9.1
+   * in place.
+   */
+  remoteSafe: z.object({}).nullable().catch(null),
+  /**
+   * Non-null when the provider's OWN headless login child opens a browser on
+   * the machine it runs on. A fact about the PROVIDER's flow - not about the
+   * host, and not about the caller.
+   *
+   * The GUI reads it to decide whether to open `startLogin`'s URL itself
+   * (`shouldAutoOpenLoginUrl`). Opening a URL a child already opened
+   * double-opens a consent page on one `state`, which is a visible bug; not
+   * opening one nothing opened leaves the user staring at a waiting step.
+   *
+   * It replaces `userCode !== null` as the proxy for this, and that proxy was
+   * measured wrong. Its premise was "device-auth children do not open a
+   * browser, so the GUI must" - true of Codex and Grok, whose printed URL the
+   * GUI is expected to open (see `provider-login-runner.ts`'s module
+   * docblock), and FALSE of Kimi, which runs a device-code flow AND opens the
+   * browser itself. So the moment `DEVICE_AUTH_LOGIN_MODE` gave Kimi a
+   * non-null `userCode`, every local Kimi sign-in opened a second consent tab.
+   * Three independent facts hid behind that one proxy - the flow yields a
+   * scrapable code, the flow needs no loopback (`remoteSafe`), and the child
+   * opens its own browser - and this is the third.
+   *
+   * POLARITY IS DELIBERATE, and it is the fail-safe direction. `null` means
+   * "not known to open its own browser", NOT "known not to". An unsourced
+   * `null` costs a second tab at worst; a key spelled the other way round
+   * ("the GUI must open") would strand a user with no tab at all whenever a
+   * row was left unfilled. Read `null` as the absence of a claim.
+   *
+   * Two classes of row therefore carry `null` for reasons that are NOT a
+   * statement about the CLI, and a reader must not invert them into one:
+   *
+   *   - a provider whose `terminalLogin` is non-null, or whose `oauthArgs` is
+   *     null: `startProviderLogin` refuses or never starts it, so no waiting
+   *     step ever renders and nothing can observe the value. Declaring a
+   *     marker no product path can read would be unfalsifiable - the same
+   *     reason `claude-code` carries no `remoteSafe` behind `codePaste`'s
+   *     short-circuit. Where such a row has a MEASURED value anyway (Amp opens
+   *     its own browser, shim-caught), the fact is recorded in a comment on
+   *     that row rather than declared here.
+   *   - a provider whose child genuinely prints a URL for the GUI to open.
+   *     That is the honest `null` and the one the key exists to serve.
+   *
+   * Independent of `remoteSafe`, and the overlap is the informative part:
+   * Kimi is the only provider that is both, which is exactly why one marker
+   * could never have carried both facts.
+   *
+   * Shape and `.catch(null)` follow `remoteSafe` above, as does the version
+   * that carries it: 9.2, filled for every older peer by the 9.1 -> 9.2 bridge.
+   */
+  selfOpensBrowser: z.object({}).nullable().catch(null),
 });
 export type ProviderLoginCapability = z.infer<
   typeof providerLoginCapabilitySchema
@@ -1117,9 +1250,26 @@ export type ProviderLoginCapabilityV40 = z.infer<
  * exactly that reason, one line later: the fifth capability field must not
  * appear on v7.0 just because it appears on the live schema.
  *
- * Do not add fields here. Extend the live `providerLoginCapabilitySchema` and
- * let the v7->v8 upgrade bridge fill the new field for old hosts, the way the
- * v6->v7 bridge fills `terminalLogin`.
+ * That fifth field arrived - `remoteSafe` - and it is why this snapshot now
+ * backs `providerCliStateBaseShapeV70` and `providerCliStateBaseShapeV80` as
+ * well as the pre-image. Both of those kept pointing at the LIVE
+ * capability, so both released lines would have grown the marker; re-pointing
+ * them here was the whole fix, because this shape ALREADY held the four keys
+ * they shipped. Nothing new had to be snapshotted.
+ *
+ * Do not add fields here. Extend the live `providerLoginCapabilitySchema`,
+ * OPEN A NEW MINOR for it, and let the first bridge whose target models the new
+ * field fill it for old hosts, the way the v6->v7 bridge fills `terminalLogin`.
+ * That bridge is `providersListUpgradeV91ToV92` today: 7.0, 8.0, 9.0 and 9.1
+ * are all pinned to this four-key shape, so 9.2 is the first line that models a
+ * fifth key.
+ *
+ * This paragraph has now named three different hops (v7->v8, then v8->v9, then
+ * this), and the last correction was needed because the shapes were re-pointed
+ * and this text was not. The bridge MOVES; re-derive which target models your
+ * field rather than copying the answer from here. Filling on a hop whose target
+ * does not model the key is silently dropped, because `upgradeResponseToVersion`
+ * chains the callbacks by cast with no re-parse.
  */
 export const providerLoginCapabilitySchemaV70 = z.object({
   oauthArgs: z.array(z.string()).nullable(),
@@ -1680,23 +1830,230 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
- * Frozen `providers.list@9.0` provider state: the live shape as it stood
- * before `autoJudge`.
- *
- * 9.0 stopped being the head line when 9.1 opened to publish the per-provider
- * auto-mode judge, and is frozen here exactly as 8.0 was frozen when 9.0
- * opened. Built by OMITTING the new key from the live shape rather than
- * hand-copying twenty fields: the freeze is one field wide, and a hand copy of
- * this particular object is what drifted twice before (see
- * `providerMutationCliStateSchemaV21`'s note). `.omit()` states the delta
- * itself, so it cannot fall out of step with the live shape it is a snapshot
- * of - and a SECOND field added to the live state fails the frozen-catalog
- * snapshot here rather than silently widening 8.0.
- *
- * Do NOT add fields here. Add them to `providerCliStateBaseShape` above, which
- * only 9.1 (the head line) publishes.
+ * The profile row `providers.list@9.0` / `@9.1` shipped: v8.0's plus `apiKey`,
+ * which landed while 9.x was still the unreleased head. Same hand-written
+ * discipline and same reason as `providerIdSchemaV91` above.
  */
-export const providerCliStateSchemaV90 = providerCliStateSchema.omit({
+export const providerProfileSchemaV91 = z.object({
+  ...providerProfileShapeV70,
+  enabled: z.boolean().default(true).catch(true),
+  apiKey: providerProfileApiKeyStateSchema.nullable().catch(null).optional(),
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
+});
+export type ProviderProfileV91 = z.infer<typeof providerProfileSchemaV91>;
+
+// ── Frozen leaves shared by every RELEASED providers.list line ─────────────
+//
+// `advisory`, `managedInstallState` and (on 9.1 only) `autoJudge` rode the live
+// schema on all four released rows until now. Each pin below is byte-identical
+// to its live original TODAY - deliberately, and it is the proof the pin is
+// right: `frozen-catalog-lines.test.ts` dumps every row, so a pin that captured
+// the wrong shape would redden it. They change nothing now and stop the next
+// member from landing on four shipped wires at once.
+//
+// Why these three and not the other fifty-odd leaves these rows can still
+// reach: see `__tests__/frozen-lines-reach-no-unreviewed-live-enum.test.ts`, which enumerates the
+// remainder as a reviewed list rather than leaving it to a reader to rediscover.
+
+/**
+ * Frozen advisory row. Reuses nothing from the live schema on purpose - a
+ * `z.object` spread of the live shape is what let the provider-pack fields grow
+ * v5.0 and v6.0 after they shipped (see `providerCliStateSchemaV50`).
+ */
+export const providerAdvisorySchemaV70 = z.object({
+  kind: z.enum([
+    "stale-channel",
+    "cannot-confirm-eligibility",
+    "yank-keep-running",
+    "yank-rollback",
+    "row-incompatibility",
+  ]),
+  detail: z.string().nullable(),
+});
+export type ProviderAdvisoryV70 = z.infer<typeof providerAdvisorySchemaV70>;
+
+/**
+ * Frozen managed-install state. Hand-listed arms, because a discriminated union
+ * cannot be pinned with `.extend()` and a new `status` arm is exactly the growth
+ * this has to refuse.
+ *
+ * The error arm reuses `providerManagedInstallErrorReasonSchemaV70`, which was
+ * already frozen for the pre-image and is still byte-identical to the live enum,
+ * so there is no second copy of that list to keep in step. Field-level reasoning
+ * (why `percent` is nullable, why every `version` is `.catch(null).optional()`,
+ * what a null `retryAtMs` means per reason) is NOT duplicated here - it lives on
+ * `providerManagedInstallStateSchema` above and is one definition, not two.
+ */
+export const providerManagedInstallStateSchemaV70 = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("absent") }),
+    z.object({
+      status: z.literal("downloading"),
+      percent: z.number().min(0).max(100).nullable(),
+      version: z.string().nullable().catch(null).optional(),
+    }),
+    z.object({
+      status: z.literal("installed"),
+      version: z.string().nullable().catch(null).optional(),
+    }),
+    z.object({
+      status: z.literal("error"),
+      reason: providerManagedInstallErrorReasonSchemaV70,
+      version: z.string().nullable().catch(null).optional(),
+      message: z.string(),
+      retryAtMs: z.number().int().nonnegative().nullable(),
+    }),
+  ],
+);
+export type ProviderManagedInstallStateV70 = z.infer<
+  typeof providerManagedInstallStateSchemaV70
+>;
+
+/**
+ * Frozen auto-judge kind for `providers.list@9.1`.
+ *
+ * Declared here rather than beside the live enum in `auto-mode/contracts.ts`
+ * because this line is its only binder, and a freeze belongs with the contract
+ * it freezes. 9.1 is the ONLY released line that carries the key at all - 9.0
+ * omits it and 8.0 never had it - so unlike the two pins above there is no
+ * shared declaration to make.
+ */
+const autoJudgeKindSchemaV91 = z.enum(["provider", "traycer"]);
+
+/**
+ * Frozen `providers.list@9.0` / `@9.1` managed-versions row. V80's shape with
+ * this line's id enum swapped in; the key set has not moved since V70.
+ *
+ * It exists for one leaf. `sharedWithProviders` is a host→client `providerId`
+ * array, and `providerManagedVersionsSchemaV80`'s comment records what leaving
+ * it live cost last time: "leaving it live let Antigravity reach a released
+ * wire". A `.extend()` on the live row does not reach a nested schema, so
+ * pinning `providerId` at the top level and stopping there leaves this one
+ * reading the live enum - the same hole, one level down.
+ */
+const providerManagedVersionsSchemaV91 = z.object({
+  autoDownload: z.boolean(),
+  pinnedVersion: z.string().nullable(),
+  updateAvailable: z.object({ version: z.string() }).nullable(),
+  sharedWithProviders: z.array(providerIdSchemaV91).catch([]),
+  totalSizeBytes: z.number().int().nonnegative().nullable(),
+  available: z.array(providerPackVersionSchema),
+});
+
+/**
+ * Frozen `providers.list@9.1` provider state: the live shape as it stood
+ * before the login-capability markers.
+ *
+ * 9.1 stopped being the head line when 9.2 opened to publish `remoteSafe` and
+ * `selfOpensBrowser`. It is frozen HERE, against the four-key login capability
+ * it actually shipped, and that pin is the whole point of this declaration.
+ *
+ * `.omit()` states a delta against the live shape, which is the right tool
+ * when the delta is a TOP-LEVEL key - but it is blind to a key added INSIDE a
+ * nested schema the frozen alias still points at. That is exactly how these
+ * two markers silently grew 9.0 and 9.1 after they had shipped: both lines
+ * reached `providerLoginCapabilitySchema` by reference, so widening the live
+ * capability widened two released lines with it, and the released host
+ * `host-v1.3.2-staging.39.g3a73077` publishes a `protocol-surface.json`
+ * advertising canonical 9.1 with only `oauthArgs` / `token` / `codePaste` /
+ * `terminalLogin`. Pinning `loginCapability` to the four-key
+ * `providerLoginCapabilitySchemaV70` is what makes this snapshot match the
+ * bytes those hosts actually send.
+ *
+ * Do NOT add fields here, and do not let a field reach this shape through a
+ * live nested schema either. Add them to `providerCliStateBaseShape` above,
+ * which only 9.2 (the head line) publishes.
+ *
+ * WHAT THE FOUR PINS COVER, AND WHAT THEY DO NOT. `loginCapability` is the
+ * leaf this freeze was written for; the other three are the leaves whose
+ * growth has already moved a released line once. `providerId` and
+ * `managedVersions.sharedWithProviders` are the two `providerId` enums - V70
+ * froze the second for Reasonix and V80 again for Antigravity - and `profiles`
+ * is the row `apiKey` and `launchCommand` were added to.
+ *
+ * Four more pins joined them afterwards, in the change that added
+ * `frozen-line-projection.ts`: `nativeCapabilities` (for its `supportedTabs`
+ * enum), `managedInstallState`, `advisory` and `autoJudge`. `autoJudge` is the
+ * odd one - it exists only on 9.1 and 9.2, so V90 omits it and V80 has no such
+ * key, and it has no precedent in either direction.
+ *
+ * WHY `nativeCapabilities` WAS THE ONE TO TAKE FIRST. Not because it carries a
+ * `providerId` - it does not. Because of the GRANULARITY of the `.catch()`
+ * standing between the leaf and the rest of the row: `nativeCapabilities` is
+ * read through a WHOLE-OBJECT `.catch(DEFAULT)`, so a single unknown
+ * `supportedTabs` member costs a peer its MCP, Plugins and Skills tabs at once,
+ * where `sharedWithProviders`'s `.catch([])` degrades to one missing label.
+ * `providerSettingsTabSchema` had also already grown once (`modelProviders`).
+ * That is the question to ask of any future leaf, in place of "does it carry an
+ * id".
+ *
+ * A PIN ALONE WOULD NOT HAVE HELPED. Freezing an enum that sits in an array
+ * under a catch does not protect the peer - it moves where the collapse
+ * happens. Unpinned, the host forwards the unknown member and the peer's own
+ * copy of this schema discards the object; pinned, the host's own downgrade
+ * discards it first. Same loss. What changes the outcome is
+ * {@link projectOntoFrozenLine}, which drops the member and keeps its siblings,
+ * and it can only do that for a leaf that is pinned - the two halves are one
+ * mechanism and neither is worth much alone.
+ *
+ * THESE ARE STILL NOT EVERY LIVE SCHEMA THIS ROW REACHES, and that is no longer
+ * a caveat a reader has to take on trust:
+ * `__tests__/frozen-lines-reach-no-unreviewed-live-enum.test.ts` walks this row
+ * and names every live enum still reachable from it, with the field path, and
+ * fails if the set changes. Note what that test does that the frozen-catalog
+ * snapshot cannot - a frozen hand-copy and a live alias dump IDENTICALLY, so
+ * the snapshot stays green while a leaf silently tracks the head. Ablate any
+ * pin below and the snapshot passes 38/38 while that test reddens on the exact
+ * path.
+ *
+ * If you grow any of these, pin it here in the same change - the frozen-catalog
+ * row will go red, and regenerating it instead of pinning is the mistake this
+ * whole comment exists to prevent.
+ */
+export const providerCliStateSchemaV91 = providerCliStateSchema.extend({
+  providerId: providerIdSchemaV91,
+  profiles: z.array(providerProfileSchemaV91).catch([]),
+  managedVersions: providerManagedVersionsSchemaV91
+    .nullable()
+    .catch(null)
+    .optional(),
+  loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
+  managedInstallState: providerManagedInstallStateSchemaV70
+    .nullable()
+    .catch(null)
+    .optional(),
+  advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
+  autoJudge: autoJudgeKindSchemaV91.optional(),
+  nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  ),
+});
+export type ProviderCliStateV91 = z.infer<typeof providerCliStateSchemaV91>;
+
+export const providersListResponseSchemaV91 = z.object({
+  providers: z.array(providerCliStateSchemaV91),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV91 = z.infer<
+  typeof providersListResponseSchemaV91
+>;
+
+/**
+ * Frozen `providers.list@9.0` provider state: 9.1's shape without `autoJudge`.
+ *
+ * Derived from the 9.1 snapshot rather than from the live shape, so the
+ * capability pin above covers this line too - 9.0 shipped the same four-key
+ * capability and the same released host advertises it that way.
+ */
+export const providerCliStateSchemaV90 = providerCliStateSchemaV91.omit({
   autoJudge: true,
 });
 export type ProviderCliStateV90 = z.infer<typeof providerCliStateSchemaV90>;
@@ -2072,12 +2429,20 @@ export type ProvidersListResponseV70Preimage = z.infer<
 // keys honestly instead. Do not "simplify" this back to a widen-in-place.
 //
 // Like `providersListRequestSchemaV70`, this pin freezes v7.0's own KEY SET.
-// Its profile leaf is also frozen because v8.0 adds profile eligibility there;
-// the other live leaves remain guarded by the deep snapshot below.
-// Growth inside any of those is caught by the deep `z.toJSONSchema` snapshot in
+// Several leaves are frozen beneath it as well, each because a later line grew
+// it or was going to: the profile leaf, because v8.0 adds profile eligibility
+// there; the login capability, because major 9 adds `remoteSafe`; and
+// `nativeCapabilities` / `managedInstallState` / `advisory`, taken with
+// `frozen-line-projection.ts` - see `providerCliStateSchemaV91`'s docblock for
+// why a pin on one of those is only half a fix without the projection.
+//
+// Growth inside any of them is caught by the deep `z.toJSONSchema` snapshot in
 // `__tests__/__fixtures__/frozen-catalog-lines.ts`, which pins this shape - and
 // when it goes red, hand-freeze the sub-schema that grew rather than
-// regenerating the fixture.
+// regenerating the fixture. What the snapshot canNOT catch is a leaf that is
+// still LIVE while dumping identically to a frozen copy; that is
+// `__tests__/frozen-lines-reach-no-unreviewed-live-enum.test.ts`, which lists
+// every live enum this row still reaches, by path.
 const providerCliStateBaseShapeV70 = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -2088,12 +2453,18 @@ const providerCliStateBaseShapeV70 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  // Pinned to `providerLoginCapabilitySchemaV70` - the four keys v7.0 actually
+  // shipped - rather than to the live capability. It pointed live until
+  // `remoteSafe` landed, which is the same defect the `V40` snapshot fixed for
+  // the v4.0/v5.0/v6.0 lines: a released wire must not grow a capability field
+  // the moment the live schema does. No new snapshot was needed; the v7.0 one
+  // was already sitting one screen up, referenced only by the pre-image.
+  loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
   profiles: z.array(providerProfileSchemaV70).catch([]),
   // `.optional()` on top of `.catch(null)` is copied deliberately, not tidied
   // away - see the live shape's comments for what each half does.
-  managedInstallState: providerManagedInstallStateSchema
+  managedInstallState: providerManagedInstallStateSchemaV70
     .nullable()
     .catch(null)
     .optional(),
@@ -2101,7 +2472,7 @@ const providerCliStateBaseShapeV70 = {
     .nullable()
     .catch(null)
     .optional(),
-  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
   cliBinaryResolved: z.boolean().catch(true).optional(),
   packId: z.string().nullable().catch(null).optional(),
   // The ONE leaf this shape does not keep live - see
@@ -2123,7 +2494,7 @@ export const providerCliStateSchemaV70 = z.object({
   providerId: providerIdSchemaV70,
   ...providerCliStateBaseShapeV70,
   auth: PROVIDER_AUTH_SCHEMA_V20,
-  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+  nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
     DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   ),
 });
@@ -2199,10 +2570,15 @@ const providerCliStateBaseShapeV80 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  // Same pin, same reason as `providerCliStateBaseShapeV70` above: v8.0 shipped
+  // the four-key capability in `cli-v1.3.0` / `host-v1.3.0`, so `remoteSafe`
+  // must not reach it. Both released list lines share the v7.0 snapshot because
+  // both released exactly that key set - this is a field freeze, not a second
+  // pre-image.
+  loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
   profiles: z.array(providerProfileSchemaV80).catch([]),
-  managedInstallState: providerManagedInstallStateSchema
+  managedInstallState: providerManagedInstallStateSchemaV70
     .nullable()
     .catch(null)
     .optional(),
@@ -2210,7 +2586,7 @@ const providerCliStateBaseShapeV80 = {
     .nullable()
     .catch(null)
     .optional(),
-  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
   cliBinaryResolved: z.boolean().catch(true).optional(),
   packId: z.string().nullable().catch(null).optional(),
   managedVersions: providerManagedVersionsSchemaV80
@@ -2228,7 +2604,7 @@ export const providerCliStateSchemaV80 = z.object({
   providerId: providerIdSchemaV80,
   ...providerCliStateBaseShapeV80,
   auth: PROVIDER_AUTH_SCHEMA_V20,
-  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+  nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
     DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   ),
 });
@@ -3739,8 +4115,17 @@ export function downgradeProviderAuthV20ToV10(
 // and the provider-pack-registry fields, so those are widened to optional here.
 // That keeps them destructurable in the strip below no matter which side fed
 // this call.
+//
+// `ProviderCliStateV80` is a member because `providersListDowngradeV8ToV1`
+// genuinely feeds this function v8.0 rows. It was absent while
+// `enabledProviderProfilesOnly` was declared over the live state, which
+// re-typed those rows on the way in - v8.0 was structurally assignable to live
+// until its capability leaf was pinned for `remoteSafe`. It is not assignable
+// to `ProviderCliStateV70` either: v8.0 added `antigravity`, so its
+// `providerId` union is WIDER than v7.0's, not narrower.
 export type DowngradableToV10ProviderState = (
   | ProviderCliState
+  | ProviderCliStateV80
   | ProviderCliStateV70
   | ProviderCliStateV70Preimage
   | ProviderCliStateV60
@@ -3751,7 +4136,10 @@ export type DowngradableToV10ProviderState = (
   | ProviderMutationCliStateV20
   | ProviderMutationCliStateV21
 ) & {
-  profiles?: ProviderCliState["profiles"] | ProviderCliStateV70["profiles"];
+  profiles?:
+    | ProviderCliState["profiles"]
+    | ProviderCliStateV80["profiles"]
+    | ProviderCliStateV70["profiles"];
   // Widened to the pre-image capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
   // snapshots: callers reach this function holding either shape, and the
@@ -3779,7 +4167,19 @@ export type DowngradableToV10ProviderState = (
   managedVersions?: ProviderCliState["managedVersions"];
   managedVersionsUnavailable?: ProviderCliState["managedVersionsUnavailable"];
   nextRunBinary?: ProviderCliState["nextRunBinary"];
-  loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
+  // (v9.1) the auto-mode judge. Optional here for the same reason as the rest:
+  // a caller may hold a row from any released line, and only a 9.1 row has it.
+  autoJudge?: ProviderCliState["autoJudge"];
+  // `V70` is named explicitly rather than left to ride the `V10` arm on the
+  // strength of structural width: the v7.0 and v8.0 list lines are pinned to
+  // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
+  // rows carry, and stating it keeps this union readable as "every capability
+  // snapshot a caller can hold" instead of "whatever happens to be assignable".
+  loginCapability:
+    | ProviderLoginCapability
+    | ProviderLoginCapabilityV70
+    | ProviderLoginCapabilityV10
+    | null;
 };
 
 export function downgradeProviderCliStateToV10(
@@ -3824,6 +4224,19 @@ export function downgradeProviderCliStateToV10(
     managedVersions: _managedVersions,
     managedVersionsUnavailable: _managedVersionsUnavailable,
     nextRunBinary: _nextRunBinary,
+    // (v9.1) the per-provider auto-mode judge. The trap above fired a SECOND
+    // time on this field: it landed with the `auto` permission mode and was not
+    // added here, so any user who set a judge preference made that provider
+    // disappear for v1.0 clients. It is `.optional()` on the live shape, which
+    // is why it went unnoticed - the row only carries the key once someone
+    // actually chooses, so the fault is invisible on a default install.
+    //
+    // The comment above was not enough to prevent it, and neither were the
+    // hand-written per-field fixtures that caught the last one. What guards it
+    // now is `provider-schemas-v70-pins.test.ts`'s derived check, which reads
+    // the obligation out of the two schemas' key sets instead of a list a human
+    // maintains. ADD THE FIELD HERE; do not weaken that test.
+    autoJudge: _autoJudge,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
@@ -3831,6 +4244,66 @@ export function downgradeProviderCliStateToV10(
     auth: downgradeProviderAuthV20ToV10(state.auth),
   });
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * The shared body of every `downgradeProviderCliStateListTo*` below: project
+ * each row onto the frozen line, then keep the rows that survive it.
+ *
+ * The filter half is the rule these bridges have always applied - a row whose
+ * `providerId` is not in the frozen enum simply does not survive the parse, and
+ * that is how post-vN providers stay off an already-shipped wire. What
+ * {@link projectOntoFrozenLine} adds is the same rule one level DOWN: before
+ * this round decides whether to drop the whole row, it drops the individual
+ * array members the frozen line cannot represent, so a single unknown enum
+ * member costs that member rather than its enclosing object (or the row).
+ *
+ * Written once rather than seven times deliberately. These helpers were seven
+ * copies of one body, and a policy that has to be re-typed per line is a policy
+ * that eventually differs per line.
+ */
+function projectRowsOntoFrozenLine<T extends z.ZodType>(
+  frozen: T,
+  states: readonly unknown[],
+): z.infer<T>[] {
+  return states.flatMap((state) => {
+    const parsed = frozen.safeParse(projectOntoFrozenLine(frozen, state));
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Parse a whole `providers.list` response onto a frozen line, projecting first.
+ *
+ * The row helper above covers `providers[]`. This covers the response's OTHER
+ * half - `native`, the optional MCP/plugins/skills query result - which no row
+ * helper touches. Of the TWELVE catch-less enum leaves on `providers.list@7.0`,
+ * eight are under `native`, and growth in any of them fails the ENTIRE
+ * `providers.list` response rather than degrading part of it. FIVE sit under an
+ * array and so are repairable by dropping - `servers[].status`,
+ * `servers[].statusSource`, `servers[].tools[].denySources[]`,
+ * `skills[].source`, and `server.tools[].denySources[]` on the single-server
+ * arm. The other three are scalars (`server.status` and `server.statusSource`
+ * on that same arm, plus the error arm's `code`); dropping cannot rescue those,
+ * and they want a `.catch()` rather than a pin. Calling this instead of a bare
+ * `.safeParse` is what puts the five inside the projection's reach.
+ *
+ * The remaining four catch-less leaves are on the row itself and reach the
+ * projection through `projectRowsOntoFrozenLine` above, where an unrepresentable
+ * value drops its row - already the shipped behaviour.
+ *
+ * Reach, not effect: like the row helper, this only acts on a leaf the frozen
+ * line pins STRICTLY NARROWER than the head, because the host has already
+ * parsed the value against the head before any downgrade runs. None of the
+ * eight is pinned narrower today - see the module docblock on
+ * `frozen-line-projection.ts` - so this is currently a parse with a walk in
+ * front of it, waiting on the first of those enums to move.
+ */
+export function parseProvidersListResponseForFrozenLine<T extends z.ZodType>(
+  frozen: T,
+  response: unknown,
+): z.infer<T> {
+  return frozen.parse(projectOntoFrozenLine(frozen, response));
 }
 
 // Downgrades a latest-shaped provider-state list to the frozen v2.0 shape,
@@ -3842,10 +4315,7 @@ export function downgradeProviderCliStateToV10(
 export function downgradeProviderCliStateListToV20(
   states: readonly unknown[],
 ): ProviderCliStateV20[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV20.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV20, states);
 }
 
 // Downgrades a latest-shaped provider-state list to the frozen v3.0 shape,
@@ -3857,10 +4327,7 @@ export function downgradeProviderCliStateListToV20(
 export function downgradeProviderCliStateListToV30(
   states: readonly unknown[],
 ): ProviderCliStateV30[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV30.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV30, states);
 }
 
 // Downgrades latest state to frozen list@2.0 (drops Amp/Devin/Pi + nativeCapabilities).
@@ -3892,10 +4359,7 @@ export function downgradeProviderCliStateToMutationV20(
 export function downgradeProviderCliStateListToV40(
   states: readonly unknown[],
 ): ProviderCliStateV40[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV40.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV40, states);
 }
 
 /**
@@ -3906,10 +4370,7 @@ export function downgradeProviderCliStateListToV40(
 export function downgradeProviderCliStateListToV50(
   states: readonly unknown[],
 ): ProviderCliStateV50[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV50.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV50, states);
 }
 
 /**
@@ -3965,12 +4426,20 @@ function parseProviderStateWithEnabledProfiles(state: unknown) {
 export function downgradeProviderCliStateListToV70(
   states: readonly unknown[],
 ): ProviderCliStateV70[] {
-  return states.flatMap((state) => {
+  // The enabled-profiles pre-pass runs FIRST and stays separate: omitting a
+  // disabled profile is a v7.0 PRODUCT rule (that line cannot render one
+  // safely), not a question of what the frozen shape can represent. Folding it
+  // into the projection would file a deliberate omission under "the line could
+  // not hold it", which is the kind of conflation that makes a bridge's
+  // behaviour impossible to reason about later.
+  const enabledProfilesOnly = states.flatMap((state) => {
     const current = parseProviderStateWithEnabledProfiles(state);
-    if (current === null) return [];
-    const parsed = providerCliStateSchemaV70.safeParse(current);
-    return parsed.success ? [parsed.data] : [];
+    return current === null ? [] : [current];
   });
+  return projectRowsOntoFrozenLine(
+    providerCliStateSchemaV70,
+    enabledProfilesOnly,
+  );
 }
 
 /**
@@ -3987,10 +4456,7 @@ export function downgradeProviderCliStateListToV70(
 export function downgradeProviderCliStateListToV80(
   states: readonly unknown[],
 ): ProviderCliStateV80[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV80.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV80, states);
 }
 
 /**
@@ -4003,10 +4469,7 @@ export function downgradeProviderCliStateListToV80(
 export function downgradeProviderCliStateListToV60(
   states: readonly unknown[],
 ): ProviderCliStateV60[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV60.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV60, states);
 }
 
 // Upgrades a v1.0 state to the frozen v2.0 shape - used only by

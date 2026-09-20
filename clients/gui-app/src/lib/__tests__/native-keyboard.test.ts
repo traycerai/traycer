@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getNativeKeyboardState,
+  readNativeKeyboardInsetPx,
   runWhenNativeKeyboardSettled,
   setNativeKeyboardState,
   subscribeNativeKeyboardState,
@@ -78,5 +79,25 @@ describe("runWhenNativeKeyboardSettled", () => {
     setNativeKeyboardState({ open: true, transitioning: false });
 
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("readNativeKeyboardInsetPx", () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty("--keyboard-inset");
+  });
+
+  it("reads the covered height the native bridge publishes", () => {
+    document.documentElement.style.setProperty("--keyboard-inset", "336px");
+
+    expect(readNativeKeyboardInsetPx()).toBe(336);
+  });
+
+  it("reads 0 where nothing publishes it and while the keyboard is closed", () => {
+    // Android, the browser and desktop never write the variable; the iOS
+    // shell writes 0px while the keyboard is down.
+    expect(readNativeKeyboardInsetPx()).toBe(0);
+    document.documentElement.style.setProperty("--keyboard-inset", "0px");
+    expect(readNativeKeyboardInsetPx()).toBe(0);
   });
 });

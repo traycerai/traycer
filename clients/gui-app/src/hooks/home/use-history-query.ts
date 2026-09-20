@@ -69,6 +69,8 @@ export interface UseHistoryQueryResult {
   data: HistoryFetchResult | undefined;
   isPending: boolean;
   isFetching: boolean;
+  /** The current search's count is provisional, unlike a same-query refresh. */
+  readonly isCountPending: boolean;
   error: Error | null;
   hostId: string | null;
   refetch: () => Promise<unknown>;
@@ -375,6 +377,9 @@ export function useHistoryQuery(
   ]);
 
   const refetch = useCallback(() => refetchCloudTasks(), [refetchCloudTasks]);
+  const isHydratingSearchMatches =
+    (isPullRequestNumberQuery && activityIndex.isFetching) ||
+    taskContexts.isFetching;
 
   return {
     data,
@@ -382,11 +387,20 @@ export function useHistoryQuery(
     // `pending` forever - it has no data and never will - and passing that
     // through is what put a permanent skeleton on History.
     isPending: !initialLegRefused && tasksQuery.isPending,
+    // Placeholder rows answer the previous request; local projection during
+    // debounce/hydration is only a preview. A background first-page refresh
+    // with current-query data, however, retains a usable loaded count.
+    isCountPending:
+      !initialLegRefused &&
+      [
+        tasksQuery.isPending,
+        isQueryDebouncing,
+        tasksQuery.isPlaceholderData,
+        isCloudPagePending,
+        isHydratingSearchMatches,
+      ].some(Boolean),
     isFetching:
-      tasksQuery.isFetching ||
-      isQueryDebouncing ||
-      (isPullRequestNumberQuery && activityIndex.isFetching) ||
-      taskContexts.isFetching,
+      tasksQuery.isFetching || isQueryDebouncing || isHydratingSearchMatches,
     error:
       (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
       (isPullRequestNumberQuery ? activityIndex.error : null) ??

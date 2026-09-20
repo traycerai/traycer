@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -106,7 +107,8 @@ interface ForkWorkspaceStagingSession {
 export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
   readonly sourceChatTitle: string;
-  readonly assistantMessageId: string;
+  // null asks the destination to choose its latest available checkpoint on submit.
+  readonly assistantMessageId: string | null;
   // Q&A forks identify the exact interview block within an assistant row;
   // ordinary message-level forks leave this null and retain the whole row.
   readonly interviewBlockId: string | null;
@@ -580,7 +582,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   useEffect(() => {
     if (activeWorkspaceTarget === null) return;
     const session: ForkWorkspaceStagingSession = {
-      owner: Symbol(activeWorkspaceTarget.assistantMessageId),
+      owner: Symbol(activeWorkspaceTarget.assistantMessageId ?? "latest"),
       touched: new Map(),
     };
     stagingSessionRef.current = session;
@@ -684,19 +686,23 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         workspaceMode,
         worktreeIntent,
         initialMessage: null,
-        forkSource: {
-          boundary: "assistantMessage",
-          sourceChatId: target.sourceChatId,
-          assistantMessageId: target.assistantMessageId,
-          interviewBlockId: target.interviewBlockId,
-          carriedInterviews: target.carriedInterviews,
-          // The owner this dialog renders for the source chat (V12's hint), or
-          // `null` when it does not know. A target host with no registry facts
-          // of its own - the cross-host case - has nothing else to check the
-          // cloud publication's owner against, and treats a supplied value as
-          // the expectation, so it must never be invented.
-          sourceOwnerUserId,
-        },
+        // Both fork shapes carry the rendered source owner so a destination
+        // with no local chat record can verify the cloud publication's owner.
+        forkSource:
+          target.assistantMessageId === null
+            ? {
+                boundary: "latest",
+                sourceChatId: target.sourceChatId,
+                sourceOwnerUserId,
+              }
+            : {
+                boundary: "assistantMessage",
+                sourceChatId: target.sourceChatId,
+                assistantMessageId: target.assistantMessageId,
+                interviewBlockId: target.interviewBlockId,
+                carriedInterviews: target.carriedInterviews,
+                sourceOwnerUserId,
+              },
       },
       {
         onSuccess: (result) => {
@@ -842,6 +848,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         ))}
         <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
+          {target !== null && target.assistantMessageId === null ? (
+            <DialogDescription>
+              {isCrossHost
+                ? "The fork uses the latest usable cloud backup available when you click Fork. Work still in progress may not be included."
+                : "The fork uses the latest saved checkpoint available when you click Fork."}{" "}
+              The original agent continues working.
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
         <div
           className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"

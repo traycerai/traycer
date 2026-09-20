@@ -21,6 +21,16 @@ interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
+    // `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+    // `HostBusyForceDeferDialog`) calls `useFocusModel()` ->
+    // `useConnectableHostIds()` -> `useHostDirectoryList()`, which reads
+    // `directory.list()` for its query and subscribes via
+    // `directory.onChange()` in an effect the moment either dialog opens.
+    // Neither answer matters to this suite; they just need to exist.
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -263,6 +273,8 @@ function bindingWith(hostClient: unknown): HostBindingMock {
         localHostIdMock.current === null
           ? null
           : { hostId: localHostIdMock.current },
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
     },
   };
 }

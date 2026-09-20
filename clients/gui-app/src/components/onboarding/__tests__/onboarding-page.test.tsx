@@ -3,23 +3,11 @@ import {
   act,
   cleanup,
   fireEvent,
-  render as renderUi,
-  type RenderResult,
+  render,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { LazyMotion, domAnimation } from "motion/react";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
-import {
-  ONBOARDING_ACTS,
-  onboardingActsFor,
-  type OnboardingAct,
-  type OnboardingActId,
-} from "@/components/onboarding/onboarding-acts";
-import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
 import {
   hostScopeFixture,
   hostScopeOptionFixture,
@@ -30,84 +18,167 @@ import type {
 } from "@/components/settings/host-scope/use-host-scope";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  useStreamHostId,
-  type StreamRuntimeBinding,
-} from "@/lib/host/stream-runtime-context";
-import { RunnerHostContext } from "@/providers/runner-host-context";
-import { SessionImportProgress } from "@/components/session-import/session-import-progress";
-import { sessionImportTone } from "@/components/session-import/session-import-tone";
-import { useSessionImportRun } from "@/stores/session-import/session-import-run-store";
+import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
+import { setMobileApp } from "@/lib/mobile-app";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import type { OpenLink } from "@/lib/links/open-link";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 
-type GuideQueryState = {
-  readonly data:
-    | {
-        readonly content: string | null;
-        readonly generatedDefaultContent: string;
-        readonly providersSettled: boolean;
-      }
-    | undefined;
-  readonly isError: boolean;
-};
+const FEATURE_ANNOUNCEMENTS_STORAGE_KEY =
+  "traycer-gui-app:feature-announcements";
 
-// Stub heavy layout-only sub-trees that have no bearing on navigation logic.
-vi.mock("@/components/auth/cinematic-backdrop", () => ({
-  PhotoBloom: () => <div data-testid="photo-bloom-stub" />,
-  BrandMark: () => <span data-testid="brand-mark-stub" />,
+function resetFeatureAnnouncementsStore(): void {
+  window.localStorage.removeItem(FEATURE_ANNOUNCEMENTS_STORAGE_KEY);
+  useFeatureAnnouncementsStore.setState({ consumed: {} });
+}
+
+const hostsMock = vi.hoisted(() => ({ ids: ["host-a"] as readonly string[] }));
+const capabilityMock = vi.hoisted(() => ({ available: true }));
+const scanMock = vi.hoisted(() => ({ activeCalls: [] as boolean[] }));
+const safeAreaInsetsMock = vi.hoisted(() => ({ left: 0, right: 0 }));
+const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>(() => Promise.resolve()));
+const prefetchMock = vi.hoisted(() => ({ renders: 0 }));
+const hostReadinessMock = vi.hoisted(() => ({
+  streamMismatchFor: null as string | null,
+  unsupportedImportFor: null as string | null,
 }));
 
-vi.mock("@/components/onboarding/onboarding-detected-agents", () => ({
-  OnboardingDetectedAgents: () => <div data-testid="detected-agents-stub" />,
-}));
+const scrollToDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "scrollTo",
+);
 
-vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
-  OnboardingThemePicker: () => <div data-testid="theme-picker-stub" />,
-}));
+function stubElementScrollTo(): void {
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: vi.fn(),
+  });
+}
 
-vi.mock("@/components/session-import/session-import-wizard", () => ({
-  // Prints the host of the stream binding the tour re-provided above it, which
-  // is the whole point of the picker: the wizard's scan, and the run it starts,
-  // must move to whichever machine the title bar names. Also renders the real
-  // (unmocked) `SessionImportProgress` behind the same `runIdle` gate the real
-  // wizard uses, so a suite about switching between two importing hosts can
-  // drive the actual run store and read the actual progress copy instead of a
-  // second, hand-rolled stand-in for it.
-  SessionImportWizard: () => {
-    const hostId = useStreamHostId();
-    const runIdle = useSessionImportRun(hostId).status === "idle";
-    return (
-      <div
-        data-testid="session-import-wizard-stub"
-        data-stream-host={hostId ?? ""}
-      >
-        {runIdle ? null : (
-          <SessionImportProgress
-            tone={sessionImportTone("onboarding")}
-            hostId={hostId}
-          />
-        )}
-      </div>
+function restoreElementScrollTo(): void {
+  if (scrollToDescriptor === undefined) {
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  } else {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "scrollTo",
+      scrollToDescriptor,
     );
+  }
+}
+
+vi.mock("@/components/auth/cinematic-backdrop", () => ({
+  BrandMark: () => <span aria-hidden="true" />,
+}));
+
+vi.mock("@/components/onboarding/onboarding-workspace-illustration", () => ({
+  OnboardingWorkspaceIllustration: () => (
+    <div data-testid="workspace-illustration" />
+  ),
+}));
+
+vi.mock("@/components/onboarding/onboarding-provider-discovery", () => ({
+  OnboardingProviderPrefetch: () => {
+    prefetchMock.renders += 1;
+    return <div data-testid="provider-prefetch" />;
   },
 }));
 
-// The scan subscribes over the stream transport the moment one exists, and
-// this suite provides a stub client with no server behind it. The tour only
-// hands the handle on to the (stubbed) wizard.
-vi.mock("@/components/session-import/use-session-import-scan", () => ({
-  useSessionImportScan: () => ({
-    state: { kind: "scan-stub" },
-    dispatch: () => undefined,
-  }),
+vi.mock("@/components/onboarding/onboarding-detected-agents", async () => {
+  const { useStreamHostId } = await import("@/lib/host/stream-runtime-context");
+  return {
+    OnboardingDetectedAgents: () => {
+      const hostId = useStreamHostId();
+      return (
+        <div data-testid="detected-agents-stub" data-host-id={hostId ?? ""}>
+          <div
+            data-testid="provider-editor"
+            contentEditable
+            suppressContentEditableWarning
+          />
+        </div>
+      );
+    },
+  };
+});
+
+vi.mock("@/components/onboarding/onboarding-host-picker", () => ({
+  OnboardingHostPickerBar: (props: {
+    readonly picker: {
+      readonly scope: HostScope;
+      readonly onSelectHost: (hostId: string) => void;
+    };
+  }) => (
+    <div
+      data-testid="onboarding-host-picker-bar"
+      data-host-id={props.picker.scope.hostId ?? ""}
+    >
+      {props.picker.scope.hosts.map((host) => (
+        <button
+          key={host.hostId}
+          type="button"
+          data-testid={`settings-host-switcher-option-${host.hostId}`}
+          onClick={() => props.picker.onSelectHost(host.hostId)}
+        >
+          {host.name}
+        </button>
+      ))}
+    </div>
+  ),
+  OnboardingHostUnavailableNotice: (props: {
+    readonly refusal: string | null;
+  }) => (
+    <div data-testid="host-unavailable" data-refusal={props.refusal ?? ""} />
+  ),
 }));
 
-/**
- * The tour re-provides the picked host's runtimes, so the six hooks a
- * `HostScope` composes (both host lists, the runner host, the plan gate) would
- * all have to stand up for a suite about act navigation. Mocked at the scope
- * boundary, exactly as the Settings panels' and the usage popover's suites do.
- */
-const hostsMock = vi.hoisted(() => ({ ids: ["host-a"] as readonly string[] }));
+vi.mock("@/components/session-import/session-import-wizard", async () => {
+  const { useStreamHostId } = await import("@/lib/host/stream-runtime-context");
+  return {
+    SessionImportWizard: () => {
+      const hostId = useStreamHostId();
+      return (
+        <div
+          data-testid="session-import-wizard"
+          data-stream-host={hostId ?? ""}
+        />
+      );
+    },
+  };
+});
+
+vi.mock("@/components/session-import/use-session-import-scan", () => ({
+  useSessionImportScan: (active: boolean) => {
+    scanMock.activeCalls.push(active);
+    return { state: { kind: "scan-stub" }, dispatch: () => undefined };
+  },
+}));
+
+vi.mock("@/hooks/session-import/use-session-import-available", () => ({
+  useSessionImportAvailable: () => capabilityMock.available,
+  useSessionImportAvailableFor: (
+    client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  ) =>
+    client === null ||
+    client.instanceId !==
+      `onboarding-test:${hostReadinessMock.unsupportedImportFor}`,
+}));
+
+vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
+  useScopedHostBinding: () => null,
+}));
+
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: (scope: HostScope) =>
+    scope.isViewingActive || scope.hostId === null
+      ? null
+      : streamBindingFor(
+          scope.hostId === hostReadinessMock.streamMismatchFor
+            ? "host-a"
+            : scope.hostId,
+        ),
+}));
 
 vi.mock(
   "@/components/settings/host-scope/use-host-scope",
@@ -119,172 +190,30 @@ vi.mock(
   }),
 );
 
-// The unary half needs no client here: every host RPC the tour makes is
-// mocked above, so what matters is only that the tour keeps rendering.
-vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
-  useScopedHostBinding: () => null,
+const navigateMock = vi.fn();
+const historyBackMock = vi.fn();
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => navigateMock,
+  useRouter: () => ({ history: { back: historyBackMock } }),
 }));
 
-// The stream half is this suite's subject, so it answers the way the real hook
-// does: a binding of its own for an explicit pick, `null` while following.
-//
-// `streamStallMock` reproduces the window that makes the tour's agreement
-// check necessary. The real hook holds its binding in STATE and replaces it in
-// an effect, so for at least the commit after a pick it still answers for the
-// host being left - or `null` - while the scope has already moved.
-const streamStallMock = vi.hoisted(() => ({ hostId: null as string | null }));
-
-vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
-  useScopedStreamBinding: (scope: HostScope) =>
-    scope.isViewingActive ||
-    scope.hostId === null ||
-    scope.hostId === streamStallMock.hostId
-      ? null
-      : streamBindingFor(scope.hostId),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
 }));
 
-// The picker's two collaborators outside this suite's subject: the registry
-// liveness poll (a query with no client behind it) and the Settings jump (a
-// router this harness has no route tree for).
-vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/auth/use-registered-hosts-query")
-  >()),
-  useRegisteredHostsPollLiveness: () => undefined,
-}));
-
-vi.mock("@/stores/tabs/use-system-tab-modal", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/stores/tabs/use-system-tab-modal")
-  >()),
-  useSystemTabModalActions: () => ({
-    openSettings: () => undefined,
-    openHistory: () => undefined,
-    close: () => undefined,
-    setSection: () => undefined,
+vi.mock("@/lib/safe-area-insets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/safe-area-insets")>()),
+  readSafeAreaInsets: () => ({
+    top: 0,
+    right: safeAreaInsetsMock.right,
+    bottom: 0,
+    left: safeAreaInsetsMock.left,
   }),
 }));
 
-/**
- * The negotiated capability the tour's length turns on. Driven directly here
- * rather than through the stream transport that backs the real hook.
- */
-const sessionImportAvailableMock = vi.hoisted(() => ({ value: true }));
+import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 
-// The per-CLIENT form is the session-import stage's own gate, so it answers
-// per host: each fake transport carries its host in `instanceId`, which is what
-// lets this say "host B is too old" without the stage being told a host id it
-// could have read from anywhere.
-const scanUnsupportedMock = vi.hoisted(() => ({
-  hostId: null as string | null,
-}));
-
-vi.mock("@/hooks/session-import/use-session-import-available", () => ({
-  useSessionImportAvailable: () => sessionImportAvailableMock.value,
-  useSessionImportAvailableFor: (
-    client: IHostStreamClient<HostStreamRpcRegistry> | null,
-  ) =>
-    client === null ||
-    scanUnsupportedMock.hostId === null ||
-    client.instanceId !== streamClientInstanceId(scanUnsupportedMock.hostId),
-}));
-
-// The wizard is stubbed above, so nothing in this file can click its own
-// Import button - this mock exists solely to prove the tour's own forward
-// control never starts a run on its own.
-const startSessionImportRunMock = vi.hoisted(() => vi.fn());
-vi.mock("@/components/session-import/session-import-run-handle", () => ({
-  startSessionImportRun: startSessionImportRunMock,
-}));
-
-// Off by default: the login-import act needs a browser bridge and saved
-// logins on, which this harness has no desktop for. Suites that exercise
-// the act flip it and stub the stage.
-const loginImportAvailableMock = vi.hoisted(() => ({ value: false }));
-
-vi.mock("@/hooks/browser/use-login-import-available", () => ({
-  useLoginImportAvailable: () => loginImportAvailableMock.value,
-}));
-
-vi.mock("@/components/onboarding/onboarding-diorama", () => ({
-  OnboardingDiorama: (props: {
-    readonly actId: OnboardingActId;
-    readonly agentGuide: OnboardingAgentGuideState;
-  }) => (
-    <div data-testid="onboarding-diorama-stub" data-act-id={props.actId}>
-      {props.actId === "agent-guide" ? (
-        <>
-          <textarea
-            data-testid="mock-agent-guide-input"
-            aria-label="Agent selection guide"
-            value={props.agentGuide.value}
-            disabled={props.agentGuide.loading || props.agentGuide.saving}
-            onChange={(event) =>
-              props.agentGuide.onValueChange(event.target.value)
-            }
-          />
-          <button
-            type="button"
-            data-testid="mock-agent-guide-revert"
-            disabled={
-              props.agentGuide.loading ||
-              props.agentGuide.saving ||
-              props.agentGuide.value ===
-                props.agentGuide.generatedDefaultContent
-            }
-            onClick={props.agentGuide.onRevertToDefault}
-          >
-            Revert
-          </button>
-        </>
-      ) : null}
-    </div>
-  ),
-}));
-
-let guideQueryState: GuideQueryState = {
-  data: {
-    content: "saved guide",
-    generatedDefaultContent: "claude guide",
-    providersSettled: true,
-  },
-  isError: false,
-};
-const setGlobalGuideMock = vi.fn((variables: { readonly content: string }) =>
-  Promise.resolve({
-    content: variables.content,
-    generatedDefaultContent:
-      guideQueryState.data?.generatedDefaultContent ?? "",
-  }),
-);
-const resetSetGlobalGuideMock = vi.fn();
-
-vi.mock(
-  "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query",
-  () => ({
-    useAgentSelectionGuideGlobalOnboardingDraftQuery: () => guideQueryState,
-  }),
-);
-
-// `isPending` is DRIVEN, not pinned false: the page reads it as
-// `agentGuideSaving`, and `saveAgentGuideDraft` reports failure while it is
-// true. A suite that pins it false cannot reach the mid-save arm at all.
-const guideSavingMock = vi.hoisted(() => ({ pending: false }));
-
-vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
-  useAgentSelectionGuideSetGlobalMutation: () => ({
-    isError: false,
-    isPending: guideSavingMock.pending,
-    mutateAsync: setGlobalGuideMock,
-    reset: resetSetGlobalGuideMock,
-  }),
-}));
-
-/**
- * The scope the tour sees, over the selection the PAGE owns - so a pick made
- * through the picker really does re-point the tour, rather than the fixture
- * deciding the answer in advance.
- */
 function tourScope(selection: HostScopeSelection): HostScope {
   const hosts = hostsMock.ids.map((hostId) =>
     hostScopeOptionFixture({ hostId, name: hostId }),
@@ -306,38 +235,29 @@ function tourScope(selection: HostScopeSelection): HostScope {
   });
 }
 
-/**
- * One binding per host, kept rather than rebuilt: a fresh object each render
- * would hand the whole subtree a new stream client on every commit.
- */
 const streamBindings = new Map<string, StreamRuntimeBinding>();
 
 function streamBindingFor(hostId: string): StreamRuntimeBinding {
   const existing = streamBindings.get(hostId);
   if (existing !== undefined) return existing;
-  const created: StreamRuntimeBinding = {
+  const binding: StreamRuntimeBinding = {
     wsStreamClient: fakeWsStreamClient(hostId),
     hostId,
     retain: null,
   };
-  streamBindings.set(hostId, created);
-  return created;
+  streamBindings.set(hostId, binding);
+  return binding;
 }
 
-function streamClientInstanceId(hostId: string): string {
-  return `fake-ws-stream-client:${hostId}`;
-}
-
-/** Honest enough for `useWsStreamClient`, which only asks whether it is open. */
 function fakeWsStreamClient(
   hostId: string,
 ): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => {
-      throw new Error("not exercised by this suite");
+      throw new Error("not exercised by this test");
     },
     subscribeWithParamsProvider: () => {
-      throw new Error("not exercised by this suite");
+      throw new Error("not exercised by this test");
     },
     close: () => undefined,
     isClosed: () => false,
@@ -350,1143 +270,955 @@ function fakeWsStreamClient(
     getMethodSchemaVersion: () => null,
     subscribeAvailabilityRecovered: () => () => undefined,
     getClosedReason: () => null,
-    instanceId: streamClientInstanceId(hostId),
     onClosed: () => () => undefined,
+    instanceId: `onboarding-test:${hostId}`,
   };
 }
 
-const navigateMock = vi.fn();
-const historyBackMock = vi.fn();
-const routerHistory = { length: 1, back: historyBackMock };
+function renderPage(replay: boolean) {
+  vi.useFakeTimers();
+  try {
+    const view = render(<OnboardingPage replay={replay} />);
+    const skipWelcome = screen.queryByTestId("onboarding-welcome-skip");
+    if (skipWelcome !== null) {
+      fireEvent.click(skipWelcome);
+      void act(() => vi.advanceTimersByTime(320));
+    }
+    return view;
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@tanstack/react-router")>();
-  return {
-    ...actual,
-    useNavigate: () => navigateMock,
-    useRouter: () => ({ history: routerHistory }),
-  };
-});
+function currentStepId(): string | null {
+  return screen.getByTestId("onboarding-step").getAttribute("data-step-id");
+}
 
-// Import after mocks are registered.
-import { OnboardingPage } from "@/components/onboarding/onboarding-page";
-import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
-import { browserMutationKeys } from "@/lib/query-keys";
-import {
-  progressEntryFrom,
-  useSessionImportRunStore,
-} from "@/stores/session-import/session-import-run-store";
+async function advanceToStep(stepId: string): Promise<void> {
+  const stepIds = capabilityMock.available
+    ? ["task-tabs", "providers", "session-import"]
+    : ["task-tabs", "providers"];
+  const target = stepIds.indexOf(stepId);
+  for (
+    let index = stepIds.indexOf(currentStepId() ?? "");
+    index < target;
+    index++
+  ) {
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+    await waitFor(() => expect(currentStepId()).toBe(stepIds[index + 1]));
+  }
+}
+
+interface PointerPosition {
+  readonly clientX: number;
+  readonly clientY: number;
+}
 
 /**
- * Every link surface below reaches the external-link bridge mutation, which
- * needs a `QueryClientProvider` above it.
+ * The tracked drag reads `timeStamp` to get a release speed, so every synthetic
+ * pointer carries one: without it three events constructed in the same tick
+ * look like an infinitely fast flick, and the distance arm - the one most of
+ * these cases are about - is never reached.
  */
-function render(ui: ReactNode): RenderResult {
-  return renderUi(ui, { wrapper: WithTestQueryClient });
+function dispatchPointer(
+  target: EventTarget,
+  type: "pointerdown" | "pointermove" | "pointerup",
+  position: PointerPosition,
+  atMs: number,
+): void {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    clientX: { value: position.clientX },
+    clientY: { value: position.clientY },
+    pointerId: { value: 1 },
+    isPrimary: { value: true },
+    timeStamp: { value: atMs },
+  });
+  target.dispatchEvent(event);
 }
 
-function renderPage(args: { readonly replay: boolean }) {
-  return render(
-    <LazyMotion features={domAnimation}>
-      <OnboardingPage replay={args.replay} />
-    </LazyMotion>,
-  );
-}
-
-function createRunnerHost() {
-  return new MockRunnerHost({
-    signInUrl: "https://auth.traycer.test/sign-in",
-    authnBaseUrl: "https://auth.traycer.test",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
+/** A deliberate drag: 300ms of travel, which is well under the flick speed. */
+function drag(
+  target: EventTarget,
+  from: PointerPosition,
+  to: PointerPosition,
+): void {
+  act(() => {
+    dispatchPointer(target, "pointerdown", from, 0);
+    dispatchPointer(window, "pointermove", to, 300);
+    dispatchPointer(window, "pointerup", to, 300);
   });
 }
 
-/** The tour the mocked host actually runs - not always the whole catalog. */
-function visibleActs(): ReadonlyArray<OnboardingAct> {
-  return onboardingActsFor({
-    sessionImportAvailable: sessionImportAvailableMock.value,
-    loginImportAvailable: loginImportAvailableMock.value,
+/** A flick: the same travel spent in 40ms, so the speed arm decides. */
+function flick(
+  target: EventTarget,
+  from: PointerPosition,
+  to: PointerPosition,
+): void {
+  act(() => {
+    dispatchPointer(target, "pointerdown", from, 0);
+    dispatchPointer(window, "pointermove", to, 40);
+    dispatchPointer(window, "pointerup", to, 40);
   });
 }
 
-function currentActId(): string | null {
-  return screen.getByTestId("onboarding-act").getAttribute("data-act-id");
-}
-
-async function advanceToAct(actId: OnboardingActId): Promise<void> {
-  const acts = visibleActs();
-  const target = acts.findIndex((act) => act.id === actId);
-  const current = acts.findIndex((act) => act.id === currentActId());
-  for (let index = current; index < target; index++) {
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-    await waitFor(() => {
-      expect(currentActId()).toBe(acts[index + 1].id);
-    });
+function onboardingTourLayer(): HTMLElement {
+  const layer = screen.getByTestId("onboarding-step").closest("[aria-hidden]");
+  if (!(layer instanceof HTMLElement)) {
+    throw new Error("Expected the onboarding tour layer.");
   }
+  return layer;
+}
+
+function swipeSurface(container: HTMLElement): HTMLElement {
+  const surface = container.querySelector(".onboarding-stage-scroll");
+  if (!(surface instanceof HTMLElement)) throw new Error("stage is missing");
+  return surface;
+}
+
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+
+/**
+ * The phone layout is keyed to the VIEWPORT (`useIsMobileViewport`, 768px), not
+ * to the installed app, so a width is all these suites have to set. The global
+ * `matchMedia` stub never fires a change, which is exactly right here: the
+ * snapshot is read at render and the width is fixed for the test.
+ */
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
 }
 
 describe("OnboardingPage", () => {
   beforeEach(() => {
+    stubElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    resetFeatureAnnouncementsStore();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useFeatureAnnouncementsStore.setState({ consumed: {} });
-    window.localStorage.clear();
-    sessionImportAvailableMock.value = true;
+    useSessionImportRunStore.setState({ runs: new Map() });
+    useFirstTaskGuideStore.setState({
+      status: "inactive",
+      imports: new Map(),
+      workspaceReviewed: false,
+    });
+    setMobileApp(false);
+    capabilityMock.available = true;
     hostsMock.ids = ["host-a"];
-    streamStallMock.hostId = null;
-    guideSavingMock.pending = false;
-    scanUnsupportedMock.hostId = null;
-    startSessionImportRunMock.mockClear();
+    prefetchMock.renders = 0;
+    hostReadinessMock.streamMismatchFor = null;
+    hostReadinessMock.unsupportedImportFor = null;
+    scanMock.activeCalls.length = 0;
+    safeAreaInsetsMock.left = 0;
+    safeAreaInsetsMock.right = 0;
+    openLinkMock.mockReset();
     navigateMock.mockReset();
     historyBackMock.mockReset();
-    setGlobalGuideMock.mockClear();
-    resetSetGlobalGuideMock.mockClear();
-    routerHistory.length = 1;
-    guideQueryState = {
-      data: {
-        content: "saved guide",
-        generatedDefaultContent: "claude guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
   });
 
   afterEach(() => {
     cleanup();
+    restoreElementScrollTo();
+    resetFeatureAnnouncementsStore();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useFeatureAnnouncementsStore.setState({ consumed: {} });
-    window.localStorage.clear();
+    useSessionImportRunStore.setState({ runs: new Map() });
+    setMobileApp(false);
   });
 
-  it("renders act 1 copy and the live miniature on initial mount", () => {
-    renderPage({ replay: false });
+  it("shows the fixed three-step desktop flow and advances by step id", async () => {
+    renderPage(false);
 
-    const firstAct = ONBOARDING_ACTS[0];
+    expect(currentStepId()).toBe("task-tabs");
     expect(
-      screen.getByText(firstAct.title.replace(/\s+/g, " "), {
-        exact: false,
-      }),
-    ).not.toBeNull();
-    expect(screen.getByTestId("onboarding-diorama-stub")).not.toBeNull();
-  });
+      screen.getByRole("heading", { name: /A home for\s+all your work\./ }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("workspace-illustration")).toBeTruthy();
+    expect(scanMock.activeCalls.at(-1)).toBe(true);
+    expect(screen.getByTestId("provider-prefetch")).toBeTruthy();
 
-  it("starts a new onboarding session from act 1 instead of a stale store step", async () => {
-    useOnboardingStore.setState({ completedAt: 123, step: 3 });
+    await advanceToStep("providers");
+    expect(screen.getByTestId("detected-agents-stub")).toBeTruthy();
+    expect(screen.queryByTestId("provider-prefetch")).toBeNull();
 
-    renderPage({ replay: true });
-
-    const firstAct = ONBOARDING_ACTS[0];
-    await waitFor(() => {
-      expect(
-        screen.getByText(firstAct.title.replace(/\s+/g, " "), {
-          exact: false,
-        }),
-      ).not.toBeNull();
-      expect(useOnboardingStore.getState().completedAt).toBe(123);
-      expect(useOnboardingStore.getState().step).toBe(0);
-    });
-  });
-
-  it("shows the continue button (not 'Enter Traycer') on the first act", () => {
-    renderPage({ replay: false });
-
-    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
-      "Continue",
-    );
-  });
-
-  it("shows the client version in the footer", () => {
-    renderPage({ replay: false });
-
-    expect(screen.getByText("v0.0.0")).not.toBeNull();
-  });
-
-  it("wires onboarding footer links to the website destinations", async () => {
-    const host = createRunnerHost();
-    render(
-      <RunnerHostContext.Provider value={host}>
-        <LazyMotion features={domAnimation}>
-          <OnboardingPage replay={false} />
-        </LazyMotion>
-      </RunnerHostContext.Provider>,
-    );
-
-    const expectedLinks = [
-      ["Features", traycerInfo.mainWebsiteFeatures],
-      ["Enterprise", traycerInfo.mainWebsiteEnterprise],
-      ["Support", traycerInfo.mainWebsiteContactUs],
-    ] as const;
-
-    expectedLinks.forEach(([label, url]) => {
-      const link = screen.getByRole<HTMLAnchorElement>("link", {
-        name: label,
-      });
-      expect(link.href).toBe(url);
-      fireEvent.click(link);
-    });
-
-    // The bridge is a mutation now, so each handoff lands a microtask later.
-    await waitFor(() => {
-      expect(host.openedExternalLinks).toEqual(
-        expectedLinks.map(([, url]) => url),
-      );
-    });
-  });
-
-  it("advances through every act while keeping the Figma continue label", async () => {
-    renderPage({ replay: false });
-
-    const acts = visibleActs();
-    for (let index = 0; index < acts.length - 1; index++) {
-      const advanceButton = screen.getByTestId("onboarding-advance");
-      expect(advanceButton.textContent).toContain("Continue");
-      fireEvent.click(advanceButton);
-      await waitFor(() => {
-        expect(currentActId()).toBe(acts[index + 1].id);
-      });
-    }
-
-    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
-      "Start building",
-    );
-  });
-
-  it("omits the session-import act entirely when the host cannot scan sessions", async () => {
-    // The act's stage IS the live wizard, so an unsupported host has nothing to
-    // put there: the act must be unreachable, not blank.
-    sessionImportAvailableMock.value = false;
-    renderPage({ replay: false });
-
-    const acts = visibleActs();
-    expect(acts.map((act) => act.id)).not.toContain("session-import");
-
-    const walked: Array<string | null> = [currentActId()];
-    for (let index = 0; index < acts.length - 1; index++) {
-      expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
-      fireEvent.click(screen.getByTestId("onboarding-advance"));
-      await waitFor(() => {
-        expect(currentActId()).toBe(acts[index + 1].id);
-      });
-      walked.push(currentActId());
-    }
-
-    expect(walked).toEqual(acts.map((act) => act.id));
-    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
-
-    // The act after providers is now delegation, and the tour still ends on the
-    // same last act - which finishes onboarding rather than overrunning.
-    expect(walked[4]).toBe("agent-guide");
-    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
-      "Start building",
-    );
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-  });
-
-  it("keeps the session-import act, wizard and all, when the host can scan", async () => {
-    renderPage({ replay: false });
-
-    expect(visibleActs().map((act) => act.id)).toContain("session-import");
-    await advanceToAct("session-import");
-
-    expect(currentActId()).toBe("session-import");
-    expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
-    // This act has no mock-up to preview: its diorama slot holds the live
-    // wizard's own stage, not the shared `OnboardingDiorama`.
-    expect(
-      screen.getByTestId("onboarding-session-import-stage"),
-    ).not.toBeNull();
-    expect(screen.queryByTestId("onboarding-diorama-stub")).toBeNull();
-  });
-
-  it("does not start an import when 'Start building' is pressed on the session-import act", async () => {
-    // The wizard's own Import button is the only thing that starts a run; an
-    // earlier version made Continue do both, which imported the default
-    // selection without an explicit ask.
-    renderPage({ replay: false });
-
-    const acts = visibleActs();
-    await advanceToAct(acts[acts.length - 1].id);
-    expect(currentActId()).toBe("session-import");
-    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
-      "Start building",
-    );
+    await advanceToStep("session-import");
+    expect(screen.getByTestId("onboarding-session-import-stage")).toBeTruthy();
+    expect(screen.getByTestId("session-import-wizard")).toBeTruthy();
+    expect(screen.getByTestId("provider-prefetch")).toBeTruthy();
 
     fireEvent.click(screen.getByTestId("onboarding-advance"));
-
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(startSessionImportRunMock).not.toHaveBeenCalled();
-  });
-
-  it("first-run finish (no replay flag) marks complete and opens a fresh draft tab", async () => {
-    renderPage({ replay: false });
-
-    const acts = visibleActs();
-    await advanceToAct(acts[acts.length - 1].id);
-
-    // Now on the last act.
-    expect(useOnboardingStore.getState().completedAt).toBeNull();
-
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-
-    await waitFor(() => {
-      expect(setGlobalGuideMock).toHaveBeenCalledWith({
-        content: "saved guide",
-      });
-    });
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
+    expect(useOnboardingStore.getState().completedAt).toEqual(
+      expect.any(Number),
+    );
+    expect(useFirstTaskGuideStore.getState().status).toBe("active");
     expect(navigateMock).toHaveBeenCalledWith({
       to: "/draft/new",
       replace: true,
     });
-    expect(historyBackMock).not.toHaveBeenCalled();
   });
 
-  it("shows the generated guide in onboarding, keeps it in memory on Continue, and saves on finish", async () => {
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "claude guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    renderPage({ replay: false });
+  // The desktop shell is not what the phone rework changed, and this is the
+  // guard that says so: the eyebrow, the wordmark and a footer Back are all
+  // things the phone branch removes, and all three still belong here.
+  it("keeps the desktop shell: the eyebrow, the wordmark, and Back in the footer", async () => {
+    const { container } = renderPage(false);
 
-    await advanceToAct("agent-guide");
-
-    const input = screen.getByTestId<HTMLTextAreaElement>(
-      "mock-agent-guide-input",
+    expect(container.querySelector(".onboarding-eyebrow")?.textContent).toBe(
+      "Workspace · 1 of 3",
     );
-    expect(input.value).toBe("claude guide");
+    expect(container.querySelector(".onboarding-wordmark")).not.toBeNull();
+    expect(screen.getByTestId("onboarding-skip").textContent).toBe(
+      "Skip intro",
+    );
+    expect(screen.getByTestId("onboarding-advance").className).not.toContain(
+      "onboarding-button--block",
+    );
 
-    fireEvent.change(input, { target: { value: "custom onboarding guide" } });
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
+    await advanceToStep("providers");
 
-    await waitFor(() => {
+    const back = screen.getByTestId("onboarding-back");
+    expect(back.closest("footer")).not.toBeNull();
+    expect(back.closest("header")).toBeNull();
+    expect(back.textContent).toBe("Back");
+  });
+
+  it("shows the welcome first, prefetches provider data, then reveals the tour after both transitions", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
+      expect(onboardingTourLayer().hasAttribute("inert")).toBe(true);
+      expect(screen.getByTestId("provider-prefetch")).toBeTruthy();
+      expect(prefetchMock.renders).toBeGreaterThan(0);
+      expect(scanMock.activeCalls.at(-1)).toBe(true);
+
+      void act(() => vi.advanceTimersByTime(1799));
+      expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(1));
+      const welcome = screen
+        .getByTestId("onboarding-welcome-skip")
+        .closest("section");
+      expect(welcome?.getAttribute("data-leaving")).toBe("true");
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(319));
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(screen.queryByTestId("onboarding-welcome-skip")).toBeNull();
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).not.toBe(
+        "true",
+      );
+      expect(currentStepId()).toBe("task-tabs");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets Skip welcome bypass the hold without skipping the onboarding steps", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
+
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      void act(() => vi.advanceTimersByTime(320));
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).not.toBe(
+        "true",
+      );
+      expect(currentStepId()).toBe("task-tabs");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the short welcome and leave timings when reduced motion is preferred", () => {
+    // Enough of a MediaQueryList for every reader on this screen: the welcome's
+    // own timings read `matches`, and `useIsMobileViewport` subscribes.
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      void act(() => vi.advanceTimersByTime(299));
+      expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
+      void act(() => vi.advanceTimersByTime(1));
       expect(
-        screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
-      ).toBe("command-theme");
-    });
-    expect(setGlobalGuideMock).not.toHaveBeenCalled();
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
 
-    // command-theme is no longer the last act - session-import now follows
-    // it - so Continue here only advances, and the guide is only saved once
-    // "Start building" is pressed on that final act.
+      void act(() => vi.advanceTimersByTime(149));
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
+      void act(() => vi.advanceTimersByTime(1));
+      expect(onboardingTourLayer().getAttribute("aria-hidden")).not.toBe(
+        "true",
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("omits session import and its scan when the host does not support it", async () => {
+    capabilityMock.available = false;
+    renderPage(false);
+
+    await advanceToStep("providers");
+    expect(screen.queryByTestId("onboarding-session-import-stage")).toBeNull();
+    expect(scanMock.activeCalls.at(-1)).toBe(false);
+
     fireEvent.click(screen.getByTestId("onboarding-advance"));
 
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
-      ).toBe("session-import");
-    });
-    expect(setGlobalGuideMock).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-
-    await waitFor(() => {
-      expect(setGlobalGuideMock).toHaveBeenCalledWith({
-        content: "custom onboarding guide",
-      });
+    expect(useOnboardingStore.getState().completedAt).toEqual(
+      expect.any(Number),
+    );
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: "/draft/new",
+      replace: true,
     });
   });
 
-  it("keeps onboarding navigation available while provider discovery settles", async () => {
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "traycer guide",
-        providersSettled: false,
-      },
-      isError: false,
-    };
-    renderPage({ replay: false });
+  it("finishes a replay by returning to history without navigating to a new draft", () => {
+    renderPage(true);
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
 
-    await advanceToAct("agent-guide");
+    expect(useOnboardingStore.getState().completedAt).toEqual(
+      expect.any(Number),
+    );
+    expect(historyBackMock).toHaveBeenCalledOnce();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
+  });
 
-    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Agent selection guide",
+  it("consumes the login import announcement when first-run onboarding mounts", () => {
+    renderPage(false);
+
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toEqual(expect.any(Number));
+    expect(useFeatureAnnouncementsStore.getState().claim("login-import")).toBe(
+      false,
+    );
+  });
+
+  it("spends the import announcement only once the import act is on screen", async () => {
+    renderPage(false);
+
+    // Still owed: someone who skips from here never saw the act, so the toast
+    // is how they hear about importing.
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toBeUndefined();
+
+    await advanceToStep("session-import");
+
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toEqual(expect.any(Number));
+  });
+
+  it("does not consume the login import announcement when onboarding is replayed", () => {
+    renderPage(true);
+
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeUndefined();
+  });
+
+  it("dismisses the first-task guide when first-run onboarding is skipped", () => {
+    renderPage(false);
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+  });
+
+  it("does not activate the guide when replay onboarding completes", async () => {
+    renderPage(true);
+    await advanceToStep("session-import");
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+
+    expect(historyBackMock).toHaveBeenCalledOnce();
+    expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
+  });
+
+  it("starts every replay from the first step without clearing completion", () => {
+    useOnboardingStore.setState({ completedAt: 123, step: 2 });
+    renderPage(true);
+
+    expect(currentStepId()).toBe("task-tabs");
+    expect(useOnboardingStore.getState()).toMatchObject({
+      completedAt: 123,
+      step: 0,
     });
-    expect(input.disabled).toBe(true);
+  });
+
+  it("keeps the provider and import screens on the host selected in the provider screen", async () => {
+    hostsMock.ids = ["host-a", "host-b"];
+    renderPage(false);
+    await advanceToStep("providers");
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("detected-agents-stub").getAttribute("data-host-id"),
+      ).toBe("host-b");
+    });
+
+    await advanceToStep("session-import");
     expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: /continue/i })
-        .disabled,
-    ).toBe(false);
+      screen
+        .getByTestId("session-import-wizard")
+        .getAttribute("data-stream-host"),
+    ).toBe("host-b");
+  });
+
+  it("withholds host-scoped content while the stream does not match the selected host", async () => {
+    hostsMock.ids = ["host-a", "host-b"];
+    hostReadinessMock.streamMismatchFor = "host-b";
+    renderPage(false);
+    await advanceToStep("providers");
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    expect(screen.getByTestId("host-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("detected-agents-stub")).toBeNull();
+
+    await advanceToStep("session-import");
+    expect(screen.queryByTestId("session-import-wizard")).toBeNull();
     expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: /skip intro/i })
-        .disabled,
-    ).toBe(false);
+      screen.getByTestId("host-unavailable").getAttribute("data-refusal"),
+    ).toBe("");
+  });
+
+  it("shows the selected host's import refusal when that host lacks scan support", async () => {
+    hostsMock.ids = ["host-a", "host-b"];
+    hostReadinessMock.unsupportedImportFor = "host-b";
+    renderPage(false);
+    await advanceToStep("providers");
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+    await advanceToStep("session-import");
+
+    expect(screen.queryByTestId("session-import-wizard")).toBeNull();
+    expect(
+      screen.getByTestId("host-unavailable").getAttribute("data-refusal"),
+    ).toBe("host-b can't import tasks");
+  });
+
+  it("uses arrows, Enter, and Escape for navigation while ignoring controls, editors, and overlays", async () => {
+    renderPage(false);
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+
+    const input = document.createElement("input");
+    document.body.append(input);
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(currentStepId()).toBe("providers");
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    await waitFor(() => expect(currentStepId()).toBe("task-tabs"));
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+
+    fireEvent.keyDown(screen.getByTestId("provider-editor"), {
+      key: "ArrowRight",
+    });
+    expect(currentStepId()).toBe("providers");
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.append(dialog);
+    fireEvent.keyDown(dialog, { key: "ArrowRight" });
+    expect(currentStepId()).toBe("providers");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    expect(useOnboardingStore.getState().completedAt).toEqual(
+      expect.any(Number),
+    );
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: "/draft/new",
+      replace: true,
     });
-    expect(setGlobalGuideMock).not.toHaveBeenCalled();
+    input.remove();
+    dialog.remove();
   });
 
-  it("persists an edited existing guide even while provider discovery is still settling", async () => {
-    guideQueryState = {
-      data: {
-        content: "saved guide",
-        generatedDefaultContent: "claude guide",
-        providersSettled: false,
-      },
-      isError: false,
-    };
-    renderPage({ replay: false });
+  it("skips the tour on Escape from its own controls, and leaves an open picker's Escape alone", () => {
+    renderPage(false);
 
-    await advanceToAct("agent-guide");
+    const picker = document.createElement("div");
+    picker.setAttribute("data-slot", "popover-content");
+    picker.setAttribute("data-state", "open");
+    document.body.append(picker);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useOnboardingStore.getState().completedAt).toBeNull();
+    picker.remove();
 
-    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Agent selection guide",
-    });
-    expect(input.disabled).toBe(false);
+    // Escape does what Skip does, and the tour IS the screen - so an Escape
+    // aimed at one of its own buttons is still aimed at the tour.
+    fireEvent.keyDown(screen.getByTestId("onboarding-skip"), { key: "Escape" });
 
-    fireEvent.change(input, {
-      target: { value: "edited while providers settle" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /skip intro/i }));
-
-    await waitFor(() => {
-      expect(setGlobalGuideMock).toHaveBeenCalledWith({
-        content: "edited while providers settle",
-      });
-    });
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-  });
-
-  it("never traps the user when the onboarding guide fails to load", async () => {
-    guideQueryState = { data: undefined, isError: true };
-    renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-
-    // The optional guide keeps spinning (editor disabled) since the read never
-    // resolved, but it must not block onboarding: Skip and Advance stay enabled.
-    expect(
-      screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input")
-        .disabled,
-    ).toBe(true);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("onboarding-skip").disabled,
-    ).toBe(false);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("onboarding-advance").disabled,
-    ).toBe(false);
-
-    // Skipping completes onboarding without attempting to persist an unloaded
-    // guide.
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(setGlobalGuideMock).not.toHaveBeenCalled();
-  });
-
-  it("refreshes an untouched onboarding guide from regenerated defaults and preserves edits", async () => {
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "claude guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    const { rerender } = renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-
-    const input = screen.getByTestId<HTMLTextAreaElement>(
-      "mock-agent-guide-input",
+    expect(useOnboardingStore.getState().completedAt).toEqual(
+      expect.any(Number),
     );
-    expect(input.value).toBe("claude guide");
-
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "codex guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-      ).toBe("codex guide");
-    });
-
-    fireEvent.change(
-      screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input"),
-      {
-        target: { value: "hand-written guide" },
-      },
-    );
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "opencode guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    expect(
-      screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-    ).toBe("hand-written guide");
-
-    fireEvent.click(screen.getByTestId("mock-agent-guide-revert"));
-    expect(
-      screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-    ).toBe("opencode guide");
-  });
-
-  it("replaces cached generated onboarding content with later saved disk content", async () => {
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "claude guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    const { rerender } = renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-
-    expect(
-      screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-    ).toBe("claude guide");
-
-    guideQueryState = {
-      data: {
-        content: "saved disk guide",
-        generatedDefaultContent: "codex guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-      ).toBe("saved disk guide");
-    });
-  });
-
-  it("shows existing guide content without replacing it with provider defaults", async () => {
-    const { rerender } = renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-
-    const input = screen.getByTestId<HTMLTextAreaElement>(
-      "mock-agent-guide-input",
-    );
-    expect(input.value).toBe("saved guide");
-
-    guideQueryState = {
-      data: {
-        content: "saved guide",
-        generatedDefaultContent: "codex guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-      ).toBe("saved guide");
-    });
-
-    fireEvent.click(screen.getByTestId("mock-agent-guide-revert"));
-    expect(
-      screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-    ).toBe("codex guide");
-
-    guideQueryState = {
-      data: {
-        content: "saved guide",
-        generatedDefaultContent: "opencode guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
-      ).toBe("codex guide");
-    });
-  });
-
-  it("replay finish (replay flag) saves the visible guide, marks complete, and returns to the prior route", async () => {
-    renderPage({ replay: true });
-
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
-
-    await waitFor(() => {
-      expect(setGlobalGuideMock).toHaveBeenCalledWith({
-        content: "saved guide",
-      });
-    });
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(historyBackMock).toHaveBeenCalledTimes(1);
-    expect(navigateMock).not.toHaveBeenCalled();
-  });
-
-  it("clicking the skip button on a first run saves the visible guide and opens a fresh draft tab", async () => {
-    guideQueryState = {
-      data: {
-        content: null,
-        generatedDefaultContent: "claude guide",
-        providersSettled: true,
-      },
-      isError: false,
-    };
-    renderPage({ replay: false });
-
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
-
-    await waitFor(() => {
-      expect(setGlobalGuideMock).toHaveBeenCalledWith({
-        content: "claude guide",
-      });
-    });
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
     expect(navigateMock).toHaveBeenCalledWith({
       to: "/draft/new",
       replace: true,
     });
   });
 
-  it("consumes the login-import announcement on Skip when the import is available", async () => {
-    loginImportAvailableMock.value = true;
-    renderPage({ replay: false });
+  // Input inside an act is not navigation: only the deliberate gestures swap
+  // the step, and the block the eye is on is the SAME element afterwards.
+  it("keeps the act stable for in-step input", async () => {
+    renderPage(false);
+    await advanceToStep("providers");
 
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
+    const currentStep = screen.getByTestId("onboarding-step");
+    const editor = screen.getByTestId("provider-editor");
 
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(
-      useFeatureAnnouncementsStore.getState().consumed["login-import"],
-    ).toBeDefined();
+    fireEvent.keyDown(editor, { key: "Tab" });
+    expect(screen.getByTestId("onboarding-step")).toBe(currentStep);
+
+    fireEvent.pointerDown(editor);
+    fireEvent.click(editor);
+    expect(screen.getByTestId("onboarding-step")).toBe(currentStep);
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(currentStepId()).toBe("session-import"));
   });
+});
 
-  it("consumes the login-import announcement on Skip even when the import is unavailable, so a pending availability read cannot resurrect the toast", async () => {
-    loginImportAvailableMock.value = false;
-    renderPage({ replay: false });
-
-    fireEvent.click(screen.getByRole("button", { name: /Skip intro/ }));
-
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(
-      useFeatureAnnouncementsStore.getState().consumed["login-import"],
-    ).toBeDefined();
-  });
-
-  it("consumes the login-import announcement on a completed tour (Continue through the last act)", async () => {
-    loginImportAvailableMock.value = true;
-    renderPage({ replay: false });
-
-    const acts = visibleActs();
-    await advanceToAct(acts[acts.length - 1].id);
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    expect(
-      useFeatureAnnouncementsStore.getState().consumed["login-import"],
-    ).toBeDefined();
-  });
-
-  it("disables Back while a login import is pending, and re-enables once it settles", async () => {
-    loginImportAvailableMock.value = true;
-    const client = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-    renderUi(
-      <QueryClientProvider client={client}>
-        <LazyMotion features={domAnimation}>
-          <OnboardingPage replay={false} />
-        </LazyMotion>
-      </QueryClientProvider>,
-    );
-
-    await advanceToAct("login-import");
-    expect(currentActId()).toBe("login-import");
-
-    // Drives the SAME mutation cache `useIsMutating` reads, under the exact
-    // key the import mutation uses - no need to walk the whole import flow's
-    // UI to get a pending mutation registered.
-    // A holder rather than a `let`: the assignment happens inside the
-    // mutation's callback, which TypeScript's narrowing cannot see.
-    const releaseImport: { current: (() => void) | null } = { current: null };
-    const mutation = client.getMutationCache().build(client, {
-      mutationKey: browserMutationKeys.importLogins(),
-      mutationFn: () =>
-        new Promise<void>((resolve) => {
-          releaseImport.current = () => {
-            resolve();
-          };
-        }),
-    });
-    void mutation.execute(undefined);
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole<HTMLButtonElement>("button", { name: /Back/ })
-          .disabled,
-      ).toBe(true);
-    });
-
-    // The ArrowLeft path is the same guard as the button: the step must not
-    // move while the import is in flight.
-    const stepBeforeArrowLeft = useOnboardingStore.getState().step;
-    fireEvent.keyDown(window, { key: "ArrowLeft" });
-    expect(useOnboardingStore.getState().step).toBe(stepBeforeArrowLeft);
-    expect(currentActId()).toBe("login-import");
-
-    const release = releaseImport.current;
-    if (release === null) throw new Error("no import mutation to release");
-    release();
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole<HTMLButtonElement>("button", { name: /Back/ })
-          .disabled,
-      ).toBe(false);
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
-    await waitFor(() => {
-      expect(currentActId()).not.toBe("login-import");
-    });
-  });
-
-  it("consumes the login-import announcement on Skip even after the act was dropped from the list mid-tour", async () => {
-    loginImportAvailableMock.value = true;
-    const view = renderPage({ replay: false });
-
-    // The tour-scoped marker is set by an effect that has to observe the act
-    // in the list at least once.
-    await waitFor(() => {
-      expect(visibleActs().map((act) => act.id)).toContain("login-import");
-    });
-
-    loginImportAvailableMock.value = false;
-    view.rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    await waitFor(() => {
-      expect(visibleActs().map((act) => act.id)).not.toContain("login-import");
-    });
-
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
-
-    await waitFor(() => {
-      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
-    });
-    // The marker, not the live availability: the act was offered at some
-    // point during this tour, even though the list held it for only part of
-    // it.
-    expect(
-      useFeatureAnnouncementsStore.getState().consumed["login-import"],
-    ).toBeDefined();
-  });
-
-  it("keeps the user on the SAME act by id when the act list changes under them", async () => {
-    // The shorter tour: login import starts unavailable, so agent-guide
-    // sits one index earlier than it does in the full catalog.
-    loginImportAvailableMock.value = false;
-    const view = renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-    expect(currentActId()).toBe("agent-guide");
-
-    // Login import resolves available mid-tour and a new act is inserted
-    // ahead of agent-guide, which shifts its index by one.
-    loginImportAvailableMock.value = true;
-    view.rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    await waitFor(() => {
-      expect(currentActId()).toBe("agent-guide");
-    });
-    // The store's own position moved WITH the act, to wherever agent-guide
-    // now sits in the longer tour - never left pointing at the login-import
-    // act that took its old index.
-    const agentGuideIndex = visibleActs().findIndex(
-      (entry) => entry.id === "agent-guide",
-    );
-    expect(useOnboardingStore.getState().step).toBe(agentGuideIndex);
-  });
-
-  it("a normal Continue still advances to the next act after a re-seat", async () => {
-    loginImportAvailableMock.value = false;
-    const view = renderPage({ replay: false });
-    await advanceToAct("agent-guide");
-
-    loginImportAvailableMock.value = true;
-    view.rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-    await waitFor(() => {
-      expect(currentActId()).toBe("agent-guide");
-    });
-
-    await advanceToAct("command-theme");
-
-    expect(currentActId()).toBe("command-theme");
-  });
-
-  function streamHostOfWizard(): string | null {
-    return screen
-      .getByTestId("session-import-wizard-stub")
-      .getAttribute("data-stream-host");
-  }
-
-  it("re-points the import stage's stream at a newly picked host", async () => {
-    hostsMock.ids = ["host-a", "host-b"];
-    renderPage({ replay: false });
-    await advanceToAct("session-import");
-
-    // Following the host the tour opened on: no transport of its own, which is
-    // exactly what the tour read before there was a picker.
-    expect(streamHostOfWizard()).toBe("");
-
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
-
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-b");
-    });
-  });
-
-  it("saves the guide draft to the host being left before the pick commits", async () => {
-    hostsMock.ids = ["host-a", "host-b"];
-    // Held open so the ORDER is observable rather than inferred from a promise
-    // that resolves in the same tick as the click.
-    const save = { release: (): void => undefined };
-    setGlobalGuideMock.mockImplementationOnce(
-      (variables: { readonly content: string }) =>
-        new Promise((resolve) => {
-          save.release = () =>
-            resolve({
-              content: variables.content,
-              generatedDefaultContent: "claude guide",
-            });
-        }),
-    );
-    renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-    fireEvent.change(screen.getByTestId("mock-agent-guide-input"), {
-      target: { value: "notes for host a" },
-    });
-    await advanceToAct("session-import");
-
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
-
-    expect(setGlobalGuideMock).toHaveBeenCalledWith({
-      content: "notes for host a",
-    });
-    // The write is still in flight, so the tour is still on the host it is
-    // writing to - a pick that committed here would land host A's draft on
-    // host B.
-    expect(streamHostOfWizard()).toBe("");
-
-    act(() => save.release());
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-b");
-    });
-  });
-
-  it("withholds the wizard while the stream still names the host being left", async () => {
-    // The scope resolves a pick synchronously; the transport does not. Between
-    // the two, the wizard on screen would scan - and import from - host A under
-    // a title bar reading host B.
-    hostsMock.ids = ["host-a", "host-b"];
-    streamStallMock.hostId = "host-b";
-    const view = renderPage({ replay: false });
-    await advanceToAct("session-import");
-
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("host-scope-connecting")).not.toBeNull();
-    });
-    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
-
-    // And it is a WAIT, not a dead end: the wizard returns on the host it
-    // names the moment the transport catches up.
-    streamStallMock.hostId = null;
-    view.rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-b");
-    });
-  });
-
-  it("honours the latest pick when a second one lands mid-save", async () => {
-    hostsMock.ids = ["host-a", "host-b", "host-c"];
-    const save = { release: (): void => undefined };
-    setGlobalGuideMock.mockImplementationOnce(
-      (variables: { readonly content: string }) =>
-        new Promise((resolve) => {
-          guideSavingMock.pending = true;
-          save.release = () => {
-            guideSavingMock.pending = false;
-            resolve({
-              content: variables.content,
-              generatedDefaultContent: "claude guide",
-            });
-          };
-        }),
-    );
-    const view = renderPage({ replay: false });
-
-    await advanceToAct("agent-guide");
-    fireEvent.change(screen.getByTestId("mock-agent-guide-input"), {
-      target: { value: "notes for host a" },
-    });
-    await advanceToAct("session-import");
-
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
-
-    // The page must SEE the write in flight, which is the state that used to
-    // make `saveAgentGuideDraft` report failure and the next pick vanish.
-    view.rerender(
-      <LazyMotion features={domAnimation}>
-        <OnboardingPage replay={false} />
-      </LazyMotion>,
-    );
-
-    // Second thoughts, while the first pick's write is still open.
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-c"));
-
-    // One write of one draft, not two: the second pick replaced the
-    // destination rather than starting another save of the same content.
-    expect(setGlobalGuideMock).toHaveBeenCalledTimes(1);
-
-    act(() => save.release());
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-c");
-    });
-  });
-
-  it("refuses the wizard on a picked host too old to scan sessions", async () => {
-    // The act EXISTS because the ambient host can scan; the picked one is a
-    // different machine and may predate the feature entirely.
-    hostsMock.ids = ["host-a", "host-b"];
-    scanUnsupportedMock.hostId = "host-b";
-    renderPage({ replay: false });
-    await advanceToAct("session-import");
-    expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
-
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("onboarding-host-unavailable").textContent,
-      ).toContain("host-b can't import sessions");
-    });
-    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
-  });
-
-  it("reads as plain text, not a picker, on a single-host account", async () => {
-    renderPage({ replay: false });
-    await advanceToAct("session-import");
-
-    expect(screen.getByTestId("onboarding-host-name").textContent).toBe(
-      "host-a",
-    );
-    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
-  });
-
-  function progressText(): string {
-    return screen.getByTestId("session-import-progress").textContent;
-  }
-
-  function pickHost(hostId: string): void {
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    fireEvent.click(
-      screen.getByTestId(`settings-host-switcher-option-${hostId}`),
-    );
-  }
-
-  it("shows each host's own import progress when switching between two hosts that are both importing", async () => {
-    hostsMock.ids = ["host-a", "host-b"];
-    // Both hosts' slices are host-scoped in the run store, but the store is a
-    // module singleton this suite does not otherwise touch - clear both
-    // before seeding so an earlier test's run (there is none today) could
-    // never bleed in.
+/**
+ * The installed app, which is a PRODUCT branch and not a width: about nine in
+ * ten people who open it have already run the tour on the desktop app, so the
+ * acts are dropped there and the welcome hands straight over to the landing
+ * guide. Everything here is keyed to `setMobileApp(true)` and nothing to the
+ * viewport - the phone-layout suite below is the same width with the flag off,
+ * and it still gets all three acts.
+ */
+describe("OnboardingPage on the installed mobile app", () => {
+  beforeEach(() => {
+    stubElementScrollTo();
+    setViewportWidth(393);
+    resetFeatureAnnouncementsStore();
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
-
-    renderPage({ replay: false });
-    await advanceToAct("session-import");
-
-    // The tour opens FOLLOWING host A, which rides the ambient (here: absent)
-    // ws-stream transport rather than a scoped one - see
-    // `useScopedStreamBinding`'s `isViewingActive` branch. Picking host A
-    // explicitly through the switcher is what the real app does the moment a
-    // user glances at the picker, and it is the only way this harness ever
-    // resolves the wizard's stream to a real "host-a", which
-    // `SessionImportProgress` needs in order to read host A's own slice
-    // rather than the idle fallback a `null` host id resolves to.
-    pickHost("host-a");
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-a");
+    useFirstTaskGuideStore.setState({
+      status: "inactive",
+      imports: new Map(),
+      workspaceReviewed: false,
+      acknowledgedHints: new Set(),
     });
+    setMobileApp(true);
+    capabilityMock.available = true;
+    hostsMock.ids = ["host-a"];
+    prefetchMock.renders = 0;
+    scanMock.activeCalls.length = 0;
+    navigateMock.mockReset();
+    historyBackMock.mockReset();
+  });
 
-    act(() => {
-      const store = useSessionImportRunStore.getState();
-      store.markStarting("host-a", new Map());
-      store.applyStarted("host-a", {
-        runId: "run-a",
-        total: 4,
-        attached: false,
+  afterEach(() => {
+    cleanup();
+    restoreElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    resetFeatureAnnouncementsStore();
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    setMobileApp(false);
+  });
+
+  it("plays only the welcome, then completes and opens a new draft with the guide armed", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
+      // Not a hidden tour layer - no tour at all. Nothing of the acts exists to
+      // flash between the welcome leaving and the draft arriving.
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+      expect(screen.queryByTestId("onboarding-advance")).toBeNull();
+      expect(screen.queryByTestId("onboarding-skip")).toBeNull();
+      // And none of the acts' work is started either: no provider prefetch, and
+      // the session-import scan is never even asked about.
+      expect(screen.queryByTestId("provider-prefetch")).toBeNull();
+      expect(prefetchMock.renders).toBe(0);
+      expect(scanMock.activeCalls).toEqual([]);
+
+      // The desktop's own welcome timings, unchanged.
+      void act(() => vi.advanceTimersByTime(1799));
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      void act(() => vi.advanceTimersByTime(1));
+      expect(
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(319));
+      expect(navigateMock).not.toHaveBeenCalled();
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+      expect(useOnboardingStore.getState().completedAt).toEqual(
+        expect.any(Number),
+      );
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      // The phone has no import act, so nothing is left for the import toast
+      // to follow up on.
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["session-import"],
+      ).toEqual(expect.any(Number));
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
       });
-      store.applyProgress(
-        "host-a",
-        progressEntryFrom({
-          runId: "run-a",
-          harness: "claude",
-          nativeSessionId: "a1",
-          outcome: { kind: "imported", epicId: "epic-a1", chatId: "chat-a1" },
-        }),
-      );
-      store.applyProgress(
-        "host-a",
-        progressEntryFrom({
-          runId: "run-a",
-          harness: "claude",
-          nativeSessionId: "a2",
-          outcome: { kind: "imported", epicId: "epic-a2", chatId: "chat-a2" },
-        }),
-      );
-    });
-    expect(progressText()).toContain("Importing 2 of 4…");
+      expect(historyBackMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    // Switch to host B, which is also mid-import - a separate slice under a
-    // separate key in the same store.
-    pickHost("host-b");
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-b");
-    });
+  it("uses the short welcome and leave timings when reduced motion is preferred", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
 
-    act(() => {
-      const store = useSessionImportRunStore.getState();
-      store.markStarting("host-b", new Map());
-      store.applyStarted("host-b", {
-        runId: "run-b",
-        total: 10,
-        attached: false,
+      void act(() => vi.advanceTimersByTime(300));
+      expect(
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(149));
+      expect(navigateMock).not.toHaveBeenCalled();
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
       });
-      store.applyProgress(
-        "host-b",
-        progressEntryFrom({
-          runId: "run-b",
-          harness: "claude",
-          nativeSessionId: "b1",
-          outcome: { kind: "imported", epicId: "epic-b1", chatId: "chat-b1" },
-        }),
-      );
-    });
-    expect(progressText()).toContain("Importing 1 of 10…");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
 
-    // A frame lands for host A while B is the one on screen. It must be
-    // folded into A's slice - the wizard reads `useSessionImportRun`, keyed
-    // by host - and must not touch what B's view is showing.
-    act(() => {
-      useSessionImportRunStore.getState().applyProgress(
-        "host-a",
-        progressEntryFrom({
-          runId: "run-a",
-          harness: "claude",
-          nativeSessionId: "a3",
-          outcome: { kind: "imported", epicId: "epic-a3", chatId: "chat-a3" },
-        }),
-      );
-    });
-    expect(progressText()).toContain("Importing 1 of 10…");
+  // Skipping is not skipping guidance here: the welcome IS the tour on this
+  // shell, so the only thing the button shortens is the animation.
+  it("gives Skip welcome the same outcome as letting the welcome finish", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
 
-    // Switching back to host A shows A's own progress, including the frame
-    // that landed while B was on screen - nothing was lost, and nothing of
-    // B's leaked in.
-    pickHost("host-a");
-    await waitFor(() => {
-      expect(streamHostOfWizard()).toBe("host-a");
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      void act(() => vi.advanceTimersByTime(320));
+
+      expect(useOnboardingStore.getState().completedAt).toEqual(
+        expect.any(Number),
+      );
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // "Replay" has to show the tour again, and on this shell the tour the user
+  // would recognise is the landing guide - so the replay re-arms it from
+  // scratch and goes to the page it lives on, rather than back to Settings.
+  it("re-arms the landing guide on replay and navigates instead of going back", () => {
+    useOnboardingStore.setState({ completedAt: 123, step: 0 });
+    useFirstTaskGuideStore.setState({
+      status: "finished",
+      acknowledgedHints: new Set(["tasks-menu"]),
     });
-    expect(progressText()).toContain("Importing 3 of 4…");
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
+      void act(() => vi.advanceTimersByTime(320));
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      // `prepare()` ran, so last run's acknowledgements are not still retiring
+      // the steps this replay is meant to show.
+      expect(useFirstTaskGuideStore.getState().acknowledgedHints.size).toBe(0);
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(historyBackMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A replay is not a first run: the announcement it would otherwise consume is
+  // still owed to the user, exactly as on the desktop.
+  it("consumes the login import announcement on first run only", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["login-import"],
+      ).toEqual(expect.any(Number));
+
+      cleanup();
+      resetFeatureAnnouncementsStore();
+      render(<OnboardingPage replay />);
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["login-import"],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("OnboardingPage phone layout", () => {
+  beforeEach(() => {
+    stubElementScrollTo();
+    setViewportWidth(393);
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    // Deliberately NOT the installed app: the phone shell, the phone copy and
+    // the drag all come from the viewport, so a narrow desktop window gets
+    // exactly this layout.
+    setMobileApp(false);
+    capabilityMock.available = true;
+    hostsMock.ids = ["host-a"];
+    hostReadinessMock.streamMismatchFor = null;
+    hostReadinessMock.unsupportedImportFor = null;
+    scanMock.activeCalls.length = 0;
+    safeAreaInsetsMock.left = 0;
+    safeAreaInsetsMock.right = 0;
+    navigateMock.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    restoreElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    setMobileApp(false);
+    safeAreaInsetsMock.left = 0;
+    safeAreaInsetsMock.right = 0;
+  });
+
+  it("puts Back in the header past act one, and renders no eyebrow or wordmark", async () => {
+    const { container } = renderPage(false);
+
+    // Act 1's leading slot is the brand mark, so there is nothing to go back to.
+    expect(screen.queryByTestId("onboarding-back")).toBeNull();
+    expect(container.querySelector(".onboarding-eyebrow")).toBeNull();
+    expect(container.querySelector(".onboarding-wordmark")).toBeNull();
+    expect(screen.getByTestId("onboarding-skip").textContent).toBe("Skip");
+
+    await advanceToStep("providers");
+
+    const back = screen.getByRole("button", { name: "Back" });
+    expect(back.getAttribute("data-testid")).toBe("onboarding-back");
+    // In the HEADER, not in the footer: the footer is one full-width primary on
+    // every act, and a phone's back affordance belongs at the top.
+    expect(back.closest("header")).not.toBeNull();
+    expect(back.closest("footer")).toBeNull();
+
+    fireEvent.click(back);
+    await waitFor(() => expect(currentStepId()).toBe("task-tabs"));
+  });
+
+  it("gives act one a subtitle and the later acts none", async () => {
+    const { container } = renderPage(false);
+
+    const subtitle = container.querySelector(".onboarding-subtitle");
+    expect(subtitle?.textContent).toBe(
+      "Tasks in the menu. Swipe for the rest.",
+    );
+
+    await advanceToStep("providers");
+    expect(container.querySelector(".onboarding-subtitle")).toBeNull();
+  });
+
+  it("shows one full-width primary, and hands act three's footer to the wizard", async () => {
+    const { container } = renderPage(false);
+
+    const advance = screen.getByTestId("onboarding-advance");
+    expect(advance.className).toContain("onboarding-button--block");
+    expect(advance.className).toContain("onboarding-button--primary");
+    expect(advance.textContent).toContain("Continue");
+    expect(container.querySelector("footer")?.dataset.quiet).toBe("false");
+
+    await advanceToStep("session-import");
+
+    // The wizard owns the primary on act 3, so the shell keeps only the quiet
+    // way past it - centred, and spelled the same as the header's.
+    const footerAction = screen.getByTestId("onboarding-advance");
+    expect(footerAction.className).toContain("onboarding-button--quiet");
+    expect(footerAction.className).not.toContain("onboarding-button--block");
+    // The Enter cap rides along in the DOM (it is CSS-hidden below `md`), so
+    // this asks what the label says rather than what the node contains.
+    expect(footerAction.textContent).toContain("Skip");
+    expect(footerAction.textContent).not.toContain("for now");
+    expect(container.querySelector("footer")?.dataset.quiet).toBe("true");
+  });
+
+  it("runs the whole step list, leaves vertical drags alone, and navigates on horizontal ones", async () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    expect(currentStepId()).toBe("task-tabs");
+    // The import act is offered on a phone under the same host gate as on the
+    // desktop, so its early scan arms there too.
+    expect(scanMock.activeCalls.at(-1)).toBe(true);
+
+    drag(
+      surface,
+      { clientX: 200, clientY: 300 },
+      { clientX: 200, clientY: 420 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    drag(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+
+    drag(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("session-import"));
+
+    drag(
+      surface,
+      { clientX: 160, clientY: 300 },
+      { clientX: 280, clientY: 306 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+  });
+
+  it("springs a short drag home and commits a flick that barely travelled", async () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    // 60px of a 393px surface is under the quarter a slow release has to cover,
+    // and 200px/s is under the flick speed.
+    drag(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 220, clientY: 302 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    // The same distance thrown in 40ms is 1500px/s, which commits on its own.
+    flick(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 220, clientY: 302 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+  });
+
+  it("resists at the ends instead of leaving the tour", () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    // Back from the first act: there is nothing behind it, so the act rubber
+    // bands and the tour stays where it is.
+    drag(
+      surface,
+      { clientX: 120, clientY: 300 },
+      { clientX: 320, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+    expect(useOnboardingStore.getState().completedAt).toBeNull();
+  });
+
+  it("does not steal swipes from controls or the platform edge zones", async () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    drag(
+      screen.getByTestId("onboarding-advance"),
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    drag(
+      surface,
+      { clientX: 10, clientY: 300 },
+      { clientX: 130, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    await advanceToStep("providers");
+    drag(
+      screen.getByTestId("provider-editor"),
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("providers");
+  });
+
+  it("widens platform edge zones by the safe-area inset", async () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+    safeAreaInsetsMock.left = 20;
+    safeAreaInsetsMock.right = 20;
+
+    drag(
+      surface,
+      { clientX: window.innerWidth - 10, clientY: 300 },
+      { clientX: window.innerWidth - 150, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    drag(
+      surface,
+      { clientX: 40, clientY: 300 },
+      { clientX: 180, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    drag(
+      surface,
+      { clientX: window.innerWidth - 60, clientY: 300 },
+      { clientX: window.innerWidth - 200, clientY: 306 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
   });
 });

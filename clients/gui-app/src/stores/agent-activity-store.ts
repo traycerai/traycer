@@ -434,6 +434,16 @@ export function subscribeAgentActivity(listener: () => void): () => void {
   });
 }
 
+export type ActivityFleetCoverage = "fleet" | "partial" | "none";
+
+export function useActivityFleetCoverage(): ActivityFleetCoverage {
+  return useAgentActivityStore((state) => {
+    if (selectPlaneSpansFleet(state.byHost)) return "fleet";
+    if (selectPlaneAnswers(state.byHost)) return "partial";
+    return "none";
+  });
+}
+
 /**
  * Marks every known host's view as reconnecting.
  *

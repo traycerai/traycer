@@ -76,6 +76,8 @@ function historyResult(
     // it, so `false` is the quiet fixture rather than a claim that a cloud
     // page is settled.
     cloudPagePending: false,
+    // Settled, like `isPending`: the palette source never reads the count.
+    isCountPending: false,
   };
 }
 

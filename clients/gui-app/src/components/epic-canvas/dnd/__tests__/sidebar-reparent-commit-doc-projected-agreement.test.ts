@@ -245,6 +245,10 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
         panelId: "chats",
         viewTabId: "tab-1",
         queryClient,
+        // A doc-only terminal agent routes to the doc-write branch, never the
+        // registry-rpc owner-host resolution - `null` mirrors the routing
+        // suite's "no binding mounted" default.
+        hostBinding: null,
       }),
     ).resolves.toBeUndefined();
 

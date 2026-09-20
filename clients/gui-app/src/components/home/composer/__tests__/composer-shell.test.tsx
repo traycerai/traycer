@@ -93,7 +93,7 @@ describe("ComposerShell file-drop overlay", () => {
   it("anchors utility chrome above layout flow regardless of attachments", () => {
     renderComposerShell(
       "images",
-      <div data-testid="composer-utility">Stash 2</div>,
+      <div data-testid="composer-utility">Drafts 2</div>,
       <div data-testid="composer-attachments">Images</div>,
     );
 

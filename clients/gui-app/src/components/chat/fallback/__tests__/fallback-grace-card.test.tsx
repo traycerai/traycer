@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatRunSettings,
   FallbackImpendingAction,
+  LastFailedAttempt,
   PendingFallback,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { FallbackGraceCard } from "@/components/chat/fallback/fallback-grace-card";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import {
@@ -20,6 +22,7 @@ import {
   TARGET_CODEX_TUPLE,
   chatRunSettings,
   fallbackImpendingAction,
+  lastFailedAttempt,
   pendingFallback,
 } from "./fallback-fixtures";
 
@@ -41,6 +44,91 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
+}));
+
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module -
+ * see `fallback-model-labels.test.tsx` for the resolver's own resolution
+ * rules, which are not this file's concern. Two modes, chosen by
+ * `modelLabelOverride`:
+ *
+ *   - `null` (every existing case in this file): passes the slug straight
+ *     through, exactly what the resolver degrades to with no catalogue - so
+ *     every literal model string already pinned below stays correct unchanged.
+ *   - a `Map`: the ONE case that cares whether this card actually reads the
+ *     resolver's answer rather than `tuple.model` directly - see "renders
+ *     whatever the model-label resolver returns, not the raw tuple.model".
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
+/**
+ * The chat-session slice `FallbackGraceRungActions` reaches through
+ * `useChatLastFailedAttempt` (for the manual-rung boundary cases below) and
+ * through `usePublishConfirmedManualFallbackAction` /
+ * `usePublishUnattendedFallbackOutcome` (the mutation's own `onSuccess`
+ * closes over these once a rung is confirmed). Mirrors the harness in
+ * `fallback-grace-rung-actions.test.tsx` - this file needs the same slice
+ * shape because `FallbackGraceCard` mounts the exact same component, just
+ * behind the card's own `state === "hold"` gate instead of directly.
+ *
+ * `useExistingChatSessionHandle` ignores its arguments and always returns
+ * this one store, same as the sibling harness - every case in this file
+ * renders a single card, so there is only ever one triple to serve.
+ */
+const sessionRegistry = vi.hoisted(() => {
+  type Slice = {
+    lastFailedAttempt: LastFailedAttempt | undefined;
+    access: { readonly canAct: boolean } | null;
+    connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+    publishConfirmedManualFallbackAction: (input: unknown) => void;
+    publishUnattendedFallbackOutcome: (input: unknown) => void;
+  };
+  const initialSlice = (): Slice => ({
+    lastFailedAttempt: undefined,
+    access: { canAct: true },
+    connectionStatus: "open",
+    publishConfirmedManualFallbackAction: () => {},
+    publishUnattendedFallbackOutcome: () => {},
+  });
+  let state: Slice = initialSlice();
+  const listeners = new Set<() => void>();
+  const store = {
+    getState: (): Slice => state,
+    getInitialState: (): Slice => initialSlice(),
+    setState: (next: Partial<Slice>): Slice => {
+      state = { ...state, ...next };
+      for (const listener of listeners) listener();
+      return state;
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return { store };
+});
+
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  useExistingChatSessionHandle: () => ({ store: sessionRegistry.store }),
 }));
 
 /**
@@ -148,6 +236,8 @@ describe("FallbackGraceCard", () => {
     mocks.outcome = "applied";
     mocks.deferOnSuccess = false;
     mocks.capturedOnSuccess = null;
+    modelLabelOverride.value = null;
+    sessionRegistry.store.setState({ lastFailedAttempt: undefined });
     useSettingsHostScopeStore.getState().setScopedHostId(APP_HOST);
   });
 
@@ -175,6 +265,34 @@ describe("FallbackGraceCard", () => {
     expect(card.textContent).toMatch(/Claude Code · failed01/);
     expect(card.textContent).not.toMatch(/Codex · target01/);
     expect(card.textContent).not.toMatch(BANNED_VOCABULARY);
+  });
+
+  // The label-resolution wiring, not the resolver's own rules (that's
+  // `fallback-model-labels.test.tsx`). This is the assertion that would catch
+  // a regression back to reading `tuple.model` raw: a card that bypassed
+  // `useFallbackModelLabels` would still show the fixture's literal slug here
+  // even with the override installed. The destination sentence is the one
+  // place on this card a model is named at all - the header names only
+  // provider/profile for the failed side (see `fallback-grace-card.tsx`).
+  it("renders whatever the model-label resolver returns for the destination, not the raw tuple.model", () => {
+    modelLabelOverride.value = new Map([
+      [
+        `${TARGET_CODEX_TUPLE.harnessId}:${TARGET_CODEX_TUPLE.model}`,
+        "GPT Astra",
+      ],
+    ]);
+    renderCard({
+      pending: gracePending({
+        state: "hold",
+        reason: "rate_limit",
+        targetTuple: TARGET_CODEX_TUPLE,
+        deadline: Date.now() + 12_000,
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+    });
+    const text = screen.getByTestId("fallback-grace-card").textContent;
+    expect(text).toContain("GPT Astra");
+    expect(text).not.toContain(TARGET_CODEX_TUPLE.model);
   });
 
   it("renders Switching to the target plus a countdown on hold, and This turn failed when there is no target", () => {
@@ -1066,5 +1184,111 @@ describe("FallbackGraceCard", () => {
       expect(text).toContain("Stopping any moment now.");
       expect(text).not.toMatch(/in any moment now/);
     });
+  });
+
+  // CodeRabbit's gap: everything above exercises the card's OWN controls, and
+  // `fallback-grace-rung-actions.test.tsx` covers `FallbackGraceRungActions`
+  // in isolation - but nothing mounted the CARD with a manual-rung attempt in
+  // scope, so a regression at the boundary (the import deleted, the
+  // `pending.state === "hold"` gate dropped or widened, the wrong props
+  // threaded through) could not be caught here. These pins mount
+  // `FallbackGraceCard` itself, the same way every case above does, with
+  // `sessionRegistry`'s `lastFailedAttempt` seeded the way the host only ever
+  // defines it: during a live `hold`.
+  describe("the manual-rung boundary (FallbackGraceRungActions on the card)", () => {
+    const RETRY_USER_MESSAGE_ID = "user-msg-grace-retry";
+    const RETRY_TURN_ID = "turn-grace-retry";
+
+    // `FallbackNoticeSettingsLink`, drawn unconditionally inside
+    // `ManualRungAffordances`'s own row, resolves through `useTabHostId()` -
+    // which throws outside `<TabHostProvider>`. Every other case in this file
+    // never reaches that component (no attempt in scope, so
+    // `FallbackGraceRungActions` returns `null` before rendering it), which is
+    // why `renderCard` above has no provider of its own; these cases do reach
+    // it, so they need the same wrapper `fallback-grace-rung-actions.test.tsx`
+    // uses to mount the identical subtree.
+    function renderCardWithHost(input: { readonly pending: PendingFallback }) {
+      return render(
+        <TabHostProvider hostId={TAB_HOST}>
+          <FallbackGraceCard
+            pending={input.pending}
+            client={null}
+            chatId="chat-grace"
+            epicId="epic-grace"
+            hostId={TAB_HOST}
+            canAct
+            menu={null}
+          />
+        </TabHostProvider>,
+      );
+    }
+
+    function seedRetryAttempt(): void {
+      sessionRegistry.store.setState({
+        lastFailedAttempt: lastFailedAttempt({
+          userMessageId: RETRY_USER_MESSAGE_ID,
+          turnId: RETRY_TURN_ID,
+          failure: { reason: "rate_limit" },
+          eligibleRungs: ["retry"],
+          waitDisposition: "no_verified_reset",
+          switchDisposition: "unknown",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      });
+    }
+
+    it("renders Retry on a hold and sends chat.fallback.runManualRung with the attempt's ids", () => {
+      seedRetryAttempt();
+      renderCardWithHost({
+        pending: gracePending({
+          state: "hold",
+          reason: "rate_limit",
+          targetTuple: TARGET_CODEX_TUPLE,
+          deadline: Date.now() + 12_000,
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      });
+      const retryButton = screen.getByRole("button", { name: "Retry" });
+      fireEvent.click(retryButton);
+      // Same spelling `fallback-grace-rung-actions.test.tsx` asserts for
+      // `FallbackGraceRungActions` mounted directly - this is the same
+      // mutation call reached through the card instead.
+      expect(mocks.mutate).toHaveBeenCalledWith({
+        epicId: "epic-grace",
+        chatId: "chat-grace",
+        rung: "retry",
+        target: null,
+        userMessageId: RETRY_USER_MESSAGE_ID,
+        turnId: RETRY_TURN_ID,
+      });
+    });
+
+    // The load-bearing negative. A positive-only pin here would keep passing
+    // if someone dropped the `pending.state === "hold"` gate in
+    // `fallback-grace-card.tsx` and rendered `FallbackGraceRungActions`
+    // unconditionally - a likelier regression than deleting the import
+    // outright, since the component itself already renders nothing with no
+    // attempt in scope and would look harmless left unconditional.
+    //
+    // Falsification: delete the `pending.state === "hold" ? ... : null` gate
+    // around `<FallbackGraceRungActions>` in `fallback-grace-card.tsx` (render
+    // it unconditionally instead) - both cases below go red, a "Retry" button
+    // appears on a card the host has not armed a manual rung for.
+    it.each(["choosing", "switching"] as const)(
+      "does NOT render the manual rungs while %s, even with an attempt in scope",
+      (state) => {
+        seedRetryAttempt();
+        renderCardWithHost({
+          pending: gracePending({
+            state,
+            reason: "rate_limit",
+            targetTuple: TARGET_CODEX_TUPLE,
+            deadline: Date.now() + 12_000,
+            failedTuple: FAILED_CLAUDE_TUPLE,
+          }),
+        });
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      },
+    );
   });
 });

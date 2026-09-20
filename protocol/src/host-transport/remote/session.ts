@@ -24,6 +24,7 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import {
   clockSkewStreamReason,
   type NegotiatedManifestRecorder,
+  type NegotiatedStreamVersionRecorder,
   type ServerClockSkewSignal,
   type ServedStreamMajors,
   type WakeProbeTuning,
@@ -395,6 +396,20 @@ export interface RemoteSessionOptions<
    * Optional client-side capability publication hook. `null` on host dialers.
    */
   readonly onNegotiatedMethods: NegotiatedManifestRecorder | null;
+  /**
+   * The stream sibling of {@link onNegotiatedMethods}: publishes what a
+   * subscribe on each stream method would negotiate with this host, so a
+   * dispatch that holds only a host id can read a stream version floor without
+   * owning a session.
+   *
+   * OPTIONAL rather than `| null`, unlike its unary sibling, because it arrived
+   * later: every existing composition - the client's own adapter aside, that is
+   * the host dialing another host - already constructs these options, and a
+   * required field would be a compile break for a publication host dialers have
+   * no use for. Omitted means "publish nothing", which is what a host dialer
+   * wants: nothing in a host process reads a per-host stream version registry.
+   */
+  readonly onNegotiatedStreamMethodVersions?: NegotiatedStreamVersionRecorder;
   /** Stream majors this composition can actually serve. */
   readonly servedStreamMajors: ServedStreamMajors;
   /**
@@ -2910,6 +2925,14 @@ export class RemoteSession<
     // notification-feed selection deliberately need the prediction that lets
     // them decide whether to open an optional stream in the first place.
     this.notifyMethodSupportListeners();
+    // Same moment, same evidence, for the per-HOST reader: a caller holding
+    // only a host id (a composer deciding hash-only versus inlined bytes)
+    // cannot ask a session it does not own. Published from
+    // `streamMethodCapability`, which is the only place the two manifests and
+    // this composition's served majors are checked against each other - a raw
+    // manifest key would not answer the question. Re-published on every
+    // re-attach, which is when a host upgraded underneath us re-handshakes.
+    this.publishNegotiatedStreamMethodVersions();
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -3571,6 +3594,31 @@ export class RemoteSession<
    * host is at least as new as this client. The Start Page renders one such
    * reader per remote host and crashed on open.
    */
+  /**
+   * Hands {@link RemoteSessionOptions.onNegotiatedStreamMethodVersions} the
+   * version a subscribe would settle on for every method this composition's
+   * registry names, omitting the ones this pairing cannot bridge.
+   *
+   * Every entry goes through `streamMethodCapability`, so the published map is
+   * by construction the same answer `getMethodSchemaVersion` gives for this
+   * session - one source, two readers. It also warms that method cache, which
+   * is keyed on the very manifest object just installed.
+   */
+  private publishNegotiatedStreamMethodVersions(): void {
+    const publish = this.options.onNegotiatedStreamMethodVersions;
+    if (publish === undefined) {
+      return;
+    }
+    const versions = new Map<string, SchemaVersion>();
+    for (const method of Object.keys(this.options.streamRegistry)) {
+      const schemaVersion = this.streamMethodCapability(method).schemaVersion;
+      if (schemaVersion !== null) {
+        versions.set(method, schemaVersion);
+      }
+    }
+    publish(this.options.hostId, versions);
+  }
+
   private streamMethodCapability(method: string): StreamMethodCapability {
     const hostManifest = this.connection?.hostManifest;
     if (hostManifest === null || hostManifest === undefined) {

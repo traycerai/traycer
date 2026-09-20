@@ -31,6 +31,7 @@ import {
 } from "@/lib/composer/composer-clipboard";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 import {
   deleteImageBytesUnchecked,
   imageHashKeys,
@@ -178,8 +179,8 @@ vi.mock(
         instance.insertMentionAttachment(mention),
       beginPathInsertion: () => instance.beginPathInsertion(),
       removeImageAttachmentById: (id) => instance.removeImageAttachmentById(id),
-      rewriteImageAttachmentHashById: (id, hash) => {
-        const result = instance.rewriteImageAttachmentHashById(id, hash);
+      rewriteImageAttachmentHashById: (id, rewrite) => {
+        const result = instance.rewriteImageAttachmentHashById(id, rewrite);
         mocks.rewriteResults.push(result);
         return result;
       },
@@ -434,6 +435,8 @@ function render(ui: ReactElement): RenderResult {
   });
 }
 
+const originalCreateImageBitmap = globalThis.createImageBitmap;
+
 afterEach(() => {
   cleanup();
   draftRuntimeRegistry.resetForTesting();
@@ -441,6 +444,15 @@ afterEach(() => {
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   vi.useRealTimers();
+  // Only the queue-serialization controls install a createImageBitmap
+  // double; restoring it unconditionally after every test is a no-op for
+  // every other case (they use magic-byte-mismatched fixtures that never
+  // reach decode at all).
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: originalCreateImageBitmap,
+  });
 });
 
 /**
@@ -681,6 +693,55 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
       expect(atoms[0]?.hash).toBe(hash);
       expect(atoms[0]?.b64content).toBeNull();
     });
+  });
+
+  it("leaves a non-storable format INLINE and stores no bytes for it", async () => {
+    // The landing composer long carried its own copy of the pending-image
+    // ingest, and that copy had no notion of a storable format: it started a
+    // store job for any decodable image, so a pasted BMP was hashed here and
+    // then refused by the host's writer, while its budget reservation was taken
+    // and never released.
+    //
+    // The shared hook's rule - a format the host refuses stays INLINE, reserves
+    // nothing and starts no job - is what this asserts on the landing surface.
+    const bytes = bytesOf([7, 7, 7]);
+    const hash = await sha256Hex(bytes);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    pasteComposerContent(nonStorableContent(bytesToBase64(bytes)));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+
+    // The DISCRIMINATOR, and the reason this is not merely a same-tick read:
+    // an ingest job in flight holds the pending indicator true, and this test
+    // releases no gate, so a BMP job that wrongly started would hold it true
+    // until this `waitFor` gave up. Settling to "false" is therefore positive
+    // evidence that no job is outstanding - not just that none had registered
+    // yet when the assertion ran.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
+    });
+
+    // And nothing reached the store under its hash. `setGates` records every
+    // `putImage` that got that far, so an entry here would mean a job ran.
+    expect(setGates.has(hash)).toBe(false);
+
+    // Inline is the ACCEPTED outcome, not a rejection: the draft still sends
+    // this image, just not hash-only.
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
+    );
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.b64content).not.toBeNull();
+    expect(atoms[0]?.hash).toBeNull();
   });
 
   // Seam 2 standalone (also covered above while pending): partialize + desktop.
@@ -1122,6 +1183,228 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
       serializedHasStringB64(JSON.stringify(rehydrated[0]?.content ?? {})),
     ).toBe(false);
   });
+
+  // Concurrency fix: structured paste launches ONE background job per pending
+  // image node, synchronously and without awaiting one another
+  // (`runPendingImageJob`/`trackPendingImageJob`). Before the mount's
+  // preparation session serialized `prepare` calls, two pasted inline images
+  // both called `createImageBitmap` in the SAME tick. `mixedContent` below
+  // uses PNG-magic-but-header-less bytes (`distinctPngBytes`, via
+  // `pngBytesOfSize`) specifically so the fallback DECODE path is reached -
+  // the file's other fixtures (`bytesOf([...])`) deliberately mismatch their
+  // declared MIME and never reach `createImageBitmap` at all.
+  it("serializes structured-paste decodes: two pasted images never hold two bitmaps at once", async () => {
+    const bytesA = distinctPngBytes(1);
+    const bytesB = distinctPngBytes(2);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const double = installDecodeOrderDouble();
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+
+    // Both images were accepted into the document, but the OLD code would
+    // have called `createImageBitmap` for BOTH in this same tick. With the
+    // session queue, only the first has started.
+    await waitFor(() => expect(double.gates).toHaveLength(1));
+    expect(double.events).toEqual(["decode-call:0"]);
+
+    double.gates[0]?.();
+    await waitFor(() => expect(double.gates).toHaveLength(2));
+    // The second decode only starts after the first bitmap's close ran -
+    // this is the assertion an unserialized (both-in-one-tick) launch fails.
+    expect(double.events).toEqual([
+      "decode-call:0",
+      "close:0",
+      "decode-call:1",
+    ]);
+
+    double.gates[1]?.();
+
+    // Drive the rest to completion through the existing durable-write gate
+    // (both images are verbatim after decode: small dims, under the output
+    // ceiling, so the prepared bytes equal the source bytes and hash the
+    // same as `bytesOf`-based cases elsewhere in this file).
+    await waitFor(() => {
+      expect(setGates.has(hashA)).toBe(true);
+      expect(setGates.has(hashB)).toBe(true);
+    });
+    setGates.get(hashA)?.release();
+    setGates.get(hashB)?.release();
+
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms.map((atom) => atom.hash)).toEqual([hashA, hashB]);
+    });
+  });
+
+  // Same defect, the remount re-entry path: `reingestPendingImages` loops
+  // synchronously over every still-pending atom and calls
+  // `startPendingImageIngest` for each - the second mount's own launch site
+  // that does not await between jobs.
+  it("serializes remount re-entry decodes: two still-pending images decode one at a time on the new mount", async () => {
+    const bytesA = distinctPngBytes(3);
+    const bytesB = distinctPngBytes(4);
+    const double = installDecodeOrderDouble();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+
+    // Only the first mount's first decode has started; leave it (and the
+    // still-queued second image) unsettled and navigate away, exactly like
+    // "unmount mid-ingest remount restarts ingest" above.
+    await waitFor(() => expect(double.gates).toHaveLength(1));
+    expect(double.events).toEqual(["decode-call:0"]);
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    mocks.scheduleLandingImageReconcile.mockClear();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // The remount's re-entry has two still-pending atoms (both b64, neither
+    // hashed) and launches a job for each. The OLD code would have started
+    // BOTH new decodes in this same tick; the queue means only one more.
+    await waitFor(() => expect(double.gates).toHaveLength(2));
+    expect(double.events).toEqual(["decode-call:0", "decode-call:1"]);
+
+    double.gates[1]?.();
+    await waitFor(() => expect(double.gates).toHaveLength(3));
+    expect(double.events).toEqual([
+      "decode-call:0",
+      "decode-call:1",
+      "close:1",
+      "decode-call:2",
+    ]);
+  });
+
+  // Follow-on defect in the queue itself: `startPendingImageIngest` used to
+  // release a paste's anonymous batch reservation only in `finally` -
+  // i.e. once preparation/storage settled. With the per-mount queue, a
+  // second job can't even START preparing until the first job's decode
+  // settles, so unmounting while the first is still pending held BOTH
+  // anonymous charges far longer than before the queue existed. Anonymous
+  // charges can't dedupe against the successor's hash-keyed charge, so near
+  // the cap the remount's post-store reservation fails and the job REMOVES
+  // an image the user already had. The fix binds release to the job's abort,
+  // not its settlement. The byte math below is exact (no slack): the budget
+  // is seeded so the two pasted images fill it precisely, so the remount's
+  // two hash-aware reservations can succeed ONLY if both original anonymous
+  // charges are gone by the time it reserves - proving the abort release
+  // actually ran, not merely that capacity happened to be available.
+  it("keeps a remounted image whose anonymous reservation was released on abort, at the exact budget cap", async () => {
+    const IMAGE_BYTES = 3 * 1024 * 1024;
+    const bytesA = distinctPngBytesOfSize(1, IMAGE_BYTES);
+    const bytesB = distinctPngBytesOfSize(2, IMAGE_BYTES);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const double = installDecodeOrderDouble();
+
+    const competing = reserveLandingImageBudget("near-cap-abort-release", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - IMAGE_BYTES * 2 },
+    ]);
+    expect(competing).not.toBeNull();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+
+    // Only the first image's decode has started - the second job's own
+    // `prepare` call is queued behind it on the same mount's session (the
+    // ticket-1 fix), so NEITHER original job has settled, and both still
+    // hold their own anonymous reservation.
+    await waitFor(() => expect(double.gates).toHaveLength(1));
+    expect(double.events).toEqual(["decode-call:0"]);
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    // Tightness check: the budget is exactly full right now - a third byte
+    // cannot be reserved.
+    const probeBeforeUnmount = reserveLandingImageBudget("probe-before", [
+      { hash: null, bytes: 1 },
+    ]);
+    expect(probeBeforeUnmount).toBeNull();
+
+    view.unmount();
+    mocks.scheduleLandingImageReconcile.mockClear();
+
+    // Tightness check: unmounting aborts both original jobs, and with the
+    // abort-bound release BOTH anonymous charges free immediately - neither
+    // job's decode or store had to settle first. Exactly `IMAGE_BYTES * 2`
+    // fits now; not one byte more was freed, and not one byte less.
+    const probeAfterUnmount = reserveLandingImageBudget("probe-after-unmount", [
+      { hash: null, bytes: IMAGE_BYTES * 2 },
+    ]);
+    expect(probeAfterUnmount).not.toBeNull();
+    const probeOverAfterUnmount = reserveLandingImageBudget("probe-over", [
+      { hash: null, bytes: 1 },
+    ]);
+    expect(probeOverAfterUnmount).toBeNull();
+    probeAfterUnmount?.release();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // Remount re-entry launches a new job for each still-pending atom.
+    await waitFor(() => expect(double.gates).toHaveLength(2));
+
+    double.gates[1]?.();
+    await waitFor(() => expect(setGates.has(hashA)).toBe(true));
+    setGates.get(hashA)?.release();
+
+    await waitFor(() => expect(double.gates).toHaveLength(3));
+    double.gates[2]?.();
+    await waitFor(() => expect(setGates.has(hashB)).toBe(true));
+    setGates.get(hashB)?.release();
+
+    // Both images SURVIVE remount: rewritten to a hash and still in the
+    // document, never removed by a `postStoreReservation === null` refusal.
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms.map((atom) => atom.hash)).toEqual([hashA, hashB]);
+      expect(atoms.every((atom) => atom.b64content === null)).toBe(true);
+    });
+    // Budget is exactly full again (no slack) after both hash-aware charges.
+    const probeAfterRemount = reserveLandingImageBudget("probe-after-remount", [
+      { hash: null, bytes: 1 },
+    ]);
+    expect(probeAfterRemount).toBeNull();
+
+    competing?.release();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1208,6 +1491,30 @@ function imageOnlyContent(b64: string, fileName: string): JsonContent {
   };
 }
 
+/** A single non-storable (BMP) image node - a format the host's writer refuses. */
+function nonStorableContent(b64: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-bmp",
+              fileName: "shot.bmp",
+              b64content: b64,
+              mimeType: "image/bmp",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function emptyDoc(): JsonContent {
   return { type: "doc", content: [{ type: "paragraph" }] };
 }
@@ -1229,4 +1536,70 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
+}
+
+/** Distinct valid-PNG-magic, header-less bytes so two pasted images hash
+ * differently while both still reach the DECODE fallback (no parseable
+ * IHDR), unlike this file's other `bytesOf([...])` fixtures, whose bytes
+ * mismatch their declared MIME and never reach `createImageBitmap`. */
+function distinctPngBytes(tag: number): Uint8Array<ArrayBuffer> {
+  const bytes = pngBytesOfSize(16);
+  bytes[15] = tag;
+  return bytes;
+}
+
+/** Same as `distinctPngBytes`, at a caller-chosen size - for budget-math
+ * cases that need the pasted (SOURCE, pre-preparation) byte count to land on
+ * an exact number. */
+function distinctPngBytesOfSize(
+  tag: number,
+  byteLength: number,
+): Uint8Array<ArrayBuffer> {
+  const bytes = pngBytesOfSize(byteLength);
+  bytes[byteLength - 1] = tag;
+  return bytes;
+}
+
+interface DecodeOrderDouble {
+  readonly events: string[];
+  readonly gates: Array<() => void>;
+}
+
+/**
+ * Doubles `createImageBitmap` so a decode's START is recorded synchronously
+ * (before its promise resolves) and its settlement is held open until the
+ * test releases it - the shape needed to prove call ORDER, not just eventual
+ * completion. Canvas encode is never reached by these fixtures (small
+ * headerless-PNG bytes that fit the edge/ceiling verbatim after decode), so
+ * no canvas double is needed.
+ */
+function installDecodeOrderDouble(): DecodeOrderDouble {
+  const events: string[] = [];
+  const gates: Array<() => void> = [];
+  let index = 0;
+  const createImageBitmapDouble = vi.fn(
+    (
+      _source: ImageBitmapSource,
+      _opts: ImageBitmapOptions | undefined,
+    ): Promise<{ width: number; height: number; close: () => void }> => {
+      const label = index;
+      index += 1;
+      events.push(`decode-call:${label}`);
+      return new Promise((resolve) => {
+        gates.push(() =>
+          resolve({
+            width: 100,
+            height: 100,
+            close: () => events.push(`close:${label}`),
+          }),
+        );
+      });
+    },
+  );
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: createImageBitmapDouble,
+  });
+  return { events, gates };
 }

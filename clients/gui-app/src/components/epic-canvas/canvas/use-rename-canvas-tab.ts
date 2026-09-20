@@ -7,7 +7,22 @@ import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
+
+// Shared across panes editing the same host-bound agent; cleared on settlement.
+const snapshotRenames = new Map<string, symbol>();
+
+function matchesProjectedAgentHost(
+  state: OpenEpicState,
+  tab: EpicCanvasTileRef,
+): boolean {
+  const projectedHostId =
+    (tab.type === "chat"
+      ? state.chats.byId[tab.id]?.hostId
+      : state.tuiAgents.byId[tab.id]?.hostId) ?? tab.hostId;
+  return projectedHostId === tab.hostId;
+}
 
 /**
  * Commit handler for inline tab-title editing in the canvas tab strip, for
@@ -60,6 +75,11 @@ export function useRenameCanvasTab(
       if (trimmed.length === 0) return;
       if (tab.type === "terminal") return;
       const id = tab.id;
+      // A same-id clone on another host must not receive this rename overlay.
+      const matchesProjection = matchesProjectedAgentHost(
+        epicHandle.store.getState(),
+        tab,
+      );
       // DOC-RESIDENT terminal agents keep the direct doc write: an agent
       // whose title still lives in the epic Y.Doc (bound to an un-upgraded
       // peer host) has no registry row on the serving host, so
@@ -69,7 +89,7 @@ export function useRenameCanvasTab(
       // absent-from-union included. The doc write is synchronous authority -
       // no stamp to retire - and the snapshot follows the write's own
       // success.
-      if (tab.type === "terminal-agent") {
+      if (tab.type === "terminal-agent" && matchesProjection) {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, id) || agents[id].docResident) {
           // AWAITED: the replica is on the worker thread now, so the doc
@@ -78,7 +98,7 @@ export function useRenameCanvasTab(
           // stamp to retire and the snapshot follows the write's own success -
           // just no longer synchronous in time.
           if (await epicHandle.store.getState().renameArtifact(id, trimmed)) {
-            renameArtifactInTab(viewTabId, id, trimmed);
+            renameArtifactInTab(viewTabId, id, trimmed, null);
           }
           return;
         }
@@ -88,7 +108,7 @@ export function useRenameCanvasTab(
           renameArtifact
             .mutateAsync({ epicId, artifactId: id, title: trimmed })
             .then(
-              () => renameArtifactInTab(viewTabId, id, trimmed),
+              () => renameArtifactInTab(viewTabId, id, trimmed, null),
               () => {
                 // SUPERSEDED IS NOT LOST. `enqueueAndWait` throws for every
                 // non-committed terminal state, so a rename whose own
@@ -124,7 +144,7 @@ export function useRenameCanvasTab(
                   Object.hasOwn(artifacts, id) &&
                   artifacts[id].title === trimmed
                 ) {
-                  renameArtifactInTab(viewTabId, id, trimmed);
+                  renameArtifactInTab(viewTabId, id, trimmed, null);
                 }
               },
             ),
@@ -143,6 +163,7 @@ export function useRenameCanvasTab(
       // an optimistic patch for a mutation that is never sent is a row that
       // renames and then snaps back.
       if (
+        matchesProjection &&
         resolveChatWriteRoute({
           chatsById: epicHandle.store.getState().chats.byId,
           isChatRow: tab.type === "chat",
@@ -162,9 +183,25 @@ export function useRenameCanvasTab(
       // it has to be the value rather than the promise - a `Promise<string>`
       // here is truthy, which would make the `!== null` guards pass and hand a
       // promise to `retirePendingMutation` as if it were an id.
-      const requestId = await epicHandle.store
-        .getState()
-        .beginRenameMutation(id, trimmed);
+      // The projection may belong to a clone, so snapshot ordering cannot
+      // depend on an overlay stamp being available for this host.
+      const snapshotKey = JSON.stringify([epicId, tab.hostId, id]);
+      const snapshotToken = Symbol();
+      snapshotRenames.set(snapshotKey, snapshotToken);
+      const clearSnapshotRename = () => {
+        if (snapshotRenames.get(snapshotKey) === snapshotToken) {
+          snapshotRenames.delete(snapshotKey);
+        }
+      };
+      const requestId = matchesProjection
+        ? await epicHandle.store
+            .getState()
+            .beginRenameMutation(id, trimmed)
+            .catch((error: unknown) => {
+              clearSnapshotRename();
+              throw error;
+            })
+        : null;
       // Retire rides the `mutateAsync` PROMISE, never a per-call `onSettled`:
       // TanStack drops mutate-level callbacks when the component unmounts
       // before settle, and a second `mutate()` on the same observer replaces
@@ -207,7 +244,8 @@ export function useRenameCanvasTab(
         ) {
           return;
         }
-        renameArtifactInTab(viewTabId, id, trimmed);
+        if (snapshotRenames.get(snapshotKey) !== snapshotToken) return;
+        renameArtifactInTab(viewTabId, id, trimmed, tab.hostId);
       };
       const failed = async (): Promise<void> => {
         await retire("failed");
@@ -220,16 +258,28 @@ export function useRenameCanvasTab(
       if (tab.type === "chat") {
         settleDetachedEpicMutation(
           renameChat
-            .mutateAsync({ epicId, chatId: id, title: trimmed })
-            .then(landed, failed),
+            .mutateAsync({
+              epicId,
+              chatId: id,
+              title: trimmed,
+              hostId: tab.hostId,
+            })
+            .then(landed, failed)
+            .finally(clearSnapshotRename),
           "canvas tab",
           "chat rename settlement",
         );
       } else {
         settleDetachedEpicMutation(
           renameTerminalAgent
-            .mutateAsync({ epicId, tuiAgentId: id, title: trimmed })
-            .then(landed, failed),
+            .mutateAsync({
+              epicId,
+              tuiAgentId: id,
+              title: trimmed,
+              hostId: tab.hostId,
+            })
+            .then(landed, failed)
+            .finally(clearSnapshotRename),
           "canvas tab",
           "terminal-agent rename settlement",
         );

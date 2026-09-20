@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Blob as NodeBlob } from "node:buffer";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // `Response.blob()` (Node's `undici`) and the fake IndexedDB's real
 // `structuredClone` both operate on Node's OWN `Blob` (from `node:buffer`),

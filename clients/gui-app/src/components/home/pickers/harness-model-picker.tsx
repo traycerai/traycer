@@ -687,7 +687,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       selection.profileId,
     ],
   );
-  function openProviderSettings(): void {
+  // `focusTab` is the caller's, not this function's: a CTA that promises a
+  // specific destination ("Set up CLI" -> the CLI candidates on General) has to
+  // be able to name it. This used to end with an unconditional
+  // `setFocusTab("usage")`, which silently overwrote whatever the call site had
+  // just set - the CTA's own write landed first and lost. Required rather than
+  // defaulted so every site states where it sends the user.
+  function openProviderSettings(focusTab: string): void {
     // Settings has its own host scope. The picker may be following the
     // app-wide default (`runTargetHostId === null`), so hand Settings the
     // concrete host backing this picker rather than the follow-default
@@ -707,7 +713,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       profileId: activePanelProfileId ?? "ambient",
       startSignIn: false,
     });
-    focus.setFocusTab("usage");
+    focus.setFocusTab(focusTab);
     openSettings({
       section: "providers",
       resetToGeneral: false,
@@ -1264,7 +1270,12 @@ function useBrowsedProviderCatalogEntry(input: {
     input.catalogHarnesses.find(
       (harness) => harness.id === input.browsedProviderId,
     ) ?? null;
-  const fetchGate = input.catalogActive && entry?.available === true;
+  // A pending entry promoted by cached models needs no fetch. A known-positive
+  // host verdict with no models still needs this targeted cold-cache load.
+  const fetchGate =
+    input.catalogActive &&
+    entry?.available === true &&
+    (!entry.availabilityPending || entry.models.length === 0);
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     input.runTargetClient,
     input.browsedProviderId,

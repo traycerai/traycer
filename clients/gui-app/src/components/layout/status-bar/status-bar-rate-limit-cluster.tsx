@@ -1,19 +1,14 @@
 import type { ReactNode } from "react";
 import { PopoverTrigger } from "@/components/ui/popover";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
-import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar-density";
 import {
-  statusBarUsageDetailCeiling,
-  statusBarUsageLadderLevels,
-  useStatusBarUsageLadder,
-} from "@/components/layout/status-bar/status-bar-usage-ladder";
-import {
-  statusBarClusterSegments,
+  STATUS_BAR_USAGE_CONTENT_CLASS,
   statusBarSegmentName,
-  statusBarUsageContentClass,
   useStatusBarUsageDisplay,
+  type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import { StatusBarUsageReadings } from "@/components/layout/status-bar/status-bar-usage-readings";
+import { StatusBarUsageScroller } from "@/components/layout/status-bar/status-bar-usage-scroller";
 import { STATUS_BAR_MENU_EXEMPT_ATTRIBUTE } from "@/components/layout/status-bar/status-bar-visibility-menu";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -40,13 +35,13 @@ import type { PercentMode } from "@/stores/settings/layout-store";
  * The strip's left cluster: every visible provider's usage, the one control
  * that refreshes them, and the trigger for the usage panel.
  *
- * How much of each reading it draws is decided by measurement, not by width
- * alone: the ladder drops one kind of detail at a time until what it holds fits
- * the button it holds it in, and folds whole providers into a `+N` chip once
- * there is nothing left to drop. That replaces the fade this cluster used to
- * paint over its own overflow — a fade says there is more without giving any
- * of it back, and at a laptop width with a multi-window account there was a
- * great deal more.
+ * It draws everything that is switched on, at every width. Which accounts
+ * appear and how much each reading says are both the user's choices - the
+ * panel's per-account switches, the Layout page's display switches - and a
+ * strip that quietly hid one of them to fit a window would be overriding a
+ * choice it was asked to show. So when the readings outgrow the strip they
+ * SCROLL (`StatusBarUsageScroller`), with a fade on whichever edge hides
+ * something, and the trigger keeps its natural width inside that scroller.
  *
  * Mounted only inside the bar's `scopedToOwnHost` gate and only while the
  * preference is on, so every query below is bound to the host the strip watches.
@@ -56,8 +51,9 @@ import type { PercentMode } from "@/stores/settings/layout-store";
  * that hides these segments and is therefore anchored by the strip.
  */
 export function StatusBarRateLimitCluster(props: {
+  /** The watched host, whose readings these are. */
+  readonly hostId: string | null;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
-  readonly density: StatusBarDensity;
   readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
@@ -72,119 +68,44 @@ export function StatusBarRateLimitCluster(props: {
     // below fans out from here. Every other reader observes what this one wrote.
     mode: "live",
   });
-  const segments = statusBarClusterSegments(cluster);
-  const { stop, roomRef, reservedRef, contentRef } = useStatusBarUsageLadder({
-    ceiling: statusBarUsageDetailCeiling(props.density),
-    levels: statusBarUsageLadderLevels(display),
-    segmentCount: segments.length,
-    // The three cluster states below draw one sentence that no rung changes.
-    // Measuring them would record widths against steps that free nothing, and
-    // those widths would then decide how the first frame of real segments is
-    // drawn - a hide-all/unhide round trip repainting at `icon-only`.
-    enabled: segments.length > 0,
-  });
 
   return (
     <>
       {/*
-        The box that holds the ROOM, and the only one in this cluster that
-        stretches - the ladder's hysteresis records its width, and a
-        shrink-to-fit box would report its own content instead the moment that
-        content fits, which is a ladder that can only ever go down. It is a
-        wrapper rather than the trigger itself because the trigger has to keep
-        hugging its readings: its hover fill and focus ring are the strip's
-        only affordance saying the usage panel is one click away, and a button
+        The scroller is a wrapper around the trigger rather than the trigger
+        itself, for two reasons. A `<button>` is not a reliable scroll
+        container - WebKit and Firefox do not scroll one - so the box that
+        scrolls has to be a plain element. And the trigger has to keep hugging
+        its readings: its hover fill and focus ring are the strip's only
+        affordance saying the usage panel is one click away, and a button
         stretched across the empty half of the bar would light up nowhere near
         the thing it opens.
       */}
-      <span
-        ref={roomRef}
-        data-testid="status-bar-rate-limit-room"
-        className="flex min-w-0 flex-1 items-center"
+      <StatusBarUsageScroller
+        hostId={props.hostId}
+        cluster={cluster}
+        testId="status-bar-rate-limit-scroller"
       >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            // The button's own name, not the segments' - `aria-label` overrides
-            // everything inside it, so the readings have to be IN the name or
-            // they are not reachable at all. Kept to one reading per provider:
-            // the whole window list is what the panel this opens is for. It is
-            // also the one thing the ladder never shortens - what a screen
-            // reader hears cannot depend on how wide the window is.
-            aria-label={triggerAccessibleName(cluster, display.percentMode)}
-            data-testid="status-bar-rate-limit-trigger"
-            data-density={props.density}
-            data-usage-detail={stop.detail}
-            // The bar's own right-click menu stands down over a control that is
-            // itself a way into the surface the menu summarises.
-            {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
-            // A click ON a segment is a deep link to that account's card; the
-            // panel still opens through the trigger's own toggle, this only
-            // arms which card it opens on. A click beside the segments, or
-            // the keyboard, opens the panel where it was.
-            onClick={(event) => {
-              const target = statusBarSegmentAtClick(event.target);
-              if (target !== null) requestRevealProfile(target);
-            }}
-            // No padding of its own: the readings inside carry it, so the
-            // natural width the ladder measures is the width this button would
-            // need - hover fill and focus ring included - rather than that
-            // number minus a gutter it would then clip anyway.
-            className="inline-flex h-6 min-w-0 items-center overflow-hidden text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-          >
-            {/*
-              The readings at their NATURAL width, which is the other half of
-              the measurement: `shrink-0` is what makes `scrollWidth` here the
-              width the cluster wants rather than the width it was given, and
-              the room span above reports the width it was given. It is also the
-              box worth observing for change - a countdown ticking from
-              `4h 15m` to `4h` moves this and nothing else.
-
-              Not `shrink-0` when there are no segments, and that is the same
-              decision as the ladder being off in that state: with nothing to
-              measure, the one sentence below should behave like ordinary text
-              in a box too small for it and ellipsize, which `truncate` can only
-              do inside a parent that is allowed to squeeze it.
-            */}
-            <span
-              ref={contentRef}
-              data-testid="status-bar-rate-limit-content"
-              className={statusBarUsageContentClass(cluster)}
-            >
-              <StatusBarUsageReadings
-                cluster={cluster}
-                stop={stop}
-                display={display}
-              />
-            </span>
-          </button>
-        </PopoverTrigger>
-        {/*
-          Inside the room and after the trigger, so the strip reads
-          `<readings> ↻ ————— <resources>` rather than parking the control
-          that refreshes these numbers a screen away from them, against the
-          resource readout. Nothing here grows, so the room's spare width
-          collects to the right of both, which is where the strip wants it.
-
-          Its own box because that box is what the ladder SUBTRACTS: the
-          readings may only have the room this control leaves. The `pl-1` is
-          the gap between the two - carried here rather than as the room's
-          `gap`, so the width being subtracted is the whole of what the
-          control occupies and no separate constant has to be kept in step
-          with a class it cannot see.
-        */}
-        <span
-          ref={reservedRef}
-          data-testid="status-bar-rate-limit-reserved"
-          className="flex shrink-0 items-center pl-1"
-        >
-          <StatusBarRateLimitRefresh
-            refresh={refresh}
-            // Nothing to refresh is not the same as a refresh that failed, so
-            // the control stays visible and says why it is off.
-            disabled={cluster.kind !== "segments"}
-          />
-        </span>
+        <StatusBarUsageTrigger
+          cluster={cluster}
+          display={display}
+          onRevealProfile={requestRevealProfile}
+        />
+      </StatusBarUsageScroller>
+      {/*
+        After the scroller rather than inside it, so the strip reads
+        `<readings> ↻ ————— <resources>` and the control that refreshes these
+        numbers never scrolls away with them. Nothing here grows, so the
+        scroller takes the room and this stays pinned beside its right edge.
+        The `pl-1` is the gap between the two.
+      */}
+      <span className="flex shrink-0 items-center pl-1">
+        <StatusBarRateLimitRefresh
+          refresh={refresh}
+          // Nothing to refresh is not the same as a refresh that failed, so
+          // the control stays visible and says why it is off.
+          disabled={cluster.kind !== "segments"}
+        />
       </span>
       {mountTargets.map((target) => (
         <StatusBarProviderMountRefresh
@@ -193,6 +114,63 @@ export function StatusBarRateLimitCluster(props: {
         />
       ))}
     </>
+  );
+}
+
+/**
+ * The usage panel's trigger, wearing the readings.
+ *
+ * Its own component, taking what it draws as props, because it is the one
+ * piece of the cluster a layout check has to render on its own: whether the
+ * scroller overflows at a given width, and where the fade lands, is a fact
+ * about THIS button at its natural width inside the scroller - and the hooks
+ * the cluster resolves its readings through cannot run without a host.
+ *
+ * It must sit inside a `Popover`: `PopoverTrigger` throws outside one.
+ */
+export function StatusBarUsageTrigger(props: {
+  readonly cluster: StatusBarRateLimitClusterModel;
+  readonly display: StatusBarUsageDisplay;
+  readonly onRevealProfile: (target: RateLimitPopoverRevealTarget) => void;
+}): ReactNode {
+  const { cluster, display } = props;
+  return (
+    <PopoverTrigger asChild>
+      <button
+        type="button"
+        // The button's own name, not the segments' - `aria-label` overrides
+        // everything inside it, so the readings have to be IN the name or
+        // they are not reachable at all. Kept to one reading per segment:
+        // the whole window list is what the panel this opens is for, and
+        // a segment scrolled out of view is still in the name.
+        aria-label={triggerAccessibleName(cluster, display.percentMode)}
+        data-testid="status-bar-rate-limit-trigger"
+        // The bar's own right-click menu stands down over a control that is
+        // itself a way into the surface the menu summarises.
+        {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+        // A click ON a segment is a deep link to that account's card; the
+        // panel still opens through the trigger's own toggle, this only
+        // arms which card it opens on. A click beside the segments, or
+        // the keyboard, opens the panel where it was.
+        onClick={(event) => {
+          const target = statusBarSegmentAtClick(event.target);
+          if (target !== null) props.onRevealProfile(target);
+        }}
+        // Natural width and no overflow rule of its own: the scroller
+        // around it is the box that clips, and a trigger that clipped or
+        // shrank would hide readings the scroller exists to reach. No
+        // padding either - the readings inside carry it, so the hover
+        // fill and focus ring end where the last reading does.
+        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        <span
+          data-testid="status-bar-rate-limit-content"
+          className={STATUS_BAR_USAGE_CONTENT_CLASS}
+        >
+          <StatusBarUsageReadings cluster={cluster} display={display} />
+        </span>
+      </button>
+    </PopoverTrigger>
   );
 }
 
@@ -226,8 +204,10 @@ function statusBarSegmentAtClick(
  *
  * One reading per segment rather than every window, because this is a control
  * name and a name is read in full before anything else can happen. The tightest
- * window is the one the compact densities already choose to show for the same
- * reason - it is the number that decides whether the panel is worth opening.
+ * window is the one the segment model selects by default for the same reason -
+ * it is the number that decides whether the panel is worth opening. Every
+ * segment is in the name whether or not it is currently scrolled into view:
+ * what a screen reader hears cannot depend on where the strip is scrolled to.
  */
 function triggerAccessibleName(
   cluster: StatusBarRateLimitClusterModel,

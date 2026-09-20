@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
-  CreateEpicChatSeed,
-  CreateEpicResponse,
+  CreateEpicChatSeedV12,
+  CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -15,6 +16,8 @@ import type {
   WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
@@ -44,6 +47,7 @@ import {
   draftRuntimeRegistry,
   type DraftSubmissionPlacement,
   type DraftSubmissionAttempt,
+  type DraftSubmissionSettlement,
 } from "@/stores/home/draft-runtime-registry";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
@@ -62,18 +66,39 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
-  stringValue,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
+// The inline step is shared with the in-epic send, the edit-and-resend, the
+// new-conversation create and the handoff resend - every surface that has to
+// hand the host base64 - so "what the host receives" has one implementation.
 import {
-  collectImageAtoms,
   containsImageAtoms,
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import {
+  resolveDraftImageBytes,
+  type DraftImageByteTarget,
+} from "@/lib/drafts/resolve-draft-image-bytes";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
+// The by-hash half of the same question: which of those nodes need NOT be
+// inlined, because the host will resolve them from this account's blob tier.
+import {
+  confirmAttachmentsByHash,
+  createAttachmentsByHashSupported,
+  exceedsCreateAttachmentHashCap,
+  planAttachmentsByHash,
+  reportCreateAttachmentHashCapExceeded,
+  type AttachmentsByHashPlan,
+} from "@/lib/composer/attachments-by-hash";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
+import {
+  createOutcomeIsDecidable,
+  pollEpicExistence,
+} from "@/lib/epics/epic-existence-poll";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
@@ -82,9 +107,12 @@ import {
   resolvePrimaryPath,
 } from "@/lib/worktree/resolve-primary-path";
 import {
+  armEpicCreateSeedHoldTimer,
   clearEpicCreateSeedPending,
+  clearUnheldEpicCreateSeed,
   markEpicCreateSeedPending,
 } from "@/lib/worktree/pending-epic-create-seeds";
+import { shouldDeferWorktreeProvisioning } from "@/lib/worktree/defer-worktree-provisioning";
 import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
@@ -179,7 +207,31 @@ export interface LandingPlacementRefusal {
 }
 
 interface FinalizeLandingSubmissionInput {
+  /** What the HOST receives: image hashes inlined back to base64. */
   readonly resolvedContent: JsonContent;
+  /**
+   * The same document with its image nodes still HASH-ONLY — what the handoff
+   * entry records.
+   *
+   * The two differ on purpose. The handoff is persisted to `localStorage` and
+   * is a GC root for the bytes it names, so it must hold the hash, not a
+   * megabyte of base64: storing the inlined copy is what put the image in
+   * `traycer-gui-app:initial-chat-handoffs` in the first place, and the persist
+   * `partialize` that now strips base64 would drop it on the next write. The
+   * resend inlines from the composer image store at the moment it sends.
+   */
+  readonly hashOnlyContent: JsonContent;
+  /**
+   * Whether `resolvedContent` still carries hash-only image nodes the host must
+   * resolve from this account's draft blob tier - `epic.create@1.2`'s
+   * `attachmentsByHash`.
+   *
+   * PER MESSAGE, not per node: it says "resolve the hash-only nodes in here",
+   * and inline nodes beside them stay inline. A mixed document (some images
+   * confirmed on the host, some inlined because they could not be) is the
+   * ordinary output of the submit gate, not an edge case.
+   */
+  readonly attachmentsByHash: boolean;
   readonly text: string;
   readonly args: LandingComposerSubmitArgs;
   readonly workspaceContext: LandingWorkspaceContext;
@@ -220,17 +272,32 @@ export function useLandingComposerActions(
   );
   const createEpicMutateAsync = createEpic.mutateAsync;
   const terminalAgentCreateFn = terminalAgentCreate.create;
+  // The one client every request this hook makes goes out on - the placement's
+  // own, never an app-wide read. Named here so the by-hash upload and the
+  // existence poll cannot reach for a different one than the create does.
+  const submitClient = target.client;
 
   // Guards the async (session-cold image) submit path against re-entry: on that
   // path `createEpic.isPending` — and thus the composer's `canSubmit` — only flips
   // inside the deferred `finalizeSubmission`, so without this a second submit
   // during the IndexedDB read would create a second epic.
   const submissionInFlightRef = useRef(false);
+  // STATE, not a ref, because the composer has to see it: the by-hash submit
+  // path spends its time in `drafts.putBlob`, before `createEpic.isPending`
+  // flips, and a Send button that stays live through a multi-megabyte upload is
+  // a second epic waiting to happen. The ref above guards re-entry; this is the
+  // same window reported to the UI.
+  const [attachmentUploadPending, setAttachmentUploadPending] = useState(false);
 
   // Single create path shared by the GUI-chat and terminal-agent flows so the
   // epic.create request (epic light + repos + workspaces + folded chat) - and
   // therefore the optimistic history insert in `useEpicCreate.onSuccess` - is
   // built identically and cannot drift between the two entry points.
+  // Resolves with the LATEST `epic.create` line's response (`@1.2`), because
+  // that is what the mutation hands back: its `refusal` is the `@1.2` instance,
+  // whose kind enum carries a member the released one does not. Annotating the
+  // frozen type would narrow nothing here - it would simply stop describing the
+  // value this returns.
   const createLandingEpic = useCallback(
     (input: {
       readonly epicId: string;
@@ -238,13 +305,31 @@ export function useLandingComposerActions(
       readonly hostId: string;
       readonly title: string;
       readonly initialUserPrompt: string;
-      readonly chat: CreateEpicChatSeed | null;
+      readonly chat: CreateEpicChatSeedV12 | null;
       readonly workspaceFolders: ReadonlyArray<string>;
       readonly workspaceFolderInfoByPath: Readonly<
         Record<string, WorkspaceFolderInfo>
       >;
       readonly now: number;
-    }): Promise<CreateEpicResponse> => {
+      /**
+       * Handed the closure that re-establishes everything this create seeded,
+       * for the ONE caller that can learn a rejected create actually landed.
+       *
+       * The teardown in `.catch` below is right for every rejection that means
+       * what it says, and it runs before any caller sees the error - so a
+       * caller that then polls and finds the epic has already lost the seed,
+       * the pair entry and, with it, the release invalidation and the backstop
+       * that would have landed the real binding row. It cannot rebuild them:
+       * the optimistic rows, the seeded query key and the `release` closure are
+       * all locals of this callback.
+       *
+       * Passed OUT rather than deferring the teardown, deliberately: a
+       * recovery nobody invokes leaves today's behaviour exactly as it is,
+       * while a deferred teardown nobody completes leaks a hold that suppresses
+       * this epic's binding refetches until the window is reloaded.
+       */
+      readonly captureSeedRecovery: (recover: () => void) => void;
+    }): Promise<CreateEpicResponseV12> => {
       const profile = useAuthStore.getState().profile;
       const hostId = input.hostId;
       const optimisticRows = buildOptimisticWorkspaceBindingRows(
@@ -279,13 +364,61 @@ export function useLandingComposerActions(
       // Files/Diff openers show them immediately instead of flashing empty
       // during the in-flight create.
       seedBindings();
+      const seedChatId = input.chat?.chatId ?? null;
+      // EVERY landing create registers an entry now, not only one that wrote
+      // rows. Two independent facts ride it and they are not the same question:
+      // `seedRows` is the `worktree.changed` burst guard's (does an optimistic
+      // seed need protecting?), while `heldForDeferredCreate` is the
+      // create-path refetch hold's (will the host have no binding row to answer
+      // with until a post-response `git worktree add` lands?). A deferred
+      // create whose picked folder produced no rows is the pair that needs
+      // both answers to differ.
+      //
       // While the create is in flight the seed is authoritative: a
       // `worktree.changed` burst refetch could return pre-binding
       // `{ rows: [] }` and clobber it, so the burst invalidation only MARKS
-      // this epic's binding queries until the create settles.
-      if (seededBindingsKey !== null) {
-        markEpicCreateSeedPending(input.epicId);
-      }
+      // this epic's binding queries until the create settles - and, on the
+      // deferred path, until the chat's own provisioning outcome.
+      // Built once and used twice - at submit, and by the recovery below. The
+      // two must be the SAME entry: a recovery that re-registered with, say,
+      // `heldForDeferredCreate: false` would hand a deferred create's epic to
+      // the first refetch that asked, which is the whole condition the hold
+      // exists to prevent.
+      const seedEntry = {
+        hostId,
+        seededMessageId: input.chat?.initialMessage?.messageId ?? null,
+        seedRows: seededBindingsKey !== null,
+        heldForDeferredCreate: input.chat?.deferWorktreeProvisioning === true,
+        // The release IS an invalidate and nothing else: scoped to this epic's
+        // own key (not the host-wide method scope the success path uses) and at
+        // the default `refetchType: "active"`, so a mounted chip refetches now
+        // and an unmounted one is marked - which is what lands the worktree row
+        // on the next mount of a tile the user closed mid-window.
+        release: () => {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.method<
+              HostRpcRegistry,
+              "worktree.listBindingsForEpic"
+            >(hostId, "worktree.listBindingsForEpic", {
+              epicId: input.epicId,
+            }),
+          });
+        },
+      };
+      markEpicCreateSeedPending(input.epicId, seedChatId, seedEntry);
+      input.captureSeedRecovery(() => {
+        // The seeded rows first, so a chip that mounts between these two lines
+        // reads folders rather than the empty listing the teardown left.
+        seedBindings();
+        markEpicCreateSeedPending(input.epicId, seedChatId, seedEntry);
+        // ARMED HERE, and this is the part a plain re-registration would miss.
+        // The backstop is normally armed by `useEpicCreateForClient.onSuccess`
+        // - which never ran, because the response is exactly what was lost. An
+        // entry with no timer and no response to release it would hold this
+        // epic's binding listing until something unrelated refetched it, which
+        // is a worse outcome than the teardown this is undoing.
+        armEpicCreateSeedHoldTimer(input.epicId, seedChatId);
+      });
       return createEpicMutateAsync({
         epic: buildEpicLight({
           id: input.epicId,
@@ -317,7 +450,10 @@ export function useLandingComposerActions(
           // into `onError`'s generic "Couldn't create epic." toast, discarding
           // the host's message and the repair the typed arm exists to offer.
           if (response.refusal !== undefined) {
-            clearEpicCreateSeedPending(input.epicId);
+            // UNCONDITIONAL, and it has to be: `onSuccess` returned at the
+            // refusal before any hold or timer, and `onError` never touches the
+            // marker, so nothing else would ever remove this entry.
+            clearEpicCreateSeedPending(input.epicId, seedChatId);
             if (seededBindingsKey !== null) {
               queryClient.removeQueries({ queryKey: seededBindingsKey });
             }
@@ -329,11 +465,22 @@ export function useLandingComposerActions(
           // reconciles to the host's truth, including later removals, so the
           // chip can't get stuck showing removed folders.
           seedBindings();
-          clearEpicCreateSeedPending(input.epicId);
+          // UNHELD ONLY. A held entry has to survive its own response: the hold
+          // was established at submit and `onSuccess` armed its timer before
+          // this arm runs, so an unconditional delete here would leave nothing
+          // that ever invalidates the epic's key - the chip would sit on the
+          // seeded folders with no worktree row to follow. The tile driver (or
+          // that timer) releases it.
+          clearUnheldEpicCreateSeed(input.epicId, seedChatId);
           return response;
         })
         .catch((error: unknown) => {
-          clearEpicCreateSeedPending(input.epicId);
+          // Unconditional, like the refusal arm. A lifecycle throw inside
+          // `onSuccess` AFTER the timer arm also rejects `mutateAsync` into
+          // here, so this delete is what cancels that orphaned timer; for a
+          // seeded entry the `removeQueries` below then makes the lost hold a
+          // cold refetch of host truth rather than a stuck chip.
+          clearEpicCreateSeedPending(input.epicId, seedChatId);
           // Roll back the seed so a failed create can't leave the chip showing
           // folders for an epic that never existed.
           if (seededBindingsKey !== null) {
@@ -368,6 +515,14 @@ export function useLandingComposerActions(
 
       const submittedContent = buildSubmittedChatJSONContent(
         resolvedContent,
+        args.slashCatalog,
+      );
+      // The same document the host gets, but hash-only — for the handoff entry,
+      // which is persisted and roots those bytes against GC. Built through the
+      // SAME normalizer so the two can only differ in the image payload, never
+      // in the slash-command chip or any other structural rewrite.
+      const handoffContent = buildSubmittedChatJSONContent(
+        input.hashOnlyContent,
         args.slashCatalog,
       );
       const profile = useAuthStore.getState().profile;
@@ -435,6 +590,13 @@ export function useLandingComposerActions(
               sender: { type: "user" as const, userId },
               settings,
               accountContext,
+              // Spread rather than a `false` literal, like the sibling opt-in
+              // below: absent and `false` read identically on the host, and a
+              // request that names the key only when it is asking for something
+              // keeps the wire honest about which creates carry hashes.
+              ...(input.attachmentsByHash
+                ? { attachmentsByHash: true as const }
+                : {}),
             }
           : null;
 
@@ -455,7 +617,7 @@ export function useLandingComposerActions(
         userId,
         epicId,
         chatId,
-        content: submittedContent,
+        content: handoffContent,
         settings,
         worktreeIntent: workspaceContext.worktreeIntent,
         placement: null,
@@ -489,6 +651,69 @@ export function useLandingComposerActions(
       // a cloud NOT_FOUND until the create host's background connect lands.
       markEpicCreatedThisSession(epicId, activeHostId);
 
+      // Where the epic's tab goes once the create is known to have landed.
+      //
+      // TWO ARMS REACH IT and they must place identically: the response, and -
+      // now that the create is keyed - an existence poll that finds the epic
+      // after the response was lost. Written as one closure rather than
+      // duplicated so the second arm cannot drift into a different placement,
+      // which is the kind of divergence nothing would notice until someone
+      // lost a tab.
+      const placeLandedEpic = (settlement: DraftSubmissionSettlement): void => {
+        if (settlement.kind === "current") {
+          placeCreatedDraftEpic({
+            draftId: attempt.draftId,
+            epicId,
+            tabId,
+            epicTitle,
+            editor,
+            placement: attempt.placement,
+            activate: () => {
+              // The create continuation can settle after the user opens
+              // Settings / History. Keep the normal underlying transition
+              // from draft to Epic, but carry that foreground overlay onto
+              // the Epic route so async completion cannot dismiss it.
+              const preserveSystemOverlay =
+                (getSystemTabModalApi()?.active ?? null) !== null;
+              activateTabIntent(
+                navigate,
+                existingEpicTabIntent({ epicId, tabId, focus: undefined }),
+                preserveSystemOverlay
+                  ? { search: (previous) => previous }
+                  : undefined,
+              );
+            },
+          });
+          return;
+        }
+        // Content changed after send: keep that later edit. A close during
+        // create used to be the same branch because close destroyed the row;
+        // now close retains, so `"closed"` must still delete (decision #13) or
+        // the sent text stays as a draft alongside the new epic.
+        placeCreatedEpicInBackground(epicId, epicTitle);
+        if (settlement.kind === "closed") {
+          useLandingDraftStore.getState().deleteDraft(attempt.draftId);
+        }
+      };
+
+      // The opt-in, on the four facts this surface has in hand. It travels with
+      // the UI for the state it produces (the queued row, the setup card and
+      // its Retry), which all ship in the same change - so no client ever asks
+      // for a worktree created after the response without being able to show
+      // the user what is happening to it.
+      const deferWorktreeProvisioning = shouldDeferWorktreeProvisioning({
+        hostId: activeHostId,
+        method: "epic.create",
+        hasInitialMessage: initialMessage !== null,
+        workspaceMode: workspaceContext.workspaceMode,
+        worktreeIntent: workspaceContext.worktreeIntent,
+      });
+
+      // Filled synchronously by `createLandingEpic` before it dispatches, and
+      // read only on the one branch that learns a rejected create landed after
+      // all. A holder rather than a bare `let` so no flow analysis has to
+      // reason about an assignment that happens inside a callback.
+      const seedRecovery: { run: (() => void) | null } = { run: null };
       void createLandingEpic({
         epicId,
         hostId: activeHostId,
@@ -497,6 +722,9 @@ export function useLandingComposerActions(
         workspaceFolders: workspaceContext.workspaceFolders,
         workspaceFolderInfoByPath: workspaceContext.workspaceFolderInfoByPath,
         now,
+        captureSeedRecovery: (recover) => {
+          seedRecovery.run = recover;
+        },
         chat: {
           chatId,
           parentId: null,
@@ -507,6 +735,14 @@ export function useLandingComposerActions(
           workspaceMode: workspaceContext.workspaceMode,
           worktreeIntent: workspaceContext.worktreeIntent,
           initialMessage,
+          // Spread rather than a `false` literal: absent and `false` mean the
+          // same thing to the host, but a plain local-folder create on a `@1.2`
+          // host is supposed to ship NO field, and a request that names the key
+          // only when it is asking for something keeps the wire honest about
+          // which creates opted in.
+          ...(deferWorktreeProvisioning
+            ? { deferWorktreeProvisioning: true }
+            : {}),
         },
       })
         .then((response) => {
@@ -545,6 +781,7 @@ export function useLandingComposerActions(
           }
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
+          useFirstTaskGuideStore.getState().dismiss();
           clearConsumedLandingWorktreeIntent(workspaceContext);
           // Re-anchor the create-race window on COMPLETION - see the terminal
           // flow's copy for why. This flow needs it most: the tab is opened
@@ -564,44 +801,10 @@ export function useLandingComposerActions(
                 chatId,
               );
           }
-          if (settlement.kind === "current") {
-            placeCreatedDraftEpic({
-              draftId: attempt.draftId,
-              epicId,
-              tabId,
-              epicTitle,
-              editor,
-              placement: attempt.placement,
-              activate: () => {
-                // The create continuation can settle after the user opens
-                // Settings / History. Keep the normal underlying transition
-                // from draft to Epic, but carry that foreground overlay onto
-                // the Epic route so async completion cannot dismiss it.
-                const preserveSystemOverlay =
-                  (getSystemTabModalApi()?.active ?? null) !== null;
-                activateTabIntent(
-                  navigate,
-                  existingEpicTabIntent({ epicId, tabId, focus: undefined }),
-                  preserveSystemOverlay
-                    ? { search: (previous) => previous }
-                    : undefined,
-                );
-              },
-            });
-          } else {
-            // Content changed after send: keep that later edit. A close
-            // during create used to be the same branch because close
-            // destroyed the row; now close retains, so `"closed"` must
-            // still delete (decision #13) or the sent text stays as a
-            // draft alongside the new epic.
-            placeCreatedEpicInBackground(epicId, epicTitle);
-            if (settlement.kind === "closed") {
-              useLandingDraftStore.getState().deleteDraft(attempt.draftId);
-            }
-          }
+          placeLandedEpic(settlement);
           draftRuntimeRegistry.complete(attempt);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           // A retired attempt takes the same exit as the success path above:
           // the id-scoped leftovers still have to go, but `markFailed` must
           // not - it would re-insert a handoff entry keyed to an identity the
@@ -612,19 +815,257 @@ export function useLandingComposerActions(
             draftRuntimeRegistry.complete(attempt);
             return;
           }
-          // The epic never landed on the host: drop the create marker so its
-          // orphaned tab is no longer exempt from existence reconciliation,
-          // and settle the handoff.
-          settleUnlandedLandingEpic({
-            epicId,
-            chatId,
+          // ONE class of rejection no longer means "the epic never landed".
+          // This create carries `idempotencyKey = epicId`, so an ambiguous
+          // post-send drop (or a `keyReuseConflict`) leaves an epic the host
+          // can be asked about by name - and tearing local state down for an
+          // epic that DOES exist is the expensive mistake here: the handoff
+          // moves to `failed`, the create marker is dropped, and the user is
+          // told a task they now own was not created. Every other rejection is
+          // its own answer and settles immediately, as before.
+          if (
+            !(error instanceof HostRpcError) ||
+            !createOutcomeIsDecidable(error)
+          ) {
+            settleUnlandedLandingEpic({
+              epicId,
+              chatId,
+              hostId: activeHostId,
+              userId,
+            });
+            draftRuntimeRegistry.complete(attempt);
+            return;
+          }
+          // Deduped with the mutation's own poll for this pair, so the notice
+          // and this teardown are decided on ONE set of readings.
+          void pollEpicExistence({
+            client: submitClient,
             hostId: activeHostId,
-            userId,
-          });
-          draftRuntimeRegistry.complete(attempt);
+            epicId,
+          }).then(
+            (verdict) => {
+              if (verdict !== "exists") {
+                settleUnlandedLandingEpic({
+                  epicId,
+                  chatId,
+                  hostId: activeHostId,
+                  userId,
+                });
+                draftRuntimeRegistry.complete(attempt);
+                return;
+              }
+              // The create landed; only its answer was lost. This is the
+              // success arm above minus the two things a lost response cannot
+              // supply: the refusal check (a refusal is a RESOLVED body, so it
+              // cannot arrive here) and `initialTurnStarted`. Leaving the
+              // handoff `pending` is right rather than lossy - the driver
+              // re-sends the seeded message, and the host dedupes it on
+              // `messageId`, which is exactly the fallback path a `false`
+              // answer would have taken.
+              const settled = draftRuntimeRegistry.settlement(attempt);
+              if (settled.kind === "retired") {
+                discardRetiredLandingEpic({ epicId, chatId });
+                draftRuntimeRegistry.complete(attempt);
+                return;
+              }
+              clearConsumedLandingWorktreeIntent(workspaceContext);
+              // Re-anchored HERE rather than left at its submit-time stamp: the
+              // poll can run for a minute, and the marker's window is what
+              // keeps the opening session on the create host.
+              markEpicCreatedThisSession(epicId, activeHostId);
+              // And so is the binding seed, which `createLandingEpic`'s own
+              // `.catch` tore down before this poll ever started - correctly,
+              // for every rejection that means what it says. This one does not:
+              // the epic exists, the host may still be provisioning its
+              // worktree, and without the entry the tile's hold driver finds
+              // nothing to release and the listing this create seeded stays
+              // empty until an unrelated refetch. Restored BEFORE the tab is
+              // placed, so the tile mounts onto the seeded rows rather than
+              // onto the hole.
+              seedRecovery.run?.();
+              placeLandedEpic(settled);
+              draftRuntimeRegistry.complete(attempt);
+            },
+            () => {
+              settleUnlandedLandingEpic({
+                epicId,
+                chatId,
+                hostId: activeHostId,
+                userId,
+              });
+              draftRuntimeRegistry.complete(attempt);
+            },
+          );
         });
     },
-    [createLandingEpic, navigate],
+    [createLandingEpic, navigate, submitClient],
+  );
+
+  /**
+   * The by-hash submit: confirm the bytes are on the placement host, inline
+   * only what could not be confirmed, and send the rest as hashes.
+   *
+   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
+   * host" is not a question this window can answer synchronously. That costs
+   * the landing composer its one-stack-frame submit for a message with images,
+   * which is why the re-entry guard and the pending flag both cover it.
+   *
+   * REFUSES rather than dropping an image, which is the landing composer's own
+   * rule and not a general one: a hash here names bytes that were pasted into
+   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
+   * hash it can neither confirm nor inline is an image that would silently
+   * vanish from the message. The chat and edit composers inline best-effort for
+   * the opposite reason - their hashes routinely address the host's epic store.
+   */
+  /**
+   * The authoritative cap check, on the hashes the create will actually carry.
+   *
+   * The pre-upload check below sees only the plan's ELIGIBLE set, which is not
+   * what the host counts: `collectAttachmentHashes` counts every node still
+   * holding a hash, whatever this client thought of its eligibility. On this
+   * surface the two nearly always agree - an unresolvable hash is refused
+   * outright a few lines down rather than shipped - so this is a backstop
+   * rather than the live arm it is in the modal. It is here anyway because the
+   * rule belongs to the wire, not to one surface's inlining policy, and a
+   * backstop that costs one array walk is cheaper than the two surfaces
+   * drifting apart.
+   *
+   * Returns whether it refused, having already narrated and settled the
+   * attempt.
+   */
+  const refusedOverWireHashCap = useCallback(
+    (content: JsonContent, attempt: DraftSubmissionAttempt): boolean => {
+      if (!exceedsCreateAttachmentHashCap(hashOnlyImageHashes(content))) {
+        return false;
+      }
+      reportCreateAttachmentHashCapExceeded();
+      draftRuntimeRegistry.complete(attempt);
+      return true;
+    },
+    [],
+  );
+  const dispatchByHashSubmission = useCallback(
+    (input: {
+      readonly args: LandingComposerSubmitArgs;
+      readonly attempt: DraftSubmissionAttempt;
+      readonly client: HostClient<HostRpcRegistry>;
+      readonly editorContent: JsonContent;
+      readonly hostId: string;
+      readonly plan: AttachmentsByHashPlan;
+      readonly text: string;
+      readonly workspaceContext: LandingWorkspaceContext;
+    }) => {
+      const { attempt, editorContent, hostId, plan } = input;
+      // BEFORE the upload, on the eligible set: an eligible set already over
+      // the cap can never come back under it, so this keeps an oversized
+      // request off the wire without paying for the uploads first. The
+      // authoritative count is the post-inlining one below, on the hashes the
+      // request actually carries.
+      if (exceedsCreateAttachmentHashCap(plan.eligible)) {
+        reportCreateAttachmentHashCapExceeded();
+        draftRuntimeRegistry.complete(attempt);
+        return;
+      }
+      if (submissionInFlightRef.current) {
+        // Same reason as the async inline path's guard: the attempt is
+        // per-draft while this flag is per-composer, so a re-entrant submit
+        // that resolved to a DIFFERENT draft has a live attempt that nothing
+        // else would settle.
+        draftRuntimeRegistry.complete(attempt);
+        return;
+      }
+      submissionInFlightRef.current = true;
+      setAttachmentUploadPending(true);
+      void confirmAttachmentsByHash({
+        hostId,
+        client: input.client,
+        plan,
+        // Read here, not inside the leaf: a confirmation is recorded against
+        // the account that uploaded, and a `null` owner (no signed-in account
+        // in this window) confirms nothing, which inlines everything.
+        ownerUserId: currentDraftBlobOwnerId(),
+      })
+        .then(async (confirmed) => {
+          if (attemptAborted(attempt)) return;
+          if (confirmed.inline.length === 0) {
+            if (refusedOverWireHashCap(editorContent, attempt)) return;
+            finalizeSubmission({
+              resolvedContent: editorContent,
+              hashOnlyContent: editorContent,
+              attachmentsByHash: true,
+              text: input.text,
+              args: input.args,
+              workspaceContext: input.workspaceContext,
+              attempt,
+              hostId,
+            });
+            return;
+          }
+          const bytesByHash = await resolveBase64ByHash(
+            confirmed.inline,
+            draftImageByteTargetForHost(hostId),
+          );
+          if (attemptAborted(attempt)) return;
+          const missing = confirmed.inline.filter(
+            (hash) => !bytesByHash.has(hash),
+          );
+          if (missing.length > 0) {
+            reportableErrorToast(
+              "Couldn't attach an image.",
+              { description: "Re-add the image and try sending again." },
+              {
+                title: "Could not attach image",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+            draftRuntimeRegistry.complete(attempt);
+            return;
+          }
+          // Only the unconfirmed hashes are in the map, so every confirmed
+          // node keeps its hash and every other one comes back as base64 -
+          // the mixed document `attachmentsByHash` is defined for. Counted
+          // AFTER that rewrite, because that is the document the host counts.
+          const resolvedContent = inlineHashOnlyImageBytes(
+            editorContent,
+            bytesByHash,
+          );
+          if (refusedOverWireHashCap(resolvedContent, attempt)) return;
+          finalizeSubmission({
+            resolvedContent,
+            hashOnlyContent: editorContent,
+            // `false` when the upload confirmed nothing at all: the document
+            // then carries no hash for the host to resolve, and claiming
+            // otherwise would ask it to run a resolution pass over nothing.
+            attachmentsByHash: confirmed.byHash.size > 0,
+            text: input.text,
+            args: input.args,
+            workspaceContext: input.workspaceContext,
+            attempt,
+            hostId,
+          });
+        })
+        .catch(() => {
+          if (attemptAborted(attempt)) return;
+          reportableErrorToast(
+            "Couldn't attach an image.",
+            { description: "Image storage is unavailable. Please try again." },
+            {
+              title: "Could not attach image",
+              message: "Image storage was unavailable.",
+              code: null,
+              source: "Chat composer",
+            },
+          );
+          draftRuntimeRegistry.complete(attempt);
+        })
+        .finally(() => {
+          submissionInFlightRef.current = false;
+          setAttachmentUploadPending(false);
+        });
+    },
+    [finalizeSubmission, refusedOverWireHashCap],
   );
 
   const dispatchSubmission = useCallback(
@@ -674,10 +1115,12 @@ export function useLandingComposerActions(
       // the optimistic local-state + navigation block synchronous. Slow path: a
       // restored (session-cold) draft → await IndexedDB BEFORE that block; a hash
       // with no bytes (manual wipe) blocks the send with a toast.
-      const hashes = imageHashesFromContent(editorContent);
+      const hashes = hashOnlyImageHashes(editorContent);
       if (hashes.length === 0) {
         finalizeSubmission({
           resolvedContent: editorContent,
+          hashOnlyContent: editorContent,
+          attachmentsByHash: false,
           text,
           args: exactArgs,
           workspaceContext,
@@ -686,10 +1129,46 @@ export function useLandingComposerActions(
         });
         return;
       }
-      const sessionBytes = readSessionImageBytes(hashes);
+      // …unless the host takes the hashes THEMSELVES, which is the whole point
+      // of `epic.create@1.2`: the bytes crossed the relay once at paste, and a
+      // create that re-inlines them sends the same megabytes a second time
+      // inside a unary request that then has to be parsed on the host loop.
+      //
+      // Four conditions, and each failure lands on the inline path below - the
+      // one that has always worked:
+      //  - a client to upload on;
+      //  - no node carrying BOTH base64 and a hash (see `hasInlineHashedNode`);
+      //  - at least one node the preparer marked by-hash eligible, so there is
+      //    something to gain;
+      //  - the negotiated minor, read at dispatch and failing closed.
+      const plan = planAttachmentsByHash(editorContent);
+      if (
+        submitClient !== null &&
+        !plan.hasInlineHashedNode &&
+        plan.eligible.length > 0 &&
+        createAttachmentsByHashSupported(hostId, "epic.create")
+      ) {
+        dispatchByHashSubmission({
+          args: exactArgs,
+          attempt,
+          client: submitClient,
+          editorContent,
+          hostId,
+          plan,
+          text,
+          workspaceContext,
+        });
+        return;
+      }
+      const sessionBytes = sessionBase64ByHash(hashes);
       if (sessionBytes !== null) {
         finalizeSubmission({
-          resolvedContent: inlineImageHashes(editorContent, sessionBytes),
+          resolvedContent: inlineHashOnlyImageBytes(
+            editorContent,
+            sessionBytes,
+          ),
+          hashOnlyContent: editorContent,
+          attachmentsByHash: false,
           text,
           args: exactArgs,
           workspaceContext,
@@ -714,9 +1193,9 @@ export function useLandingComposerActions(
         return;
       }
       submissionInFlightRef.current = true;
-      void resolveImageBytes(hashes, hostId)
+      void resolveBase64ByHash(hashes, draftImageByteTargetForHost(hostId))
         .then((bytesByHash) => {
-          if (attempt.abortController.signal.aborted) return;
+          if (attemptAborted(attempt)) return;
           const missing = hashes.filter((hash) => !bytesByHash.has(hash));
           if (missing.length > 0) {
             reportableErrorToast(
@@ -735,7 +1214,12 @@ export function useLandingComposerActions(
             return;
           }
           finalizeSubmission({
-            resolvedContent: inlineImageHashes(editorContent, bytesByHash),
+            resolvedContent: inlineHashOnlyImageBytes(
+              editorContent,
+              bytesByHash,
+            ),
+            hashOnlyContent: editorContent,
+            attachmentsByHash: false,
             text,
             args: exactArgs,
             workspaceContext,
@@ -744,7 +1228,7 @@ export function useLandingComposerActions(
           });
         })
         .catch(() => {
-          if (attempt.abortController.signal.aborted) return;
+          if (attemptAborted(attempt)) return;
           reportableErrorToast(
             "Couldn't attach an image.",
             {
@@ -763,7 +1247,7 @@ export function useLandingComposerActions(
           submissionInFlightRef.current = false;
         });
     },
-    [finalizeSubmission],
+    [dispatchByHashSubmission, finalizeSubmission, submitClient],
   );
 
   const dispatchTerminalAgent = useCallback(
@@ -851,6 +1335,11 @@ export function useLandingComposerActions(
         workspaceFolders: workspaceContext.workspaceFolders,
         workspaceFolderInfoByPath: workspaceContext.workspaceFolderInfoByPath,
         now,
+        // DISCARDED on this line, and that is the correct answer rather than an
+        // omission: the terminal-agent flow has no existence reconciliation, so
+        // a rejection here is final and the teardown that already ran is what
+        // should stand. Nothing to recover to.
+        captureSeedRecovery: () => undefined,
         chat: null,
       })
         .then(
@@ -1003,9 +1492,16 @@ export function useLandingComposerActions(
     () => ({
       submit,
       selectTerminalAgent,
-      isPending: createEpic.isPending || terminalAgentCreate.isPending,
+      // The upload phase counts. It runs BEFORE `epic.create` is dispatched, so
+      // without it the composer would report itself idle for the whole of a
+      // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
+      isPending:
+        createEpic.isPending ||
+        terminalAgentCreate.isPending ||
+        attachmentUploadPending,
     }),
     [
+      attachmentUploadPending,
       createEpic.isPending,
       selectTerminalAgent,
       submit,
@@ -1389,87 +1885,76 @@ function clearConsumedLandingWorktreeIntent(
   useWorktreeIntentStagingStore.getState().clearForAllHosts(stagingKey);
 }
 
-// Distinct image hashes referenced by the (hash-only) editor content. Base64
-// nodes carry no hash and are left out — they pass through `inlineImageHashes`
-// untouched and reach the host as-is.
-function imageHashesFromContent(content: JsonContent): string[] {
-  return Array.from(
-    new Set(
-      collectImageAtoms(content).flatMap((atom) =>
-        atom.hash !== null ? [atom.hash] : [],
-      ),
-    ),
-  );
-}
-
-// Synchronous resolve of every hash from the session cache. Returns null if any
-// hash is missing, signalling the caller to fall back to the async IndexedDB
-// path; a complete map keeps the submit fully synchronous.
-function readSessionImageBytes(
-  hashes: ReadonlyArray<string>,
-): Map<string, Uint8Array> | null {
-  const bytesByHash = new Map<string, Uint8Array>();
-  for (const hash of hashes) {
-    const bytes = sessionImageBytes(hash);
-    if (bytes === null) return null;
-    bytesByHash.set(hash, bytes);
-  }
-  return bytesByHash;
-}
-
 /**
- * Async resolve through the FULL three-leg resolver, not the partition alone.
+ * The landing composer's own byte-resolution policy, on top of the shared
+ * primitives.
  *
- * Leg 1 is still `getImageBytes`, so a draft whose bytes were pasted in this
- * window answers exactly as before. What the other two legs add is the case
- * this surface newly has: a landing draft ADOPTED from the cloud is made
- * visible by `applyHostDocument` BEFORE the eager recovery pass finishes, so a
- * user can submit while the transfer is still in flight. A partition-only read
- * calls that image missing and blocks the create, for bytes the host mirror or
- * the published blob can still supply - and the attachment strip beside it,
- * which does use the resolver, is showing the image at the time.
- *
- * Hashes with no bytes are simply absent from the map; the caller treats those
- * as missing.
+ * The RESOLUTION (`resolveDraftImageBytes`) and the REWRITE
+ * (`inlineHashOnlyImageBytes`) are upstream's and are not restated here. What
+ * is local is the refusal: a hash with no bytes names nothing on a landing
+ * submit, because no epic exists yet for the host to resolve it against, so
+ * this surface reports a miss and refuses rather than sending a reference
+ * nothing can answer. Every other surface leaves such a node hash-only on
+ * purpose - see `draft-image-inlining.ts`.
  */
-async function resolveImageBytes(
+async function resolveBase64ByHash(
   hashes: ReadonlyArray<string>,
-  hostId: string,
-): Promise<Map<string, Uint8Array>> {
-  const bytesByHash = new Map<string, Uint8Array>();
-  const target = draftImageByteTargetForHost(hostId);
+  target: DraftImageByteTarget,
+): Promise<Map<string, string>> {
+  const base64ByHash = new Map<string, string>();
   await Promise.all(
     hashes.map(async (hash) => {
       const bytes = await resolveDraftImageBytes(hash, target);
-      if (bytes !== null) bytesByHash.set(hash, bytes);
+      if (bytes !== null) base64ByHash.set(hash, bytesToBase64(bytes));
     }),
   );
-  return bytesByHash;
+  return base64ByHash;
 }
 
-// Replace each resolvable `imageAttachment` hash with inline base64, matching a
-// fresh base64 paste's node shape (`b64content` set, `hash` cleared) so the host
-// ingests it identically. Nodes without resolvable bytes are left unchanged.
-function inlineImageHashes(
-  node: JsonContent,
-  bytesByHash: ReadonlyMap<string, Uint8Array>,
-): JsonContent {
-  if (node.type === "imageAttachment") {
-    const hash = stringValue(node.attrs?.hash);
-    if (hash === null) return node;
-    const bytes = bytesByHash.get(hash);
-    if (bytes === undefined) return node;
-    return {
-      ...node,
-      attrs: { ...node.attrs, b64content: bytesToBase64(bytes), hash: null },
-    };
+/**
+ * The synchronous fast path: every hash straight from this session's cache, or
+ * `null` the moment one is cold.
+ *
+ * Kept even though `resolveDraftImageBytes`' first leg already consults the
+ * session cache, because the value here is not avoiding a round trip - it is
+ * staying in ONE STACK FRAME. A landing submit that yields between reading the
+ * document and clearing it opens a window for a re-entrant submit; the async
+ * path below carries an explicit in-flight guard for exactly that reason, and
+ * this path exists so the common case never needs it.
+ */
+function sessionBase64ByHash(
+  hashes: ReadonlyArray<string>,
+): Map<string, string> | null {
+  const base64ByHash = new Map<string, string>();
+  for (const hash of hashes) {
+    const bytes = sessionImageBytes(hash);
+    if (bytes === null) return null;
+    base64ByHash.set(hash, bytesToBase64(bytes));
   }
-  const children = node.content;
-  if (children === undefined) return node;
-  return {
-    ...node,
-    content: children.map((child) => inlineImageHashes(child, bytesByHash)),
-  };
+  return base64ByHash;
+}
+
+/**
+ * Whether this attempt has been abandoned since it was last asked.
+ *
+ * A FUNCTION rather than a bare `attempt.abortController.signal.aborted` read,
+ * and that is the entire point of it. TypeScript narrows a property access and
+ * KEEPS that narrowing across an `await`, because nothing in the type system
+ * models the abort controller flipping the flag from outside this function. So
+ * the first guard in a callback narrows the property to `false`, and the second
+ * one - on the far side of the suspension, which is the only place an abort can
+ * have happened, and therefore the guard that actually matters - types as
+ * always-falsy and lints as an unnecessary condition.
+ *
+ * Deleting that guard is what the lint literally suggests and it would be a
+ * bug: a submit abandoned during the byte read would go on to finalize. A
+ * call's result is a fresh `boolean` every time, so no narrowing carries and
+ * each guard means what it says. Used at every abort check on this surface, not
+ * just the one that happened to trip the rule, so inserting an `await` above
+ * any of them cannot quietly re-create the situation.
+ */
+function attemptAborted(attempt: DraftSubmissionAttempt): boolean {
+  return attempt.abortController.signal.aborted;
 }
 
 function buildEpicLight(input: {

@@ -79,6 +79,10 @@ vi.mock("sonner", () => ({
 }));
 
 let urlCounter = 0;
+// One preparation session per test, created fresh in `beforeEach` (never
+// inside a `renderHook` callback, which would re-create the hook's
+// `imageIngest` memo on every render) and shared across every
+// `useLandingComposerPaste` call in a given test.
 
 beforeEach(async () => {
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);

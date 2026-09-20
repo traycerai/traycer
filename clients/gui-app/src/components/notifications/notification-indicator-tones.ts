@@ -6,6 +6,7 @@ import {
   TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
+import { GlobeAlert } from "@/components/notifications/globe-alert";
 import { MessageSquareQuestionMark } from "@/components/notifications/message-square-question-mark";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import type {
@@ -26,6 +27,7 @@ export type NotificationStatusKind =
   | "fork"
   | "interview"
   | "interview-resolved"
+  | "browser"
   | "approval"
   | "approval-resolved"
   | "done";
@@ -81,6 +83,12 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
     title: "Question resolved",
     className: "text-warning-foreground",
     Icon: MessageSquareQuestionMark,
+  },
+  browser: {
+    testId: "browser",
+    title: "Browser needs you",
+    className: "text-warning-foreground",
+    Icon: GlobeAlert,
   },
   approval: {
     testId: "approval",
@@ -168,6 +176,9 @@ export function notificationFeedTone(
   }
   if (input.severity === "done") return DONE_TONE;
   if (input.severity !== "needs_action") return null;
+  if (input.hostKind === "browser.human.needed") {
+    return NOTIFICATION_STATUS_TONES.browser;
+  }
   if (input.hostKind === "interview.requested") {
     return input.resolvedAt === null ? INTERVIEW_TONE : RESOLVED_INTERVIEW_TONE;
   }

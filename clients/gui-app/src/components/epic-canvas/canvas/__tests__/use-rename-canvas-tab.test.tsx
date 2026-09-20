@@ -36,6 +36,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   EpicArtifactRef,
   EpicTerminalRef,
@@ -43,8 +44,16 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   handle: { current: null as OpenedStoreForTest | null },
-  chatCalls: [] as { readonly chatId: string; readonly title: string }[],
-  tuiCalls: [] as { readonly tuiAgentId: string; readonly title: string }[],
+  chatCalls: [] as {
+    readonly chatId: string;
+    readonly title: string;
+    readonly hostId: string | null;
+  }[],
+  tuiCalls: [] as {
+    readonly tuiAgentId: string;
+    readonly title: string;
+    readonly hostId: string | null;
+  }[],
   artifactCalls: [] as {
     readonly artifactId: string;
     readonly title: string;
@@ -92,10 +101,15 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicRenameChat: () => ({
     mutateAsync: makeMutateAsync(
-      (variables: { readonly chatId: string; readonly title: string }) => {
+      (variables: {
+        readonly chatId: string;
+        readonly title: string;
+        readonly hostId: string | null;
+      }) => {
         mocks.chatCalls.push({
           chatId: variables.chatId,
           title: variables.title,
+          hostId: variables.hostId,
         });
       },
     ),
@@ -105,10 +119,15 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicRenameTuiAgent: () => ({
     mutateAsync: makeMutateAsync(
-      (variables: { readonly tuiAgentId: string; readonly title: string }) => {
+      (variables: {
+        readonly tuiAgentId: string;
+        readonly title: string;
+        readonly hostId: string | null;
+      }) => {
         mocks.tuiCalls.push({
           tuiAgentId: variables.tuiAgentId,
           title: variables.title,
+          hostId: variables.hostId,
         });
       },
     ),
@@ -120,6 +139,8 @@ import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-c
 const EPIC_ID = "epic-1";
 const VIEW_TAB_ID = "tab-1";
 const HOST_ID = "host-1";
+/** A same-id clone's host, distinct from the session's own `HOST_ID`. */
+const OTHER_HOST_ID = "host-2";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -282,6 +303,30 @@ function agentRecord(
     // and nothing in this file is about the facet.
     sessionState: null,
     lastExit: null,
+  };
+}
+
+/** A REGISTRY chat row, bound to `HOST_ID` unless overridden. */
+function chatRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
+  return {
+    chatId: "chat-1",
+    ownerUserId: "user-a",
+    originHostId: HOST_ID,
+    title: "A chat",
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    runSettingsSummary: "claude",
+    revision: 1,
+    visibility: "private",
+    origin: "own",
+    docResident: false,
+    ...overrides,
   };
 }
 
@@ -621,8 +666,96 @@ describe("useRenameCanvasTab", () => {
       await handle.flush();
     });
 
-    expect(mocks.chatCalls).toEqual([{ chatId, title: "New chat name" }]);
+    expect(mocks.chatCalls).toEqual([
+      { chatId, title: "New chat name", hostId: HOST_ID },
+    ]);
     expect(mocks.artifactCalls).toEqual([]);
+    unmount();
+  });
+
+  // Projection A: the local session's OWN registry row for this chat id,
+  // bound to `HOST_ID`. Tile B: a canvas tile for the SAME chat id, bound to
+  // a DIFFERENT host (`OTHER_HOST_ID`) - a same-id clone. `matchesProjection`
+  // is false for every rename of tile B, so the optimistic overlay is never
+  // stamped for it (there is no local row on `OTHER_HOST_ID` to overlay) and
+  // projection A's own row must stay untouched throughout. With no overlay
+  // stamp to order settlement by, correctness for two in-flight B renames
+  // falls to the per-(epic,host,id) `snapshotRenames` token map: only the
+  // LATEST-SUBMITTED rename may write the persisted tab snapshot, even when
+  // an earlier submission settles after it.
+  it("a cross-host same-id tile (B) never touches the local projection (A), and the snapshot keeps the LATEST-SUBMITTED B rename even when it settles AFTER an earlier one", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const chatId = "chat-cross-host";
+    handle.store
+      .getState()
+      .applyChatRecords(
+        [chatRecord({ chatId, originHostId: HOST_ID, title: "Projection A" })],
+        null,
+      );
+    await handle.flush();
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Projection A",
+    );
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+    const crossHostTile: EpicArtifactRef = {
+      id: chatId,
+      instanceId: "inst-cross-host",
+      type: "chat",
+      name: "Chat (other host)",
+      hostId: OTHER_HOST_ID,
+    };
+
+    // Both renames are submitted back-to-back. Neither takes the
+    // `beginRenameMutation` branch (no `await` on that path when the
+    // projection does not match), so both `mutateAsync` calls fire
+    // synchronously within this `act`.
+    act(() => {
+      result.current(crossHostTile, "First");
+      result.current(crossHostTile, "Second");
+    });
+
+    expect(mocks.chatCalls).toEqual([
+      { chatId, title: "First", hostId: OTHER_HOST_ID },
+      { chatId, title: "Second", hostId: OTHER_HOST_ID },
+    ]);
+    // No overlay stamp ever touched projection A's own row.
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Projection A",
+    );
+
+    // Resolve the SECOND (latest-submitted) rename first.
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledExactlyOnceWith(
+      VIEW_TAB_ID,
+      chatId,
+      "Second",
+      OTHER_HOST_ID,
+    );
+
+    // Then the FIRST (stale) submission resolves - it must not overwrite the
+    // snapshot with the older title, since "Second" was submitted after it.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+
+    // Projection A was never touched by either B rename, throughout.
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Projection A",
+    );
+
+    renameArtifactInTabSpy.mockRestore();
     unmount();
   });
 
@@ -658,7 +791,7 @@ describe("useRenameCanvasTab", () => {
     });
 
     expect(mocks.tuiCalls).toEqual([
-      { tuiAgentId: "agent-1", title: "New agent name" },
+      { tuiAgentId: "agent-1", title: "New agent name", hostId: HOST_ID },
     ]);
     unmount();
   });
@@ -773,6 +906,7 @@ describe("useRenameCanvasTab", () => {
       VIEW_TAB_ID,
       id,
       "New spec title",
+      null,
     );
 
     renameArtifactInTabSpy.mockClear();
@@ -876,6 +1010,7 @@ describe("useRenameCanvasTab", () => {
       VIEW_TAB_ID,
       id,
       "B",
+      null,
     );
     // "B" settling is what lets the queue advance and finally SEND "C".
     expect(mocks.pendingSettles).toHaveLength(2);
@@ -890,6 +1025,7 @@ describe("useRenameCanvasTab", () => {
       VIEW_TAB_ID,
       id,
       "C",
+      null,
     );
 
     renameArtifactInTabSpy.mockRestore();
@@ -967,7 +1103,12 @@ describe("useRenameCanvasTab", () => {
       await flushMicrotasks();
     });
     expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
-    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "C");
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      id,
+      "C",
+      null,
+    );
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
     renameArtifactInTabSpy.mockRestore();
@@ -1013,6 +1154,7 @@ describe("useRenameCanvasTab", () => {
       VIEW_TAB_ID,
       id,
       "B",
+      null,
     );
 
     // Fired only AFTER the first fully settled, so the two chains never
@@ -1045,6 +1187,7 @@ describe("useRenameCanvasTab", () => {
       VIEW_TAB_ID,
       id,
       "C",
+      null,
     );
 
     renameArtifactInTabSpy.mockRestore();
@@ -1136,7 +1279,12 @@ describe("useRenameCanvasTab", () => {
       mocks.pendingSettles[0]?.();
       await flushMicrotasks();
     });
-    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "B");
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      id,
+      "B",
+      null,
+    );
 
     renameArtifactInTabSpy.mockRestore();
     unmount();

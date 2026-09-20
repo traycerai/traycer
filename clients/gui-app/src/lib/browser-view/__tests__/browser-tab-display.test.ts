@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
+import { browserSearchUrl } from "@/lib/browser-view/browser-search";
 import {
   browserTabFaviconUrl,
   browserTabHostname,
@@ -288,34 +289,90 @@ describe("browser-tab-display", () => {
 
 describe("browser address helpers", () => {
   it("normalizes address bar input conservatively", () => {
-    expect(normalizeBrowserAddressInput("example.test/docs")).toBe(
+    expect(normalizeBrowserAddressInput("example.test/docs", "google")).toBe(
       "https://example.test/docs",
     );
-    expect(normalizeBrowserAddressInput("localhost:5173")).toBe(
+    expect(normalizeBrowserAddressInput("localhost:5173", "google")).toBe(
       "http://localhost:5173",
     );
-    expect(normalizeBrowserAddressInput("about:blank")).toBe("about:blank");
-    expect(normalizeBrowserAddressInput("   ")).toBe("about:blank");
+    expect(normalizeBrowserAddressInput("about:blank", "google")).toBe(
+      "about:blank",
+    );
+    expect(normalizeBrowserAddressInput("   ", "google")).toBe("about:blank");
   });
 
   it("leaves an explicit scheme alone, local host names included (C7)", () => {
     // The scheme test runs BEFORE the local-address heuristic; the other order
     // prefixed a second scheme onto these.
-    expect(normalizeBrowserAddressInput("https://app.localhost:3000")).toBe(
-      "https://app.localhost:3000",
-    );
-    expect(normalizeBrowserAddressInput("http://127.0.0.1:8080/api")).toBe(
-      "http://127.0.0.1:8080/api",
-    );
+    expect(
+      normalizeBrowserAddressInput("https://app.localhost:3000", "google"),
+    ).toBe("https://app.localhost:3000");
+    expect(
+      normalizeBrowserAddressInput("http://127.0.0.1:8080/api", "google"),
+    ).toBe("http://127.0.0.1:8080/api");
     // A colon followed by digits is a PORT, not a scheme, so these still get
     // one.
     // A path does not make it remote: guessing https here would fail against
     // a plain HTTP dev server.
-    expect(normalizeBrowserAddressInput("app.localhost/path")).toBe(
+    expect(normalizeBrowserAddressInput("app.localhost/path", "google")).toBe(
       "http://app.localhost/path",
     );
-    expect(normalizeBrowserAddressInput("app.localhost:3000")).toBe(
+    expect(normalizeBrowserAddressInput("app.localhost:3000", "google")).toBe(
       "http://app.localhost:3000",
+    );
+  });
+
+  it("accepts a query string on a local address", () => {
+    expect(normalizeBrowserAddressInput("localhost?query", "google")).toBe(
+      "http://localhost?query",
+    );
+  });
+
+  it("recognizes an explicit port even though the URL normalizes away the https default (443)", () => {
+    expect(normalizeBrowserAddressInput("example.com:443", "google")).toBe(
+      "https://example.com:443",
+    );
+  });
+
+  it("recognizes a dotted domain, an IPv4 literal, and a bracketed IPv6 literal as navigation, not search", () => {
+    expect(normalizeBrowserAddressInput("example.com", "google")).toBe(
+      "https://example.com",
+    );
+    expect(normalizeBrowserAddressInput("192.168.1.1", "google")).toBe(
+      "https://192.168.1.1",
+    );
+    expect(normalizeBrowserAddressInput("[2001:db8::1]", "google")).toBe(
+      "https://[2001:db8::1]",
+    );
+  });
+
+  it("sends a bare numeric string to search, even though the URL parser would canonicalize it as an IPv4 address", () => {
+    expect(normalizeBrowserAddressInput("2026", "duckduckgo")).toBe(
+      browserSearchUrl("2026", "duckduckgo"),
+    );
+  });
+
+  it("routes a search operator through the search engine before the scheme check, for every engine", () => {
+    expect(
+      normalizeBrowserAddressInput("site:github.com traycer", "bing"),
+    ).toBe(browserSearchUrl("site:github.com traycer", "bing"));
+    expect(normalizeBrowserAddressInput("filetype:pdf report", "kagi")).toBe(
+      browserSearchUrl("filetype:pdf report", "kagi"),
+    );
+  });
+
+  it("leaves a javascript: URI unchanged - sanitizing it is the navigation guard's job, not normalization's", () => {
+    expect(normalizeBrowserAddressInput("javascript:alert(1)", "google")).toBe(
+      "javascript:alert(1)",
+    );
+  });
+
+  it("URL-encodes a plain-text query for whichever engine is selected", () => {
+    expect(normalizeBrowserAddressInput("hello world", "google")).toBe(
+      "https://www.google.com/search?q=hello+world",
+    );
+    expect(normalizeBrowserAddressInput("hello world", "bing")).toBe(
+      "https://www.bing.com/search?q=hello+world",
     );
   });
 });

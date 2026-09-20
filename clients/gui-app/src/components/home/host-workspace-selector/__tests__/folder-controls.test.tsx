@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import {
   contrastRatio,
   DARK_THEME_SURFACES,
@@ -90,6 +91,26 @@ vi.mock("@/components/ui/dropdown-menu", () => {
         : createPortal(props.children, props.container),
   };
 });
+
+// The guided first-task card is the coachmark engine's business; this file
+// covers the popover wiring around it, so render it as its action button.
+vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
+  OnboardingCoachmark: (props: {
+    readonly title: string;
+    readonly action: {
+      readonly label: string;
+      readonly onClick: () => void;
+    } | null;
+  }) => (
+    <div role="group" aria-label={props.title}>
+      {props.action === null ? null : (
+        <button type="button" onClick={props.action.onClick}>
+          {props.action.label}
+        </button>
+      )}
+    </div>
+  ),
+}));
 
 import { FolderBranchControl } from "../folder-branch-control";
 import { FolderLocationControl } from "../folder-location-control";
@@ -1504,6 +1525,70 @@ describe("FolderBranchControl — Escape close", () => {
 });
 
 describe("WorkspaceFolderSummaryControl", () => {
+  function renderGuidedSummary(
+    onComplete: () => void,
+    over: Partial<WorkspaceRunItem>,
+  ): void {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
+          items={[item(over)]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          discardDisabled={false}
+          onEditEnvironment={NOOP}
+          refresh={null}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+          onFirstTaskSetupComplete={onComplete}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("does not complete guided setup when Escape closes the popover", async () => {
+    const onComplete = vi.fn();
+    useFirstTaskGuideStore.setState({ workspaceReviewed: false });
+    renderGuidedSummary(onComplete, {});
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    await screen.findByRole("button", { name: "Use this setup" });
+    fireEvent.keyDown(screen.getByTestId("workspace-rows-popover"), {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Use this setup" }),
+      ).toBeNull(),
+    );
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(useFirstTaskGuideStore.getState().workspaceReviewed).toBe(false);
+  });
+
+  it("completes guided setup once when Use this setup closes the popover", async () => {
+    const onComplete = vi.fn(() =>
+      useFirstTaskGuideStore.getState().reviewWorkspace(),
+    );
+    useFirstTaskGuideStore.setState({ workspaceReviewed: false });
+    renderGuidedSummary(onComplete, {});
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use this setup" }),
+    );
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(useFirstTaskGuideStore.getState().workspaceReviewed).toBe(true);
+  });
+
   it("uses the rich hover preview instead of a competing native title", () => {
     render(
       <TooltipProvider>

@@ -116,6 +116,20 @@ export function FallbackLadderEditor(
       >
         Try these in order
       </div>
+      {/* The page's one statement of what a switch COSTS, and it belongs here -
+          beside the two steps that cause it - rather than beside the
+          switch-back choice, which is where it used to be implied and nowhere
+          stated. A user-lens review found the return row's "starts a fresh
+          session too" had no antecedent anywhere on the page: nothing had ever
+          said the OUTBOUND switch started one either, so "too" pointed at a
+          fact the reader had never been given. Said once, up front, it earns
+          the "also" down there and answers the question this whole page is
+          really about - what happens to my chat. */}
+      <p className="text-ui-xs text-muted-foreground">
+        Switching accounts or models starts a new agent session using this
+        chat&apos;s history, and retries the blocked message there. Messages
+        waiting to run use the new account or model too.
+      </p>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -170,12 +184,22 @@ export function FallbackLadderEditor(
         {/* First sentence added for AX7: the drag handle is a mouse
             affordance and says nothing to a screen reader, so the way to
             reorder has to be stated where entering the list will reach it. */}
-        Use each step&apos;s Move up and Move down buttons to reorder, or drag
-        it by its handle. Turning a step off keeps it here, and turning it back
-        on puts it back where it was. Only its saved position is lost: next time
-        you open this page a step that is off sits just above &ldquo;
-        {FALLBACK_RUNG_COPY.notify.label}&rdquo; - never below it, where turning
-        it on again would leave it unable to run.
+        {/* Three versions, and the middle one is the lesson. The original
+            walked the reader through toggling off, toggling on, leaving and
+            reopening. A rewrite compressed that to "stays in the list and comes
+            back where it was", which reads as a contradiction - if it never
+            left, what comes back? - and dropped the CONDITION. The fix for that
+            restored the condition by restoring the whole sequence, and a second
+            user-lens review caught what the sequence then implied: "turn it
+            back on before you leave this page and it keeps its position" reads
+            as advice to re-enable a step you had just deliberately disabled.
+            The only fact worth the words is that steps STILL OFF move on
+            reload. "down" went with it - a direction nobody needs when the
+            landmark is named. */}
+        Reorder with Move up and Move down, or drag a step by its handle.
+        Turning a step off leaves it in place. When you reopen this page, steps
+        still off appear just above &ldquo;
+        {FALLBACK_RUNG_COPY.notify.label}&rdquo;.
       </p>
     </div>
   );

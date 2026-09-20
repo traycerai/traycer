@@ -1,5 +1,5 @@
 import { act, cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserScreencastOpenRequest } from "@traycer/protocol/host/browser/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -13,6 +13,22 @@ import {
   resetHandoffTokensForTests,
 } from "@/lib/browser-view/sessions/screencast-handoff-tokens";
 import { independentScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+
+// `use-screencast-session.ts`'s `hostIsMac` derivation reads these two hooks
+// directly; the real `useHostDirectoryEntry` reaches `useHostDirectory()`,
+// which throws outside a `HostRuntimeProvider` this harness never mounts.
+// Mocked to the same "platform unknown" shape `browser-peek-tile-shortcuts`
+// pins for the same reason - `hostId` on the entry only, no `kind`, and no
+// registered hosts - so `hostIsMac` resolves to `null` and none of this
+// suite's handoff-token assertions are affected. The literal below must match
+// `TAB.hostId` (declared further down); a `vi.mock` factory is hoisted above
+// that declaration, so it cannot close over it.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => ({ hostId: "host-1" }),
+}));
+vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
+  useRegisteredHosts: () => ({ data: null }),
+}));
 
 function unusedClientMethod(): never {
   throw new Error("not exercised by this test");

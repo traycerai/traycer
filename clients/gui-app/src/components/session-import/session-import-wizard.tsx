@@ -1,7 +1,14 @@
-import { useEffect, useId, useMemo } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { History, Search } from "lucide-react";
+import { FolderSearch, History, Search, SlidersHorizontal } from "lucide-react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type {
@@ -9,11 +16,19 @@ import type {
   SessionImportSelection,
 } from "@traycer/protocol/host/session-import/candidate";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { SessionImportImportedSupport } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -31,6 +46,7 @@ import {
   selectionStateFor,
   sessionImportScanWindowLabel,
   sessionImportSelectionKey,
+  SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
   SESSION_IMPORT_SCAN_WINDOW_OPTIONS,
   type SessionImportProviderView,
   type SessionImportScanWindow,
@@ -40,6 +56,7 @@ import {
 import {
   SelectionBox,
   SessionImportGroupItem,
+  SessionImportTaskRow,
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
@@ -82,6 +99,7 @@ export interface SessionImportSecondaryAction {
  * without an explicit ask; an import now starts only when Import is pressed.
  */
 export function SessionImportWizard(props: {
+  readonly hostPicker: ReactNode;
   readonly surface: SessionImportSurface;
   readonly scan: SessionImportScanHandle;
   /** Called once a run has been submitted, so the caller can move on. */
@@ -92,6 +110,7 @@ export function SessionImportWizard(props: {
 }) {
   const { surface, scan, onImportStarted, secondaryAction } = props;
   const tone = sessionImportTone(surface);
+  const [groupByProject, setGroupByProject] = useState(false);
   // The run this wizard shows and starts is the one on the host it renders
   // under - transport and host name off the same binding, which is also what
   // the submission is aimed at.
@@ -161,13 +180,34 @@ export function SessionImportWizard(props: {
 
   const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);
-  // The master checkbox reads the VISIBLE slice: it heads the list exactly as
-  // the search and pills have narrowed it, so what it shows and what it moves
-  // are the same rows the user is looking at.
-  const visibleSelection = selectionStateFor(
-    view.visibleSelectionKeys.length,
-    view.visibleSelectedCount,
+  const taskRows = useMemo(
+    () =>
+      view.groups
+        .flatMap((group) => group.rows)
+        .sort((a, b) => b.candidate.updatedAt - a.candidate.updatedAt),
+    [view.groups],
   );
+  // Rows the scan found but nobody can import: the footer names them so the
+  // gap between "34 tasks" on screen and "31 selected" has an explanation.
+  // Already-imported rows are deliberately not counted - they carry their own
+  // chip and their own way in.
+  const unavailableCount = useMemo(
+    () =>
+      view.groups.reduce(
+        (total, group) =>
+          total +
+          group.rows.filter((row) => row.candidate.state.kind === "unreadable")
+            .length,
+        0,
+      ),
+    [view.groups],
+  );
+  const onboarding = surface === "onboarding";
+  // The tour's act on a phone, and nothing else: the Settings dialog keeps its
+  // own toolbar at every width (spec D3 - one wizard, two presentations), so
+  // this is deliberately `onboarding &&` rather than the viewport alone. Read
+  // once here and passed down, so the rows below take no subscription.
+  const phone = useIsMobileViewport() && onboarding;
 
   const submit = (): void => {
     // A run already under way owns the screen, and the button is not rendered
@@ -186,85 +226,86 @@ export function SessionImportWizard(props: {
 
   if (!runIdle) {
     return (
-      <SessionImportRunView
-        tone={tone}
-        hostId={hostId}
-        runStatus={runStatus}
-        secondaryAction={secondaryAction}
-      />
+      <>
+        {props.hostPicker}
+        <SessionImportRunView
+          tone={tone}
+          hostId={hostId}
+          runStatus={runStatus}
+          secondaryAction={secondaryAction}
+        />
+      </>
     );
   }
 
+  const filterProps = {
+    tone,
+    query: state.query,
+    providers: view.providers,
+    scanning: state.phase === "scanning",
+    scanWindow: state.scanWindow,
+    showImported: state.showImported,
+    importedSupport: state.importedSupport,
+    onShowImportedChange: (showImported: boolean) =>
+      dispatch({ kind: "showImportedChanged", showImported }),
+    onQueryChange: (query: string) => dispatch({ kind: "queryChanged", query }),
+    onToggleProvider: (harness: GuiHarnessId) =>
+      dispatch({ kind: "providerScopeToggled", harness }),
+    onScanWindowChange: (window: SessionImportScanWindow) =>
+      dispatch({ kind: "windowChanged", window }),
+  };
+
+  // Hoisted so the two shapes read as one choice rather than a ternary
+  // nested in a ternary.
+  const scanningIndicator =
+    onboarding && view.groups.length === 0 ? (
+      // Nothing to read yet, so the panel is one centred card rather
+      // than a lone line of 12px text on an empty field.
+      <div className="onboarding-import-card">
+        <AgentSpinningDots
+          className={tone.muted}
+          testId="session-import-scan-spinner"
+          variant={undefined}
+        />
+        <p className={cn("text-ui-sm", tone.muted)}>
+          Looking for your recent tasks…
+        </p>
+      </div>
+    ) : (
+      // px-2.5 sits the spinner on the same column as the checkboxes in
+      // the cards above it.
+      <div className="flex shrink-0 items-center gap-2 px-2.5 py-2">
+        <AgentSpinningDots
+          className={tone.faint}
+          testId="session-import-scan-spinner"
+          variant={undefined}
+        />
+        <span className={cn("text-ui-xs tabular-nums", tone.faint)}>
+          Finding tasks…
+          {view.totalSessions > 0
+            ? ` ${view.totalSessions.toLocaleString()} found`
+            : ""}
+        </span>
+      </div>
+    );
+
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
-      <SessionImportFilters
-        tone={tone}
-        query={state.query}
-        providers={view.providers}
-        scanning={state.phase === "scanning"}
-        scanWindow={state.scanWindow}
-        showImported={state.showImported}
-        importedSupport={state.importedSupport}
-        onShowImportedChange={(showImported) =>
-          dispatch({ kind: "showImportedChanged", showImported })
-        }
-        onQueryChange={(query) => dispatch({ kind: "queryChanged", query })}
-        onToggleProvider={(harness) =>
-          dispatch({ kind: "providerScopeToggled", harness })
-        }
-        onScanWindowChange={(window) =>
-          dispatch({ kind: "windowChanged", window })
-        }
+      <SessionImportToolbar
+        {...filterProps}
+        phone={phone}
+        onboarding={onboarding}
+        hostPicker={props.hostPicker}
+        view={view}
+        dispatch={dispatch}
+        groupByProject={groupByProject}
+        setGroupByProject={setGroupByProject}
       />
 
-      {view.groups.length > 0 && view.selectableSessions > 0 ? (
-        <div className="flex shrink-0 items-center gap-1 px-4 pt-2">
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={
-              visibleSelection === "partial"
-                ? "mixed"
-                : visibleSelection === "all"
-            }
-            aria-label="Select all available tasks shown"
-            data-testid="session-import-visible-selection"
-            disabled={view.visibleSelectionKeys.length === 0}
-            onClick={() =>
-              dispatch({
-                kind: "visibleSelectionSet",
-                selectionKeys: view.visibleSelectionKeys,
-                selected: visibleSelection !== "all",
-              })
-            }
-            // The transparent side borders mirror the cards' own border, so
-            // this box heads exactly the column the folder checkboxes below
-            // sit on - which is also what makes its reach legible: it rules
-            // the rows under it, as the search and pills have narrowed them.
-            className={cn(
-              "flex shrink-0 items-center rounded-md border-x border-transparent px-2.5 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-              view.visibleSelectionKeys.length > 0 && tone.rowHover,
-            )}
-          >
-            <SelectionBox
-              state={visibleSelection}
-              disabled={view.visibleSelectionKeys.length === 0}
-              tone={tone}
-            />
-          </button>
-          {view.selectableSessions > 0 ? (
-            <span
-              data-testid="session-import-selection-count"
-              className={cn("text-ui-xs tabular-nums", tone.faint)}
-            >
-              {view.selectedCount.toLocaleString()}{" "}
-              {view.selectedCount === 1 ? "task" : "tasks"} selected for import
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain px-4 py-3">
+      <div
+        data-surface={surface}
+        className="session-import-groups flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain px-4 py-3"
+      >
         {state.scanErrorDetail !== null ? (
           <p
             data-testid="session-import-scan-error"
@@ -273,7 +314,7 @@ export function SessionImportWizard(props: {
               tone.warningSurface,
             )}
           >
-            The scan stopped before it finished. {state.scanErrorDetail}
+            Scan interrupted. {state.scanErrorDetail}
           </p>
         ) : null}
 
@@ -286,46 +327,48 @@ export function SessionImportWizard(props: {
               tone.warningSurface,
             )}
           >
-            Your {harnessDisplayName(failure.harness)} work could not be read.{" "}
+            Couldn’t read {harnessDisplayName(failure.harness)} tasks.{" "}
             {failure.detail}
           </p>
         ))}
 
-        {view.groups.map((group) => (
-          <SessionImportGroupItem
-            key={group.groupKey}
-            group={group}
-            tone={tone}
-            onToggleExpanded={(groupKey) =>
-              dispatch({ kind: "groupExpansionToggled", groupKey })
-            }
-            onSetGroupSelection={(groupKey, selected) =>
-              dispatch({ kind: "groupSelectionSet", groupKey, selected })
-            }
-            onTaskOpened={props.onTaskOpened}
-            onBeforeTaskOpen={props.onBeforeTaskOpen}
-            onToggleSession={(selectionKey) =>
-              dispatch({ kind: "sessionToggled", selectionKey })
-            }
-          />
-        ))}
-        {state.phase === "scanning" ? (
-          // px-2.5 sits the spinner on the same column as the checkboxes in
-          // the cards above it.
-          <div className="flex shrink-0 items-center gap-2 px-2.5 py-2">
-            <AgentSpinningDots
-              className={tone.faint}
-              testId="session-import-scan-spinner"
-              variant={undefined}
-            />
-            <span className={cn("text-ui-xs", tone.faint)}>
-              Looking for your work on this machine…
-              {view.totalSessions > 0
-                ? ` ${view.totalSessions.toLocaleString()} found so far`
-                : ""}
-            </span>
+        {onboarding && !groupByProject ? (
+          <div className="onboarding-import-list">
+            {taskRows.map((row) => (
+              <SessionImportTaskRow
+                key={row.selectionKey}
+                row={row}
+                tone={tone}
+                showFolder
+                onToggle={(selectionKey) =>
+                  dispatch({ kind: "sessionToggled", selectionKey })
+                }
+                onTaskOpened={props.onTaskOpened}
+                onBeforeTaskOpen={props.onBeforeTaskOpen}
+              />
+            ))}
           </div>
-        ) : null}
+        ) : (
+          view.groups.map((group) => (
+            <SessionImportGroupItem
+              key={group.groupKey}
+              group={group}
+              tone={tone}
+              onToggleExpanded={(groupKey) =>
+                dispatch({ kind: "groupExpansionToggled", groupKey })
+              }
+              onSetGroupSelection={(groupKey, selected) =>
+                dispatch({ kind: "groupSelectionSet", groupKey, selected })
+              }
+              onTaskOpened={props.onTaskOpened}
+              onBeforeTaskOpen={props.onBeforeTaskOpen}
+              onToggleSession={(selectionKey) =>
+                dispatch({ kind: "sessionToggled", selectionKey })
+              }
+            />
+          ))
+        )}
+        {state.phase === "scanning" ? scanningIndicator : null}
         <SessionImportEmptyState
           state={state}
           view={view}
@@ -339,7 +382,7 @@ export function SessionImportWizard(props: {
       {statusQuery.isError ? (
         <div role="alert" className="flex items-center gap-2 px-4 py-2">
           <p className={cn("text-ui-xs", tone.muted)}>
-            Traycer could not check whether an import is already running.
+            Couldn’t check for an active import.
           </p>
           <Button
             type="button"
@@ -355,6 +398,8 @@ export function SessionImportWizard(props: {
       <SessionImportFooter
         tone={tone}
         view={view}
+        phone={phone}
+        unavailableCount={unavailableCount}
         canSubmit={canSubmit}
         checkingStatus={checkingStatus}
         secondaryAction={secondaryAction}
@@ -371,15 +416,27 @@ function SessionImportEmptyState(props: {
   readonly onShowImported: () => void;
 }) {
   const { state, view, tone, onShowImported } = props;
+  const onboarding = tone.surface === "onboarding";
   if (state.phase === "scanning" || view.groups.length > 0) return null;
   return (
     <div
       data-testid="session-import-empty"
       className={cn(
-        "mx-auto max-w-[26rem] px-1 py-10 text-center text-ui-sm",
+        onboarding
+          ? "onboarding-import-card"
+          : "mx-auto max-w-[26rem] px-1 py-10",
+        "text-center text-ui-sm leading-relaxed text-pretty",
         tone.muted,
       )}
     >
+      {/* Neutral, not a status: nothing has gone wrong, there is just nothing
+          here. Same glyph anatomy as the running, summary and error cards so
+          the panel's states read as one family. */}
+      {onboarding ? (
+        <span className="onboarding-import-glyph border-foreground/10 bg-foreground/8 text-muted-foreground">
+          <FolderSearch aria-hidden className="size-5" />
+        </span>
+      ) : null}
       <p>{emptyMessage(state, view)}</p>
       {view.hiddenImportedCount > 0 && state.importedSupport === "supported" ? (
         <Button
@@ -402,10 +459,11 @@ function sessionImportHostIsIdle(
 }
 
 /**
- * The pinned header: search over everything, the scan-window picker, one pill
- * per provider the scan covers.
+ * Everything the three toolbars read and write. One type, because the wizard
+ * builds one object and hands it to whichever shape is on screen - the phone
+ * bar is a PRESENTATION of this state, not a second copy of it.
  */
-function SessionImportFilters(props: {
+interface SessionImportFilterProps {
   readonly tone: SessionImportTone;
   readonly query: string;
   readonly providers: ReadonlyArray<SessionImportProviderView>;
@@ -417,7 +475,77 @@ function SessionImportFilters(props: {
   readonly onQueryChange: (query: string) => void;
   readonly onToggleProvider: (harness: GuiHarnessId) => void;
   readonly onScanWindowChange: (window: SessionImportScanWindow) => void;
-}) {
+}
+
+/**
+ * Which toolbar this surface and this viewport get.
+ *
+ * Three shapes over ONE state: the Settings dialog's two stacked rows, the
+ * tour's two rows on a pointer, and the tour's single 44pt bar on a phone. A
+ * component rather than a ternary in the wizard's body, so the wizard states
+ * the choice once and the branches keep their own names.
+ */
+function SessionImportToolbar(
+  props: SessionImportFilterProps & {
+    readonly phone: boolean;
+    readonly onboarding: boolean;
+    readonly hostPicker: ReactNode;
+    readonly view: SessionImportWizardView;
+    readonly dispatch: SessionImportScanHandle["dispatch"];
+    readonly groupByProject: boolean;
+    readonly setGroupByProject: (grouped: boolean) => void;
+  },
+) {
+  const { phone, onboarding, view, tone, dispatch } = props;
+  if (phone)
+    return (
+      <>
+        <SessionImportPhoneToolbar
+          {...props}
+          hostPicker={props.hostPicker}
+          groupByProject={props.groupByProject}
+          setGroupByProject={props.setGroupByProject}
+        />
+        <SessionImportSelectionToolbar
+          view={view}
+          tone={tone}
+          dispatch={dispatch}
+          countLabel={selectedOfSelectableLabel(view)}
+        />
+      </>
+    );
+  if (onboarding) return <SessionImportOnboardingToolbar {...props} />;
+  return (
+    <>
+      <SessionImportFilters {...props} hostPicker={props.hostPicker} />
+      <SessionImportSelectionToolbar
+        view={view}
+        tone={tone}
+        dispatch={dispatch}
+        countLabel={selectionCountLabel(
+          view.selectedCount,
+          view.visibleSelectedCount,
+        )}
+      />
+    </>
+  );
+}
+
+/** "38 of 38 selected" - the count both tour shapes head their list with. */
+function selectedOfSelectableLabel(
+  view: SessionImportWizardView,
+): string | null {
+  if (view.selectableSessions === 0) return null;
+  return `${view.selectedCount.toLocaleString()} of ${view.selectableSessions.toLocaleString()} selected`;
+}
+
+/**
+ * The pinned header: search over everything, the scan-window picker, one pill
+ * per provider the scan covers.
+ */
+function SessionImportFilters(
+  props: SessionImportFilterProps & { readonly hostPicker: ReactNode },
+) {
   const {
     tone,
     query,
@@ -431,28 +559,31 @@ function SessionImportFilters(props: {
   return (
     <div
       className={cn(
-        "flex shrink-0 flex-col gap-2 border-b px-4 py-3",
+        "session-import-filters flex shrink-0 flex-col gap-2 border-b px-4 py-3",
         tone.border,
       )}
     >
-      <div className="relative min-w-0">
-        <Search
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2",
-            tone.faint,
-          )}
-        />
-        <Input
-          type="search"
-          value={query}
-          aria-label="Search work"
-          placeholder="Search work or folders"
-          data-testid="session-import-search"
-          onChange={(event) => onQueryChange(event.target.value)}
-          className="h-8 pl-8"
-          size="sm"
-        />
+      <div className="session-import-toolbar flex min-w-0 items-center gap-3">
+        {props.hostPicker}
+        <div className="relative min-w-0 flex-1">
+          <Search
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2",
+              tone.faint,
+            )}
+          />
+          <Input
+            type="search"
+            value={query}
+            aria-label="Search work"
+            placeholder="Search tasks or folders"
+            data-testid="session-import-search"
+            onChange={(event) => onQueryChange(event.target.value)}
+            className="h-8 pl-8"
+            size="sm"
+          />
+        </div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {/* Rendered even before the first group lands: on an empty result the
@@ -482,6 +613,257 @@ function SessionImportFilters(props: {
   );
 }
 
+/**
+ * The tour's toolbar on a phone: ONE 44pt bar.
+ *
+ * Measured on an iPhone 15, the pointer toolbar spent 261pt of an 852pt screen
+ * on five rows and left the list a 176pt window - 2.7 of 38 tasks. So the bar
+ * keeps only what names the scan's SUBJECT (which machine) and gives the other
+ * two jobs a control each: search expands over the bar, and everything that
+ * narrows the result moves behind one "Filters" control.
+ *
+ * Same state, same reducer, same rows - this is presentation. The dialog never
+ * reaches here (see the wizard's `phone`), so its surface is untouched.
+ */
+function SessionImportPhoneToolbar(
+  props: SessionImportFilterProps & {
+    readonly hostPicker: ReactNode;
+    readonly groupByProject: boolean;
+    readonly setGroupByProject: (grouped: boolean) => void;
+  },
+) {
+  const { tone, query, onQueryChange } = props;
+  // Expanded on request and collapsed again on blur, but only while it is
+  // EMPTY: a field the user typed into is the state of the list behind it, and
+  // hiding it behind an icon would leave that state unexplained.
+  const [searchOpen, setSearchOpen] = useState(false);
+  return (
+    <div className="onboarding-import-bar flex shrink-0 items-center gap-2">
+      {props.hostPicker}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          aria-label="Search tasks"
+          aria-expanded={searchOpen}
+          data-testid="session-import-search-toggle"
+          className="onboarding-import-bar-button"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search aria-hidden className="size-4" />
+        </button>
+        <SessionImportFilterSheet {...props} />
+      </div>
+      {searchOpen ? (
+        <SessionImportPhoneSearch
+          tone={tone}
+          query={query}
+          onQueryChange={onQueryChange}
+          onCollapse={() => setSearchOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The expanded field, covering the bar it grew out of.
+ *
+ * Focused on mount rather than through `autoFocus`: the press that opened it
+ * WAS the request to type, and leaving focus on the icon behind it would make
+ * the next tap the one that starts the search. Its own component so that
+ * focus happens exactly once - on the commit that mounts the field - instead of
+ * on every keystroke's render.
+ */
+function SessionImportPhoneSearch(props: {
+  readonly tone: SessionImportTone;
+  readonly query: string;
+  readonly onQueryChange: (query: string) => void;
+  readonly onCollapse: () => void;
+}) {
+  const { tone, query, onQueryChange, onCollapse } = props;
+  const fieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    fieldRef.current?.focus();
+  }, []);
+  return (
+    <div className="onboarding-import-search-overlay">
+      <Search
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2",
+          tone.faint,
+        )}
+      />
+      <Input
+        ref={fieldRef}
+        type="search"
+        value={query}
+        aria-label="Search work"
+        placeholder="Search tasks or folders"
+        data-testid="session-import-search"
+        onChange={(event) => onQueryChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onCollapse();
+        }}
+        // Collapses only while EMPTY: a field the user typed into is the state
+        // of the list behind it, and folding that back behind an icon would
+        // leave a narrowed list with nothing on screen explaining it.
+        onBlur={() => {
+          if (query.trim().length === 0) onCollapse();
+        }}
+        className="h-11 w-full pl-10"
+      />
+    </div>
+  );
+}
+
+/**
+ * Everything that narrows the scan, behind one control.
+ *
+ * A bottom sheet rather than a popover: four sections of 44pt controls is a
+ * surface, not a menu, and a phone's thumb reaches the bottom of the screen.
+ * The dot on the trigger is the only thing that says a filter is ON while the
+ * sheet is shut - a filtered list that looks like an unfiltered one is how a
+ * user concludes their work is missing.
+ */
+function SessionImportFilterSheet(
+  props: SessionImportFilterProps & {
+    readonly groupByProject: boolean;
+    readonly setGroupByProject: (grouped: boolean) => void;
+  },
+) {
+  const { tone, providers, scanning, groupByProject } = props;
+  const dirty = sessionImportFiltersDirty(props);
+  return (
+    <Sheet>
+      <SheetTrigger asChild>
+        <button
+          type="button"
+          aria-label="Filters"
+          data-testid="session-import-filters"
+          data-filtered={dirty}
+          className="onboarding-import-bar-button"
+        >
+          <SlidersHorizontal aria-hidden className="size-4" />
+          {dirty ? (
+            <span
+              aria-hidden
+              data-testid="session-import-filters-dot"
+              className="onboarding-import-filter-dot"
+            />
+          ) : null}
+        </button>
+      </SheetTrigger>
+      <SheetContent
+        side="bottom"
+        className="onboarding-import-filter-sheet max-h-[85svh] overflow-y-auto"
+      >
+        <SheetHeader>
+          <SheetTitle>Filters</SheetTitle>
+        </SheetHeader>
+        <div className="flex flex-col gap-5 px-4 pb-6">
+          <section className="flex flex-col gap-2">
+            <h3 className="onboarding-import-filter-heading">Time range</h3>
+            <ScanWindowSelect
+              tone={tone}
+              scanWindow={props.scanWindow}
+              onChange={props.onScanWindowChange}
+            />
+          </section>
+          {providers.length > 0 ? (
+            <section className="flex flex-col gap-2">
+              <h3 className="onboarding-import-filter-heading">Providers</h3>
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {providers.map((provider) => (
+                  <ProviderPill
+                    key={provider.harness}
+                    provider={provider}
+                    pending={scanning}
+                    tone={tone}
+                    onToggle={props.onToggleProvider}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {/* No heading over this one: its own label already says "Show
+              imported", and a heading above it would be the same two words
+              twice. The row IS the section. */}
+          <ImportedVisibilityToggle
+            tone={tone}
+            showImported={props.showImported}
+            support={props.importedSupport}
+            onChange={props.onShowImportedChange}
+          />
+          <section className="flex flex-col gap-2">
+            <h3 className="onboarding-import-filter-heading">
+              Group by project
+            </h3>
+            <SessionImportViewToggle
+              groupByProject={groupByProject}
+              setGroupByProject={props.setGroupByProject}
+            />
+          </section>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * Whether anything behind the sheet differs from how the act opened.
+ *
+ * The provider scope is "any pill switched OFF", not "any pill on": pills
+ * arrive enabled from the scan's own `started` frame, so an empty provider list
+ * is a scan that has not answered yet rather than a filter.
+ */
+function sessionImportFiltersDirty(input: {
+  readonly scanWindow: SessionImportScanWindow;
+  readonly showImported: boolean;
+  readonly providers: ReadonlyArray<SessionImportProviderView>;
+  readonly groupByProject: boolean;
+}): boolean {
+  return [
+    input.scanWindow !== SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
+    input.showImported,
+    input.groupByProject,
+    input.providers.some((provider) => !provider.enabled),
+  ].includes(true);
+}
+
+/** Tasks flat, or one section per folder. Shared by the tour's two shapes. */
+function SessionImportViewToggle(props: {
+  readonly groupByProject: boolean;
+  readonly setGroupByProject: (grouped: boolean) => void;
+}) {
+  const viewControlId = useId();
+  return (
+    <fieldset
+      aria-label="Import view"
+      role="radiogroup"
+      className="onboarding-import-view-toggle flex shrink-0 gap-0.5 rounded-lg bg-foreground/5 p-0.5"
+    >
+      {[
+        { label: "Tasks", grouped: false },
+        { label: "By project", grouped: true },
+      ].map((option) => (
+        <label key={option.label} className="cursor-pointer">
+          <input
+            type="radio"
+            name={viewControlId}
+            checked={props.groupByProject === option.grouped}
+            onChange={() => props.setGroupByProject(option.grouped)}
+            className="peer sr-only"
+          />
+          <span className="onboarding-import-view-option block rounded-md px-3 py-1 text-ui-xs text-muted-foreground transition-colors peer-checked:bg-foreground/10 peer-checked:text-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring peer-focus-visible:transition-none motion-reduce:transition-none">
+            {option.label}
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function importedVisibilityNotice(
   support: SessionImportImportedSupport,
 ): string | null {
@@ -508,7 +890,10 @@ function ImportedVisibilityToggle(props: {
   return (
     <div
       className={cn(
-        "ml-auto flex items-center gap-1.5 px-2 py-1 text-ui-xs",
+        // The class is how the phone's filter sheet reaches this row to give it
+        // the sheet's full width and a 44pt line (`onboarding-import.css`); on
+        // the two pointer toolbars it carries nothing.
+        "session-import-imported-toggle ml-auto flex items-center gap-1.5 px-2 py-1 text-ui-xs",
         disabled && "opacity-55",
         tone.muted,
       )}
@@ -608,6 +993,9 @@ function ScanWindowSelect(props: {
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
+  /** The tour on a phone: one full-width button, and nothing beside it. */
+  readonly phone: boolean;
+  readonly unavailableCount: number;
   readonly canSubmit: boolean;
   readonly checkingStatus: boolean;
   readonly secondaryAction: SessionImportSecondaryAction | null;
@@ -615,13 +1003,33 @@ function SessionImportFooter(props: {
 }) {
   const { tone, view, canSubmit, checkingStatus, secondaryAction, onSubmit } =
     props;
+  const onboarding = tone.surface === "onboarding";
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3",
+        "flex shrink-0 items-center gap-2",
+        onboarding
+          ? "onboarding-import-footer justify-between"
+          : "justify-end px-4 py-3",
+        tone.surface === "dialog" && "border-t",
         tone.border,
       )}
     >
+      {/* The count is the BUTTON's on a phone ("Import 38 tasks"), so the
+          label beside it would be the same number twice on the one screen
+          with no room for it. The unavailable tail goes with it: it explains
+          a gap between two numbers only one of which is now on screen. */}
+      {onboarding && !props.phone ? (
+        <p
+          data-testid="session-import-footer-count"
+          className={cn("min-w-0 truncate text-ui-xs tabular-nums", tone.muted)}
+        >
+          {view.selectedCount.toLocaleString()} selected
+          {props.unavailableCount > 0
+            ? ` · ${props.unavailableCount.toLocaleString()} unavailable`
+            : ""}
+        </p>
+      ) : null}
       {secondaryAction !== null ? (
         <Button
           type="button"
@@ -632,23 +1040,44 @@ function SessionImportFooter(props: {
           {secondaryAction.label}
         </Button>
       ) : null}
-      <Button
-        type="button"
-        size="sm"
-        data-testid="session-import-submit"
-        disabled={!canSubmit || view.selectedCount === 0}
-        onClick={onSubmit}
-      >
-        {checkingStatus ? (
-          <AgentSpinningDots
-            className={tone.muted}
-            testId="session-import-status-spinner"
-            variant={undefined}
-          />
-        ) : null}
-        Import {view.selectedCount}{" "}
-        {view.selectedCount === 1 ? "task" : "tasks"}
-      </Button>
+      {tone.surface === "onboarding" ? (
+        <button
+          type="button"
+          data-testid="session-import-submit"
+          className="onboarding-button onboarding-button--primary tabular-nums"
+          disabled={!canSubmit || view.selectedCount === 0}
+          onClick={onSubmit}
+        >
+          {checkingStatus ? (
+            <AgentSpinningDots
+              className={tone.muted}
+              testId="session-import-status-spinner"
+              variant={undefined}
+            />
+          ) : null}
+          Import {view.selectedCount}{" "}
+          {view.selectedCount === 1 ? "task" : "tasks"}
+        </button>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          data-testid="session-import-submit"
+          className="tabular-nums"
+          disabled={!canSubmit || view.selectedCount === 0}
+          onClick={onSubmit}
+        >
+          {checkingStatus ? (
+            <AgentSpinningDots
+              className={tone.muted}
+              testId="session-import-status-spinner"
+              variant={undefined}
+            />
+          ) : null}
+          Import {view.selectedCount}{" "}
+          {view.selectedCount === 1 ? "task" : "tasks"}
+        </Button>
+      )}
     </div>
   );
 }
@@ -728,19 +1157,19 @@ function emptyMessage(
   state: SessionImportWizardState,
   view: SessionImportWizardView,
 ): string {
-  if (state.phase === "failed")
-    return "Traycer could not read your work folders.";
+  if (state.phase === "failed") return "Couldn’t read task folders.";
   if (view.hiddenImportedCount > 0 && state.importedSupport === "supported")
-    return "All matching tasks have already been imported.";
+    return "All matching tasks are already imported.";
   if (view.totalSessions === 0) {
     // A bounded scan finding nothing is not "you have no work" - the window
     // picker above can look further back, and the copy points at it.
     return state.scanWindow === null
-      ? "No work from Claude Code, Codex, or OpenCode found on this machine."
-      : `No work from Claude Code, Codex, or OpenCode in the ${sessionImportScanWindowLabel(state.scanWindow).toLowerCase()}. Pick a longer window to look further back.`;
+      ? "No tasks found on this device."
+      : `No tasks in the ${sessionImportScanWindowLabel(state.scanWindow).toLowerCase()}. Choose a longer time range.`;
   }
-  if (state.query.trim().length > 0) return "No work matches your search.";
-  return "No work from the providers you picked.";
+  if (state.query.trim().length > 0)
+    return "No matching tasks. Try another search.";
+  return "No tasks from the selected providers. Choose another provider.";
 }
 
 /**
@@ -756,7 +1185,13 @@ function SessionImportRunView(props: {
   readonly secondaryAction: SessionImportSecondaryAction | null;
 }) {
   const { tone, hostId, runStatus, secondaryAction } = props;
-  const runFinished = runStatus === "complete" || runStatus === "error";
+  // The tour's progress and result are centred cards, so the way back lives
+  // inside the card it belongs to rather than in a bar under it - there is no
+  // surface exit to pair it with there, and a lone button on a hairline was
+  // the "floating mid-air" the redesign is answering.
+  const runFinished =
+    (runStatus === "complete" || runStatus === "error") &&
+    tone.surface === "dialog";
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
       <SessionImportProgress tone={tone} hostId={hostId} />
@@ -789,11 +1224,188 @@ function SessionImportRunView(props: {
                 useSessionImportRunStore.getState().reset(hostId);
               }}
             >
-              {runStatus === "error" ? "Back to sessions" : "Import more"}
+              {runStatus === "error" ? "Back to tasks" : "Import more"}
             </Button>
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function selectionCountLabel(
+  selected: number,
+  visibleSelected: number,
+): string {
+  const label = `${selected.toLocaleString()} ${selected === 1 ? "task" : "tasks"} selected`;
+  return selected > visibleSelected
+    ? `${label} · ${selected - visibleSelected} outside this view`
+    : label;
+}
+
+/**
+ * The master checkbox and the count it heads, shared by both surfaces' second
+ * toolbar row. It reads the VISIBLE slice: it heads the list exactly as the
+ * search and pills have narrowed it, so what it shows and what it moves are the
+ * same rows the user is looking at.
+ */
+function SessionImportSelectAll(props: {
+  readonly view: SessionImportWizardView;
+  readonly tone: SessionImportTone;
+  readonly dispatch: SessionImportScanHandle["dispatch"];
+  readonly countLabel: string | null;
+}) {
+  const { view, tone, dispatch, countLabel } = props;
+  const visibleSelection = selectionStateFor(
+    view.visibleSelectionKeys.length,
+    view.visibleSelectedCount,
+  );
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={
+          visibleSelection === "partial" ? "mixed" : visibleSelection === "all"
+        }
+        aria-label="Select all available tasks shown"
+        data-testid="session-import-visible-selection"
+        disabled={view.visibleSelectionKeys.length === 0}
+        onClick={() =>
+          dispatch({
+            kind: "visibleSelectionSet",
+            selectionKeys: view.visibleSelectionKeys,
+            selected: visibleSelection !== "all",
+          })
+        }
+        className={cn(
+          "flex shrink-0 items-center rounded-md border-x border-transparent px-2.5 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+          view.visibleSelectionKeys.length > 0 && tone.rowHover,
+        )}
+      >
+        <SelectionBox
+          state={visibleSelection}
+          disabled={view.visibleSelectionKeys.length === 0}
+          tone={tone}
+        />
+      </button>
+      {countLabel !== null ? (
+        <span
+          data-testid="session-import-selection-count"
+          className={cn(
+            "text-ui-xs tabular-nums whitespace-nowrap",
+            tone.muted,
+          )}
+        >
+          {countLabel}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionImportSelectionToolbar(props: {
+  readonly view: SessionImportWizardView;
+  readonly tone: SessionImportTone;
+  readonly dispatch: SessionImportScanHandle["dispatch"];
+  /** What heads the list: the dialog's detailed line, or the tour's count. */
+  readonly countLabel: string | null;
+}) {
+  const { view, tone, dispatch } = props;
+  return view.groups.length > 0 && view.selectableSessions > 0 ? (
+    <div className="session-import-selection flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 pt-2">
+      <SessionImportSelectAll
+        view={view}
+        tone={tone}
+        dispatch={dispatch}
+        countLabel={props.countLabel}
+      />
+    </div>
+  ) : null;
+}
+
+/**
+ * The tour's own toolbar, in two rows with two jobs. Row one is the SCOPE -
+ * which machine, which words, how far back, whether imported work counts. Row
+ * two is the SELECTION - how much of what row one turned up is ticked, which
+ * providers it is drawn from, and how it is arranged. The Settings dialog keeps
+ * its own one-column arrangement above; nothing here reaches it.
+ */
+function SessionImportOnboardingToolbar(
+  props: SessionImportFilterProps & {
+    readonly hostPicker: ReactNode;
+    readonly view: SessionImportWizardView;
+    readonly dispatch: SessionImportScanHandle["dispatch"];
+    readonly groupByProject: boolean;
+    readonly setGroupByProject: (grouped: boolean) => void;
+  },
+) {
+  const { tone, view, providers, scanning, groupByProject } = props;
+  const pills = (
+    <div className="onboarding-import-pills flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+      {providers.map((provider) => (
+        <ProviderPill
+          key={provider.harness}
+          provider={provider}
+          pending={scanning}
+          tone={tone}
+          onToggle={props.onToggleProvider}
+        />
+      ))}
+    </div>
+  );
+  return (
+    <div className="onboarding-import-toolbar flex shrink-0 flex-col gap-2.5">
+      <div className="onboarding-import-toolbar-scope flex min-w-0 items-center gap-2">
+        {props.hostPicker}
+        <div className="onboarding-import-search relative min-w-0 flex-1">
+          <Search
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2",
+              tone.faint,
+            )}
+          />
+          <Input
+            type="search"
+            value={props.query}
+            aria-label="Search work"
+            placeholder="Search tasks or folders"
+            data-testid="session-import-search"
+            onChange={(event) => props.onQueryChange(event.target.value)}
+            // `h-11`, matching the height this act's stylesheet has always
+            // given the field: `h-8` plus a 2.75rem CSS override was the same
+            // number written twice, once wrongly. The default size variant is
+            // deliberate too - it is the 16px-on-mobile rule that stops iOS
+            // zooming a focused field, and it still resolves to 14px here.
+            className="h-11 pl-10"
+          />
+        </div>
+        <ScanWindowSelect
+          tone={tone}
+          scanWindow={props.scanWindow}
+          onChange={props.onScanWindowChange}
+        />
+        <ImportedVisibilityToggle
+          tone={tone}
+          showImported={props.showImported}
+          support={props.importedSupport}
+          onChange={props.onShowImportedChange}
+        />
+      </div>
+      <div className="onboarding-import-selection flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 pb-2">
+        <SessionImportSelectAll
+          view={view}
+          tone={tone}
+          dispatch={props.dispatch}
+          countLabel={selectedOfSelectableLabel(view)}
+        />
+        {pills}
+        <SessionImportViewToggle
+          groupByProject={groupByProject}
+          setGroupByProject={props.setGroupByProject}
+        />
+      </div>
     </div>
   );
 }

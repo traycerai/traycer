@@ -61,6 +61,7 @@ import {
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
+import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   landingPlacementHostId,
@@ -148,6 +149,18 @@ export interface LandingDraftWorkspaceSnapshot {
   readonly primaryPath: string | null;
 }
 
+/** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
+export interface InstallLandingDraftInput {
+  readonly id: string;
+  readonly content: JsonContent;
+  readonly selection: DraftSelection | null;
+  readonly lastTouchedAt: number;
+  readonly settings: ChatRunSettings | null;
+  readonly composerMode: ComposerMode;
+  readonly workspace: LandingDraftWorkspaceSnapshot;
+  readonly closed: boolean;
+}
+
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
@@ -174,6 +187,18 @@ interface LandingDraftStoreState {
    * `nextId` already exists.
    */
   forkDraft: (sourceId: string, nextId: string) => boolean;
+  /**
+   * Insert a start-task row for `id` carrying the given snapshot verbatim,
+   * dirty (so the mirror adopts and publishes it) and unadopted, WITHOUT
+   * touching `activeDraftId` - the stash migration installs many rows at
+   * once and Undo restores one the user is not looking at, so neither may
+   * hijack the composer. False when `id` is retired or already present.
+   *
+   * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
+   * then clears the active draft, and fires an image reconcile between the
+   * empty content and the real content.
+   */
+  installLandingDraft: (input: InstallLandingDraftInput) => boolean;
   /**
    * Put a start-task draft away. A non-empty draft is retained (`closed:
    * true`) and leaves the tab strip; an empty one is deleted so stray Cmd-N
@@ -674,6 +699,32 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         return true;
       },
 
+      installLandingDraft: (input) => {
+        if (landingDraftIsRetired(input.id)) return false;
+        if (get().drafts.some((draft) => draft.id === input.id)) return false;
+        const next: LandingDraftTab = {
+          id: input.id,
+          content: input.content,
+          selection: input.selection,
+          lastTouchedAt: input.lastTouchedAt,
+          settings: copyChatRunSettings(input.settings),
+          composerMode: input.composerMode,
+          workspace: input.workspace,
+          ...freshLandingMirrorState(),
+          // A fresh row with content is dirty by definition: the mirror
+          // adopts and publishes it on the next sweep.
+          generation: 1,
+          closed: input.closed,
+        };
+        // Partial set: `activeDraftId` is deliberately left where it is.
+        set((state) => ({
+          drafts: [...uniqueLandingDrafts(state.drafts), next],
+        }));
+        notifyDraftLocalEdit(input.id);
+        scheduleLandingImageReconcile();
+        return true;
+      },
+
       closeDraft: (id) => {
         if (!get().drafts.some((d) => d.id === id)) return;
         // Flush pending runtime writes first so emptiness is judged on the
@@ -937,10 +988,14 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // ACCEPTED IMPERFECTION: process exit (quit or crash) during the sub-second
       // ingest window omits that paste's still-pending image from the serialized
       // draft, because its b64 node has not yet converted to a hash.
+      // The caret goes with the strip: positions count nodes, so a draft
+      // persisted mid-ingest would otherwise restore its caret against a
+      // document one node shorter than the one those positions were measured
+      // in.
       partialize: (state) => ({
         drafts: state.drafts.map((draft) => ({
           ...draft,
-          content: stripBase64ImageNodes(draft.content),
+          ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
       }),
@@ -1103,25 +1158,30 @@ useLandingDraftStore.subscribe((state) => {
 function projectLandingDraftForDesktop(
   draft: LandingDraftTab,
 ): DesktopPerWindowLandingDraft {
+  // T6: emit the real hash-only editor JSON, the cursor, and the edit time.
+  // Desktop serialization seam [Mechanism A]: strip a paste's still-pending b64
+  // node first so the projected draft is hash-only — this covers BOTH the store
+  // subscription and the [B1] empty-inbound guard re-projection (both route
+  // through here). Same narrowed accepted imperfection as the persist
+  // `partialize`, and the same caret rule: a strip that removes a node shifts
+  // every position after it, so the selection is taken from the stripped pair
+  // rather than from `draft` directly.
+  const stripped = stripBase64ImageNodesWithSelection(
+    draft.content,
+    draft.selection,
+  );
   return {
     id: draft.id,
-    // T6: emit the real hash-only editor JSON, the cursor, and the edit time.
-    // Desktop serialization seam [Mechanism A]: strip a paste's still-pending b64
-    // node first so the projected draft is hash-only — this covers BOTH the store
-    // subscription and the [B1] empty-inbound guard re-projection (both route
-    // through here). Same narrowed accepted imperfection as the persist
-    // `partialize`. `content` is plain JSON already; the walker reproduces it as a
+    // `content` is plain JSON already; the walker reproduces it as a
     // `DesktopJsonValue` without a cast (`JsonContent`'s `unknown`-valued attrs
     // are not structurally assignable to `DesktopJsonValue`).
-    content: landingDraftContentToDesktopValue(
-      stripBase64ImageNodes(draft.content),
-    ),
+    content: landingDraftContentToDesktopValue(stripped.content),
     // `DraftSelection` lacks an index signature, so rebuild it as a fresh
     // record literal (numbers) to satisfy `DesktopJsonValue` without a cast.
     selection:
-      draft.selection === null
+      stripped.selection === null
         ? null
-        : { from: draft.selection.from, to: draft.selection.to },
+        : { from: stripped.selection.from, to: stripped.selection.to },
     lastTouchedAt: draft.lastTouchedAt,
     settings: chatRunSettingsToDesktopValue(draft.settings),
     composerMode: draft.composerMode,
@@ -1171,7 +1231,7 @@ function parseComposerMode(value: unknown): ComposerMode {
   return useSettingsStore.getState().composerMode;
 }
 
-function parseChatRunSettings(value: unknown): ChatRunSettings | null {
+export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
   if (value === null || value === undefined) return null;
   const parsed = chatRunSettingsSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
@@ -1338,7 +1398,7 @@ export function setLandingDraftWorkspacePrimary(
   return { ...workspace, primaryPath: folderPath };
 }
 
-function parseLandingDraftWorkspaceSnapshot(
+export function parseLandingDraftWorkspaceSnapshot(
   value: unknown,
 ): LandingDraftWorkspaceSnapshot {
   if (!isRecord(value)) return emptyLandingDraftWorkspaceSnapshot();
@@ -1555,31 +1615,6 @@ function workspaceFolderInfoByPathToDesktopValue(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-// Strip pending base64 image nodes (and any `attachmentGroup` left empty) from
-// content at the two SERIALIZATION seams [Mechanism A] — the persist
-// `partialize` and `projectLandingDraftForDesktop` — NOT in `setDraftContent`
-// (in-memory draft content is canonical and may carry a paste's still-pending
-// b64 node). Hash-only image nodes (whose bytes are durably stored) are kept; a
-// still-pending b64 node is dropped from the serialized form until its background
-// job flips it to a hash and the next serialization captures the converted node.
-function stripBase64ImageNodes(content: JsonContent): JsonContent {
-  return stripBase64ImageNode(content) ?? EMPTY_LANDING_DRAFT_CONTENT;
-}
-
-function stripBase64ImageNode(node: JsonContent): JsonContent | null {
-  if (node.type === "imageAttachment") {
-    return typeof node.attrs?.b64content === "string" ? null : node;
-  }
-  const children = node.content;
-  if (children === undefined) return node;
-  const nextChildren = children.flatMap((child) => {
-    const stripped = stripBase64ImageNode(child);
-    return stripped === null ? [] : [stripped];
-  });
-  if (node.type === "attachmentGroup" && nextChildren.length === 0) return null;
-  return { ...node, content: nextChildren };
 }
 
 function sameDraftSelection(

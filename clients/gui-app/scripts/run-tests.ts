@@ -178,12 +178,28 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/docx-preview-browser-regression.mjs"),
     );
+    // Same gate: whether the sign-in page is legible is a question about
+    // rendered colours under a given theme preset, and jsdom has no cascade
+    // and no pixels. Ablated before wiring: without the page's dark palette
+    // scope, "Enter code manually" reads 1.04:1 under every light preset.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/sign-in-theme-contrast-browser.mjs"),
+    );
     // A CSS duration accidentally applied to transition-property: all sends
     // Floating UI surfaces from the viewport corner on mount and re-anchor;
     // only a real browser can measure that layout and style interpolation.
     exitCode = firstFailure(
       exitCode,
       runBrowserRegression("scripts/panel-motion-position-browser.mjs"),
+    );
+    // Same gate: whether the status bar's usage cluster overflows and
+    // scrolls at a real width, which edge its fade lands on, and whether the
+    // resource readout beside it stays whole are all layout - jsdom reports
+    // every box as 0px wide and cannot see what a mask class does.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/status-bar-usage-scroll-browser.mjs"),
     );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the

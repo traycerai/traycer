@@ -769,6 +769,9 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           text: existing.text + event.delta,
+          ...(event.browserSession === undefined
+            ? {}
+            : { browserSession: event.browserSession }),
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -781,6 +784,9 @@ export function accumulateEvent(
           status: "streaming",
           timestamp: event.timestamp,
           text: event.delta,
+          ...(event.browserSession === undefined
+            ? {}
+            : { browserSession: event.browserSession }),
           providerNotice: null,
         },
       ];

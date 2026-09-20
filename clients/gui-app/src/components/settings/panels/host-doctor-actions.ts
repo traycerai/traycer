@@ -72,7 +72,7 @@ export async function runFixAction(
   issue: HostDoctorIssue,
   /**
    * The local host these fixes are for. EVERY arm below now carries it: the
-   * log read, the free-port repair, and the three lifecycle repairs via
+   * free-port repair and the three lifecycle repairs via
    * `runDoctorRepairQueued`. There is deliberately no unfenced arm left, so a
    * fix added to this switch cannot reach the bridge without naming a host.
    *
@@ -120,9 +120,6 @@ export async function runFixAction(
         repair: "restart",
         expectedHostId,
       });
-    case "host-logs":
-      await management.getHostLogs({ tailLines: 200, expectedHostId });
-      return { kind: "applied" };
     case "host-free-port-and-restart": {
       const input = parseFreePortInput(issue);
       if (input === null) {
