@@ -1835,8 +1835,8 @@ describe("<HomeFocusView /> status column", () => {
     expect(
       within(
         within(group).getAllByTestId("home-focus-task-group-job")[0],
-      ).getByTestId("home-focus-row-status-duration").textContent,
-    ).toBe("· 5m");
+      ).getByTestId("home-focus-row-status-elapsed").textContent,
+    ).toBe("· 5m 0s");
   });
 
   // The `turn` STATE keeps its name - it is the wire tier, and the dot colour
@@ -1940,6 +1940,129 @@ describe("<HomeFocusView /> status column", () => {
     expect(
       within(chat).queryByTestId("home-focus-row-status-duration"),
     ).toBeNull();
+    expect(
+      within(chat).queryByTestId("home-focus-row-status-elapsed"),
+    ).toBeNull();
+  });
+});
+
+describe("<HomeFocusView /> job row elapsed", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The chat's Background panel prints the same shell as `42h 47m 13s`, so
+  // Home's row prints that reading rather than the compact age's `1d`.
+  it("prints a running shell's elapsed as the panel's clock and ticks it once a second in place", () => {
+    vi.useFakeTimers();
+    const base = Date.now();
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "host", tier: "background" }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          label: "PR gate watcher",
+          startedAtMs: base - ((42 * 60 + 47) * 60 + 13) * 1000,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const job = within(taskGroup("epic-1")).getByTestId(
+      "home-focus-task-group-job",
+    );
+    const clock = within(job).getByTestId("home-focus-row-status-elapsed");
+    expect(clock.textContent).toBe("· 42h 47m 13s");
+    expect(
+      within(job).queryByTestId("home-focus-row-status-duration"),
+    ).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    const clockAfter = within(job).getByTestId("home-focus-row-status-elapsed");
+    expect(clockAfter).toBe(clock);
+    expect(clockAfter.textContent).toBe("· 42h 47m 14s");
+
+    // The rest of the row is what it was: the clock is the only thing ticking.
+    expect(within(job).getByTestId("home-focus-row-name").textContent).toBe(
+      "PR gate watcher",
+    );
+    expect(within(job).getByTestId("home-focus-background-glyph")).toBeTruthy();
+    expect(
+      within(job).getByRole("button", { name: "Stop PR gate watcher" }),
+    ).toBeTruthy();
+    expect(
+      within(job)
+        .getByTestId("home-focus-row-status")
+        .getAttribute("data-state"),
+    ).toBe("running");
+  });
+
+  it("prints no elapsed for a job with no start time", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "host", tier: "background" }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          kind: "background-item",
+          itemKind: "subagent",
+          startedAtMs: null,
+          stoppable: false,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const job = within(taskGroup("epic-1")).getByTestId(
+      "home-focus-task-group-job",
+    );
+    expect(
+      within(job).queryByTestId("home-focus-row-status-elapsed"),
+    ).toBeNull();
+    expect(
+      within(job).queryByTestId("home-focus-row-status-duration"),
+    ).toBeNull();
+  });
+
+  // A prompt's part is an age, not a running clock, and stays on the coarse
+  // reading beside a job that ticks every second.
+  it("keeps the prompt row on the compact age", () => {
+    modelMock.value = model({
+      prompts: [
+        promptRow({
+          epicId: null,
+          taskTitle: null,
+          createdAt: Date.now() - 5 * 60 * 1000,
+        }),
+      ],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-row-status-duration").textContent,
+    ).toBe("· 5m");
+    expect(screen.queryByTestId("home-focus-row-status-elapsed")).toBeNull();
   });
 });
 

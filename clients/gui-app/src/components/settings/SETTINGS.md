@@ -2490,6 +2490,16 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       stays out of that button's accessible name, but it is unpositioned and
       therefore still under its stretched overlay - by design, since everything
       that is not a control opens the row.
+    - **The status cell's trailing slot has two clocks, and the row decides
+      which.** A prompt row's `· 5m` is an AGE (`RowStatusDuration`:
+      `formatCompactRelativeTime` on the shared 60s clock) - how long a
+      question has sat unanswered, where nothing changes second to second. A
+      running shell's `· 42h 47m 13s` is a CLOCK (`RowStatusElapsed`:
+      `useElapsedSeconds` + `formatClockDuration`, a 1s tick confined to that
+      leaf) - the same reading the chat's Background panel prints for the same
+      shell, because a watcher that reads `42h 47m 13s` in the panel and `1d`
+      on Home is one fact in two vocabularies. Agent rows and in-turn
+      background items print neither: neither plane carries a start time.
     - **The duration hides on a narrow ROW, under Compact only.** An
       `@container` on the section and `@max-sm:hidden` on the duration, not a
       viewport breakpoint: a slim Home tile inside a wide window is exactly the

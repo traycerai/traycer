@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 import { useStore } from "zustand";
@@ -71,6 +72,11 @@ import type {
   EpicTerminalMentionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
+import {
+  recentMentionPicks,
+  selectMentionPickBucket,
+  useMentionPickMemoryStore,
+} from "@/stores/composer/mention-pick-memory-store";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
@@ -94,6 +100,18 @@ const EMPTY_STEP_ENTRIES: MentionStepEntries = {
   entries: [],
   matchedCount: null,
 };
+const EMPTY_RECENT_PICKS: ReadonlyMap<string, number> = new Map();
+
+/** Which session and step the hook last published a list for. */
+interface PublishedStepIdentity {
+  readonly sessionId: number;
+  readonly stepKey: string;
+}
+
+function mentionStepKey(step: MentionFlowStep): string {
+  if (step.kind === "root") return "root";
+  return `${step.providerId}:${step.stepId}:${step.workspacePath ?? ""}`;
+}
 
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -255,6 +273,31 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     active,
   });
 
+  // Which rows this host's user picked this session, for the root search's
+  // recency nudge. The bucket identity only changes on a pick, so the map is
+  // rebuilt once per pick, never per keystroke.
+  const pickBucket = useMentionPickMemoryStore((state) =>
+    selectMentionPickBucket(state, readiness.hostId),
+  );
+  const recentPicks = useMemo<ReadonlyMap<string, number>>(
+    () => (active ? recentMentionPicks(pickBucket) : EMPTY_RECENT_PICKS),
+    [active, pickBucket],
+  );
+  // Every commit that inserts a mention lands here (keyboard and click both
+  // go through `commitActiveItem`), attributed to the composer's target host.
+  const pickHostId = readiness.hostId;
+  useEffect(() => {
+    const store = pickerStore.getState();
+    store.setMentionPickObserver((entry) => {
+      useMentionPickMemoryStore
+        .getState()
+        .recordPick(pickHostId, entry.id, Date.now());
+    });
+    return () => {
+      pickerStore.getState().setMentionPickObserver(null);
+    };
+  }, [pickHostId, pickerStore]);
+
   // The current epic's COMPLETE local artifact set, read the same churn-free way
   // (via `getState`) as the chats above. Cloud `epic.mention*` returns at most
   // 25 artifacts per kind across all epics, so on a large epic some of the
@@ -342,6 +385,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
+      recentPicks: EMPTY_RECENT_PICKS,
     }),
     [currentEpicId, emptyGithubContext, epicAttachedRoots, mentionRoots, query],
   );
@@ -359,6 +403,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
+      recentPicks: EMPTY_RECENT_PICKS,
     }),
     [
       currentEpicId,
@@ -478,6 +523,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       browserTabEntries,
       epicAttachedRoots,
       github: github.context,
+      recentPicks,
     }),
     [
       currentEpicId,
@@ -490,18 +536,33 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       github.context,
       mentionRoots,
       query,
+      recentPicks,
       workspaceEntries,
       workspaceRequests.length,
     ],
   );
 
-  const stepEntries = useMemo<MentionStepEntries>(
+  const liveStepEntries = useMemo<MentionStepEntries>(
     () =>
       active
         ? mentionProviderRegistry.entriesWithMatches(step, resolvedContext)
         : EMPTY_STEP_ENTRIES,
     [active, resolvedContext, step],
   );
+
+  const stepEntries = liveStepEntries;
+  const holdPublishedItems = useHoldWhileWorkspaceRefetches({
+    active,
+    sessionId,
+    step,
+    // Loading (no rows at all yet) is not held: there is nothing to hold, and
+    // the menu's loading state is the honest thing to show.
+    workspaceRefetching:
+      step.kind === "root" &&
+      workspaceRequests.length > 0 &&
+      workspaceFetching &&
+      !workspaceLoading,
+  });
   const entries = stepEntries.entries;
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
@@ -569,7 +630,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [active, pickerStore, sessionId, step, stepChrome]);
 
   useEffect(() => {
-    if (!active || sessionId === null) return;
+    // While the workspace lane refetches, the store keeps the list it already
+    // has - built for the previous query, and stamped as such, so the store
+    // refuses to commit from it (see `commitActiveItem`) - rather than taking
+    // that list re-ranked under the live query and then the host's answer.
+    if (!active || sessionId === null || holdPublishedItems) return;
     pickerStore.getState().setItems({
       sessionId,
       kind: "mention",
@@ -585,7 +650,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       loadFailed: false,
       retryLoad: null,
     });
-  }, [active, items, loading, pickerStore, query, sessionId, step]);
+  }, [
+    active,
+    holdPublishedItems,
+    items,
+    loading,
+    pickerStore,
+    query,
+    sessionId,
+    step,
+  ]);
 
   useEffect(() => {
     if (!active) return;
@@ -650,6 +724,52 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     }
     state.closeSession(sessionId);
   }, [dismissForNoMatches, pickerStore, sessionId]);
+}
+
+interface HoldWhileWorkspaceRefetchesInput {
+  readonly active: boolean;
+  readonly sessionId: number | null;
+  readonly step: MentionFlowStep;
+  readonly workspaceRefetching: boolean;
+}
+
+/**
+ * True while the store should keep the list it already has instead of taking
+ * a new publish: the workspace lane is refetching for the live query, and
+ * this session and step have published a list before. `keepPreviousData`
+ * leaves the previous query's rows in the workspace entries during that
+ * window, and ranking THEM under the new query reorders the menu once before
+ * the host's answer reorders it again. A first list for a session or step is
+ * never held back: there is nothing on screen to keep.
+ *
+ * State rather than a ref because the previous render's fact is read DURING
+ * render (a ref may not be), and the conditional set is React's own pattern
+ * for deriving state from the previous render.
+ */
+function useHoldWhileWorkspaceRefetches(
+  input: HoldWhileWorkspaceRefetchesInput,
+): boolean {
+  const { active, sessionId, step, workspaceRefetching } = input;
+  const stepKey = mentionStepKey(step);
+  const [published, setPublished] = useState<PublishedStepIdentity | null>(
+    null,
+  );
+  const hold =
+    workspaceRefetching &&
+    published !== null &&
+    published.sessionId === sessionId &&
+    published.stepKey === stepKey;
+  if (
+    !hold &&
+    active &&
+    sessionId !== null &&
+    (published === null ||
+      published.sessionId !== sessionId ||
+      published.stepKey !== stepKey)
+  ) {
+    setPublished({ sessionId, stepKey });
+  }
+  return hold;
 }
 
 interface SourcePendingInput {
