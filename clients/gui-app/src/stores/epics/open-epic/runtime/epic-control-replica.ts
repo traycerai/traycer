@@ -638,7 +638,7 @@ export function createEpicControlReplica(
       //  - A `@1.4`/`@1.5` peer (`!peerSpeaksDurabilityLegs`) cannot express
       //    `cloud` at all, so its omission IS the positive cloud statement -
       //    the reading `useEpicCommentRoomAvailability` and
-      //    `useEpicHomeCacheSync` already make of the same frame. A promotion
+      //    the session's home write-through already make of the same frame. A promotion
       //    that completes under such a peer ends in exactly this frame.
       //  - A `@1.6` peer's omission is the wire's stated UNKNOWN. Unknown is
       //    not "still local": every gate that reads the retained statement

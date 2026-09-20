@@ -347,6 +347,7 @@ export function AddProviderProfileDialog({
 
           <AddProfileAccountSection
             flowState={flow.state}
+            loginCapability={state.loginCapability}
             isLocalHost={isLocalHost}
             startPending={flow.startPending}
             cancelPending={flow.cancelPending}
@@ -423,6 +424,7 @@ export function AddProviderProfileDialog({
 
 function AddProfileAccountSection({
   flowState,
+  loginCapability,
   isLocalHost,
   startPending,
   cancelPending,
@@ -443,6 +445,7 @@ function AddProfileAccountSection({
   onRetryFinalize,
 }: {
   readonly flowState: ProviderProfileLoginFlowState;
+  readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
   readonly startPending: boolean;
   readonly cancelPending: boolean;
@@ -493,6 +496,7 @@ function AddProfileAccountSection({
         <AddProfileWaitingStep
           loginUrl={flowState.kind === "waiting" ? flowState.url : null}
           userCode={flowState.kind === "waiting" ? flowState.userCode : null}
+          loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={startPending}
           cancelRequested={
@@ -752,6 +756,7 @@ function WaitingStepPasteFallback(props: {
 export function AddProfileWaitingStep({
   loginUrl,
   userCode,
+  loginCapability,
   isLocalHost,
   queuePending,
   cancelRequested,
@@ -764,6 +769,10 @@ export function AddProfileWaitingStep({
 }: {
   readonly loginUrl: string | null;
   readonly userCode: string | null;
+  /** Read only for `selfOpensBrowser` - whether this provider's own child
+   *  already opened a browser, which decides whether the GUI opens one too.
+   *  `userCode` above is still the paste-flow signal and is NOT that fact. */
+  readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
   readonly queuePending: boolean;
   readonly cancelRequested: boolean;
@@ -781,7 +790,7 @@ export function AddProfileWaitingStep({
 }): ReactNode {
   const autoOpen = useAutoOpenLoginUrl(
     isLocalHost,
-    userCode,
+    loginCapability,
     loginUrl,
     onOpenExternalLink,
   );

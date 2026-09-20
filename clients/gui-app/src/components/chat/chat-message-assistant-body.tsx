@@ -1,4 +1,5 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import { BrowserSessionRow } from "./segments/browser-session-row";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
@@ -1001,6 +1002,14 @@ function AssistantSegment({
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
     case "text":
+      if (segment.browserSession !== undefined) {
+        return (
+          <BrowserSessionRow
+            session={segment.browserSession}
+            findUnitId={findUnitId}
+          />
+        );
+      }
       return (
         <TextSegment
           findUnitId={findUnitId}

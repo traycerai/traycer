@@ -56,6 +56,28 @@ export function chatFilterEmptyStateDescription(filter: ChatFilter): string {
 }
 
 /**
+ * What "No agents match your search." says underneath itself. Both clauses are
+ * about where the search already looked and found nothing: the messages of this
+ * task's agents, and - when a filter is on - rows that may never have been
+ * offered to the query at all.
+ *
+ * `noMessageHits` is false while the message search is still running or was
+ * never asked, so the line only ever appears once there is a settled answer to
+ * report. See `epic-sidebar-message-hits-state.ts`.
+ */
+export function chatSearchEmptyStateDescription(
+  filterActive: boolean,
+  noMessageHits: boolean,
+): string | null {
+  const clauses: Array<string> = [];
+  if (noMessageHits) clauses.push("…and no messages match.");
+  if (filterActive) {
+    clauses.push("The current filters may also be hiding matches.");
+  }
+  return clauses.length === 0 ? null : clauses.join(" ");
+}
+
+/**
  * The Artifacts counterpart. Named rather than derived because its three facets
  * combine freely - a status and a kind constraint routinely narrow together, so
  * singling one out would be a guess.

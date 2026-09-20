@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type { SplitStripItem } from "@/stores/tabs/layout";
 import { closedHeaderPlacementSchema } from "../header-layout";
 import {

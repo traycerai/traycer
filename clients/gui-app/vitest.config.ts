@@ -42,13 +42,13 @@ const MAX_TEST_WORKERS = Math.min(
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop
-  // renderer's compiler preset. The stash regression was invisible when
-  // tests skipped this pass because the compiler may replace a React
-  // imperative-handle facade during an ordinary editor render. The filter
+  // renderer's compiler preset. The regression that motivated it was
+  // invisible when tests skipped this pass because the compiler may replace a
+  // React imperative-handle facade during an ordinary editor render. The filter
   // keeps unrelated GUI tests on their existing fast transform path.
   plugins: [
     react(),

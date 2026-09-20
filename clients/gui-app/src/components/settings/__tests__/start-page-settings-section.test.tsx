@@ -91,7 +91,7 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper",
       "Traycer team curated wallpapers",
       "Show greeting",
-      "Show recent tasks",
+      "Show tasks on the start page",
     ]);
     expect(screen.getByText("None")).not.toBeNull();
   });
@@ -133,7 +133,7 @@ describe("StartPageSettingsSection", () => {
       "Effect strength",
       "Tint wallpaper with theme accent color",
       "Show greeting",
-      "Show recent tasks",
+      "Show tasks on the start page",
     ]);
     expect(
       screen
@@ -168,7 +168,7 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper effect",
       "Effect strength",
       "Show greeting",
-      "Show recent tasks",
+      "Show tasks on the start page",
     ]);
   });
 
@@ -190,7 +190,7 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper effect",
       "Effect strength",
       "Show greeting",
-      "Show recent tasks",
+      "Show tasks on the start page",
     ]);
   });
 
@@ -258,7 +258,7 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper",
       "Traycer team curated wallpapers",
       "Show greeting",
-      "Show recent tasks",
+      "Show tasks on the start page",
     ]);
     choose.resolve();
   });

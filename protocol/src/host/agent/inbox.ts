@@ -142,8 +142,9 @@ export const agentInboxNoticeSchema = z.object({
    *     Definitive for this run.
    *   - `quiet`          - watchdog backstop: long PTY silence. Advisory -
    *     the receiver may still be mid-turn; check its transcript.
-   *   - `user-stopped`   - the receiver's turn was stopped by the user. It
-   *     will not resume on its own.
+   *   - `user-stopped`   - the receiver's turn was stopped: by the user, or
+   *     by an agent stop that aborted the same turn. The wire name predates
+   *     the second. It will not resume on its own.
    *   - `errored`        - the receiver's turn ended on an error (e.g. an
    *     API usage/rate limit). The raw text is in `detail`.
    *   - `awaiting-input` - the receiver is mid-turn but blocked on a human

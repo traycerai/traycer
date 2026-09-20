@@ -1,4 +1,9 @@
 import {
+  firstTaskImports,
+  firstTaskImportPending,
+  useFirstTaskGuideStore,
+} from "@/stores/onboarding/first-task-guide-store";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -1284,6 +1289,16 @@ function HomeWorkspaceSummaryControl(props: {
   readonly recentWorkspaceCount: number;
   readonly moveToRecent: boolean;
 }) {
+  const guidedSetup = useFirstTaskGuideStore(
+    (state) =>
+      state.status === "active" &&
+      !state.workspaceReviewed &&
+      !firstTaskImportPending(state.imports) &&
+      firstTaskImports(state.imports).length === 0,
+  );
+  const reviewWorkspace = useFirstTaskGuideStore(
+    (state) => state.reviewWorkspace,
+  );
   return (
     <div
       className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
@@ -1296,6 +1311,9 @@ function HomeWorkspaceSummaryControl(props: {
       )}
       <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
         <WorkspaceFolderSummaryControl
+          onFirstTaskSetupComplete={
+            guidedSetup && props.items.length > 0 ? reviewWorkspace : undefined
+          }
           items={props.items}
           readOnly={false}
           bindingResolved

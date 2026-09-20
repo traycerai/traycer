@@ -2377,7 +2377,7 @@ interface StopTarget {
  * asked: the agent is reported to its senders as having "exited" without
  * replying - a verdict that sticks until it is re-armed - and its record
  * cannot say it was stopped rather than lost. `terminal.kill` carries the
- * intent, so the sender is told the agent "was stopped by the user", the next
+ * intent, so the sender is told the agent "was stopped", the next
  * message resumes the same session, and the row reads asleep instead of gone.
  *
  * Separate from {@link StopTarget} rather than folded into it because the two

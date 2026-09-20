@@ -435,7 +435,7 @@ export function StartPageSettingsSection() {
               trackSettingChanged("appearance", "showRecentHistory");
               setShowRecentHistory(next);
             }}
-            aria-label="Show recent tasks"
+            aria-label="Show tasks on the start page"
           />
         }
       />

@@ -28,7 +28,7 @@ export interface FallbackDangerZoneProps {
 }
 
 /**
- * Settings ▸ Fallback ▸ Danger Zone - "Reset all fallback settings".
+ * Settings ▸ Model routing ▸ Danger Zone - "Reset model routing".
  *
  * The only destructive action on this page, and the confirm body has to NAME ITS
  * SCOPE, because every part of that scope is something a user could reasonably
@@ -43,11 +43,19 @@ export interface FallbackDangerZoneProps {
  *    ladder, grace window, max wait and return-to-preferred were frozen into a
  *    snapshot when they armed, so a policy write cannot move them.
  *
- * The one thing the copy deliberately does NOT claim is that armed traversals
- * are wholly unaffected. They are not: the tier rung re-reads the model groups
- * LIVE at the moment it runs, so a reset does change where an already-armed
- * traversal can hop to. "Keep the steps and timings they started with" is the
- * true half, and the smaller true statement beats the tidier false one.
+ * The copy does NOT claim armed traversals are wholly unaffected. They are not:
+ * the tier rung re-reads the model groups LIVE at the moment it runs, so a
+ * reset does change where an already-armed traversal can hop to.
+ *
+ * For a long time the sentence stopped at the true half - "keep the steps and
+ * timings they started with" - on the reasoning that a smaller true statement
+ * beats a tidier false one. That was right about the two candidates it was
+ * choosing between and wrong that they were the only two. A user-lens review
+ * read the half-sentence exactly as it is written: as reassurance that
+ * in-flight chats carry on untouched. Withholding the known second half does
+ * not leave the reader neutral, it leaves them confidently wrong - and this is
+ * a confirm dialog, where that is least affordable. Both halves now, which was
+ * always available and never written.
  */
 export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
   const {
@@ -149,7 +157,7 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
       <ConfirmDestructiveDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title="Reset all fallback settings?"
+        title="Reset model routing?"
         description={resetConfirmDescription(hostLabel)}
         // Not a cascade: the dialog's cascade slot renders "This will also
         // delete <x> nested under it", which is about descendants of a deleted
@@ -188,10 +196,23 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
  * which needs no export.
  */
 function resetConfirmDescription(hostLabel: string | null): string {
+  // "equivalent models", not "model groups". The section this names is HEADED
+  // "Equivalent models", so a dialog naming it "model groups" asked the reader
+  // to map one term onto another before they could tell what they were about
+  // to destroy - on the one dialog where being sure matters most. The editor
+  // below still calls its own rows model groups; that surface is being
+  // replaced, and a confirm dialog should speak in the page's headings either
+  // way.
   const what =
-    "Turns automatic fallback off, restores the default steps, timings and model groups, and clears any per-failure overrides.";
+    "Turns automatic routing off, restores the default steps, timings and equivalent models, and clears any per-failure overrides.";
+  // Names the model-group consequence too. "Keep the steps and timings they
+  // started with" was the true half and read as the WHOLE truth - the file's
+  // own doc has always recorded that the tier step re-reads the groups LIVE, so
+  // a reset does change where an already-armed chat can hop to. Stating only
+  // the reassuring half of a known pair, on a confirm dialog, is the one place
+  // that is least affordable.
   const inFlight =
-    "Chats already waiting or switching keep the steps and timings they started with.";
+    "Chats already waiting or switching keep their original steps and timings. If they still need another model, they'll use the restored default groups.";
   if (hostLabel === null) return `${what} ${inFlight}`;
   return `${what} Applies to your chat agents on ${hostLabel}. ${inFlight}`;
 }

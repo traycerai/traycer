@@ -79,6 +79,49 @@ interface HostAvailabilitySweepGate {
 /** Unsubscribe handle returned by `HostClient` event subscriptions. */
 export type HostClientUnsubscribe = () => void;
 
+/**
+ * Everything a caller may ask of ONE unary dispatch, in one object.
+ *
+ * The narrow entry points below (`requestWithSignal`,
+ * `requestWithIdempotencyKey`, `requestWithResponseTimeout`,
+ * `requestWithSignalRequiringHostMethodVersion`) each hard-code the three
+ * options they do not take, so no caller could combine a retry key with an
+ * extended budget, or a key with a version floor. Both combinations are now
+ * required by one flow: `drafts.putBlob` needs its digest key AND its 120 s
+ * budget, and `epic.create` needs its `epicId` key AND the `@1.2` floor that
+ * makes the keyed params byte-stable. This is that surface, and the narrow four
+ * are thin wrappers over it so there is exactly one place the messenger is
+ * called.
+ *
+ * EVERY FIELD IS REQUIRED, `null`/`undefined` included. A defaulted option here
+ * would be a silent policy: a caller that forgot the key would still dispatch,
+ * and the difference between "this call is replay-safe" and "nobody thought
+ * about it" is precisely what must not be inferred from an absent property.
+ */
+export interface HostRequestDispatchOptions {
+  /**
+   * Stable retry identity for a command. Read the allowlist note on
+   * {@link HostRequester.requestWithIdempotencyKey} before adding a caller.
+   */
+  readonly idempotencyKey: string | null;
+  /**
+   * Extended response-frame budget, validated against the method's scheduling
+   * policy entry. `null` keeps the transport default. A value the policy table
+   * does not declare for this method is refused before dispatch.
+   */
+  readonly responseTimeoutMs: number | null;
+  /**
+   * Version floor this dispatch's own handshake must clear, refused pre-send
+   * otherwise (`HostRequestOptions.requiredHostMethodVersion`).
+   */
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+  /**
+   * Caller cancellation. `undefined` is what the key and budget entry points
+   * have always passed; the version-floor one threads a real signal.
+   */
+  readonly signal: AbortSignal | undefined;
+}
+
 export interface HostClientChangeEvent {
   readonly previousHostId: string | null;
   readonly currentHostId: string | null;
@@ -129,12 +172,39 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
   /**
    * Selects the transport-key path explicitly. A non-null key gives a command
    * a stable retry identity; `null` is the byte-equivalent no-key path used by
-   * {@link request}. Only the command queue may opt into a non-null key.
+   * {@link request}.
+   *
+   * THE ALLOWLIST, which is a review rule rather than a type: the command
+   * queue, the `epic.create` dispatch (keyed on the `epicId` it is creating,
+   * which is only stable because hash-only content keeps the params
+   * byte-identical across a replay) and `drafts.putBlob` (keyed on the blob's
+   * own sha256, so a replayed upload is the same upload). A key is a promise
+   * that a SECOND arrival of these bytes is the same intent; for anything else
+   * it is a way to have a command applied twice under one name.
+   *
+   * The latter two reach it through {@link requestWithOptions}, because each
+   * also needs a second option this entry point hard-codes.
    */
   requestWithIdempotencyKey<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     idempotencyKey: string | null,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
+  /**
+   * Every dispatch option at once (see {@link HostRequestDispatchOptions}), for
+   * the callers that need a combination the four narrow entry points cannot
+   * express - a retry key WITH an extended budget, or a retry key WITH a
+   * version floor.
+   *
+   * On the narrow requester surface, not only on the class, for the same reason
+   * `requestWithSignalRequiringHostMethodVersion` is: gui-app's mutation layer
+   * holds a requester and no `HostDirectoryEntry`, so an option it cannot
+   * express here is an option it silently does not apply.
+   */
+  requestWithOptions<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
   requestWithSignal<Method extends keyof Registry & string>(
     method: Method,
@@ -403,7 +473,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // The entry is captured HERE, at property access, so all five
+          // The entry is captured HERE, at property access, so all six
           // request members resolve at the same instant.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
@@ -424,6 +494,14 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
               params,
               idempotencyKey,
             );
+        }
+        if (property === "requestWithOptions") {
+          // Re-pointed like every other request member. Falling through to the
+          // generic bind below would reach `requestWithOptions` on the TARGET,
+          // which addresses no host (∅) and rejects at the preflight - i.e. the
+          // combined entry point would be the one option a routed facade could
+          // not express, which is exactly the failure its own doc warns about.
+          return target.requestForWithOptions.bind(target, resolveEntry());
         }
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
@@ -732,6 +810,20 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   /**
+   * {@link HostRequester.requestWithOptions} - the instance-level face of
+   * {@link requestForWithOptions}, for callers that hold a client rather than a
+   * directory entry.
+   */
+  async requestWithOptions<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    // ∅ — see `request`.
+    return this.requestForWithOptions(null, method, params, options);
+  }
+
+  /**
    * Releases a cancelled TanStack Query's active latest/join raw call. This
    * is for bespoke query functions that predate `requestWithSignal`; normal
    * query builders propagate their cancellation signal directly.
@@ -810,20 +902,72 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, signal, (authority) =>
-      this.messenger.request(method, params, {
-        idempotencyKey: null,
-        authority,
-        // Every dispatch this client originates is a caller's FIRST attempt.
-        // The replay requirement is raised one layer down, by
-        // `createRetryingMessenger`, and only for the attempts that follow a
-        // failure whose retryability a negotiated key earned.
-        replayMustBeKeyed: false,
-        // No floor: an ordinary caller dispatches whatever the handshake
-        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
-        // opt-in.
-        requiredHostMethodVersion: null,
-      }),
+    return this.requestForWithOptions(entry, method, params, {
+      idempotencyKey: null,
+      responseTimeoutMs: null,
+      // No floor: an ordinary caller dispatches whatever the handshake
+      // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+      // opt-in.
+      requiredHostMethodVersion: null,
+      signal,
+    });
+  }
+
+  /**
+   * The ONE place this client calls the messenger, and the entry point every
+   * narrow variant above and below funnels into. See
+   * {@link HostRequestDispatchOptions} for why the combination exists at all
+   * and why nothing in it is defaulted.
+   *
+   * `responseTimeoutMs` is validated against the method's scheduling-policy
+   * entry before anything is scheduled, exactly as the budget-only entry point
+   * has always done: the policy table is where "this method may wait" is
+   * declared, and a caller naming a budget the table does not know is refused
+   * rather than granted one.
+   */
+  requestForWithOptions<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { idempotencyKey, responseTimeoutMs, requiredHostMethodVersion } =
+      options;
+    if (responseTimeoutMs !== null) {
+      const expectedTimeout = this.schedulingPolicyTimeout(method);
+      if (expectedTimeout === null || expectedTimeout !== responseTimeoutMs) {
+        return Promise.reject(
+          new Error(
+            `Host method '${method}' does not permit response timeout ${responseTimeoutMs}`,
+          ),
+        );
+      }
+    }
+    return this.scheduleRequest(
+      entry,
+      method,
+      params,
+      options.signal,
+      (authority) => {
+        const requestOptions = {
+          idempotencyKey,
+          authority,
+          // Every dispatch this client originates is a caller's FIRST attempt.
+          // The replay requirement is raised one layer down, by
+          // `createRetryingMessenger`, and only for the attempts that follow a
+          // failure whose retryability a negotiated key earned.
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion,
+        };
+        return responseTimeoutMs === null
+          ? this.messenger.request(method, params, requestOptions)
+          : this.messenger.requestWithResponseTimeout(
+              method,
+              params,
+              responseTimeoutMs,
+              requestOptions,
+            );
+      },
     );
   }
 
@@ -866,14 +1010,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     signal: AbortSignal | undefined,
     requiredHostMethodVersion: RequiredHostMethodVersion,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, signal, (authority) =>
-      this.messenger.request(method, params, {
-        idempotencyKey: null,
-        authority,
-        replayMustBeKeyed: false,
-        requiredHostMethodVersion,
-      }),
-    );
+    return this.requestForWithOptions(entry, method, params, {
+      idempotencyKey: null,
+      responseTimeoutMs: null,
+      requiredHostMethodVersion,
+      signal,
+    });
   }
 
   requestForWithIdempotencyKey<Method extends keyof Registry & string>(
@@ -882,19 +1024,17 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     idempotencyKey: string | null,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.messenger.request(method, params, {
-        idempotencyKey,
-        authority,
-        // A key the CALLER supplied, which is not the same as a replay that
-        // requires one - see the sibling above.
-        replayMustBeKeyed: false,
-        // No floor: an ordinary caller dispatches whatever the handshake
-        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
-        // opt-in.
-        requiredHostMethodVersion: null,
-      }),
-    );
+    return this.requestForWithOptions(entry, method, params, {
+      // A key the CALLER supplied, which is not the same as a replay that
+      // requires one - see `requestForWithOptions`.
+      idempotencyKey,
+      responseTimeoutMs: null,
+      // No floor: an ordinary caller dispatches whatever the handshake
+      // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+      // opt-in.
+      requiredHostMethodVersion: null,
+      signal: undefined,
+    });
   }
 
   requestForWithResponseTimeout<Method extends keyof Registry & string>(
@@ -903,27 +1043,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const expectedTimeout = this.schedulingPolicyTimeout(method);
-    if (expectedTimeout === null || expectedTimeout !== responseTimeoutMs) {
-      return Promise.reject(
-        new Error(
-          `Host method '${method}' does not permit response timeout ${responseTimeoutMs}`,
-        ),
-      );
-    }
-    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.messenger.requestWithResponseTimeout(
-        method,
-        params,
-        responseTimeoutMs,
-        {
-          idempotencyKey: null,
-          authority,
-          replayMustBeKeyed: false,
-          requiredHostMethodVersion: null,
-        },
-      ),
-    );
+    return this.requestForWithOptions(entry, method, params, {
+      idempotencyKey: null,
+      responseTimeoutMs,
+      requiredHostMethodVersion: null,
+      signal: undefined,
+    });
   }
 
   private scheduleRequest<Method extends keyof Registry & string>(

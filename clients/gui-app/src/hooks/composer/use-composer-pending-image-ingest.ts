@@ -1,5 +1,11 @@
 /**
- * The in-place b64 -> hash rewrite, for the three chat surfaces.
+ * The in-place b64 -> prepare + hash rewrite, for the three chat surfaces.
+ *
+ * The job PREPARES before it stores (≤ 2000 px longest edge, ≤ 3.75 MiB,
+ * animation preserved), so what the hash addresses is what the node describes
+ * and what the send carries. That is why the rewrite takes the whole
+ * `ImageAttachmentRewrite` and not a bare hash, and why a node's `size` and
+ * `mimeType` can differ from the bytes that were pasted.
  *
  * Two channels reach the same job. A FILE paste/drop/pick is converted before
  * insertion (`useComposerHashPasteAdapter`), so it arrives already hashed. A
@@ -22,18 +28,29 @@
  * single-flight, and the rewrite is by node id - so re-ingesting a node whose
  * bytes an aborted earlier job already stored just re-roots the same hash.
  *
- * ## Why this is a shared hook rather than three copies
+ * ## Why this is a shared hook rather than four copies
  *
- * `landing-composer.tsx` grew this logic first and still owns its own copy;
- * the difference between the two is one argument (`draftId`, which only names
- * the budget toast's wording). Landing is deliberately NOT repointed at this
- * hook in the ticket that introduced it - see the T4 report - because it is the
- * one composer already shipping the hash rewrite correctly, and it is the
- * control the three new surfaces are being compared against. Repointing it is
- * a worthwhile follow-up, not a thing to do in the same change that adds three
- * new callers.
+ * `landing-composer.tsx` grew this logic first and kept a private copy while
+ * this hook was extracted, because it was the control the three new callers
+ * were compared against. It is repointed here, and the copy is gone.
+ *
+ * The note this replaces said the two differed by "one argument (`draftId`)".
+ * That was true when it was written and false by the time it was acted on: the
+ * review that hardened this hook gave it FIVE behaviours the private copy never
+ * received - a deadline on the store write, a reconcile for a write that lands
+ * after that deadline, the format verdict running before budget admission,
+ * reservations keyed by image index rather than a running counter, and leaving
+ * a format the host refuses INLINE rather than hashing it. A pasted BMP on the
+ * landing composer was hashed, refused by the host's writer, and left its
+ * budget reservation held.
+ *
+ * The general point, recorded because the next extraction will face it: a
+ * duplicate left in place as a "reference" stops being one the moment its twin
+ * is fixed, and nothing tells you when that happened. The claim that two copies
+ * differ by one argument is a fact with a shelf life - re-derive it, do not
+ * carry it forward.
  */
-import { useCallback } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -41,6 +58,13 @@ import type {
   PastedComposerImage,
   PastedComposerImageOutcome,
 } from "@/components/chat/composer/editor/extensions/chat-paste-handler";
+import type { ImageAttachmentRewrite } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
+import {
+  createComposerImagePreparationSession,
+  prepareComposerImageBytesOrRefuse,
+  showImageTooLargeToast,
+  type ImagePreparationSession,
+} from "@/lib/composer/composer-image-preparation";
 import { decodeValidatedPastedImage } from "@/hooks/composer/use-landing-composer-paste";
 import { isHostStorableImageMimeType } from "@/lib/composer/host-storable-image-formats";
 import {
@@ -69,9 +93,16 @@ export interface PendingImageIngestEditorHandle {
   readonly isReady: () => boolean;
   readonly getJSON: () => JsonContent;
   readonly removeImageAttachmentById: (id: string) => void;
+  /**
+   * Takes the whole rewrite, not a bare hash: this job PREPARES before it
+   * stores, so the bytes the hash addresses may be a different format and a
+   * different length than the ones the node was stamped with. The node's
+   * `mimeType`, `fileName`, `size` and `byHashEligible` all have to move with
+   * the hash or the node describes bytes nobody holds.
+   */
   readonly rewriteImageAttachmentHashById: (
     id: string,
-    hash: string,
+    rewrite: ImageAttachmentRewrite,
   ) => boolean;
 }
 
@@ -86,6 +117,23 @@ export interface ComposerPendingImageIngest {
   ) => ReadonlyArray<PastedComposerImageOutcome>;
   /** Mount-time restart for every node still carrying bytes. */
   readonly reingestPendingImages: () => void;
+  /**
+   * EDGE-TRIGGERED re-ingest, safe to call on every content change.
+   *
+   * Paste is not the only way a b64 image node enters the document. The
+   * mention extension appends a browser-preview screenshot asynchronously,
+   * long after mount (`commitBrowserTabPreviewInsertion`), and mount-time
+   * re-entry cannot see a node that does not exist yet. Without an on-change
+   * caller such a node travels inline until the next mount.
+   *
+   * Idempotent per node for the life of the mount, so calling it per keystroke
+   * costs a scan and nothing else: a node whose job has been started is never
+   * started again, which covers the one that settled, the one still in flight,
+   * and - the case that would otherwise be a per-keystroke prepare + budget
+   * reservation - the one preparation REFUSED, which by the migration
+   * invariant stays inline on purpose.
+   */
+  readonly noteContentImages: (content: JsonContent) => void;
 }
 
 interface PendingImageIngestOptions {
@@ -105,6 +153,9 @@ interface PendingImageIngestOptions {
    * return without touching the node when this is set.
    */
   readonly reserveAfterStore: boolean;
+  /** The node's own name and type: what preparation declares against. */
+  readonly fileName: string;
+  readonly mimeType: string;
 }
 
 /**
@@ -126,10 +177,55 @@ async function runPendingImageIngestJob(args: {
     readonly current: PendingImageIngestEditorHandle | null;
   };
   readonly draftId: string | null;
+  readonly preparationSession: ImagePreparationSession;
 }): Promise<void> {
-  const { signal, id, bytes, options, editorRef, draftId } = args;
+  const { signal, id, bytes, options, editorRef, draftId, preparationSession } =
+    args;
   let postStoreReservation: LandingImageBudgetReservation | null = null;
+  // The caller's reservation is released when this job can no longer commit -
+  // which on ABORT is the moment the signal fires, not whenever preparation
+  // and the store happen to settle. An aborted job returns without rewriting
+  // from every branch below, so it is holding an ANONYMOUS charge for bytes it
+  // will never root, and anonymous bytes cannot dedupe against the successor
+  // mount's hash-keyed charge the way two hash-keyed reservations do. Near the
+  // cap that is the difference between a remount re-rooting the image and
+  // being refused, which removes a node the user already had. It is also what
+  // the reservation contract asks: release once the caller "discovers it will
+  // not be committed". Every other branch still releases in `finally`.
+  let callerReservationReleased = false;
+  const releaseCallerReservation = (): void => {
+    if (callerReservationReleased) return;
+    callerReservationReleased = true;
+    options.onSettled?.();
+  };
+  signal.addEventListener("abort", releaseCallerReservation, { once: true });
   try {
+    // PREPARE before storing: ≤ 2000 px longest edge, ≤ 3.75 MiB, animation
+    // preserved. The store, the node and the send then all describe the same
+    // bytes. Preparation runs on this mount's single session, so the jobs this
+    // hook launches in one tick - a multi-image paste, or mount-time re-entry
+    // over a draft holding several - decode one at a time instead of holding
+    // one bitmap each.
+    const preparation = await prepareComposerImageBytesOrRefuse(
+      preparationSession,
+      bytes,
+      options.fileName,
+      options.mimeType,
+    );
+    if (preparation.kind === "refused") {
+      // Same split as every other failure here: a fresh paste never had the
+      // image in the draft, so dropping the placeholder (with the one refusal
+      // toast) is honest; a MIGRATION's inline bytes are the draft's durable
+      // copy and are sendable as they are, so it leaves the node alone and
+      // stays quiet - the user did not just act.
+      if (!options.reserveAfterStore && !signal.aborted) {
+        showImageTooLargeToast(options.fileName);
+        editorRef.current?.removeImageAttachmentById(id);
+      }
+      scheduleLandingImageReconcile();
+      return;
+    }
+    const prepared = preparation.image;
     // Bounded and abort-responsive, for the same reason the file
     // converter's awaits are: a stalled store otherwise leaves this
     // node inline forever, and with the collector's pending-node guard
@@ -140,7 +236,7 @@ async function runPendingImageIngestJob(args: {
     // later succeeds seeds the store with bytes no node references - and the
     // failure path's own reconcile can run BEFORE that write lands, with
     // nothing scheduling another. Repeated stalled migrations accumulate.
-    const storing = putImage(bytes);
+    const storing = putImage(prepared.bytes);
     void storing.then(
       () => {
         scheduleLandingImageReconcile();
@@ -163,8 +259,11 @@ async function runPendingImageIngestJob(args: {
       return;
     }
     if (options.reserveAfterStore) {
+      // The PREPARED length, which is what `putImage` just stored and what the
+      // node's `size` will report back to the budget's steady-state accounting
+      // - charging the source length would bill capacity nothing holds.
       postStoreReservation = reserveLandingImageBudget(draftId, [
-        { hash, bytes: bytes.byteLength },
+        { hash, bytes: prepared.byteLength },
       ]);
       if (postStoreReservation === null) {
         // The node STAYS. This is a migration of bytes the draft already
@@ -184,7 +283,15 @@ async function runPendingImageIngestJob(args: {
         return;
       }
     }
-    if (!handle.rewriteImageAttachmentHashById(id, hash)) {
+    if (
+      !handle.rewriteImageAttachmentHashById(id, {
+        hash,
+        fileName: prepared.fileName,
+        mimeType: prepared.mimeType,
+        size: prepared.byteLength > 0 ? prepared.byteLength : null,
+        byHashEligible: prepared.byHashEligible,
+      })
+    ) {
       // The user deleted the pending node before the write settled, so
       // the stored bytes are unrooted - reclaim them.
       scheduleLandingImageReconcile();
@@ -209,8 +316,9 @@ async function runPendingImageIngestJob(args: {
     );
     scheduleLandingImageReconcile();
   } finally {
+    signal.removeEventListener("abort", releaseCallerReservation);
     postStoreReservation?.release();
-    options.onSettled?.();
+    releaseCallerReservation();
   }
 }
 
@@ -228,6 +336,32 @@ export function useComposerPendingImageIngest(args: {
   readonly draftId: string | null;
 }): ComposerPendingImageIngest {
   const { editorRef, runPendingImageJob, draftId } = args;
+  /**
+   * Node ids this MOUNT has started a job for. The guard that makes re-ingest
+   * safe to call on every content change.
+   *
+   * Recorded at job START, synchronously and before any await, because two
+   * content changes in one tick would otherwise both see the node unstarted.
+   * Never cleared while the mount lives, and never consulted across mounts:
+   * that scoping is deliberate, because upstream's budget-refusal branch
+   * leaves the node inline on the stated grounds that a full budget is
+   * recoverable and "every mount retries". A mount-scoped guard keeps exactly
+   * that - retried on the next mount, never on the next keystroke.
+   *
+   * A hash-only node is not keyed at all; it is skipped by the `b64content`
+   * filter, which is the same reason a node whose job settled never returns.
+   */
+  const startedNodeIdsRef = useRef<Set<string>>(new Set());
+  // One session per MOUNT, not per job: `prepare` calls on a session are
+  // serialized, and these jobs are launched synchronously one per image and
+  // never await each other, so the session is the only thing that can order
+  // them. Deliberately not process-wide - neither `createImageBitmap` nor
+  // `toBlob` takes a timeout, so a wedged decode would otherwise block image
+  // paste in every composer in the window instead of the one it wedged.
+  const preparationSession = useMemo(
+    () => createComposerImagePreparationSession(),
+    [],
+  );
 
   const startPendingImageIngest = useCallback(
     (
@@ -243,10 +377,11 @@ export function useComposerPendingImageIngest(args: {
           options,
           editorRef,
           draftId,
+          preparationSession,
         }),
       );
     },
-    [draftId, editorRef, runPendingImageJob],
+    [draftId, editorRef, preparationSession, runPendingImageJob],
   );
 
   const ingestPastedComposerImages = useCallback(
@@ -262,6 +397,8 @@ export function useComposerPendingImageIngest(args: {
       const plans = images.map((image) => ({
         bytes: decodeValidatedPastedImage(image),
         storable: isHostStorableImageMimeType(image.mimeType),
+        fileName: image.fileName,
+        mimeType: image.mimeType,
       }));
       // Reservation per STORABLE decoded image, kept attached to that image by
       // index rather than by a running counter - a counter advanced only for
@@ -306,13 +443,28 @@ export function useComposerPendingImageIngest(args: {
         // path leaves it: "accepted" with a fresh id keeps the node and its
         // bytes in place, and starting no job is what leaves it inline. It
         // reserved nothing, so there is nothing to release either.
-        if (!plan.storable) return { kind: "accepted", id: uuidv4() };
+        //
+        // Recorded all the same, so the on-change scan does not re-decode it
+        // on every keystroke only to skip it again at the format check.
+        if (!plan.storable) {
+          const inlineId = uuidv4();
+          startedNodeIdsRef.current.add(inlineId);
+          return { kind: "accepted", id: inlineId };
+        }
         const reservation = reservationByIndex.get(index);
         if (reservation === undefined) return { kind: "rejected" };
         const id = uuidv4();
+        // Recorded BEFORE the node reaches the document. A paste and an
+        // on-change scan can land in the same tick, and the node is inline
+        // b64 from insertion until the rewrite settles - so without this the
+        // scan would see an unstarted node and run a SECOND job for the image
+        // that was just pasted.
+        startedNodeIdsRef.current.add(id);
         startPendingImageIngest(id, plan.bytes, {
           onSettled: () => reservation.release(),
           reserveAfterStore: false,
+          fileName: plan.fileName,
+          mimeType: plan.mimeType,
         });
         return { kind: "accepted", id };
       });
@@ -322,42 +474,69 @@ export function useComposerPendingImageIngest(args: {
     [draftId, startPendingImageIngest],
   );
 
+  const noteContentImages = useCallback(
+    (content: JsonContent) => {
+      const handle = editorRef.current;
+      if (handle === null || !handle.isReady()) return;
+      const started = startedNodeIdsRef.current;
+      const pending = collectImageAtoms(content).filter(
+        (atom): atom is ComposerImageAtom & { readonly b64content: string } =>
+          atom.b64content !== null && !started.has(atom.id),
+      );
+      if (pending.length === 0) return;
+      let corruptedCount = 0;
+      for (const atom of pending) {
+        // Before the decode, not after: a node recorded here is one this mount
+        // will not look at again, which is what keeps a per-keystroke caller
+        // from re-running a base64 decode (let alone a prepare) on every node
+        // in the document for every character typed.
+        started.add(atom.id);
+        const bytes = decodeValidatedPastedImage({
+          fileName: atom.fileName,
+          mimeType: atom.mimeType,
+          b64content: atom.b64content,
+        });
+        if (bytes === null) {
+          // Only reachable from a corrupted or hand-edited restore: it can
+          // never be ingested, so drop it rather than leave a node nothing can
+          // resolve.
+          handle.removeImageAttachmentById(atom.id);
+          corruptedCount += 1;
+          continue;
+        }
+        // Left inline on purpose by the file ingest, so leave it inline here
+        // too. This runs on EVERY editor mount, so without the guard a BMP the
+        // paste path kept inline would be silently hashed the next time the
+        // composer opened - the format decision undone one mount later.
+        if (!isHostStorableImageMimeType(atom.mimeType)) continue;
+        startPendingImageIngest(atom.id, bytes, {
+          onSettled: undefined,
+          reserveAfterStore: true,
+          fileName: atom.fileName,
+          mimeType: atom.mimeType,
+        });
+      }
+      if (corruptedCount > 0) showPastedImageToast(corruptedCount);
+    },
+    [editorRef, startPendingImageIngest],
+  );
+
+  /**
+   * Mount-time restart. Reads the document itself and goes through the same
+   * guard, so the on-ready call and an on-change call that arrive together
+   * cannot both start a job for the same node.
+   */
   const reingestPendingImages = useCallback(() => {
     const handle = editorRef.current;
     if (handle === null || !handle.isReady()) return;
-    const pending = collectImageAtoms(handle.getJSON()).filter(
-      (atom): atom is ComposerImageAtom & { readonly b64content: string } =>
-        atom.b64content !== null,
-    );
-    if (pending.length === 0) return;
-    let corruptedCount = 0;
-    for (const atom of pending) {
-      const bytes = decodeValidatedPastedImage({
-        fileName: atom.fileName,
-        mimeType: atom.mimeType,
-        b64content: atom.b64content,
-      });
-      if (bytes === null) {
-        // Only reachable from a corrupted or hand-edited restore: it can never
-        // be ingested, so drop it rather than leave a node nothing can resolve.
-        handle.removeImageAttachmentById(atom.id);
-        corruptedCount += 1;
-        continue;
-      }
-      // Left inline on purpose by the file ingest, so leave it inline here too.
-      // This runs on EVERY editor mount, so without the guard a BMP the paste
-      // path kept inline would be silently hashed the next time the composer
-      // opened - the format decision undone one mount later.
-      if (!isHostStorableImageMimeType(atom.mimeType)) continue;
-      startPendingImageIngest(atom.id, bytes, {
-        onSettled: undefined,
-        reserveAfterStore: true,
-      });
-    }
-    if (corruptedCount > 0) showPastedImageToast(corruptedCount);
-  }, [editorRef, startPendingImageIngest]);
+    noteContentImages(handle.getJSON());
+  }, [editorRef, noteContentImages]);
 
-  return { ingestPastedComposerImages, reingestPendingImages };
+  return {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  };
 }
 
 function showPastedImageToast(corruptedCount: number): void {

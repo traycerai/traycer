@@ -33,6 +33,7 @@ import type { SessionImportRunRequest } from "@/components/session-import/sessio
 import type { SessionImportSurface } from "@/components/session-import/session-import-tone";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
+  importedCountNoun,
   SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
   sessionImportGroupKey,
 } from "@/components/session-import/session-import-model";
@@ -200,6 +201,7 @@ function TestWizard(props: {
   return (
     <SessionImportWizard
       {...props}
+      hostPicker={null}
       scan={scan}
       onTaskOpened={taskOpenedMock}
       onBeforeTaskOpen={null}
@@ -234,6 +236,7 @@ function candidate(input: {
   readonly nativeSessionId: string;
   readonly title: string;
   readonly state: SessionImportCandidateState;
+  readonly updatedAt?: number;
 }): SessionImportCandidate {
   return {
     harness: input.harness,
@@ -241,7 +244,7 @@ function candidate(input: {
     title: input.title,
     firstPrompt: null,
     createdAt: 1_000,
-    updatedAt: 1_000,
+    updatedAt: input.updatedAt ?? 1_000,
     messageCount: null,
     hasSubagents: false,
     state: input.state,
@@ -483,7 +486,7 @@ describe("<SessionImportWizard />", () => {
     });
 
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 3 tasks",
+      "Import 3 sessions",
     );
     // The "Folder not found" pill is gone: a missing folder now renders under
     // the shared "Deleted Folders" header instead of its own per-folder pill.
@@ -603,7 +606,7 @@ describe("<SessionImportWizard />", () => {
 
     fireEvent.click(row);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 1 task",
+      "Import 1 session",
     );
   });
 
@@ -692,7 +695,7 @@ describe("<SessionImportWizard />", () => {
       screen.getByTestId("session-import-submit").getAttribute("disabled"),
     ).toBe("");
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 0 tasks",
+      "Import 0 sessions",
     );
   });
 
@@ -774,7 +777,48 @@ describe("<SessionImportWizard />", () => {
 
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("1 task selected for import");
+    ).toBe("1 session selected");
+  });
+
+  it("the submit button and the selection count agree with importedCountNoun - one shared source, not two copies of the word", () => {
+    renderWizard(vi.fn());
+    const callbacks = requireCallbacks();
+
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("claude", "s1", "Session one")],
+        }),
+      );
+    });
+
+    // n = 1: both surfaces agree with the helper's own answer, never a
+    // hardcoded "session"/"sessions" literal - a future copy change that
+    // moves the table in `importedCountNoun` moves both assertions with it.
+    expect(screen.getByTestId("session-import-submit").textContent).toBe(
+      `Import 1 ${importedCountNoun(1)}`,
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe(`1 ${importedCountNoun(1)} selected`);
+
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/b",
+          sessions: [importableCandidate("codex", "s2", "Session two")],
+        }),
+      );
+    });
+
+    // n = 2: same two surfaces, same shared source.
+    expect(screen.getByTestId("session-import-submit").textContent).toBe(
+      `Import 2 ${importedCountNoun(2)}`,
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe(`2 ${importedCountNoun(2)} selected`);
   });
 
   it("shows the scan's own failure inline, with the groups it already delivered still on screen", () => {
@@ -825,7 +869,7 @@ describe("<SessionImportWizard />", () => {
     });
 
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 3 tasks",
+      "Import 3 sessions",
     );
 
     const groupAKey = sessionImportGroupKey({
@@ -839,12 +883,12 @@ describe("<SessionImportWizard />", () => {
 
     fireEvent.click(groupASelect);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 1 task",
+      "Import 1 session",
     );
 
     fireEvent.click(groupASelect);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 3 tasks",
+      "Import 3 sessions",
     );
   });
 
@@ -871,7 +915,7 @@ describe("<SessionImportWizard />", () => {
 
     expect(screen.getAllByTestId("session-import-group")).toHaveLength(2);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 2 tasks",
+      "Import 2 sessions",
     );
 
     fireEvent.change(screen.getByTestId("session-import-search"), {
@@ -880,7 +924,7 @@ describe("<SessionImportWizard />", () => {
 
     expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 2 tasks",
+      "Import 2 sessions",
     );
 
     fireEvent.change(screen.getByTestId("session-import-search"), {
@@ -940,7 +984,7 @@ describe("<SessionImportWizard />", () => {
     // provider out is scope, not amnesia about its count.
     expect(findProviderPill("codex").textContent).toContain("2");
 
-    fireEvent.click(screen.getByRole("button", { name: "Import 1 task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import 1 session" }));
 
     expect(startSessionImportRunMock).toHaveBeenCalledTimes(1);
     expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([
@@ -1047,7 +1091,7 @@ describe("<SessionImportWizard />", () => {
     });
 
     expect(screen.getByRole("alert").textContent).toContain(
-      "could not check whether an import is already running",
+      "Couldn’t check for an active import.",
     );
     expect(
       screen.getByTestId("session-import-submit").hasAttribute("disabled"),
@@ -1083,6 +1127,32 @@ describe("<SessionImportWizard />", () => {
 
     expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
     expect(screen.getByTestId("session-import-provider-failure")).toBeTruthy();
+  });
+
+  it("says sessions are MISSING, not unreadable, when the failing provider already delivered rows", () => {
+    renderWizard(vi.fn());
+    const callbacks = requireCallbacks();
+
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("codex", "s1", "Codex session")],
+        }),
+      );
+      callbacks.onProviderFailed({
+        harness: "codex",
+        reason: "source_unreadable",
+        detail: "Listed 1 Codex session, then Codex stopped responding.",
+      });
+    });
+
+    const notice = screen.getByTestId("session-import-provider-failure");
+    expect(notice.textContent).toContain("Some Codex sessions are missing.");
+    expect(notice.textContent).not.toContain("Couldn’t read");
+    expect(notice.textContent).toContain("then Codex stopped responding.");
+    // The row the walk did produce is still on offer.
+    expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
   });
 
   it("submits ticked candidates with a titles map keyed by harness:nativeSessionId and notifies the caller", () => {
@@ -1134,7 +1204,7 @@ describe("<SessionImportWizard />", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Session two" }));
 
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 1 task",
+      "Import 1 session",
     );
 
     replaceStreamClient(rerender, "host-a");
@@ -1144,7 +1214,7 @@ describe("<SessionImportWizard />", () => {
     // group and re-applied the pre-select-on-arrival rule would silently put
     // "Session two" back.
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 1 task",
+      "Import 1 session",
     );
   });
 
@@ -1162,7 +1232,7 @@ describe("<SessionImportWizard />", () => {
     });
 
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 1 task",
+      "Import 1 session",
     );
 
     replaceStreamClient(rerender, "host-b");
@@ -1172,7 +1242,7 @@ describe("<SessionImportWizard />", () => {
     // submit one machine's sessions to another.
     expect(screen.queryAllByTestId("session-import-group")).toHaveLength(0);
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
-      "Import 0 tasks",
+      "Import 0 sessions",
     );
     expect(screen.getByTestId("session-import-scan-spinner")).toBeTruthy();
   });
@@ -1394,7 +1464,7 @@ describe("<SessionImportWizard />", () => {
     // selection without an explicit ask.
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("1 task selected for import");
+    ).toBe("1 of 1 selected");
 
     fireEvent.click(screen.getByTestId("session-import-submit"));
 
@@ -1403,5 +1473,359 @@ describe("<SessionImportWizard />", () => {
       { harness: "claude", nativeSessionId: "s1" },
     ]);
     expect(onImportStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders onboarding tasks in one flat list ordered by most recent update", () => {
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s1",
+              title: "Oldest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 1_000,
+            }),
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s2",
+              title: "Middle task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 2_000,
+            }),
+          ],
+        }),
+      );
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/b",
+          sessions: [
+            candidate({
+              harness: "codex",
+              nativeSessionId: "s3",
+              title: "Newest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 3_000,
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(screen.queryByTestId("session-import-group")).toBeNull();
+    expect(
+      screen
+        .getAllByTestId("session-import-row")
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual([
+      "Newest task in /repo/b",
+      "Middle task in /repo/a",
+      "Oldest task in /repo/a",
+    ]);
+  });
+
+  it("updates onboarding selection when a task is deselected and reselected by the master checkbox", () => {
+    const onImportStarted = vi.fn();
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={onImportStarted}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            importableCandidate("claude", "s1", "Session one"),
+            importableCandidate("claude", "s2", "Session two"),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Session one in /repo/a" }),
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("1 of 2 selected");
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Select all available sessions shown",
+      }),
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("2 of 2 selected");
+
+    fireEvent.click(screen.getByTestId("session-import-submit"));
+    expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([
+      { harness: "claude", nativeSessionId: "s1" },
+      { harness: "claude", nativeSessionId: "s2" },
+    ]);
+    expect(onImportStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves onboarding selection and task labels across Sessions and By project views", () => {
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s1",
+              title: "Oldest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 1_000,
+            }),
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s2",
+              title: "Newest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 3_000,
+            }),
+          ],
+        }),
+      );
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/b",
+          sessions: [
+            candidate({
+              harness: "codex",
+              nativeSessionId: "s3",
+              title: "Middle task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 2_000,
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(
+      screen.getByRole("radiogroup", { name: "Import view" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: "Sessions" }).checked,
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Newest task in /repo/a" }),
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("2 of 3 selected");
+
+    fireEvent.click(screen.getByRole("radio", { name: "By project" }));
+
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: "By project" })
+        .checked,
+    ).toBe(true);
+    expect(screen.getByText("a", { exact: true })).toBeTruthy();
+    expect(screen.getByText("b", { exact: true })).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "a: 1 of 2 sessions selected" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "b: All 1 session selected" }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Newest task in /repo/a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Oldest task in /repo/a" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Middle task in /repo/b" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: /Review tasks in/ }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Sessions" }));
+
+    expect(
+      screen
+        .getAllByTestId("session-import-row")
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual([
+      "Newest task in /repo/a",
+      "Middle task in /repo/b",
+      "Oldest task in /repo/a",
+    ]);
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Newest task in /repo/a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("heads a fully-imported onboarding project with All imported, not a count of nothing", () => {
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      const callbacks = requireCallbacks();
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/done",
+          sessions: [
+            alreadyInTraycerCandidate("claude", "s1", "Landed one"),
+            alreadyInTraycerCandidate("claude", "s2", "Landed two"),
+          ],
+        }),
+      );
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/unreadable",
+          sessions: [unreadableCandidate("claude", "s3", "Broken one")],
+        }),
+      );
+      callbacks.onImportedSupport("supported");
+    });
+    fireEvent.click(screen.getByTestId("session-import-show-imported"));
+    fireEvent.click(screen.getByRole("radio", { name: "By project" }));
+
+    expect(screen.getByText("All imported")).toBeTruthy();
+    // Not selectable either, but for a different reason - so not "All imported".
+    expect(screen.getByText("1 session")).toBeTruthy();
+    expect(
+      screen
+        .getAllByTestId("session-import-row")
+        .filter((row) => row.getAttribute("data-imported") === "true"),
+    ).toHaveLength(2);
+  });
+});
+
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+
+/**
+ * The phone shape is keyed to the VIEWPORT (`useIsMobileViewport`, 768px), so a
+ * width is all these tests have to set. The global `matchMedia` stub never
+ * fires a change, which is right here: the snapshot is read at render.
+ */
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+}
+
+describe("<SessionImportWizard /> on a phone", () => {
+  afterEach(() => setViewportWidth(DESKTOP_VIEWPORT_WIDTH));
+
+  function renderPhoneTour(): void {
+    setViewportWidth(393);
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            importableCandidate("claude", "s1", "One"),
+            importableCandidate("claude", "s2", "Two"),
+          ],
+        }),
+      );
+    });
+  }
+
+  it("collapses the toolbar into one bar: a filter control, a search that expands, and no loose scope chips", () => {
+    renderPhoneTour();
+
+    // One bar. The four controls the pointer toolbar spreads over five rows are
+    // behind the filter sheet, so none of them is on the act.
+    expect(screen.getByTestId("session-import-filters")).toBeTruthy();
+    expect(screen.queryByTestId("session-import-scan-window")).toBeNull();
+    expect(
+      screen.queryAllByTestId("session-import-provider-pill"),
+    ).toHaveLength(0);
+    expect(screen.queryByTestId("session-import-show-imported")).toBeNull();
+    expect(screen.queryByRole("radio", { name: "By project" })).toBeNull();
+
+    // Search is an icon until it is asked for. Both of its names count the
+    // things being imported, so they say "sessions" (`importedCountNoun`).
+    expect(screen.queryByTestId("session-import-search")).toBeNull();
+    const searchToggle = screen.getByTestId("session-import-search-toggle");
+    expect(screen.getByRole("button", { name: "Search sessions" })).toBe(
+      searchToggle,
+    );
+    fireEvent.click(searchToggle);
+    expect(
+      screen.getByTestId("session-import-search").getAttribute("placeholder"),
+    ).toBe("Search sessions or folders");
+
+    // The selection line still heads the list, and the button carries the count
+    // so the standalone label does not repeat it.
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("2 of 2 selected");
+    expect(screen.queryByTestId("session-import-footer-count")).toBeNull();
+    expect(screen.getByTestId("session-import-submit").textContent).toContain(
+      "Import 2 sessions",
+    );
+  });
+
+  it("marks the filter control once any filter differs from its default", () => {
+    renderPhoneTour();
+
+    expect(screen.queryByTestId("session-import-filters-dot")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("session-import-filters"));
+    fireEvent.click(screen.getByRole("radio", { name: "By project" }));
+
+    expect(screen.getByTestId("session-import-filters-dot")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("session-import-filters")
+        .getAttribute("data-filtered"),
+    ).toBe("true");
+  });
+
+  it("leaves the Settings dialog's own toolbar alone at the same width", () => {
+    setViewportWidth(393);
+    renderWizard(vi.fn());
+
+    expect(screen.queryByTestId("session-import-filters")).toBeNull();
+    expect(screen.getByTestId("session-import-search")).toBeTruthy();
+    expect(screen.getByTestId("session-import-scan-window")).toBeTruthy();
   });
 });

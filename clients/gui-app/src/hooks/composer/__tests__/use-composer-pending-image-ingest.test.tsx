@@ -16,13 +16,20 @@ import {
   type PendingImageIngestEditorHandle,
 } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { IMAGE_READ_TIMEOUT_MS } from "@/hooks/composer/use-composer-paste";
+import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
+import type { ImageAttachmentRewrite } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import {
+  encodedWebpBytesOfSize,
+  pngBytesWithHeader,
+} from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 import {
   resetLandingImageBudgetReservationsForTesting,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // F3 needs to see whether `reserveLandingImageBudget` was called at all (the
 // non-storable path must take no reservation) and, for the mixed-batch case,
@@ -96,7 +103,7 @@ function fakeEditor(initial: JsonContent): {
   readonly handle: PendingImageIngestEditorHandle;
   readonly removeImageAttachmentById: Mock<(id: string) => undefined>;
   readonly rewriteImageAttachmentHashById: Mock<
-    (id: string, hash: string) => boolean
+    (id: string, rewrite: ImageAttachmentRewrite) => boolean
   >;
   setJSON: (next: JsonContent) => void;
 } {
@@ -105,8 +112,8 @@ function fakeEditor(initial: JsonContent): {
     (_id: string) => undefined,
   );
   const rewriteImageAttachmentHashById: Mock<
-    (id: string, hash: string) => boolean
-  > = vi.fn((_id: string, _hash: string) => true);
+    (id: string, rewrite: ImageAttachmentRewrite) => boolean
+  > = vi.fn((_id: string, _rewrite: ImageAttachmentRewrite) => true);
   return {
     handle: {
       isReady: () => true,
@@ -198,14 +205,22 @@ describe("ingestPastedComposerImages (rich-clipboard channel)", () => {
     await waitFor(() => {
       expect(editor.rewriteImageAttachmentHashById).toHaveBeenCalledTimes(1);
     });
-    const [rewrittenId, hash] =
+    const [rewrittenId, rewrite] =
       editor.rewriteImageAttachmentHashById.mock.calls[0];
     expect(rewrittenId).toBe(id);
-    const stored = await getImageBytes(hash);
+    const stored = await getImageBytes(rewrite.hash);
     expect(stored).toBeDefined();
     expect(Array.from(stored ?? [])).toEqual(
       Array.from(new TextEncoder().encode("rich-bytes")),
     );
+    // These bytes are not an image preparation can model, so it falls back to
+    // the SOURCE bytes - and says so. The metadata must describe those source
+    // bytes, and `byHashEligible` must be false: the host's writer would
+    // refuse them, and claiming otherwise is what writes a reference the host
+    // cannot resolve. (The re-encoding path is pinned separately below.)
+    expect(rewrite.mimeType).toBe("image/png");
+    expect(rewrite.size).toBe("rich-bytes".length);
+    expect(rewrite.byHashEligible).toBe(false);
     expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();
   });
 
@@ -450,13 +465,19 @@ describe("reingestPendingImages (mount-time restart)", () => {
     await waitFor(() => {
       expect(editor.rewriteImageAttachmentHashById).toHaveBeenCalledTimes(1);
     });
-    const [id, hash] = editor.rewriteImageAttachmentHashById.mock.calls[0];
+    const [id, rewrite] = editor.rewriteImageAttachmentHashById.mock.calls[0];
     expect(id).toBe("legacy-1");
-    const stored = await getImageBytes(hash);
+    const stored = await getImageBytes(rewrite.hash);
     expect(stored).toBeDefined();
     expect(Array.from(stored ?? [])).toEqual(
       Array.from(new TextEncoder().encode("legacy-bytes")),
     );
+    // A migration of bytes preparation cannot model keeps its source metadata
+    // and stays ineligible - the same verdict a fresh paste of them gets, so
+    // the channel a node may use does not depend on which mount hashed it.
+    expect(rewrite.mimeType).toBe("image/png");
+    expect(rewrite.size).toBe("legacy-bytes".length);
+    expect(rewrite.byHashEligible).toBe(false);
   });
 
   it("leaves a NON-STORABLE format inline instead of hashing it, on every mount", async () => {
@@ -488,15 +509,18 @@ describe("reingestPendingImages (mount-time restart)", () => {
     result.current.reingestPendingImages();
 
     await waitFor(() => {
-      expect(editor.rewriteImageAttachmentHashById).toHaveBeenCalledWith(
-        "png-1",
-        expect.any(String),
+      const idsSoFar = editor.rewriteImageAttachmentHashById.mock.calls.map(
+        (call) => call[0],
       );
+      expect(idsSoFar).toContain("png-1");
     });
     const rewrittenIds = editor.rewriteImageAttachmentHashById.mock.calls.map(
       (call) => call[0],
     );
     expect(rewrittenIds).toEqual(["png-1"]);
+    // And that one rewrite carried a real hash - "hashed" is the whole claim.
+    const [, pngRewrite] = editor.rewriteImageAttachmentHashById.mock.calls[0];
+    expect(pngRewrite.hash.length).toBeGreaterThan(0);
     // And the BMP is LEFT there, not dropped - "stays inline" is the point.
     expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();
   });
@@ -727,6 +751,312 @@ describe("F5: the 15s deadline and abort responsiveness (use-composer-pending-im
     );
   });
 });
+describe("noteContentImages: edge-triggered, safe to call on every change", () => {
+  // The F5 block above installs a never-resolving `putImage` with
+  // `mockImplementation`, and the shared `afterEach` only `mockClear()`s - so
+  // every case here inherits that stall, reaches the 15s deadline, and lands in
+  // the job's catch arm, which REMOVES the node instead of rewriting it. The
+  // symptom is "rewriteImageAttachmentHashById: expected 1, got 0", which reads
+  // like the job never started; it ran, stored nothing, and deleted the node.
+  // Restoring the passthrough is the convention the top-level `afterEach`
+  // names, and the reason these cases pass in isolation and fail in the file.
+  beforeEach(() => {
+    const passthrough = landingImageStoreMocks.actualPutImage;
+    if (passthrough !== null) {
+      landingImageStoreMocks.putImage.mockImplementation(passthrough);
+    }
+  });
+
+  // The gap this closes: a browser-preview screenshot node is appended by the
+  // mention extension long AFTER mount (`commitBrowserTabPreviewInsertion`),
+  // so mount-time re-entry cannot see it - it does not exist yet. Without an
+  // on-change caller the node travels inline until the next mount.
+  //
+  // The witness is `runPendingImageJob`, counted: it is the one place a job
+  // can start, so "exactly once across N changes" is a statement about work
+  // actually done, not about an outcome that could be reached another way.
+  interface JobCounter {
+    count: number;
+    readonly settled: Array<Promise<void>>;
+  }
+
+  function newJobCounter(): JobCounter {
+    return { count: 0, settled: [] };
+  }
+
+  /**
+   * Counts jobs AND keeps their promises, so a test can settle them and then
+   * count. Asserting "no job ran" by polling a counter that starts at zero
+   * passes before the first job would have started either way.
+   */
+  function countingRunPendingImageJob(counter: JobCounter) {
+    return (job: (signal: AbortSignal) => Promise<void>): void => {
+      counter.count += 1;
+      counter.settled.push(job(new AbortController().signal));
+    };
+  }
+
+  it("ingests a node appended after mount exactly once across many content changes", async () => {
+    const counter = newJobCounter();
+    const editor = fakeEditor({ type: "doc", content: [] });
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: countingRunPendingImageJob(counter),
+        draftId: null,
+      }),
+    );
+
+    // Mount-time re-entry sees an empty document: nothing to do, and nothing
+    // recorded. This is the state the screenshot arrives into.
+    result.current.reingestPendingImages();
+    expect(counter.count).toBe(0);
+
+    const withScreenshot: JsonContent = {
+      type: "doc",
+      content: [
+        pendingImageNode("shot-1", b64Of("screenshot-bytes"), "image/png"),
+      ],
+    };
+    editor.setJSON(withScreenshot);
+
+    // Ten content changes, as ten keystrokes would deliver them.
+    for (let i = 0; i < 10; i += 1) {
+      result.current.noteContentImages(withScreenshot);
+    }
+
+    await waitFor(() => {
+      expect(editor.rewriteImageAttachmentHashById).toHaveBeenCalledTimes(1);
+    });
+    expect(counter.count).toBe(1);
+    expect(landingImageStoreMocks.putImage).toHaveBeenCalledTimes(1);
+    const [rewrittenId] = editor.rewriteImageAttachmentHashById.mock.calls[0];
+    expect(rewrittenId).toBe("shot-1");
+
+    // And changes arriving after the job settled do not restart it either -
+    // by then the node is hash-only, so the scan skips it for a second reason.
+    result.current.noteContentImages(withScreenshot);
+    expect(counter.count).toBe(1);
+  });
+
+  it("never re-prepares a node preparation REFUSED, however many changes follow", async () => {
+    // Bytes preparation cannot model AND cannot fall back on: over the output
+    // ceiling, so `prepareComposerImageBytesOrRefuse` refuses outright. By the
+    // migration invariant the node stays inline - which is exactly the node a
+    // per-keystroke caller would otherwise re-prepare on every character.
+    const oversized = "x".repeat(PREPARED_IMAGE_MAX_BYTES + 1);
+    const content: JsonContent = {
+      type: "doc",
+      content: [pendingImageNode("huge-1", b64Of(oversized), "image/png")],
+    };
+    const counter = newJobCounter();
+    const editor = fakeEditor(content);
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: countingRunPendingImageJob(counter),
+        draftId: null,
+      }),
+    );
+
+    result.current.reingestPendingImages();
+    expect(counter.count).toBe(1);
+    // SETTLE the job, then assert - a poll on a counter that starts at zero
+    // would pass before the refusal was ever reached.
+    await Promise.all(counter.settled);
+    expect(landingImageStoreMocks.putImage).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 10; i += 1) {
+      result.current.noteContentImages(content);
+    }
+
+    // Still one job, and the node is still there: a refusal on the migration
+    // path leaves the inline bytes alone, and the guard is what stops the
+    // refusal being re-derived ten more times.
+    expect(counter.count).toBe(1);
+    expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();
+    expect(editor.rewriteImageAttachmentHashById).not.toHaveBeenCalled();
+  });
+
+  it("does not start a second job for an image the paste path just minted", async () => {
+    // A paste and an on-change scan can land in the same tick, and the node is
+    // inline b64 from insertion until its rewrite settles. The paste path
+    // records its minted id for exactly this reason.
+    const counter = newJobCounter();
+    const editor = fakeEditor({ type: "doc", content: [] });
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: countingRunPendingImageJob(counter),
+        draftId: null,
+      }),
+    );
+
+    const outcomes = result.current.ingestPastedComposerImages([
+      {
+        fileName: "pasted.png",
+        mimeType: "image/png",
+        b64content: b64Of("pasted-bytes"),
+      },
+    ]);
+    const outcome = outcomes.at(0);
+    const pastedId = outcome?.kind === "accepted" ? outcome.id : null;
+    expect(pastedId).not.toBeNull();
+    expect(counter.count).toBe(1);
+
+    // The node as the paste handler inserts it: still carrying its bytes.
+    result.current.noteContentImages({
+      type: "doc",
+      content: [
+        pendingImageNode(pastedId ?? "", b64Of("pasted-bytes"), "image/png"),
+      ],
+    });
+
+    expect(counter.count).toBe(1);
+    await waitFor(() => {
+      expect(editor.rewriteImageAttachmentHashById).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("preparation runs INSIDE the job, and its output is what lands", () => {
+  // Every other case in this file feeds bytes preparation cannot model, so it
+  // falls back to the source and nothing distinguishes "prepared" from "passed
+  // through". This one installs the codec doubles so preparation really runs
+  // and really re-encodes - which is the only way to pin that the bytes the
+  // store receives, and the metadata the node ends up with, are the PREPARED
+  // ones rather than the pasted ones.
+  const originalCreateImageBitmap = globalThis.createImageBitmap;
+  // Restored INDIVIDUALLY, never with `vi.restoreAllMocks()`: this file's
+  // module-level `putImage` and `reserveLandingImageBudget` mocks carry
+  // call-through implementations installed once at module load (see the
+  // top-level `afterEach`), and a blanket restore here would strip them for
+  // every describe that runs after this one.
+  const installedSpies: Array<{ readonly mockRestore: () => void }> = [];
+
+  // Same inheritance as the describe above: F5's never-resolving `putImage`
+  // survives the shared `mockClear()`, and this block's whole point is that the
+  // bytes the store RECEIVES are the prepared ones - which it cannot observe
+  // through a store that never settles.
+  beforeEach(() => {
+    const passthrough = landingImageStoreMocks.actualPutImage;
+    if (passthrough !== null) {
+      landingImageStoreMocks.putImage.mockImplementation(passthrough);
+    }
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "createImageBitmap", {
+      configurable: true,
+      writable: true,
+      value: originalCreateImageBitmap,
+    });
+    for (const spy of installedSpies) spy.mockRestore();
+    installedSpies.length = 0;
+  });
+
+  function installCodecDoubles(): void {
+    Object.defineProperty(globalThis, "createImageBitmap", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() =>
+        Promise.resolve({
+          width: 3000,
+          height: 1000,
+          close: () => undefined,
+        }),
+      ),
+    });
+    installedSpies.push(
+      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(((
+        contextId: string,
+      ) => {
+        if (contextId !== "2d") return null;
+        return {
+          fillStyle: "",
+          fillRect: () => undefined,
+          drawImage: () => undefined,
+        };
+      }) as HTMLCanvasElement["getContext"]),
+    );
+    installedSpies.push(
+      vi
+        .spyOn(HTMLCanvasElement.prototype, "toBlob")
+        .mockImplementation(function mockedToBlob(
+          this: HTMLCanvasElement,
+          callback: BlobCallback,
+          type: string | undefined,
+        ): void {
+          if (this.width === 1 && this.height === 1) {
+            callback(new Blob([new Uint8Array([1])], { type: "image/webp" }));
+            return;
+          }
+          // Magic-byte sniffed against the requested type, so the payload has
+          // to be a real WebP or every encode attempt is discarded.
+          callback(
+            new Blob([encodedWebpBytesOfSize(64)], {
+              type: type ?? "image/webp",
+            }),
+          );
+        }),
+    );
+  }
+
+  it("stores the PREPARED bytes and rewrites the node with the prepared metadata, not the pasted ones", async () => {
+    installCodecDoubles();
+    // 3000px on the long edge, so the 2000px bound forces a real re-encode
+    // rather than a verbatim pass-through.
+    const sourceBytes = pngBytesWithHeader(3000, 1000, 8192);
+    const editor = fakeEditor({ type: "doc", content: [] });
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: immediateRunPendingImageJob,
+        draftId: null,
+      }),
+    );
+
+    const outcomes = result.current.ingestPastedComposerImages([
+      {
+        fileName: "wide.png",
+        mimeType: "image/png",
+        b64content: bytesToBase64(sourceBytes),
+      },
+    ]);
+    expect(outcomes.at(0)?.kind).toBe("accepted");
+
+    await waitFor(() => {
+      expect(editor.rewriteImageAttachmentHashById).toHaveBeenCalledTimes(1);
+    });
+    const [, rewrite] = editor.rewriteImageAttachmentHashById.mock.calls[0];
+
+    // The bytes that reached the store are the encoder's output, NOT the 8192
+    // source bytes - preparation ran between the paste and `putImage`.
+    // `.at(0)`, not `calls[0]`: without `noUncheckedIndexedAccess` an index
+    // read is typed as present, so the chains below would be guarding a state
+    // the type has ruled out. `.at()` types the miss, which keeps them real -
+    // if `putImage` never ran this fails as "expected undefined to be 64",
+    // naming the absent call rather than throwing on a property of nothing.
+    const storedBytes = landingImageStoreMocks.putImage.mock.calls.at(0)?.[0];
+    expect(storedBytes?.byteLength).toBe(64);
+    expect(storedBytes?.byteLength).not.toBe(sourceBytes.byteLength);
+    const stored = await getImageBytes(rewrite.hash);
+    expect(Array.from(stored ?? [])).toEqual(
+      Array.from(encodedWebpBytesOfSize(64)),
+    );
+
+    // And the node describes THOSE bytes. A node still saying `image/png` at
+    // 8192 bytes would be describing bytes nobody holds: the budget reads
+    // `size` back, and `mimeType` is what the send carries.
+    expect(rewrite.mimeType).toBe("image/webp");
+    expect(rewrite.size).toBe(64);
+    expect(rewrite.fileName).toBe("wide.webp");
+    // Produced by the preparer, so the host can take it by hash - the
+    // complement of the fallback cases above.
+    expect(rewrite.byHashEligible).toBe(true);
+  });
+});
+
 describe("a full budget does not delete an image the draft already holds", () => {
   // The F5 block installs a never-resolving `putImage` with
   // `mockImplementation` and the shared `afterEach` only `mockClear()`s, so a

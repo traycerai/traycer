@@ -67,7 +67,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
-  "composer.stash",
+  "composer.drafts",
   "composer.model-picker.toggle",
   "model.provider.byDigit",
   "model.reasoning.byDigit",
@@ -828,11 +828,10 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
   },
-  "composer.stash": {
-    id: "composer.stash",
-    label: "Stash prompt",
-    description:
-      "Save the focused composer's full prompt for restoration in any composer.",
+  "composer.drafts": {
+    id: "composer.drafts",
+    label: "Drafts",
+    description: "Open the start-page drafts list.",
     category: "app",
     kind: "chord",
     defaultChord: "mod+s",

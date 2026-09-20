@@ -12,6 +12,7 @@ import type {
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
@@ -930,16 +931,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Opt-in (`poll: true`) and short, for one reader only: the pending-title
-  // fetcher (`providers/pending-epic-title-fetcher.tsx`) re-asks for a
-  // just-created epic's title while generation is in flight and no session is
-  // mounted to learn it from. Every other reader leaves `poll` unset and is
-  // not polled. Bounded by the 30s title-generation backstop, so the cadence
-  // sets how quickly a background tab picks up its name, not how long it asks.
-  "epic.getTaskContexts": {
-    ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 2 * SECOND_MS },
-  },
+  "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
   // Creating an epic persists a new collaboration root.
   "epic.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Batch deletion permanently removes the selected epics.
@@ -1378,8 +1370,17 @@ export const HOST_METHOD_POLL_TABLE = {
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Unary byte channel, same posture as `epic.readChatAttachment`.
-  "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Unary byte channel, same posture as `epic.readChatAttachment` - but the
+  // only one of the drafts methods whose BODY is megabytes rather than KB, so
+  // it is also the only one that declares a budget. The value is declared once
+  // in `draft-blob-transport-budget.ts` and must match exactly: `putDraftBlobs`
+  // names it on every dispatch, and the host client refuses a budget this table
+  // does not declare for the method.
+  "drafts.putBlob": {
+    mode: "fifo",
+    joinResponseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected

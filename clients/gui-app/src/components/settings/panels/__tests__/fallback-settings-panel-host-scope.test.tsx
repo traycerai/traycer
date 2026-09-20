@@ -146,6 +146,35 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQuery: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module.
+ *
+ * `TierStepHint` resolves its last-run tuple's model slug to a catalogue label
+ * through this hook, which composes `useGuiHarnessesQueryForClient` and
+ * `useHostQueries` - neither reachable here, for the same reason the catalog
+ * double above exists. A pass-through is the whole of it: the label is not this
+ * suite's subject, and the slug is what the real resolver degrades to with no
+ * catalogue.
+ *
+ * `importOriginal` keeps `fallbackProviderModelLabel` and the profile-label
+ * helpers, which this panel and `fallback-profile-labels.ts` import directly
+ * from the same module.
+ */
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
 }));

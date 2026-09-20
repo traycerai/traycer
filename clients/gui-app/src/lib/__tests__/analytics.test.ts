@@ -1109,6 +1109,376 @@ describe("analytics", () => {
       ).toBeNull();
     });
   });
+
+  describe("draft analytics schema", () => {
+    it("accepts every draft event with its exact allowlisted key set", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toEqual({
+        surface: "start_page",
+        entry_point: "button",
+        draft_count: "1",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: true,
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        draft_kind: "chat",
+        input: "pointer",
+        already_open: false,
+        draft_age: "under_1h",
+        used_search: true,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: null,
+          other_tasks: true,
+          start_pages: false,
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        this_task: null,
+        other_tasks: true,
+        start_pages: false,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftCopied, {
+          surface: "start_page",
+          draft_kind: "new_agent",
+          input: "keyboard",
+        }),
+      ).toEqual({
+        surface: "start_page",
+        draft_kind: "new_agent",
+        input: "keyboard",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleted, {
+          surface: "avatar_menu",
+          draft_kind: "start_page",
+          input: "pointer",
+          undo_offered: true,
+          draft_age: "over_7d",
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        draft_kind: "start_page",
+        input: "pointer",
+        undo_offered: true,
+        draft_age: "over_7d",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleteUndone, {
+          surface: "start_page",
+          draft_kind: "chat",
+        }),
+      ).toEqual({ surface: "start_page", draft_kind: "chat" });
+    });
+
+    // H13: the avatar dialog opens from the menu item and the palette only.
+    it("accepts drafts_list_opened from the avatar menu at each of its entry points", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      for (const entry_point of ["menu", "palette"] as const) {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+            surface: "avatar_menu",
+            entry_point,
+            draft_count: "0",
+          }),
+        ).toEqual({
+          surface: "avatar_menu",
+          entry_point,
+          draft_count: "0",
+        });
+      }
+    });
+
+    it("rejects drafts_list_opened surface and entry_point pairs the UI cannot emit", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "avatar_menu",
+          entry_point: "shortcut",
+          draft_count: "0",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "avatar_menu",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "menu",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects an out-of-set value for each draft event's enum keys", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      // `chat` is a valid `surface` value on OTHER events, not on a draft one.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "chat",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      // `page` was Home's entry point before H09-H12 retired it; it is not a
+      // member of `AnalyticsDraftEntryPoint` any more.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "page",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      // `home` was the surface before H09-H12 moved Drafts to the avatar
+      // menu; it is not a member of `AnalyticsDraftSurface` any more.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "home",
+          entry_point: "menu",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "start_page",
+          draft_kind: "epic",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: false,
+        }),
+      ).toBeNull();
+      // `null` is only meaningful for the filter's `this_task`; a search flag
+      // is always a real boolean, and the search text has no key at all.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: null,
+        }),
+      ).toBeNull();
+      // The filter lives only in the avatar dialog.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "start_page",
+          this_task: true,
+          other_tasks: true,
+          start_pages: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: null,
+          other_tasks: null,
+          start_pages: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: true,
+          other_tasks: true,
+          start_pages: true,
+          query: "secret",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftCopied, {
+          surface: "start_page",
+          draft_kind: "chat",
+          input: "mouse",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleted, {
+          surface: "start_page",
+          draft_kind: "chat",
+          input: "pointer",
+          undo_offered: true,
+          draft_age: "last_week",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleteUndone, {
+          surface: "everywhere",
+          draft_kind: "chat",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects a draft count or boolean sent as the wrong type", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "button",
+          draft_count: 1,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "start_page",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: "false",
+          draft_age: "under_1h",
+          used_search: false,
+        }),
+      ).toBeNull();
+    });
+
+    // The ticket's own rule: never draft text, titles, task/chat names, ids,
+    // host ids or paths. A payload carrying only those must fail closed.
+    it("rejects a draft event payload carrying only what must never be sent", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      const forbiddenOnly = {
+        draftText: "fix the parser",
+        draftTitle: "Ship the release notes",
+        chatName: "Sibling chat",
+        taskName: "Payments",
+        draftId: "draft-1",
+        hostId: "host-a",
+        path: "/tmp/CODE_OF_CONDUCT.md",
+      };
+
+      const events = [
+        AnalyticsEvent.DraftsListOpened,
+        AnalyticsEvent.DraftOpened,
+        AnalyticsEvent.DraftsFilterChanged,
+        AnalyticsEvent.DraftCopied,
+        AnalyticsEvent.DraftDeleted,
+        AnalyticsEvent.DraftDeleteUndone,
+      ] as const;
+
+      for (const event of events) {
+        expect(sanitizeAnalyticsProperties(event, forbiddenOnly)).toBeNull();
+      }
+    });
+
+    it("rejects every draft event with one extra forbidden key", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      const fixtures = [
+        [
+          AnalyticsEvent.DraftsListOpened,
+          {
+            surface: "start_page",
+            entry_point: "button",
+            draft_count: "0",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftOpened,
+          {
+            surface: "avatar_menu",
+            draft_kind: "chat",
+            input: "pointer",
+            already_open: false,
+            draft_age: "under_1h",
+            used_search: true,
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftsFilterChanged,
+          {
+            surface: "avatar_menu",
+            this_task: null,
+            other_tasks: true,
+            start_pages: false,
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftCopied,
+          {
+            surface: "start_page",
+            draft_kind: "new_agent",
+            input: "keyboard",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftDeleted,
+          {
+            surface: "avatar_menu",
+            draft_kind: "start_page",
+            input: "pointer",
+            undo_offered: true,
+            draft_age: "over_7d",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftDeleteUndone,
+          {
+            surface: "start_page",
+            draft_kind: "chat",
+            draftId: "draft-1",
+          },
+        ],
+      ] as const;
+
+      for (const [event, properties] of fixtures) {
+        expect(sanitizeAnalyticsProperties(event, properties)).toBeNull();
+      }
+    });
+
+    it("rejects a draft event missing one of its required keys", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          draft_age: "under_1h",
+          used_search: true,
+          // `already_open` omitted.
+        }),
+      ).toBeNull();
+    });
+  });
 });
 
 describe("app surface and platform globals", () => {

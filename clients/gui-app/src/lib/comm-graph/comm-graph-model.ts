@@ -252,3 +252,72 @@ export function aggregateCommGraphEdges(
     events: entry.events,
   }));
 }
+
+/**
+ * The far end of a cross-task message, drawn as a stand-in node.
+ *
+ * A cross-task message is recorded in BOTH tasks' logs, each row naming the
+ * other task in `peerEpicId`. Seen from this task, one endpoint is an agent
+ * that lives in the other task and so has no node here; without a stand-in the
+ * exchange would be skipped by `aggregateCommGraphEdges` exactly like an edge
+ * to an unknown id. The stand-in carries that foreign agent's id, so the pair
+ * folds onto an ordinary edge.
+ */
+export interface CommGraphPeerTaskStub {
+  /** The foreign endpoint's agent id - also the stand-in node's id. */
+  readonly agentId: string;
+  /** The task that agent lives in. */
+  readonly peerEpicId: string;
+  /** Capture time of the first row naming it, for a stable layout order. */
+  readonly firstSeenAt: number;
+}
+
+/**
+ * Every foreign endpoint named by a cross-task row in `events`, first
+ * appearance first.
+ *
+ * A cross-task row has exactly one foreign end BY CONSTRUCTION - it sits in
+ * one task's feed, and `peerEpicId` names where the other end lives - so that
+ * is the shape this reads, rather than "every endpoint the agent list does not
+ * contain". The distinction is the whole correctness of the function: absence
+ * from `epicAgentIds` is not evidence of foreignness. A local agent that has
+ * since been deleted is missing from it, and so is one the record feed has not
+ * caught up on while the event feed already carries its messages. Treating
+ * every missing id as foreign drew a LOCAL agent as living in the other task,
+ * labelled with that task's title and wired to a button that opens it.
+ *
+ * So: exactly one end missing means that end is the stub; both ends missing
+ * means this row cannot say which is which, and it contributes no stub at all
+ * (the exchange is skipped as an edge to nowhere, as it was before stubs
+ * existed - the honest outcome for a row we cannot place). Both ends present
+ * is a row that draws locally and needs no stand-in.
+ */
+export function commGraphPeerTaskStubs(
+  events: ReadonlyArray<CommGraphEvent>,
+  epicAgentIds: ReadonlySet<string>,
+): ReadonlyArray<CommGraphPeerTaskStub> {
+  const byAgentId = new Map<string, CommGraphPeerTaskStub>();
+  for (const event of events) {
+    if (event.peerEpicId === null) continue;
+    const { senderAgentId, receiverAgentId } = event;
+    // A row missing an endpoint entirely cannot establish which side is
+    // foreign either, so it is skipped for the same reason. No cross-task row
+    // has one: `peerEpicId` is only ever set on an a2a_message.
+    if (senderAgentId === null || receiverAgentId === null) continue;
+    const senderIsLocal = epicAgentIds.has(senderAgentId);
+    if (senderIsLocal === epicAgentIds.has(receiverAgentId)) continue;
+    const foreignAgentId = senderIsLocal ? receiverAgentId : senderAgentId;
+    if (byAgentId.has(foreignAgentId)) continue;
+    byAgentId.set(foreignAgentId, {
+      agentId: foreignAgentId,
+      peerEpicId: event.peerEpicId,
+      firstSeenAt: event.timestamp,
+    });
+  }
+  return Array.from(byAgentId.values());
+}
+
+/** Label for a peer task whose title this client does not know. */
+export function commGraphPeerTaskFallbackLabel(peerEpicId: string): string {
+  return `Task ${peerEpicId.slice(0, 8)}`;
+}

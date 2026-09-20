@@ -12,8 +12,13 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 export function useSetupTerminalTabRegisterDriver(options: {
   handle: ChatSessionStoreHandle;
   viewTabId: string;
+  owningTileInstanceId: string;
 }): void {
-  const { handle, viewTabId } = options;
+  const { handle, viewTabId, owningTileInstanceId } = options;
   const binding = useStore(handle.store, (state) => state.worktreeBinding);
-  useRegisterSetupTerminalTabsFromBinding({ binding, viewTabId });
+  useRegisterSetupTerminalTabsFromBinding({
+    binding,
+    viewTabId,
+    owningTileInstanceId,
+  });
 }

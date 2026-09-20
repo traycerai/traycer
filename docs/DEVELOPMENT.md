@@ -4,7 +4,9 @@ Deeper notes for working on the Traycer clients, CLI, and protocol.
 
 ## Toolchain
 
-- **Bun 1.3.12** — pinned via `packageManager`
+- **Bun 1.3.14** — pinned via `packageManager`, which Bun does not enforce. Install it with
+  `curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"` (Windows:
+  `iex "& {$(irm https://bun.sh/install.ps1)} -Version 1.3.14"`)
 - **Node 24**
 - **Nx** runs the workspace targets (`build` / `lint` / `test` / `format`) with caching
 

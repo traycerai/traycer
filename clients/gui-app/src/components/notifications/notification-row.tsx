@@ -5,7 +5,6 @@ import {
   Check,
   CheckCircle2,
   FolderX,
-  Globe,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -17,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   FAILURE_TONE,
+  NOTIFICATION_STATUS_TONES,
   notificationFeedTone,
   TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
@@ -569,10 +569,12 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     // kind itself says nothing about how the operation ended.
     case "host.operation.finished":
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
-    // Needs-action, but not an agent prompt: the shared tones return null for
-    // this kind, so the subject glyph is the whole signal.
+    // Retain the browser glyph for resolved/informational browser rows too.
     case "browser.human.needed":
-      return { icon: Globe, colorClassName: NEUTRAL_COLOR };
+      return {
+        icon: NOTIFICATION_STATUS_TONES.browser.Icon,
+        colorClassName: NOTIFICATION_STATUS_TONES.browser.className,
+      };
     case null:
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
   }

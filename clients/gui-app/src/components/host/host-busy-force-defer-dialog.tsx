@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 
 export interface HostBusyForceDeferDialogProps {
+  readonly children?: ReactNode;
   /**
    * What Force does here, exposed as `data-purpose` on the dialog: a page
    * can mount one of each (the Overview's force-restart and force-update
@@ -84,6 +86,7 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
             </p>
           )}
         </div>
+        {props.children}
         <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"

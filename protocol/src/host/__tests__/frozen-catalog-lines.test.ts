@@ -31,6 +31,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
+  providersListResponseSchemaV91,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -135,37 +136,96 @@ const LIVE_FROZEN_EXPORTS = {
   // What that red means depends on whether the line has SHIPPED, and the two
   // answers are opposites - read this before reaching for either:
   //
-  //  - RELEASED (it appears in a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at
-  //    or above `support-floor.json`): peers in the field already speak it, so
-  //    the response it serves is fixed forever. Freeze the line that stopped
-  //    being head under reserved `VNN` names, open the next one against live,
-  //    and do NOT regenerate. That is what v7.0 above records.
-  //  - UNRELEASED (the case for 8.0 today - `host-v1.2.0` registers
-  //    `providers.list` 1.0 through 7.0 and no 8.0, and RCs are excluded by
-  //    `includeReleaseCandidates: false`): no peer can have negotiated it, so
-  //    there is no contract to break, and additive growth regenerates this
-  //    fixture. `enabled` and `launchCommand` on `providerProfileSchema` both
-  //    did exactly that, and `launchCommand`'s comment says so at the field.
+  //  - RELEASED: peers in the field already speak it, so the RESPONSE it serves
+  //    is fixed forever. Freeze the line that stopped being head under reserved
+  //    `VNN` names, open the next one against live, and do NOT regenerate. That
+  //    is what v7.0 above records.
+  //
+  //    One carve-out, and it is a row in this very list. A REQUEST row whose
+  //    contract BINDS the live schema has nothing to freeze, so it is
+  //    regenerated instead - `providers.list@7.0 request` already has been,
+  //    twice, for `reasonix` and `antigravity`. That is safe for the reason the
+  //    response side is not: a request travels client to host, and a client
+  //    only ever names a provider the host itself just reported, so a new id
+  //    cannot reach an older host's decoder. Growth in the other direction has
+  //    no such argument, which is why the rule above is about responses. See
+  //    `providersListRequestSchema`, whose docblock records that v7.0 binds it.
+  //  - UNRELEASED: no peer can have negotiated it, so there is no contract to
+  //    break, and additive growth regenerates this fixture. `enabled` and
+  //    `launchCommand` on `providerProfileSchema` both did exactly that, and
+  //    `launchCommand`'s comment says so at the field.
+  //
+  // **A line is RELEASED when a HOST that advertises it has been published** -
+  // not when a tag contains the commit that opened it. Check it with
+  // `gh release list --repo traycerai/traycer-internal` INCLUDING prereleases,
+  // and read the release's uploaded `protocol-surface.json`, which states the
+  // canonical version and the exact response shape that host serves.
+  //
+  // The repo in that command is load-bearing, not decoration. Hosts are
+  // published from the INTERNAL repo; run it against THIS one and the newest
+  // host you can see is `host-v1.3.1`, which is the very answer the discredited
+  // tag recipe below gave. A reader who omits the flag reaches the wrong
+  // conclusion while believing they followed the rule.
+  //
+  // That wording is this precise because the older recipe here - "it appears in
+  // a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at or above
+  // `support-floor.json`", confirmed with
+  // `git show <newest non-rc tag>:protocol/src/host/registry.ts` - returned the
+  // WRONG ANSWER for `providers.list@9.1` and licensed widening it in place.
+  // Every clause of it was true; it just asked about tags. The published host
+  // `host-v1.3.2-staging.39.g3a73077` advertises 9.1, carries no matching tag
+  // (`git ls-remote --tags origin | grep staging` is empty), and is not an rc.
+  //
+  // Note that the compat gate's own baseline discovery
+  // (`protocol/scripts/compat/resolve-baselines.ts`) matches that same tag
+  // pattern, so it could not have caught this either and cannot catch the next
+  // one. Until that is reconciled, a staging-only line is guarded by THIS file
+  // and by the reader
+  // - which is why the rule above is stated here rather than left implied.
   //
   // So the red is a PROMPT to check release status, not a verdict on its own.
-  // Confirm with `git show <newest non-rc tag>:protocol/src/host/registry.ts`
-  // rather than from this file - once 8.0 ships, the first bullet governs and
-  // regenerating it would be the exact mistake the row exists to catch.
   //
   // There is no `providers.list@7.1` row because there is no such line: the
   // enablement pair was its entire delta over 7.0 and both were removed. This
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  // Two freezes here as well: 8.0 froze when 9.0 opened, and 9.0 froze at the
-  // pre-`autoJudge` provider state when 9.1 opened to publish the per-provider
-  // judge. Same response as when each was head - each names its frozen schema
-  // now and its dump is unchanged, so neither row was regenerated.
+  // Three freezes here as well: 8.0 froze when 9.0 opened, 9.0 froze at the
+  // pre-`autoJudge` state when 9.1 opened, and 9.1 froze at the pre-marker
+  // login capability when 9.2 opened. None of those dumps was changed BY its
+  // freeze.
+  //
+  // 9.0 and 9.1 DID move once, wrongly, and that is worth keeping rather than
+  // tidying away. An earlier revision of this comment licensed it: "Major 9 is
+  // unreleased: no tag contains the commit that opened 9.1, release candidates
+  // INCLUDED, and the newest non-rc OSS tag (`host-v1.3.1`) registers
+  // `providers.list` only to 8.0." Every clause of that was true and the
+  // conclusion was false, because it asked the wrong question. A line is
+  // released when a HOST that advertises it has been published, not when an OSS
+  // tag contains the commit that opened it: the host release
+  // `host-v1.3.2-staging.39.g3a73077` is published and not a draft, and its
+  // uploaded `protocol-surface.json` advertises `providers.list` canonical 9.1.
+  // So 9.0 and 9.1 were both already in users' hands, `providerCliStateSchemaV*`
+  // reached the LIVE capability by reference, and adding two keys to that
+  // capability silently widened two released lines - which this snapshot then
+  // recorded as the new truth instead of refusing.
+  //
+  // Read the release status off published host releases (prereleases included),
+  // and treat a frozen alias that points at a live nested schema as unfrozen
+  // whatever its own docblock says. 8.0 is the worked example of getting it
+  // right: `providerCliStateBaseShapeV80` was re-pointed at the hand-frozen
+  // four-key `providerLoginCapabilitySchemaV70`, so it stayed byte-identical
+  // through the same change that moved the other two.
   "providers.list@8.0": providersListResponseSchemaV80,
   "providers.list@9.0": providersListResponseSchemaV90,
-  // The head line, holding 9.0's old job: it names the LIVE schema, so the next
-  // attempt to grow the provider state fails here first.
-  "providers.list@9.1": providersListResponseSchema,
+  "providers.list@9.1": providersListResponseSchemaV91,
+  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
+  // attempt to grow the provider state fails here first. Note what that guard
+  // could NOT do while 9.1 held this row - it moves with the live schema by
+  // design, so the two markers landing on the live capability regenerated it
+  // without complaint. The rows above are the ones that refuse; a line earns
+  // one the moment a host advertising it is published.
+  "providers.list@9.2": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
