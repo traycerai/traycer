@@ -418,6 +418,7 @@ import {
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
   browserReplReleaseRealmV10,
+  browserReplRequestApprovalV10,
   browserReplRunCellV10,
   browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
@@ -8861,6 +8862,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: browserReplStopCellV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The dial back, from the browser's host to the agent's host. An agent's
+  // host that predates it lacks it, and the browser's host answers the cell
+  // with a typed "could not ask" rather than a fabricated decision.
+  "browser.repl.requestApproval": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplRequestApprovalV10,
           upgradeFromPreviousVersion: null,
         },
       },

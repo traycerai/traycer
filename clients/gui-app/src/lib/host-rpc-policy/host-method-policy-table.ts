@@ -922,6 +922,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dial-only in the other direction: the machine running a browser realm
+  // asks the agent's host for a person's decision. Never the renderer; here
+  // for exhaustiveness. `fifo` - each question is its own card and must
+  // never be coalesced with another.
+  "browser.repl.requestApproval": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Dial-only: one host calls this on another, never the renderer. It is here
   // because this table is exhaustive over the registry, not because the GUI
   // has a caller. `fifo` matches `agent.create`, whose effect it shares -

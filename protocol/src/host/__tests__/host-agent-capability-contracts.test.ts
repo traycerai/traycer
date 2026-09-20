@@ -22,6 +22,7 @@ import {
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
   browserReplReleaseRealmV10,
+  browserReplRequestApprovalV10,
   browserReplRunCellV10,
   browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
@@ -54,6 +55,7 @@ const NEW_METHODS = [
   browserReplRunCellV10.method,
   browserReplReleaseRealmV10.method,
   browserReplStopCellV10.method,
+  browserReplRequestApprovalV10.method,
 ] as const;
 
 describe("host-agent capability contracts", () => {

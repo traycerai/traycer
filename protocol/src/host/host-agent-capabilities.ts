@@ -891,3 +891,62 @@ export const browserReplStopCellV10 = defineRpcContract({
   requestSchema: browserReplStopCellRequestSchema,
   responseSchema: browserReplStopCellResponseSchema,
 });
+
+/**
+ * The dial BACK: a cell suspended on the browser's host asks the agent's host
+ * for a person's decision, because the approval card belongs in the agent's
+ * chat and that chat lives on the agent's machine. The browser's host is the
+ * caller here and the agent's host resolves it, the reverse of every other
+ * verb in this family.
+ *
+ * The request names the cell asking - the same `(caller, realmEpoch,
+ * cellSequence)` the cell verb carried in - and the agent's host answers only
+ * for the cell it currently has in flight on the asking host. A realm it has
+ * already re-homed or released cannot raise a card, however late its question
+ * arrives.
+ *
+ * The cell stays suspended on the browser's host until this answers, bounded
+ * by the cell's own deadline there rather than by anything of its own: the
+ * approval wait has no deadline of its own on a local realm either.
+ */
+export const browserReplApprovalSchema = z.object({
+  approvalId: z.string().min(1),
+  toolName: z.string().min(1),
+  description: z.string(),
+  /** The card's input, as the confirmation surface on the origin renders it. */
+  input: z.record(z.string(), z.unknown()).nullable(),
+});
+export type BrowserReplApproval = z.infer<typeof browserReplApprovalSchema>;
+
+export const browserReplRequestApprovalRequestSchema = z.object({
+  epicId: z.string().min(1),
+  caller: browserReplCallerSchema,
+  realmEpoch: browserRealmEpochSchema,
+  /** The cell asking; see {@link browserReplCellSequenceSchema}. */
+  cellSequence: browserReplCellSequenceSchema,
+  approval: browserReplApprovalSchema,
+});
+export type BrowserReplRequestApprovalRequest = z.infer<
+  typeof browserReplRequestApprovalRequestSchema
+>;
+
+/**
+ * A DELIVERED decision. `approved: false` is a person's (or the origin's
+ * policy's) "no"; a question the origin will not answer at all - no such cell
+ * in flight, the registration gone - is a refusal thrown on the wire, never
+ * a fabricated decision.
+ */
+export const browserReplRequestApprovalResponseSchema = z.object({
+  approved: z.boolean(),
+  reason: z.string().nullable(),
+});
+export type BrowserReplRequestApprovalResponse = z.infer<
+  typeof browserReplRequestApprovalResponseSchema
+>;
+
+export const browserReplRequestApprovalV10 = defineRpcContract({
+  method: "browser.repl.requestApproval",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplRequestApprovalRequestSchema,
+  responseSchema: browserReplRequestApprovalResponseSchema,
+});
