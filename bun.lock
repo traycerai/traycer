@@ -42,6 +42,7 @@
         "typescript-eslint": "catalog:",
         "vitest": "^4.1.11",
         "wait-on": "^9.1.0",
+        "yaml": "catalog:",
       },
     },
     "clients/desktop": {
