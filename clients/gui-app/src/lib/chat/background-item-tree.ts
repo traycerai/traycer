@@ -252,6 +252,12 @@ export function backgroundHeaderSummary(input: {
   readonly runningCount: number;
   readonly heldCount: number;
   readonly waitingWakeCount: number;
+  /**
+   * The agent's port forwards, in whatever state. Their own part, not folded
+   * into `running`: "Stop all" does not reach a forward, and a header that
+   * counted one as running would promise that it did.
+   */
+  readonly portForwardCount: number;
 }): string {
   const parts: string[] = [];
   if (input.runningCount > 0) {
@@ -262,6 +268,13 @@ export function backgroundHeaderSummary(input: {
   }
   if (input.waitingWakeCount > 0) {
     parts.push(`${input.waitingWakeCount} waiting`);
+  }
+  if (input.portForwardCount > 0) {
+    parts.push(
+      input.portForwardCount === 1
+        ? "1 port forward"
+        : `${input.portForwardCount} port forwards`,
+    );
   }
   return parts.length === 0 ? "0 running" : parts.join(" · ");
 }

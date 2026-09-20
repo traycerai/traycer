@@ -67,6 +67,7 @@ import {
 } from "@/lib/chat/background-item-tree";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { usePortForwardsForChat } from "@/stores/port-forwards/port-forwards-for-chat";
 import {
   useHeldManagedCommandsForChat,
   useRunningManagedCommandsForChat,
@@ -411,10 +412,19 @@ export function ChatLowerInteractionSurfaces(
     hostId: props.hostId,
   });
   const heldManagedCommandCount = heldManagedCommands.length;
+  // A forward outlives the turn that made it, so an otherwise idle chat can
+  // still hold one; it opens the section on its own, like a hold does.
+  const portForwards = usePortForwardsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId: props.hostId,
+  });
+  const portForwardCount = portForwards.length;
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount,
     heldManagedCommandCount,
+    portForwardCount,
   });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
@@ -428,6 +438,7 @@ export function ChatLowerInteractionSurfaces(
     backgroundItems: props.backgroundItems,
     runningManagedCommands,
     heldManagedCommands,
+    portForwardCount,
     queue: props.queue.value,
   });
   const pinnedStackVisible =
@@ -544,6 +555,7 @@ export function ChatLowerInteractionSurfaces(
           backgroundItems={props.backgroundItems}
           runningManagedCommandCount={runningManagedCommandCount}
           heldManagedCommandCount={heldManagedCommandCount}
+          portForwardCount={portForwardCount}
           backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
           backgroundStopAllPending={props.backgroundStopAllPending}
           backgroundSessionStopPending={props.backgroundSessionStopPending}
@@ -608,6 +620,7 @@ interface ChatDockChromeInput {
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly runningManagedCommands: ReadonlyArray<ManagedCommand>;
   readonly heldManagedCommands: ReadonlyArray<HeldManagedCommandUpdate>;
+  readonly portForwardCount: number;
   readonly queue: ChatSessionState["queue"];
 }
 
@@ -701,8 +714,14 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         waitingWakeCount: dedupedBackgroundItems.filter(
           (item) => item.kind === "wakeup",
         ).length,
+        portForwardCount: input.portForwardCount,
       }),
-    [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
+    [
+      backgroundRunning,
+      input.heldManagedCommands,
+      dedupedBackgroundItems,
+      input.portForwardCount,
+    ],
   );
   const changeTotals = useMemo(
     () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),

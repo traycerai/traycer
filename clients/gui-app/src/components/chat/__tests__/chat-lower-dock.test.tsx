@@ -448,6 +448,7 @@ function renderDock(input: DockInput) {
           backgroundItems={input.backgroundItems}
           runningManagedCommandCount={0}
           heldManagedCommandCount={input.heldManagedCommandCount}
+          portForwardCount={0}
           backgroundStopPendingTaskIds={new Set()}
           backgroundStopAllPending={false}
           backgroundSessionStopPending={false}

@@ -54,6 +54,8 @@ export interface ChatLowerDockProps {
    * whose only background state is a hold opens the section on this alone.
    */
   readonly heldManagedCommandCount: number;
+  /** This chat's port forwards, counted by the parent for the same reason. */
+  readonly portForwardCount: number;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
   readonly backgroundSessionStopPending: boolean;
@@ -106,6 +108,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
       backgroundItemCount: props.backgroundItems?.length ?? 0,
       runningManagedCommandCount: props.runningManagedCommandCount,
       heldManagedCommandCount: props.heldManagedCommandCount,
+      portForwardCount: props.portForwardCount,
     }) && !props.folded.has("background");
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {

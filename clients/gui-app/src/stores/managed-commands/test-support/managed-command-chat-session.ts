@@ -8,6 +8,7 @@ import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -51,6 +52,12 @@ export interface ManagedCommandChatSessionStub {
     heldUpdates: readonly HeldManagedCommandUpdate[],
   ) => void;
   readonly setConnectionStatus: (status: StreamConnectionStatus) => void;
+  /**
+   * The chat's whole set of port forwards, as the host sends it on a
+   * `portForwardsChanged` frame - never a delta, same shape as
+   * {@link setHeldUpdates}.
+   */
+  readonly setPortForwards: (portForwards: readonly ChatPortForward[]) => void;
   readonly dispose: () => void;
 }
 
@@ -154,6 +161,15 @@ export function installManagedCommandChatSession(args: {
     setConnectionStatus: (status: StreamConnectionStatus) => {
       const reason: StreamCloseReason | null = null;
       callbacks().onConnectionStatus(status, reason, null);
+    },
+    setPortForwards: (portForwards) => {
+      callbacks().onPortForwardsChanged({
+        kind: "portForwardsChanged",
+        hasBinaryPayload: false,
+        epicId,
+        chatId,
+        portForwards: [...portForwards],
+      });
     },
     dispose: () => {
       registry.forceRelease(epicId, chatId, hostId);

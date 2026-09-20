@@ -1,6 +1,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
+import {
+  disposeManagedCommandChatSessions,
+  installManagedCommandChatSession,
+} from "@/stores/managed-commands/test-support/managed-command-chat-session";
 
 // The one faked boundary: the host RPCs behind the managed-command rows. This
 // suite is about how background items nest and read; the managed-command
@@ -24,13 +29,40 @@ vi.mock(
   }),
 );
 
+// A port-forward row reaches out to the tab's real host client and the host
+// directory; neither is this suite's concern (the row's own behavior has its
+// coverage in `port-forward-row.test.tsx`), so both are faked the same way
+// that file fakes them.
+const portForwardStopRequestSpy = vi.fn();
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({
+    request: portForwardStopRequestSpy,
+    getActiveHostId: () => "host-1",
+  }),
+}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: [] }),
+}));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => vi.fn(),
+}));
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+
+// A port-forward row's Stop control is wired through a real `useMutation`,
+// which needs a QueryClient above it even though no test here actually
+// dispatches it.
+const queryClient = new QueryClient({
+  defaultOptions: { mutations: { retry: false } },
+});
 
 describe("<BackgroundItemsPanel />", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    disposeManagedCommandChatSessions();
   });
 
   it("renders nested background items under their parents and keeps nested stops per row", () => {
@@ -908,6 +940,42 @@ describe("<BackgroundItemsPanel />", () => {
   // The policy's wait cap reaches seven days, so this row's resume time
   // needs its weekday once it is that far out - the bare clock time alone
   // would name the wrong day.
+  it("lists port forwards from the chat session store, counts them in the header, and keeps them out of Stop all's reach", () => {
+    const onStopAll = vi.fn(() => null);
+    const session = installManagedCommandChatSession({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-1",
+    });
+    session.setCommands([]);
+    session.setPortForwards([
+      forward({ forwardId: "forward-1", description: "dev server" }),
+    ]);
+
+    renderPanel({
+      items: [],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll,
+    });
+
+    expect(
+      screen.getByRole("button", { name: /Background.*1 port forward/ }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Background.*1 port forward/ }),
+    );
+    expect(screen.getByText("dev server")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+    // "Stop all" ends work the agent is doing - the harness-level callback
+    // still fires for whatever it does reach - but a forward has its OWN
+    // Stop and is deliberately not reached by this button: no
+    // `portForward.stop` RPC follows from this click.
+    expect(portForwardStopRequestSpy).not.toHaveBeenCalled();
+  });
+
   it("titles a fallback-wait row with its weekday once the resume time is a day or more away", () => {
     const at = Date.now() + 4 * 24 * 60 * 60_000;
     const wait = backgroundItem({
@@ -958,29 +1026,45 @@ function panelElement(input: PanelInput) {
   // rows act on that tile's host - so the provider is part of its contract,
   // not test scaffolding.
   return (
-    <TabHostProvider hostId="host-1">
-      <BackgroundItemsPanel
-        items={input.items}
-        epicId="epic-1"
-        chatId="chat-1"
-        viewTabId="tab-1"
-        canAct
-        readOnly={false}
-        pendingStopTaskIds={new Set()}
-        stopAllPending={false}
-        sessionStopPending={input.sessionStopPending ?? false}
-        turnActive={input.turnActive ?? false}
-        scrollRegionMaxHeightClass="max-h-96"
-        separated={false}
-        onItemClick={input.onItemClick}
-        onStopItem={input.onStopItem}
-        onStopAll={input.onStopAll}
-        onStopSession={input.onStopSession ?? (() => null)}
-      />
-    </TabHostProvider>
+    <QueryClientProvider client={queryClient}>
+      <TabHostProvider hostId="host-1">
+        <BackgroundItemsPanel
+          items={input.items}
+          epicId="epic-1"
+          chatId="chat-1"
+          viewTabId="tab-1"
+          canAct
+          readOnly={false}
+          pendingStopTaskIds={new Set()}
+          stopAllPending={false}
+          sessionStopPending={input.sessionStopPending ?? false}
+          turnActive={input.turnActive ?? false}
+          scrollRegionMaxHeightClass="max-h-96"
+          separated={false}
+          onItemClick={input.onItemClick}
+          onStopItem={input.onStopItem}
+          onStopAll={input.onStopAll}
+          onStopSession={input.onStopSession ?? (() => null)}
+        />
+      </TabHostProvider>
+    </QueryClientProvider>
   );
 }
 
 function backgroundItem(input: BackgroundItem): BackgroundItem {
   return input;
+}
+
+function forward(over: Partial<ChatPortForward>): ChatPortForward {
+  return {
+    forwardId: "forward-1",
+    description: "dev server",
+    target: { hostId: "host-target", port: 3000 },
+    listen: { hostId: "host-listen", requestedPort: 8080, boundPort: null },
+    state: "active",
+    stateReason: null,
+    createdAtMs: 1,
+    recentEvents: [],
+    ...over,
+  };
 }
