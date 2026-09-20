@@ -30,7 +30,9 @@ const RESIZE_DEBOUNCE_MS = 100;
 let colorProbeCanvas: HTMLCanvasElement | null = null;
 
 /**
- * The personal start-page wallpaper. `photo` and `grain` are the image itself
+ * The personal start-page wallpaper, and - fed a catalog thumbnail - the
+ * preview each curated tile in Settings shows under the current effect, so the
+ * two can never drift apart. `photo` and `grain` are the image itself
  * under CSS; `dither` repaints it onto a low-resolution canvas upscaled with
  * `image-rendering: pixelated`, so the treatment is a render-time property of
  * the surface rather than a second set of bytes to store and invalidate.
@@ -67,6 +69,10 @@ export function AppearanceWallpaper(props: {
           className="size-full object-cover"
           src={url}
           alt=""
+          // The start page's own wallpaper is a blob URL, where a referrer is
+          // moot; a curated tile in Settings loads its thumbnail from the
+          // assets CDN, and no catalog request sends one.
+          referrerPolicy="no-referrer"
           draggable={false}
           style={
             wallpaper.style === "grain"
@@ -132,6 +138,7 @@ function DitheredWallpaper(props: {
     // Same "leave the last frame up" outcome as an aborted render - there is
     // no broken-image placeholder to paint onto a dither canvas.
     image.onerror = () => undefined;
+    image.referrerPolicy = "no-referrer";
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
