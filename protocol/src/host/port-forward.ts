@@ -299,3 +299,12 @@ export const TUNNEL_TARGET_REFUSED_CODE = "TUNNEL_TARGET_REFUSED";
  * and still owed a release - so it must never read as that.
  */
 export const TUNNEL_NO_EDIT_ACCESS_CODE = "TUNNEL_NO_EDIT_ACCESS";
+
+/**
+ * FATAL `code` on a tunnel that reached an owner whose forward is still being
+ * CREATED: the lease host bound its listener and accepted a connection before
+ * its acquire answer got back. Refused, because a forward that is not `active`
+ * carries no connection - but, like a role refusal, it says nothing about the
+ * lease, so it must not read as `TUNNEL_NOT_AUTHORIZED` and cost the listener.
+ */
+export const TUNNEL_LEASE_NOT_READY_CODE = "TUNNEL_LEASE_NOT_READY";
