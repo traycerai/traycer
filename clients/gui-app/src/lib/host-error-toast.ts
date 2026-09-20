@@ -487,7 +487,7 @@ const SHARE_PENDING_OFFLINE_MESSAGE =
  * DO about it is decided here, from why this client lost the verdict.
  *
  * Until the host sent this reason it rode `offline`, and "check your
- * connection" was the advice for all three. It is right for one of them.
+ * connection" was the advice whatever the cause. It is right for one of them.
  */
 function shareUnverifiedMessage(loss: CloudVerdictLoss): string {
   switch (loss) {
@@ -495,6 +495,8 @@ function shareUnverifiedMessage(loss: CloudVerdictLoss): string {
       return "Your session has expired. Sign in again, then invite.";
     case "account-unavailable":
       return "This account is no longer available, so this epic can't be shared from it.";
+    case "ended-elsewhere":
+      return "This window's cloud session was ended from another window, so this epic can't be shared from here right now. That window says why.";
     case "unreachable":
       return SHARE_PENDING_OFFLINE_MESSAGE;
   }

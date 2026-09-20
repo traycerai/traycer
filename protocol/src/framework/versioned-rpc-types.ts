@@ -133,9 +133,10 @@ export const RPC_ERROR_CODES = [
   // the verdict was lost to an expired or revoked session rather than to an
   // unreachable authn. The host cannot tell those apart (the verdict is a
   // boolean the client asserts) and the client can, so the code says only what
-  // the host knows and the client picks the copy. Additive: a client that
-  // does not know it renders its generic share failure with the host's
-  // message, which is written to stand alone.
+  // the host knows and the client picks the copy. Additive: a GUI that does
+  // not know it renders its generic share failure and drops the host's
+  // message (vague, not wrong); the message is what a CLI, an agent or a log
+  // reader gets, and is written to stand alone for them.
   "E_SHARE_PENDING_UNVERIFIED",
   "E_SHARE_REFUSED",
   // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:

@@ -263,8 +263,12 @@ export interface EpicShareableTeam {
  *   revoked refresh, a sign-out everywhere). Signing in again is the fix.
  * - `account-unavailable` - authn refused the ACCOUNT. Terminal: signing in
  *   again as the same account cannot succeed.
+ * - `ended-elsewhere`     - a sibling window saw authn refuse this bearer and
+ *   said so; the revoke carries the bearer and no verdict, so WHICH refusal it
+ *   was is not known in this window. The copy names no remedy it cannot
+ *   stand behind.
  *
- * It exists because the three look identical to everything downstream of the
+ * It exists because they all look identical to everything downstream of the
  * status, and one surface has to tell them apart long after the toast that
  * announced the loss is gone: a host that refuses a share for an unverified
  * caller knows only THAT the verdict is missing (the verdict crosses the wire
@@ -274,7 +278,11 @@ export interface EpicShareableTeam {
 export type CloudVerdictLoss =
   | "unreachable"
   | "session-rejected"
-  | "account-unavailable";
+  | "account-unavailable"
+  | "ended-elsewhere";
+
+/** The losses that latch: every one except the merely unreachable. */
+export type TerminalCloudVerdictLoss = Exclude<CloudVerdictLoss, "unreachable">;
 
 export interface AuthState {
   readonly status: AuthStatus;

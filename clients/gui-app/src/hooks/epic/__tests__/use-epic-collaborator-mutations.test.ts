@@ -179,6 +179,7 @@ describe("useEpicGrantAccess", () => {
         ],
         ["account-unavailable", "This account is no longer available"],
         ["unreachable", "Check your connection"],
+        ["ended-elsewhere", "ended from another window"],
       ];
       for (const [loss, fragment] of cases) {
         useAuthStore.getState().setCloudVerdictLoss(loss);
@@ -189,6 +190,12 @@ describe("useEpicGrantAccess", () => {
         );
         const message = vi.mocked(toast.error).mock.calls[0]?.[0];
         expect(message, loss).toContain(fragment);
+        // A window told of the loss by a sibling does not know which refusal
+        // it was, so its copy names neither remedy.
+        if (loss === "ended-elsewhere") {
+          expect(message).not.toContain("Sign in again");
+          expect(message).not.toContain("no longer available");
+        }
       }
     } finally {
       useAuthStore.getState().setCloudVerdictLoss(initialLoss);
@@ -202,6 +209,7 @@ describe("useEpicGrantAccess", () => {
         "session-rejected",
         "account-unavailable",
         "unreachable",
+        "ended-elsewhere",
       ] as const) {
         useAuthStore.getState().setCloudVerdictLoss(loss);
         vi.mocked(toast.error).mockClear();

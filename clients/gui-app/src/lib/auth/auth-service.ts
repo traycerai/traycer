@@ -61,6 +61,7 @@ import {
   type AuthProfile,
   type AuthStatus,
   type CloudVerdictLoss,
+  type TerminalCloudVerdictLoss,
   type SignedOutCause,
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
@@ -703,29 +704,17 @@ export class AuthService {
    * explained from that mirror, long after the toast that announced the loss
    * (and the transient `lastError` behind it) is gone.
    *
-   * Every site that sets the latch has ALREADY called `setLastError` with the
-   * verdict it is latching, which is how the terminal ACCOUNT state is told
-   * from a rejected credential here. `AUTH_ERROR_ACCOUNT_UNAVAILABLE` is also
-   * the one error the toast bridge deliberately never clears.
+   * The cause is PASSED, never read back from `lastError`. It used to be
+   * inferred from it, on the claim that every latching site had just called
+   * `setLastError`; the cross-window revoke intake had not. It carries a
+   * bearer and nothing else, so a window told by a sibling that the account
+   * was refused classified itself `session-rejected` and advised signing in
+   * again to an account that cannot. A site that does not know the cause says
+   * `ended-elsewhere`.
    */
-  private setSessionRecoveryTerminallyRejected(rejected: boolean): void {
-    this.sessionRecoveryTerminallyRejected = rejected;
-    useAuthStore
-      .getState()
-      .setCloudVerdictLoss(this.cloudVerdictLoss(rejected));
-  }
-
-  /**
-   * Why this session holds no cloud verdict, as the store mirrors it. Three
-   * answers, and the order matters: a session authn has not refused is merely
-   * unreachable, whatever error is on record from an earlier attempt.
-   */
-  private cloudVerdictLoss(terminallyRejected: boolean): CloudVerdictLoss {
-    if (!terminallyRejected) return "unreachable";
-    if (this.lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE) {
-      return "account-unavailable";
-    }
-    return "session-rejected";
+  private setSessionRecoveryTerminallyRejected(loss: CloudVerdictLoss): void {
+    this.sessionRecoveryTerminallyRejected = loss !== "unreachable";
+    useAuthStore.getState().setCloudVerdictLoss(loss);
   }
   // Superseded-save undos whose conditional deletes have not LANDED yet
   // (in flight or failed): each stale pair may still be durable. Every
@@ -1412,7 +1401,7 @@ export class AuthService {
       // copy is what tells them to sign in again.
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
       this.applyUnverifiedSession({ token: pair.token, user: stored.user });
-      this.setSessionRecoveryTerminallyRejected(true);
+      this.setSessionRecoveryTerminallyRejected("session-rejected");
       this.settleSessionRecovery("rotated-pair-rejected");
       return;
     }
@@ -1466,7 +1455,7 @@ export class AuthService {
         });
         this.setLastError(refreshRejectedCredentialError(rejection));
         this.applyUnverifiedSession(stored);
-        this.setSessionRecoveryTerminallyRejected(true);
+        this.setSessionRecoveryTerminallyRejected("session-rejected");
         this.settleSessionRecovery("refresh-rejected-credential");
         return;
       }
@@ -1492,7 +1481,7 @@ export class AuthService {
         // holding.
         this.setLastError(AUTH_ERROR_ACCOUNT_UNAVAILABLE);
         this.applyUnverifiedSession(stored);
-        this.setSessionRecoveryTerminallyRejected(true);
+        this.setSessionRecoveryTerminallyRejected("account-unavailable");
         this.settleSessionRecovery(outcome);
         return;
       case "deleted":
@@ -2310,7 +2299,11 @@ export class AuthService {
       // inbound revoke and a locally-observed one cannot drift: it builds the
       // session from `currentProfile` and returns false when there is no
       // identity to demote, rather than inventing one.
-      this.demoteLiveSessionOnTerminalVerdict(rejectedToken);
+      //
+      // `ended-elsewhere`: main's revoke carries the bearer and no verdict, so
+      // whether the sibling saw an expiry or a refused account is not known
+      // here, and this window has no `lastError` of its own to say.
+      this.demoteLiveSessionOnTerminalVerdict(rejectedToken, "ended-elsewhere");
     } finally {
       this.suppressCloudAuthorizationRevokedFanOut = false;
     }
@@ -3068,7 +3061,7 @@ export class AuthService {
       // hold the plane, and the reason all of them were enumerated rather than
       // fixed one at a time.
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
-      this.demoteLiveSessionOnTerminalVerdict(result.token);
+      this.demoteLiveSessionOnTerminalVerdict(result.token, "session-rejected");
       return { kind: "rejected" };
     }
     // Both terminal shapes report `rejected` to the request layer: the
@@ -3223,7 +3216,12 @@ export class AuthService {
             ? AUTH_ERROR_ACCOUNT_UNAVAILABLE
             : refreshRejectedCredentialError(rotated.rejection),
         );
-        if (!this.demoteLiveSessionOnTerminalVerdict(this.currentBearer)) {
+        if (
+          !this.demoteLiveSessionOnTerminalVerdict(
+            this.currentBearer,
+            refreshRejectedLoss(rotated.outcome),
+          )
+        ) {
           // No live identity to hold a plane FOR. Nothing to demote, so take
           // the old behaviour rather than inventing a session.
           this.clearUiSession();
@@ -4466,7 +4464,7 @@ export class AuthService {
     // commit through it too, so the latch would be erased by the very
     // transition that sets it. The clear belongs where a credential is
     // VALIDATED, not merely where one is stored.
-    this.setSessionRecoveryTerminallyRejected(false);
+    this.setSessionRecoveryTerminallyRejected("unreachable");
     this.emitSessionSnapshot();
     this.refreshScheduler.start();
     // THE POST-STORE VERDICT EDGE, and it is LAST for the same reason
@@ -4920,26 +4918,33 @@ export class AuthService {
    */
   private demoteLiveSessionOnTerminalVerdict(
     bearerToDemoteOnto: string | null,
+    loss: TerminalCloudVerdictLoss,
   ): boolean {
     const profile = this.currentProfile;
     if (profile === null || bearerToDemoteOnto === null) {
       return false;
     }
-    this.demoteVerifiedSessionToUnverified({
-      token: bearerToDemoteOnto,
-      user: {
-        id: profile.userId,
-        email: profile.email,
-        name: profile.userName,
+    this.demoteVerifiedSessionToUnverified(
+      {
+        token: bearerToDemoteOnto,
+        user: {
+          id: profile.userId,
+          email: profile.email,
+          name: profile.userName,
+        },
       },
-    });
+      loss,
+    );
     return true;
   }
 
-  private demoteVerifiedSessionToUnverified(session: {
-    readonly token: string;
-    readonly user: StoredCredentials["user"];
-  }): boolean {
+  private demoteVerifiedSessionToUnverified(
+    session: {
+      readonly token: string;
+      readonly user: StoredCredentials["user"];
+    },
+    loss: TerminalCloudVerdictLoss,
+  ): boolean {
     // THE TERMINAL LATCH, set here because this is the terminal arm: every
     // live-path intake that reaches a refresh-rejected / account-rejected
     // verdict demotes through this method. The stored-session paths set the
@@ -4951,7 +4956,7 @@ export class AuthService {
     // the scheduler, undoing the server's verdict on a network event. Any
     // recovery loop already running is stood down for the same reason.
     // `applySignedIn` clears the latch when authn accepts something again.
-    this.setSessionRecoveryTerminallyRejected(true);
+    this.setSessionRecoveryTerminallyRejected(loss);
     this.settleSessionRecovery("terminal-verdict");
     // Read BEFORE the projection commits: this is the only moment the two
     // states are distinguishable, and only a session that HELD a verdict is
@@ -5338,6 +5343,18 @@ function refreshRejectedCredentialError(
   return refreshRejectionRevocation(rejection) === "user-epoch"
     ? AUTH_ERROR_SIGNED_OUT_EVERYWHERE
     : AUTH_ERROR_SESSION_EXPIRED;
+}
+
+/**
+ * What a terminal refresh rejection latches as. Authn refuses either the
+ * ACCOUNT, which signing in again cannot fix, or the credential, which it can.
+ */
+function refreshRejectedLoss(
+  outcome: "refresh-rejected-account" | "refresh-rejected-credential",
+): TerminalCloudVerdictLoss {
+  return outcome === "refresh-rejected-account"
+    ? "account-unavailable"
+    : "session-rejected";
 }
 
 /**
