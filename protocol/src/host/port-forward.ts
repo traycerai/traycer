@@ -290,3 +290,12 @@ export const portForwardCutLeaseV10 = defineRpcContract({
  * target port. A per-connection event, so it rides the tunnel's own reset.
  */
 export const TUNNEL_TARGET_REFUSED_CODE = "TUNNEL_TARGET_REFUSED";
+
+/**
+ * FATAL `code` on a tunnel refused because the dialing principal may not edit
+ * the lease's task RIGHT NOW. Deliberately not `TUNNEL_NOT_AUTHORIZED`: that
+ * one says "no such lease here", which the other side acts on by forgetting
+ * the lease. A role refusal says nothing about the lease - it is still held,
+ * and still owed a release - so it must never read as that.
+ */
+export const TUNNEL_NO_EDIT_ACCESS_CODE = "TUNNEL_NO_EDIT_ACCESS";
