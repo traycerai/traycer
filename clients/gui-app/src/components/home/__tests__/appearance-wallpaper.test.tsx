@@ -98,6 +98,7 @@ describe("AppearanceWallpaper", () => {
         }}
         url="blob:wallpaper"
         tint={null}
+        surface="page"
       />,
     );
     await act(async () => {
@@ -194,6 +195,7 @@ describe("AppearanceWallpaper", () => {
           wallpaper={DITHER_WALLPAPER}
           url="blob:wallpaper"
           tint={null}
+          surface="page"
         />,
       );
       const liveCanvas = container.querySelector("canvas");
@@ -353,5 +355,40 @@ describe("AppearanceWallpaper", () => {
       expect(liveMutations()).toBe(framePainted);
       expect(imageProcessingMocks.yieldImageWork).toHaveBeenCalledTimes(passes);
     });
+  });
+  it("paints the page veil and sub-1 opacity on the page surface only", () => {
+    const wallpaper = {
+      style: "photo",
+      intensity: 0.6,
+      tintWithAccent: false,
+      name: "wallpaper.png",
+      curatedId: null,
+    } as const;
+    const onPage = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    expect(
+      onPage.container.querySelector(".appearance-wallpaper-mask"),
+    ).not.toBeNull();
+    expect(onPage.container.querySelector("img")?.style.opacity).toBe("0.85");
+    onPage.unmount();
+
+    const preview = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:wallpaper"
+        tint={null}
+        surface="preview"
+      />,
+    );
+    expect(
+      preview.container.querySelector(".appearance-wallpaper-mask"),
+    ).toBeNull();
+    expect(preview.container.querySelector("img")?.style.opacity).toBe("1");
   });
 });

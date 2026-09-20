@@ -30,19 +30,42 @@ const RESIZE_DEBOUNCE_MS = 100;
 let colorProbeCanvas: HTMLCanvasElement | null = null;
 
 /**
- * The personal start-page wallpaper. `photo` and `grain` are the image itself
- * under CSS; `dither` repaints it onto a low-resolution canvas upscaled with
- * `image-rendering: pixelated`, so the treatment is a render-time property of
- * the surface rather than a second set of bytes to store and invalidate.
+ * Where the wallpaper is being painted, which decides how much of the
+ * treatment applies.
+ *
+ * `page` is the start page: the effect's texture plus everything that settles
+ * the image into the page - the neutral veil that clears the composer, the
+ * fade into `--background` below, and the sub-1 opacity that lets the page
+ * colour through.
+ *
+ * `preview` is a curated tile in Settings: the texture alone, at full opacity.
+ * The page integration is sized for a full-height surface - at tile size the
+ * veil's ellipse covers the whole tile and the fade takes its lower half, so
+ * every wallpaper reads as grey fog and the three effects become
+ * indistinguishable. What a tile has to answer is "what do the dots / the
+ * grain look like on this picture at this strength", nothing more.
+ */
+export type WallpaperSurface = "page" | "preview";
+
+/**
+ * The personal start-page wallpaper, and - fed a catalog thumbnail as a
+ * `preview` surface - what each curated tile in Settings shows under the
+ * current effect, so the two can never drift apart. `photo` and `grain` are
+ * the image itself under CSS; `dither` repaints it onto a low-resolution
+ * canvas upscaled with `image-rendering: pixelated`, so the treatment is a
+ * render-time property of the surface rather than a second set of bytes to
+ * store and invalidate.
  */
 export function AppearanceWallpaper(props: {
   readonly wallpaper: StartPageWallpaper | null;
   readonly url: string | null;
   /** Dither tint. `null` reads the theme accent (`--primary`) instead. */
   readonly tint: string | null;
+  readonly surface: WallpaperSurface;
 }) {
-  const { wallpaper, url, tint } = props;
+  const { wallpaper, url, tint, surface } = props;
   if (wallpaper === null || url === null) return null;
+  const onPage = surface === "page";
   // Subtle leaves a 20% veil at the centre, strong reaches 65%. The same knob
   // scales the texture for dot pattern and film grain; for photo it is the
   // only thing the slider does.
@@ -67,14 +90,18 @@ export function AppearanceWallpaper(props: {
           className="size-full object-cover"
           src={url}
           alt=""
+          // The start page's own wallpaper is a blob URL, where a referrer is
+          // moot; a curated tile in Settings loads its thumbnail from the
+          // assets CDN, and no catalog request sends one.
+          referrerPolicy="no-referrer"
           draggable={false}
           style={
             wallpaper.style === "grain"
               ? {
-                  opacity: 0.9 - wallpaper.intensity * 0.4,
+                  opacity: imageOpacity(wallpaper, onPage),
                   filter: "saturate(0.8) contrast(1.05)",
                 }
-              : { opacity: 0.85 }
+              : { opacity: imageOpacity(wallpaper, onPage) }
           }
         />
       )}
@@ -84,9 +111,22 @@ export function AppearanceWallpaper(props: {
           style={{ opacity: 0.15 + wallpaper.intensity * 0.5 }}
         />
       ) : null}
-      <div className="appearance-wallpaper-mask absolute inset-0" />
+      {onPage ? (
+        <div className="appearance-wallpaper-mask absolute inset-0" />
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The `<img>` opacity of `photo` and `grain`. Grain's desaturation is texture
+ * and applies on every surface; the sub-1 opacity is page integration - it
+ * lets the page colour through - and applies on the page only.
+ */
+function imageOpacity(wallpaper: StartPageWallpaper, onPage: boolean): number {
+  if (!onPage) return 1;
+  if (wallpaper.style === "grain") return 0.9 - wallpaper.intensity * 0.4;
+  return 0.85;
 }
 
 function DitheredWallpaper(props: {
@@ -154,6 +194,14 @@ function DitheredWallpaper(props: {
     // Same "leave the last frame up" outcome as an aborted render - there is
     // no broken-image placeholder to paint onto a dither canvas.
     image.onerror = () => undefined;
+    image.referrerPolicy = "no-referrer";
+    // A cross-origin image drawn without CORS taints the canvas, and the
+    // dither pass then dies in `getImageData` - silently, into the catch
+    // below - leaving the plain image upscaled `pixelated`: it LOOKS dithered
+    // and reacts to nothing. The catalog thumbnails come from the assets CDN
+    // (which serves `Access-Control-Allow-Origin: *`); the start page's own
+    // blob URL is same-origin and unaffected either way.
+    image.crossOrigin = "anonymous";
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
