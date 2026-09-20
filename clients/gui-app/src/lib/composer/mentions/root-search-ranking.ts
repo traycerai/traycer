@@ -3,12 +3,29 @@ import { resortByNameTier, searchFuzzyMatches } from "../fuzzy-ranking";
 import type { MentionMenuEntry, MentionProviderId } from "./providers";
 
 /**
- * One root-search row with the provider that produced it. The provider id is
+ * One root-search row with the provider that produced it plus the two facts
+ * the ranking needs that the rendered row does not carry. The provider id is
  * ranking metadata only - it never changes what the row does when picked.
  */
 export interface RootSearchCandidate {
   readonly entry: MentionMenuEntry;
   readonly providerId: MentionProviderId;
+  /**
+   * The row's full path when it names one (files, folders): the text the
+   * ranking judges beside the name, in place of the rendered `detail` /
+   * `description`. Those two are BOTH the dirname on a path row, so ranking
+   * on them counted a dirname hit twice and never saw the whole path - every
+   * file inside a folder outranked the folder itself, and a query spanning a
+   * path boundary (`lib/comp`) matched nothing the ranker could see. `null`
+   * for rows that are not paths, which rank on their rendered fields.
+   */
+  readonly path: string | null;
+  /**
+   * When the user last picked this row from the menu this session, or `null`
+   * when never (or evicted from the pick memory's cap). A mild nudge, not a
+   * tier: see `RECENT_PICK_SCORE_BOOST`.
+   */
+  readonly pickedAt: number | null;
 }
 
 /**
@@ -33,19 +50,56 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
   artifacts: 0.9,
 };
 
-const FUSE_KEYS: NonNullable<IFuseOptions<RootSearchCandidate>["keys"]> = [
+/**
+ * The same mild edge for a row the user picked recently. Multiplicative like
+ * the provider boost, so it reorders rows of comparable match quality and
+ * never lifts a weak match over a literal one - the name tiers below still
+ * decide first. Deliberately not a "recent first" band: `@a` must keep
+ * `a.ts` above last week's `authorization.ts`.
+ */
+const RECENT_PICK_SCORE_BOOST = 0.85;
+
+/**
+ * What the Fuse pass reads per candidate. Built here rather than indexing the
+ * entry directly so a path row can rank on its full path while every other
+ * row keeps ranking on what it renders.
+ */
+interface RootSearchDocument {
+  readonly candidate: RootSearchCandidate;
+  readonly namePrefix: string;
+  readonly name: string;
+  readonly context: string;
+  readonly extra: string;
+  readonly searchText: string;
+}
+
+const FUSE_KEYS: NonNullable<IFuseOptions<RootSearchDocument>["keys"]> = [
   // The identity segment a PR/issue row leads with (`#4917`). Weighted with
-  // the label so typing a bare number at root finds the row it names.
-  { name: "entry.labelPrefix", weight: 2 },
-  { name: "entry.label", weight: 2 },
-  { name: "entry.detail", weight: 1 },
-  { name: "entry.description", weight: 0.5 },
+  // the name so typing a bare number at root finds the row it names.
+  { name: "namePrefix", weight: 2 },
+  { name: "name", weight: 2 },
+  { name: "context", weight: 1 },
+  { name: "extra", weight: 0.5 },
   // Non-rendered search-only text (a PR/issue author's login). Weighted at
   // the bottom: it exists so a row the SOURCE matched can be re-matched -
   // and counted by `matchedCount`, which gates the zero-match dismissal -
   // not to outrank rows matched on what the user can actually see.
-  { name: "entry.searchText", weight: 0.5 },
+  { name: "searchText", weight: 0.5 },
 ];
+
+function documentFor(candidate: RootSearchCandidate): RootSearchDocument {
+  const { entry, path } = candidate;
+  return {
+    candidate,
+    namePrefix: entry.labelPrefix ?? "",
+    name: entry.label,
+    // A path row's context is its whole path - the same two keys the host
+    // ranked it on - and nothing else, so the dirname is never counted twice.
+    context: path ?? entry.detail,
+    extra: path === null ? entry.description : "",
+    searchText: entry.searchText ?? "",
+  };
+}
 
 export interface RankedRootSearch {
   readonly entries: ReadonlyArray<MentionMenuEntry>;
@@ -58,17 +112,6 @@ export interface RankedRootSearch {
   readonly matchedCount: number | null;
 }
 
-/**
- * Ranks the flattened root `@` search across every provider into one flat
- * best-match-first list, replacing the fixed provider concatenation (which
- * pinned files/folders above everything regardless of match quality).
- *
- * Every candidate was already query-matched by its source (host path search,
- * cloud `epic.mention*`, or a local filter), so a row the client-side pass
- * cannot re-match is appended after the ranked rows in original provider order
- * rather than dropped - the source's match may live in text the menu row does
- * not carry (e.g. a deep path segment).
- */
 /**
  * Which of a row's two name fields the tiering should judge it on.
  *
@@ -117,6 +160,34 @@ function tierOf(text: string, lowerQuery: string): number {
   return lowerText.includes(lowerQuery) ? 1 : 2;
 }
 
+function scoreBoost(candidate: RootSearchCandidate): number {
+  const provider = PROVIDER_SCORE_BOOSTS[candidate.providerId];
+  return candidate.pickedAt === null
+    ? provider
+    : provider * RECENT_PICK_SCORE_BOOST;
+}
+
+/**
+ * Equal-score order. The input order is provider concatenation, which says
+ * nothing about relevance, so a tie is settled on facts about the rows: the
+ * more recently picked one, then the shorter path or name (the host's own
+ * path tie-break - `src/lib/composer` over a file inside it when both merely
+ * contain the query). Only then the input index, for determinism.
+ */
+function compareTiedCandidates(
+  left: RootSearchCandidate,
+  right: RootSearchCandidate,
+): number {
+  const leftPicked = left.pickedAt ?? Number.NEGATIVE_INFINITY;
+  const rightPicked = right.pickedAt ?? Number.NEGATIVE_INFINITY;
+  if (leftPicked !== rightPicked) return rightPicked - leftPicked;
+  return tieLength(left) - tieLength(right);
+}
+
+function tieLength(candidate: RootSearchCandidate): number {
+  return (candidate.path ?? candidate.entry.label).length;
+}
+
 export function rankRootSearchEntries(
   candidates: ReadonlyArray<RootSearchCandidate>,
   query: string,
@@ -129,19 +200,17 @@ export function rankRootSearchEntries(
     };
   }
   // Tier on the label (filename/title), not the full path: a deep path-
-  // segment hit in `detail` still surfaces via the last tier instead of
-  // competing with literal label hits, and the provider boost only orders
-  // rows within a tier — it can no longer push a substring hit above a
-  // label-prefix hit.
+  // segment hit still surfaces via the last tier instead of competing with
+  // literal label hits, and the score boosts only order rows within a tier -
+  // they can never push a substring hit above a label-prefix hit.
   const matches = resortByNameTier(
-    searchFuzzyMatches(
-      candidates,
-      trimmedQuery,
-      FUSE_KEYS,
-      (candidate, score) => score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
-    ),
+    searchFuzzyMatches(candidates.map(documentFor), trimmedQuery, FUSE_KEYS, {
+      adjustScore: (document, score) => score * scoreBoost(document.candidate),
+      compareTies: (left, right) =>
+        compareTiedCandidates(left.candidate, right.candidate),
+    }),
     trimmedQuery,
-    (candidate) => tierTextFor(candidate, trimmedQuery),
+    (document) => tierTextFor(document.candidate, trimmedQuery),
   );
   const matchedIndices = new Set(matches.map((match) => match.refIndex));
   const unmatched = candidates.filter(
@@ -149,7 +218,7 @@ export function rankRootSearchEntries(
   );
   return {
     entries: [
-      ...matches.map((match) => match.item.entry),
+      ...matches.map((match) => match.item.candidate.entry),
       ...unmatched.map((candidate) => candidate.entry),
     ],
     matchedCount: matches.length,
