@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -324,37 +324,52 @@ function findFactoryNameViolationsInSource(
   return violations;
 }
 
-function scanFactoryCalls(
-  gitRoot: string,
-  relativeTo: string,
-): { readonly files: readonly string[]; readonly sites: FactoryCallSite[] } {
-  const files = collectTypeScriptFiles(gitRoot);
-  const sites: FactoryCallSite[] = [];
-  for (const filePath of files) {
-    const relative = posixRelative(relativeTo, filePath);
-    sites.push(
-      ...findFactoryCallsInSource(relative, readFileSync(filePath, "utf8")),
-    );
+// Only 13 of the repo's 4,578 tracked TS/JS files contain any of the four
+// factory names at all, so parsing every file to look for them is nearly
+// all wasted work. A plain substring check is enough EXCEPT for a factory
+// name written with a unicode identifier escape (`defineVersionedRpcRegistry`
+// spelled with a `R` in place of an `R`, say): `node.text` is the
+// UNESCAPED name, so the AST finders see it fine, but a substring check on
+// the raw source would not - which would make the prefilter unsound rather
+// than merely approximate. Catching any `\u` escape anywhere in the file
+// keeps it sound at the cost of 94 extra files getting parsed - still ~50x
+// fewer parses than the full file set.
+const FACTORY_NAME_LIST = [...FACTORY_NAMES];
+
+function needsParse(text: string): boolean {
+  for (const name of FACTORY_NAME_LIST) {
+    if (text.includes(name)) return true;
   }
-  return { files, sites };
+  return text.includes("\\u");
 }
 
-function scanFactoryNameViolations(
+type ProductionScanResult = {
+  readonly files: readonly string[];
+  readonly sites: FactoryCallSite[];
+  readonly violations: FactoryNameViolation[];
+  readonly parsedCount: number;
+};
+
+// One listing, one read, one parse per file - shared by both production
+// tests below, which used to each run the full walk (list + read + parse)
+// independently over the same 4,578 files.
+function scanProduction(
   gitRoot: string,
   relativeTo: string,
-): FactoryNameViolation[] {
+): ProductionScanResult {
   const files = collectTypeScriptFiles(gitRoot);
+  const sites: FactoryCallSite[] = [];
   const violations: FactoryNameViolation[] = [];
+  let parsedCount = 0;
   for (const filePath of files) {
+    const text = readFileSync(filePath, "utf8");
+    if (!needsParse(text)) continue;
+    parsedCount += 1;
     const relative = posixRelative(relativeTo, filePath);
-    violations.push(
-      ...findFactoryNameViolationsInSource(
-        relative,
-        readFileSync(filePath, "utf8"),
-      ),
-    );
+    sites.push(...findFactoryCallsInSource(relative, text));
+    violations.push(...findFactoryNameViolationsInSource(relative, text));
   }
-  return violations;
+  return { files, sites, violations, parsedCount };
 }
 
 function siteKey(site: FactoryCallSite): string {
@@ -430,36 +445,104 @@ describe("static registry tripwire", () => {
     expect(shouldSkipListedPath("protocol/src/auth/registry.ts")).toBe(false);
   });
 
-  it("production has no aliased factory imports and no factory value uses outside framework", () => {
-    const violations = scanFactoryNameViolations(TRAYCER_ROOT, PROTOCOL_ROOT);
-    expect(violations).toEqual([]);
+  describe("production scan (shared pass)", () => {
+    // Measured directly on this development machine (logged once while
+    // developing this shared pass, then the log removed): the single
+    // list+read+parse-filtered pass over the repo's 4,578 tracked files
+    // completed in 500-950 ms across three runs, replacing two independent
+    // ~2.9-3.9 s passes (each parsing every file). The suite's OLD per-test
+    // cost (no shared pass, no prefilter) measured ~4 s on this machine and
+    // 8.3-9.2 s on the CI runner - a ~2.2x slowdown factor. Applying that
+    // factor to the high end of the NEW shared-pass measurement gives an
+    // expected CI cost of ~950 ms * 2.2 ~= 2,090 ms for the one pass both
+    // tests now share. The hook timeout below is 5x that expectation,
+    // rounded, for headroom.
+    const MEASURED_LOCAL_SHARED_SCAN_MS = 950;
+    const CI_SLOWDOWN_FACTOR = 2.2;
+    const EXPECTED_CI_SHARED_SCAN_MS = Math.round(
+      MEASURED_LOCAL_SHARED_SCAN_MS * CI_SLOWDOWN_FACTOR,
+    );
+    const SHARED_SCAN_HOOK_TIMEOUT_MS = EXPECTED_CI_SHARED_SCAN_MS * 5;
+
+    let scan: ProductionScanResult;
+
+    beforeAll(() => {
+      scan = scanProduction(TRAYCER_ROOT, PROTOCOL_ROOT);
+    }, SHARED_SCAN_HOOK_TIMEOUT_MS);
+
+    it("production has no aliased factory imports and no factory value uses outside framework", () => {
+      expect(scan.violations).toEqual([]);
+    });
+
+    it("the production call-site multiset equals STATIC_REGISTRIES", () => {
+      expect(scan.files.length).toBeGreaterThan(0);
+      expect(scan.files).toContain(
+        path.join(TRAYCER_ROOT, "protocol/src/auth/registry.ts"),
+      );
+
+      const plantedSites = findFactoryCallsInSource(
+        "src/planted-unlisted.ts",
+        "export const registry = defineVersionedRpcRegistry({ ping: {} });\n",
+      );
+      expect(plantedSites).toHaveLength(1);
+      const planted = plantedSites[0];
+      if (planted === undefined) {
+        throw new Error("expected one planted factory call");
+      }
+      expect(siteKey(planted)).toBe("src/planted-unlisted.ts\nunary-rpc");
+
+      const expected = STATIC_REGISTRIES.map((entry) => ({
+        sourceFile: entry.sourceFile,
+        kind: entry.kind,
+      }));
+      expect(sortedSiteKeys(scan.sites)).toEqual(sortedSiteKeys(expected));
+      expect(sortedSiteKeys([...scan.sites, planted])).not.toEqual(
+        sortedSiteKeys(expected),
+      );
+    });
+
+    it("the prefilter is safe to trust: it parses a small minority of files, and yields the same sites/violations the two tests above already pinned", () => {
+      expect(scan.parsedCount).toBeGreaterThan(0);
+      expect(scan.parsedCount).toBeLessThan(scan.files.length * 0.05);
+      expect(scan.violations).toEqual([]);
+      const expected = STATIC_REGISTRIES.map((entry) => ({
+        sourceFile: entry.sourceFile,
+        kind: entry.kind,
+      }));
+      expect(sortedSiteKeys(scan.sites)).toEqual(sortedSiteKeys(expected));
+    });
+  });
+});
+
+describe("needsParse: prefilter (pure)", () => {
+  it("a text containing each factory name needs a parse", () => {
+    for (const name of FACTORY_NAME_LIST) {
+      expect(needsParse(`export const x = ${name}({});\n`)).toBe(true);
+    }
   });
 
-  it("the production call-site multiset equals STATIC_REGISTRIES", () => {
-    const scanned = scanFactoryCalls(TRAYCER_ROOT, PROTOCOL_ROOT);
-    expect(scanned.files.length).toBeGreaterThan(0);
-    expect(scanned.files).toContain(
-      path.join(TRAYCER_ROOT, "protocol/src/auth/registry.ts"),
-    );
+  it("defineVersionedRpcRegistry({}) needs a parse, AND findFactoryCallsInSource finds the site - the control showing why the clause exists", () => {
+    const text = "export const registry = defineVersionedRpcRegistry({});\n";
+    expect(needsParse(text)).toBe(true);
+    expect(findFactoryCallsInSource("inline.ts", text)).toEqual([
+      { sourceFile: "inline.ts", kind: "unary-rpc" },
+    ]);
+  });
 
-    const plantedSites = findFactoryCallsInSource(
-      "src/planted-unlisted.ts",
-      "export const registry = defineVersionedRpcRegistry({ ping: {} });\n",
-    );
-    expect(plantedSites).toHaveLength(1);
-    const planted = plantedSites[0];
-    if (planted === undefined) {
-      throw new Error("expected one planted factory call");
-    }
-    expect(siteKey(planted)).toBe("src/planted-unlisted.ts\nunary-rpc");
+  it("a unicode-escaped identifier needs a parse even when no factory name appears as a literal substring", () => {
+    // A `\u` escape can hide any identifier, including a factory name TS
+    // would still resolve at parse time via the unescaped `node.text`. No
+    // factory name is a literal substring here, so this is exactly the
+    // case the `\u` clause exists to keep the prefilter sound for.
+    const text = "export const registry = \\u0064oSomething({});\n";
+    expect(needsParse(text)).toBe(true);
+  });
 
-    const expected = STATIC_REGISTRIES.map((entry) => ({
-      sourceFile: entry.sourceFile,
-      kind: entry.kind,
-    }));
-    expect(sortedSiteKeys(scanned.sites)).toEqual(sortedSiteKeys(expected));
-    expect(sortedSiteKeys([...scanned.sites, planted])).not.toEqual(
-      sortedSiteKeys(expected),
-    );
+  it("an ordinary file with neither a factory name nor a unicode escape does not need a parse", () => {
+    expect(
+      needsParse(
+        "export function add(a: number, b: number) {\n  return a + b;\n}\n",
+      ),
+    ).toBe(false);
   });
 });
