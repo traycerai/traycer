@@ -425,7 +425,9 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
     renderSection();
 
     await screen.findByRole("button", { name: "Wallpaper 6" });
-    expect(screen.queryByRole("button", { name: /more wallpapers/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /more wallpapers/ }),
+    ).toBeNull();
   });
 
   it("caps the in-row gallery at five tiles plus a View-N-more tile", async () => {
@@ -466,14 +468,18 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
       within(dialog).queryByRole("button", { name: /more wallpapers/ }),
     ).toBeNull();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Wallpaper 7" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Wallpaper 7" }),
+    );
     await vi.waitFor(() =>
       expect(wallpaperMocks.applyCurated).toHaveBeenCalledWith(
         expect.objectContaining({ id: "w7" }),
       ),
     );
     // Applying keeps the catalog open; Done closes it.
-    expect(screen.getByRole("dialog", { name: "Curated wallpapers" })).not.toBeNull();
+    expect(
+      screen.getByRole("dialog", { name: "Curated wallpapers" }),
+    ).not.toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
     await vi.waitFor(() =>
       expect(
