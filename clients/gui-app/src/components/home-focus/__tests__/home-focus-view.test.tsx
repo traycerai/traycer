@@ -2055,7 +2055,6 @@ describe("<HomeFocusView /> job row elapsed", () => {
           createdAt: Date.now() - 5 * 60 * 1000,
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
