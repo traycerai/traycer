@@ -524,7 +524,12 @@ function CuratedWallpaperGallery(props: {
           type="button"
           aria-label={`View ${hidden} more wallpapers`}
           onClick={props.onViewAll}
-          className="block w-full text-left"
+          // `self-start`: a button centres its content in whatever height the
+          // grid row gives it, and this one has no caption below its box to
+          // fill that row the way a wallpaper tile does - left stretched, the
+          // box floats to the row's middle instead of lining up with the
+          // thumbnails beside it.
+          className="block w-full self-start text-left"
         >
           <div className="flex aspect-[16/10] w-full items-center justify-center rounded-md border border-dashed border-border bg-foreground/5 text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground">
             View {hidden} more
@@ -582,6 +587,7 @@ function CuratedWallpaperTile(props: {
             wallpaper={props.treatment}
             url={entry.thumbUrl}
             tint={null}
+            surface="preview"
           />
         )}
         {applied ? (

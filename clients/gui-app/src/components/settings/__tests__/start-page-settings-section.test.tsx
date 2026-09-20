@@ -354,18 +354,20 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
     renderSection();
 
     const dunesTile = await screen.findByRole("button", { name: "Dunes" });
-    // The tile is the same surface the start page paints: the wallpaper
-    // wrapper, the thumbnail as its image, the grain texture and the veil.
+    // The tile is the start page's own component on its `preview` surface:
+    // the thumbnail as its image and the grain texture, at full opacity and
+    // without the page veil - the texture is what a tile has to show.
     const surface = dunesTile.querySelector(".appearance-wallpaper");
     expect(surface).not.toBeNull();
     const img = surface?.querySelector("img");
     expect(img?.getAttribute("src")).toBe(dunes.thumbUrl);
     expect(img?.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(img?.style.filter).toBe("saturate(0.8) contrast(1.05)");
+    expect(img?.style.opacity).toBe("1");
     expect(
       surface?.querySelector(".appearance-wallpaper-texture"),
     ).not.toBeNull();
-    expect(surface?.querySelector(".appearance-wallpaper-mask")).not.toBeNull();
+    expect(surface?.querySelector(".appearance-wallpaper-mask")).toBeNull();
     // Both tiles preview it, not only the applied one.
     expect(
       screen
