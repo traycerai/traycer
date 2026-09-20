@@ -206,6 +206,7 @@ function emptyChatSnapshot(args: {
     backgroundItems: [],
     managedCommands: [...args.commands],
     heldUpdates: [],
+    portForwards: [],
   };
 }
 

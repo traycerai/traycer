@@ -272,6 +272,7 @@ import {
   chatSubscribeV111,
   chatSubscribeV112,
   chatSubscribeV113,
+  chatSubscribeV114,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -11921,7 +11922,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 13,
+      latestMinor: 14,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11989,9 +11990,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         12: {
           contract: chatSubscribeV112,
         },
-        // @1.13 is the `auto` line, and the live one.
+        // @1.13 is the `auto` line. Frozen without the port-forward surface.
         13: {
           contract: chatSubscribeV113,
+        },
+        // @1.14 is the port-forward line, and the live one: the agent's
+        // forwards on the snapshot, `portForwardsChanged`, and the queue item
+        // that reports one going `interrupted`. The host PROJECTS all three
+        // away below this minor rather than refusing the subscribe.
+        14: {
+          contract: chatSubscribeV114,
         },
       },
     },

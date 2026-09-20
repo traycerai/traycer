@@ -93,6 +93,35 @@ export const ownedPortForwardSchema = z.object({
 export type OwnedPortForward = z.infer<typeof ownedPortForwardSchema>;
 
 /**
+ * One of an agent's forwards as its CHAT shows it (`chat.subscribe@1.14`,
+ * `snapshot.portForwards` and `portForwardsChanged`). Its own shape, not
+ * {@link ownedPortForwardSchema}: there are NO counters here. Bytes and open
+ * connections change with every packet, the chat's set is re-sent whole on
+ * every change, and the chat row does not show them - so carrying them would
+ * buy a frame per packet for nothing. The host-level listing
+ * (`portForward.listForHost`) is where counters live.
+ *
+ * Only `active` and `interrupted` ever appear: a `binding` forward has no id
+ * its agent knows yet, and a `stopped` one is gone.
+ */
+export const chatPortForwardSchema = z.object({
+  forwardId: z.string().min(1),
+  description: z.string(),
+  target: z.object({ hostId: z.string().min(1), port: portForwardPortSchema }),
+  listen: z.object({
+    hostId: z.string().min(1),
+    requestedPort: portForwardPortSchema,
+    boundPort: portForwardPortSchema.nullable(),
+  }),
+  state: portForwardStateSchema,
+  /** Why it is `interrupted`; null otherwise. */
+  stateReason: z.string().nullable(),
+  createdAtMs: z.number(),
+  recentEvents: z.array(portForwardEventSchema),
+});
+export type ChatPortForward = z.infer<typeof chatPortForwardSchema>;
+
+/**
  * Which half of the forward the lease host holds: the loopback LISTENER, or
  * permission to reach one named TARGET port.
  */

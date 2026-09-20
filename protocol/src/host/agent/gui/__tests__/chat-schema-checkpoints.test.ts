@@ -19,6 +19,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -67,6 +68,11 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // benign difference: `chatQueuedItemSchemaPreAuto`'s comment records that
 // `z.union` and `z.discriminatedUnion` render `anyOf` versus `oneOf` and move
 // every field path beneath them.
+//
+// 1.13 is captured ON TIME, the way the rule asks: taken from the tree at OSS
+// commit c18aba718, before the port-forward surface took 1.14 above it, and
+// re-taken after the freeze to confirm the two agree. It is the first entry
+// since 1.10 that proves the freeze rather than merely starting one.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -120,6 +126,10 @@ const SERVER_FRAME_DIGESTS = {
     "1ec10f676481441ce71ed56103b4128077c6bbcc51a2c541f151643bbe6ae5b4",
     "a17b8dbe7272b923796462c80c932481f4b2b87d28658d3e25999da32774b746",
   ],
+  13: [
+    "f83098c0c1a78280affe4b8ba958bf253e73b21f2f6af0e5878a83226ec4eeaf",
+    "1eaed10d91584f2ca9ae5e198690778df162129f9f4052c10dfe92471046b6cb",
+  ],
 } as const;
 
 const contracts = [
@@ -136,10 +146,11 @@ const contracts = [
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.12 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.13 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

@@ -137,6 +137,17 @@ export interface ChatStreamCallbacks {
       { readonly kind: "managedCommandsChanged" }
     >,
   ) => void;
+  /**
+   * The agent's port forwards changed (`chat.subscribe@1.14`): the whole set.
+   * A host below that line never sends it, so against an older host this is
+   * simply never called and the snapshot's `portForwards` stays `[]`.
+   */
+  readonly onPortForwardsChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "portForwardsChanged" }
+    >,
+  ) => void;
   readonly onHeldUpdatesChanged: (
     frame: Extract<
       ChatSubscribeServerFrame,
@@ -537,6 +548,10 @@ export class ChatStreamClient {
         this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
+      case "portForwardsChanged": {
+        this.callbacks.onPortForwardsChanged(frame);
+        return;
+      }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
         return;
@@ -783,6 +798,10 @@ export class ChatStreamClient {
       }
       case "managedCommandsChanged": {
         this.callbacks.onManagedCommandsChanged(frame);
+        return;
+      }
+      case "portForwardsChanged": {
+        this.callbacks.onPortForwardsChanged(frame);
         return;
       }
       case "heldUpdatesChanged": {

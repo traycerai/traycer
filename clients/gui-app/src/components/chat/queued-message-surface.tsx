@@ -747,15 +747,17 @@ function QueuedMessageRowContent(props: {
             ) : null}
           </QueuedMessageFloatingChrome>
         ) : null}
-        {item.kind === "managed-command" ? (
-          <span className="text-muted-foreground">{item.description}</span>
-        ) : (
+        {item.kind === "prompt" ? (
           <ComposerContentPreview
             content={item.message.content}
             emptyLabel="Queued message"
             testId="queued-message-content-preview"
             className={undefined}
           />
+        ) : (
+          // Both host-authored items (a shell's update, a forward's
+          // interruption) are content-free: the label is all they carry.
+          <span className="text-muted-foreground">{item.description}</span>
         )}
       </div>
     </div>
