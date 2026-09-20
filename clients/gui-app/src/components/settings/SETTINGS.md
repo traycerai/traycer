@@ -618,10 +618,20 @@ Supporting pieces, all viewport-agnostic where possible:
 - `settings-panel-shell.tsx` (and the inline shells in the Keybindings and
   Shell panels) step padding down below `sm`; the shell header wraps.
 - A row whose control wrapped still has to decide what to DO with its new
-  line, and that is per-control rather than something the floor can express -
-  a button should not stretch, a text field should. The worktree branch-prefix
-  row is the worked example: below `md` its cluster spans the line
-  (`max-md:w-full`), the input flexes into it, and its description drops to
+  line, and that is a per-control choice the floor cannot make - a button
+  should not stretch, a text field should. `SETTINGS_ROW_STACK.controlLine`
+  is the class that takes the line; what varies is only who opts in. A
+  bespoke two-column row writes it on its own cluster, and a `SettingsRow`
+  declares `controlSpansLine`, because there the flex item is the row's
+  control wrapper and the control is one level down - a percentage width
+  there has no definite containing block and shrink-wraps to the content it
+  was meant to widen. Settings > Appearance's light and dark theme rows are
+  the `SettingsRow` case: the picker is a share of the panel beside the
+  label and the whole line once the row has stacked, so a theme's name
+  reads instead of breaking one or two letters per line.
+  The worktree branch-prefix
+  row is the worked example of the bespoke case: below `md` its cluster spans
+  the line, the input flexes into it, and its description drops to
   `md:truncate` so the sentence wraps once it owns the width instead of
   ellipsing. Its reserved reset slot keeps leading the field at every width,
   and the small inset that costs below `md` is deliberate - responsive
@@ -670,12 +680,14 @@ Supporting pieces, all viewport-agnostic where possible:
   description beside it through `aria-describedby`.
 - `settings-row-layout.ts` The `max-md:` label floor shared by every
   label-beside-control row, `SettingsRow`'s and the bespoke ones alike - what
-  decides, per row width, which controls stack and which stay inline.
+  decides, per row width, which controls stack and which stay inline, plus the
+  `controlLine` class a stacked control takes to span the line it landed on.
 - `settings-row.tsx` Shared label/description/control row, rendered from a
   `SettingsRowDefinition` (see Search) - also density-aware.
   The label owns the flexible width; controls stay pinned to the trailing edge.
   If a wide control wraps, it remains right-aligned on its new line instead of
-  falling under the label at the leading edge.
+  falling under the label at the leading edge, and `controlSpansLine` widens it
+  to that whole line for a control whose content wants the room.
   The description `<p>` - or the `status` `<div>` shown in its place - carries a
   `useId()` id and a `max-w-[72ch] text-pretty` reading measure, and the row
   publishes that id to its control through
