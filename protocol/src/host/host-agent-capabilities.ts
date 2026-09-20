@@ -735,9 +735,13 @@ export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
  * not a boot timestamp: a wall clock that steps backwards between two
  * restarts would make every epoch of the newer process look older than the
  * dead one's, and the target would refuse the live agent forever. Ordering is
- * never compared across incarnations; the target takes the one it saw FIRST
- * as current and refuses the rest. `counter` orders realms within one
- * incarnation.
+ * never compared across incarnations: the target adopts an incarnation it has
+ * not seen as current for that owner, retiring whatever it held, and refuses
+ * every incarnation it has moved on from - so a restarted origin is admitted
+ * on its first call and the dead process's stragglers are fenced for good.
+ * Whether an unseen incarnation is really the newer process is answered by
+ * its carrying session, which the target checks last. `counter` orders
+ * realms within one incarnation.
  */
 const browserRealmEpochSchema = z.object({
   incarnation: z.string().min(1),
