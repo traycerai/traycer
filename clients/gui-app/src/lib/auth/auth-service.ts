@@ -60,6 +60,7 @@ import {
   type AuthContextMetadata,
   type AuthProfile,
   type AuthStatus,
+  type CloudVerdictLoss,
   type SignedOutCause,
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
@@ -696,6 +697,26 @@ export class AuthService {
   // event can change, and only a new credential (interactive sign-in, or a
   // sibling writing a fresh pair) can clear this.
   private sessionRecoveryTerminallyRejected: boolean = false;
+  /**
+   * The latch's ONE writer, because the store mirrors it as
+   * `cloudVerdictLoss`: a share the host refuses for an unverified caller is
+   * explained from that mirror, long after the toast that announced the loss
+   * (and the transient `lastError` behind it) is gone.
+   *
+   * Every site that sets the latch has ALREADY called `setLastError` with the
+   * verdict it is latching, which is how the terminal ACCOUNT state is told
+   * from a rejected credential here. `AUTH_ERROR_ACCOUNT_UNAVAILABLE` is also
+   * the one error the toast bridge deliberately never clears.
+   */
+  private setSessionRecoveryTerminallyRejected(rejected: boolean): void {
+    this.sessionRecoveryTerminallyRejected = rejected;
+    const loss: CloudVerdictLoss = !rejected
+      ? "unreachable"
+      : this.lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE
+        ? "account-unavailable"
+        : "session-rejected";
+    useAuthStore.getState().setCloudVerdictLoss(loss);
+  }
   // Superseded-save undos whose conditional deletes have not LANDED yet
   // (in flight or failed): each stale pair may still be durable. Every
   // adoption path must drain this set before trusting anything it reads —
@@ -1381,7 +1402,7 @@ export class AuthService {
       // copy is what tells them to sign in again.
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
       this.applyUnverifiedSession({ token: pair.token, user: stored.user });
-      this.sessionRecoveryTerminallyRejected = true;
+      this.setSessionRecoveryTerminallyRejected(true);
       this.settleSessionRecovery("rotated-pair-rejected");
       return;
     }
@@ -1435,7 +1456,7 @@ export class AuthService {
         });
         this.setLastError(refreshRejectedCredentialError(rejection));
         this.applyUnverifiedSession(stored);
-        this.sessionRecoveryTerminallyRejected = true;
+        this.setSessionRecoveryTerminallyRejected(true);
         this.settleSessionRecovery("refresh-rejected-credential");
         return;
       }
@@ -1461,7 +1482,7 @@ export class AuthService {
         // holding.
         this.setLastError(AUTH_ERROR_ACCOUNT_UNAVAILABLE);
         this.applyUnverifiedSession(stored);
-        this.sessionRecoveryTerminallyRejected = true;
+        this.setSessionRecoveryTerminallyRejected(true);
         this.settleSessionRecovery(outcome);
         return;
       case "deleted":
@@ -4435,7 +4456,7 @@ export class AuthService {
     // commit through it too, so the latch would be erased by the very
     // transition that sets it. The clear belongs where a credential is
     // VALIDATED, not merely where one is stored.
-    this.sessionRecoveryTerminallyRejected = false;
+    this.setSessionRecoveryTerminallyRejected(false);
     this.emitSessionSnapshot();
     this.refreshScheduler.start();
     // THE POST-STORE VERDICT EDGE, and it is LAST for the same reason
@@ -4920,7 +4941,7 @@ export class AuthService {
     // the scheduler, undoing the server's verdict on a network event. Any
     // recovery loop already running is stood down for the same reason.
     // `applySignedIn` clears the latch when authn accepts something again.
-    this.sessionRecoveryTerminallyRejected = true;
+    this.setSessionRecoveryTerminallyRejected(true);
     this.settleSessionRecovery("terminal-verdict");
     // Read BEFORE the projection commits: this is the only moment the two
     // states are distinguishable, and only a session that HELD a verdict is

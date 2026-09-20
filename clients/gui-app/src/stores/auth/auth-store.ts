@@ -253,8 +253,37 @@ export interface EpicShareableTeam {
  * `AuthService.onSessionSnapshotChange(...)` boundary - never through
  * `useAuthStore`. Static guard tests below enforce this constraint.
  */
+/**
+ * Why an `unverified` session holds no cloud verdict. Meaningful only under
+ * that status.
+ *
+ * - `unreachable`         - authn could not be asked. A network fact; it
+ *   clears by itself when authn answers.
+ * - `session-rejected`    - authn refused the credential (an expired or
+ *   revoked refresh, a sign-out everywhere). Signing in again is the fix.
+ * - `account-unavailable` - authn refused the ACCOUNT. Terminal: signing in
+ *   again as the same account cannot succeed.
+ *
+ * It exists because the three look identical to everything downstream of the
+ * status, and one surface has to tell them apart long after the toast that
+ * announced the loss is gone: a host that refuses a share for an unverified
+ * caller knows only THAT the verdict is missing (the verdict crosses the wire
+ * as a boolean), so the copy that says what to do about it has to come from
+ * here.
+ */
+export type CloudVerdictLoss =
+  | "unreachable"
+  | "session-rejected"
+  | "account-unavailable";
+
 export interface AuthState {
   readonly status: AuthStatus;
+  /**
+   * See {@link CloudVerdictLoss}. `AuthService` keeps it current from the
+   * latch that already decides whether a wake may re-probe; read it only
+   * while `status === "unverified"`.
+   */
+  readonly cloudVerdictLoss: CloudVerdictLoss;
   readonly profile: AuthProfile | null;
   readonly contextMetadata: AuthContextMetadata | null;
   readonly shareableTeams: ReadonlyArray<EpicShareableTeam>;
@@ -280,6 +309,7 @@ export interface AuthState {
    * whether a `signed-out` that ends a held attempt retires the identity.
    */
   readonly signedOutCause: SignedOutCause | null;
+  setCloudVerdictLoss(loss: CloudVerdictLoss): void;
   setSigningIn(attempt: SignInAttemptKind): void;
   setSignedIn(
     profile: AuthProfile,
@@ -359,6 +389,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
   contextMetadata: null,
   shareableTeams: [],
   subscriptionStatus: null,
+  cloudVerdictLoss: "unreachable",
+  setCloudVerdictLoss: (loss: CloudVerdictLoss) => {
+    set({ cloudVerdictLoss: loss });
+  },
   setSigningIn: (attempt: SignInAttemptKind) => {
     set({
       status: "signing-in",

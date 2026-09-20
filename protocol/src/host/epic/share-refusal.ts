@@ -36,8 +36,8 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * Why a promotion has not finished, coarsened to the four states a user is
- * told apart. The host's own pending vocabulary is wider and process-shaped
+ * Why a promotion has not finished, coarsened to the states a user is told
+ * apart. The host's own pending vocabulary is wider and process-shaped
  * (`promoting`, `retry-cooldown`, `epic-busy`, `rooms-unconfirmed`,
  * `promotion-failed`, `promotion-unavailable`, ...); this is the closed wire
  * union it maps onto:
@@ -47,6 +47,13 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * - `busy`           - something else holds the epic (an agent turn writing
  *   into it, another attempt in flight, rooms not yet acknowledged).
  * - `offline`        - the cloud was not reachable for the attempt.
+ * - `unverified`     - the caller's session holds no cloud verdict, so no
+ *   attempt was made for it. The host knows THAT and not WHY: the verdict is a
+ *   boolean the client asserts, and it is lost alike to an unreachable authn
+ *   (where the `offline` advice is right) and to an expired, revoked or
+ *   terminally rejected session (where the advice is to sign in again). The
+ *   client holds the cause, so it renders this reason from its own session
+ *   state rather than from one sentence.
  * - `failed`         - the attempt failed, or this host cannot promote at all.
  *   The only bucket where retrying unchanged is not the advice.
  *
@@ -54,7 +61,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * dropped: silence is what the pending state already suffered from.
  */
 export const epicSharePromotionPendingReasonSchema = lazySchema(() =>
-  z.enum(["recent-attempt", "busy", "offline", "failed"]),
+  z.enum(["recent-attempt", "busy", "offline", "unverified", "failed"]),
 );
 export type EpicSharePromotionPendingReason = z.infer<
   typeof epicSharePromotionPendingReasonSchema
@@ -98,6 +105,7 @@ const EPIC_SHARE_PENDING_CODE_BY_REASON = {
   "recent-attempt": "E_SHARE_PENDING_RECENT_ATTEMPT",
   busy: "E_SHARE_PENDING_BUSY",
   offline: "E_SHARE_PENDING_OFFLINE",
+  unverified: "E_SHARE_PENDING_UNVERIFIED",
   failed: "E_SHARE_PENDING_FAILED",
 } as const satisfies Record<EpicSharePromotionPendingReason, RpcErrorCode>;
 

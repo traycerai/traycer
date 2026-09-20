@@ -71,6 +71,7 @@ import {
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/versioned-rpc-types";
 import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
 
 function makeError(code: RpcErrorCode, message: string): HostRpcError {
   return new HostRpcError({
@@ -160,6 +161,59 @@ describe("useEpicGrantAccess", () => {
       const message = vi.mocked(toast.error).mock.calls[0]?.[0];
       expect(message).toContain(fragment);
       expect(message).not.toBe("Couldn't invite collaborators.");
+    }
+  });
+
+  // ── E10 ────────────────────────────────────────────────────────────────
+  //
+  // `E_SHARE_PENDING_UNVERIFIED` carries no cause of its own - the host only
+  // knows the caller's session holds no cloud verdict, not why - so the copy
+  // is picked from the GUI's OWN `cloudVerdictLoss`, not from the error.
+  it("picks the unverified share copy from the store's cloudVerdictLoss, not the wire code", () => {
+    const initialLoss = useAuthStore.getState().cloudVerdictLoss;
+    try {
+      const cases: ReadonlyArray<readonly [CloudVerdictLoss, string]> = [
+        [
+          "session-rejected",
+          "Your session has expired. Sign in again, then invite.",
+        ],
+        ["account-unavailable", "This account is no longer available"],
+        ["unreachable", "Check your connection"],
+      ];
+      for (const [loss, fragment] of cases) {
+        useAuthStore.getState().setCloudVerdictLoss(loss);
+        vi.mocked(toast.error).mockClear();
+        renderHook(() => useEpicGrantAccess());
+        capturedOptions["epic.grantAccess"].onError?.(
+          makeError("E_SHARE_PENDING_UNVERIFIED", "prose"),
+        );
+        const message = vi.mocked(toast.error).mock.calls[0]?.[0];
+        expect(message, loss).toContain(fragment);
+      }
+    } finally {
+      useAuthStore.getState().setCloudVerdictLoss(initialLoss);
+    }
+  });
+
+  it("control: E_SHARE_PENDING_OFFLINE says check your connection regardless of cloudVerdictLoss", () => {
+    const initialLoss = useAuthStore.getState().cloudVerdictLoss;
+    try {
+      for (const loss of [
+        "session-rejected",
+        "account-unavailable",
+        "unreachable",
+      ] as const) {
+        useAuthStore.getState().setCloudVerdictLoss(loss);
+        vi.mocked(toast.error).mockClear();
+        renderHook(() => useEpicGrantAccess());
+        capturedOptions["epic.grantAccess"].onError?.(
+          makeError("E_SHARE_PENDING_OFFLINE", "prose"),
+        );
+        const message = vi.mocked(toast.error).mock.calls[0]?.[0];
+        expect(message, loss).toContain("Check your connection");
+      }
+    } finally {
+      useAuthStore.getState().setCloudVerdictLoss(initialLoss);
     }
   });
 

@@ -127,6 +127,16 @@ export const RPC_ERROR_CODES = [
   "E_SHARE_PENDING_BUSY",
   "E_SHARE_PENDING_OFFLINE",
   "E_SHARE_PENDING_FAILED",
+  // The caller's session holds no cloud verdict, so the host made no cloud
+  // call for it. Split from E_SHARE_PENDING_OFFLINE, which it used to ride:
+  // that code's advice is "check your connection", and it is wrong whenever
+  // the verdict was lost to an expired or revoked session rather than to an
+  // unreachable authn. The host cannot tell those apart (the verdict is a
+  // boolean the client asserts) and the client can, so the code says only what
+  // the host knows and the client picks the copy. Additive: a client that
+  // does not know it renders its generic share failure with the host's
+  // message, which is written to stand alone.
+  "E_SHARE_PENDING_UNVERIFIED",
   "E_SHARE_REFUSED",
   // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:
   // "latest"}`, and the A2A `agent.fork`/`forkAgent` tool that shares the same
