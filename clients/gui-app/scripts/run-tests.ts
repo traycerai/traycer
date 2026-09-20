@@ -201,6 +201,11 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/status-bar-usage-scroll-browser.mjs"),
     );
+    // Customize hit regions, native input and two-window ownership need real layout.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/customize-overlay-browser.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design

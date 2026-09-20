@@ -227,6 +227,7 @@ describe("<AppNotificationsSettingsPanel />", () => {
           featureSettings: null,
           mobileApp: false,
           mobileFooter: false,
+          customizeEditor: false,
         };
         expect(isSystemNotificationsGroupAvailable(context)).toBe(
           testCase.system,

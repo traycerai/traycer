@@ -1,3 +1,4 @@
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -1511,6 +1512,7 @@ describe("<LayoutSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: false,
         mobileFooter: false,
+        customizeEditor: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(true);
       const { container } = render(<LayoutSettingsPanel />);
@@ -1525,6 +1527,7 @@ describe("<LayoutSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: true,
         mobileFooter: false,
+        customizeEditor: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(false);
       const { container } = render(<LayoutSettingsPanel />);
@@ -1542,6 +1545,7 @@ describe("<LayoutSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: true,
         mobileFooter: true,
+        customizeEditor: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(true);
       const { container } = render(<LayoutSettingsPanel />);
@@ -1638,5 +1642,41 @@ describe("<LayoutSettingsPanel />", () => {
 
       expect(useSettingsStore.getState().homeTabEnabled).toBe(true);
     });
+  });
+});
+
+describe("<LayoutSettingsPanel /> registers no Customize hotspots while editing (R2)", () => {
+  beforeEach(() => {
+    resetAll();
+    useCustomizeStore.setState({
+      session: {
+        scene: "in-place",
+        opener: { kind: "none" },
+        startedAt: Date.now(),
+      },
+      instances: new Map(),
+      activeKey: null,
+      popoverKey: null,
+      invoker: null,
+      disclosure: null,
+      pendingTarget: null,
+      history: { past: [], future: [] },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useCustomizeStore.setState({ session: null, instances: new Map() });
+    resetAll();
+  });
+
+  it("mounting the whole panel during an active Customize session registers zero instances - no preview leaks a live hotspot", () => {
+    render(<LayoutSettingsPanel />);
+
+    // The panel is a passive Settings surface, not a second live copy of the
+    // strip/chip/rail it previews - if this is ever nonzero, SOME preview in
+    // here (context usage, resources, providers, the status-bar frame,
+    // sidebar/tabs) started calling `useLayoutHotspot` with a real `ref`.
+    expect(useCustomizeStore.getState().instances.size).toBe(0);
   });
 });

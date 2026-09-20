@@ -152,6 +152,11 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,
   "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 2,
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 4,
+  // The Customize editor's own key handling: arrows, Home, End and Escape by
+  // name (navigation inside the proxy layer, none of them a registered chord),
+  // plus Mod+Z undo, which is the platform history convention - the key
+  // LABELLED Z - and so is deliberately read by character.
+  "gui-app/src/lib/customize/keyboard.ts": 7,
   "gui-app/src/lib/keybindings/bare-key-owner.ts": 1,
   "gui-app/src/lib/keybindings/chord.ts": 4,
   "gui-app/src/lib/notifications/notification-feed-keyboard-navigation.ts": 1,
@@ -200,6 +205,10 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": {
     chars: ["v", "y"],
     why: "the clipboard paste convention (see isScreencastPasteChord), plus the non-mac Ctrl+Y redo spelling - screencastHistoryKey re-derives the viewer's history gesture by character so it can translate it across a mac/non-mac viewer-host pair, the same deliberate character-matching exception as isTextHistoryShortcut",
+  },
+  "gui-app/src/lib/customize/keyboard.ts": {
+    chars: ["z"],
+    why: "platform mod+Z undo convention, matched where the letter is - the named keys beside it (arrows, Home, End, Escape) are not characters",
   },
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": {
     chars: ["r"],

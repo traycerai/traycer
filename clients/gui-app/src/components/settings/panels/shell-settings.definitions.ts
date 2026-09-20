@@ -6,6 +6,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // CLI bridge, so they fold into the page, which renders for every host.
 export const SHELL = defineSettingsSection("shell", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Shell",
     description:
       "How Traycer launches terminals, the host, and provider harnesses.",

@@ -24,6 +24,7 @@ import {
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // Layout's provider list is read through the WATCHED host's scope. It carries
 // no anchors - the set exists only for providers a host has reported - so the
@@ -80,6 +81,7 @@ afterEach(() => {
   setMobileApp(false);
   setFeatureSettingsBridge(null);
   setMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
+  setCustomizeEditor(false);
 });
 
 describe("settings search fixtures", () => {
@@ -126,6 +128,7 @@ function mountInShell(
   setMobileApp(context.mobileApp);
   setFeatureSettingsBridge(context.featureSettings);
   setMobileFooter(context.mobileFooter);
+  setCustomizeEditor(context.customizeEditor);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -163,6 +166,15 @@ function setFeatureSettingsBridge(
 ): void {
   (globalThis as { runnerHost?: unknown }).runnerHost =
     featureSettings === null ? undefined : { platform: { featureSettings } };
+}
+
+/**
+ * `customizeEditor` is the switch AND a desktop-width window; jsdom's window is
+ * desktop-wide, so writing the switch is the whole of it - and the probe's
+ * `toEqual(shell.context)` fails loudly if a narrow window ever makes it not.
+ */
+function setCustomizeEditor(enabled: boolean): void {
+  useSettingsStore.setState({ visualLayoutEditorEnabled: enabled });
 }
 
 /**

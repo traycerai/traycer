@@ -9,8 +9,11 @@ import {
 } from "@/components/ui/context-menu";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { trackSettingChanged } from "@/lib/analytics";
+import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 
 /**
@@ -68,6 +71,11 @@ export function StatusBarVisibilityMenu(
   // controls whatever `placement` says. So the item would write a preference
   // that moves nothing, and leave it waiting for the next desktop window.
   const narrowViewport = useIsMobileViewport();
+  const editing = useCustomizeStore((state) => state.session !== null);
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !narrowViewport && !editing;
 
   return (
     <ContextMenu>
@@ -131,6 +139,16 @@ export function StatusBarVisibilityMenu(
             Move to header
           </ContextMenuItem>
         )}
+        {showCustomizeEntry ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => customizeLayoutAction("direct_ui")}
+            >
+              Customize layout…
+            </ContextMenuItem>
+          </>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
-import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { CONTEXT_USAGE_PREVIEW_SAMPLE } from "@/components/sample-workspace/sample-workspace-scene";
+export { CONTEXT_USAGE_PREVIEW_SAMPLE } from "@/components/sample-workspace/sample-workspace-scene";
+import { ContextUsageChipView } from "@/components/chat/context-usage-chip";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
@@ -21,15 +22,6 @@ import { useSettingsDensity } from "@/providers/settings-density-context";
  * `Used 947K / 1M · Fresh 56 · Cache read 945.8k · Cache write 1.1k`. Changing
  * one of them changes a figure the user sees somewhere else.
  */
-const CONTEXT_USAGE_PREVIEW_SAMPLE: TokenUsage = {
-  inputTokens: 56,
-  outputTokens: 3,
-  totalTokens: 946_959,
-  contextTokens: 946_956,
-  cacheReadInputTokens: 945_800,
-  cacheCreationInputTokens: 1_100,
-  contextWindow: 1_000_000,
-};
 
 const SAMPLE_FIGURES_CAPTION =
   "Sample figures — the real strip reads the open chat's usage.";
@@ -37,7 +29,7 @@ const SAMPLE_FIGURES_CAPTION =
 /**
  * The context indicator as the settings below it draw it.
  *
- * It renders the REAL `ContextUsageChip`, from a fixed sample usage, so the
+ * It renders the REAL `ContextUsageChipView`, from a fixed sample usage, so the
  * pin switch, the field chips and the three indicator styles are answered by
  * the component that answers them in a chat rather than by a second drawing of
  * it that could drift. That is the whole design: there is no preview-only
@@ -94,7 +86,9 @@ export function ContextUsagePreview(): ReactNode {
           workspaceControls={
             <>
               <div className="min-w-0" />
-              <ContextUsageChip
+              <ContextUsageChipView
+                ref={null}
+                contextEditing={false}
                 usage={CONTEXT_USAGE_PREVIEW_SAMPLE}
                 onCompact={previewCompact}
               />

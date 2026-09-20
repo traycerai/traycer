@@ -1,3 +1,9 @@
+import { CustomizeDnd } from "@/components/customize/customize-dnd";
+import { CustomizeProxies } from "@/components/customize/customize-proxies";
+import { useHotspotRects } from "@/components/customize/use-hotspot-rects";
+import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useTileMinimapStore } from "@/stores/tile-minimap";
 import {
   act,
   cleanup,
@@ -67,6 +73,10 @@ import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
+import { registerChatSurfacesCustomizeOptions } from "@/lib/customize/options/chat-surfaces-options";
+import { CustomizePopover } from "@/components/customize/customize-popover";
+import { undo } from "@/lib/customize/history";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { InterviewSegment } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
@@ -88,6 +98,8 @@ const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
 const LEGEND_LIST_HEADER_PX = 40;
 const DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX = 80;
+
+registerChatSurfacesCustomizeOptions();
 
 function noOpOnVisibleOrdinalRangeChange(_range: OrdinalRange | null): void {
   return undefined;
@@ -743,6 +755,7 @@ async function selectLastChatTurnMinimapItem(): Promise<void> {
 }
 
 interface RenderChatMessagesOptions {
+  readonly tileMinimapInstanceId?: string;
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /**
    * Tab-key half of the dual-key identity (ticket 15). Prefer this over a
@@ -963,12 +976,22 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       </TileFindContext.Provider>
     );
   };
-  const jsx = (): ReactNode =>
-    options.strictMode === true ? (
-      <StrictMode>{contentWithFindContext()}</StrictMode>
+  const jsx = (): ReactNode => {
+    const inner = contentWithFindContext();
+    const scoped =
+      options.tileMinimapInstanceId === undefined ? (
+        inner
+      ) : (
+        <TileMinimapScope tileInstanceId={options.tileMinimapInstanceId}>
+          {inner}
+        </TileMinimapScope>
+      );
+    return options.strictMode === true ? (
+      <StrictMode>{scoped}</StrictMode>
     ) : (
-      contentWithFindContext()
+      scoped
     );
+  };
 
   const result = render(jsx());
   return {
@@ -2670,6 +2693,410 @@ describe("ChatMessages scroll policy", () => {
 
       expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
       expect(screen.queryByTestId("chat-turn-minimap-hit-strip")).toBeNull();
+    });
+  });
+
+  // Ticket w3-chat-surfaces: `chat.minimapSide`. Hidden or contentless while a
+  // Customize session is open means the real rail has nothing to mount on, so
+  // a dashed placeholder stands in on the setting's own preferred side.
+  describe("chat.minimapSide Customize hotspot", () => {
+    beforeEach(() => {
+      act(() => {
+        useCustomizeStore.setState({
+          session: {
+            scene: "in-place",
+            opener: { kind: "none" },
+            startedAt: 0,
+          },
+          instances: new Map(),
+          activeKey: null,
+          popoverKey: null,
+          invoker: null,
+          disclosure: null,
+          pendingTarget: null,
+          preferredTileId: null,
+          history: { past: [], future: [] },
+        });
+      });
+    });
+    afterEach(() => {
+      act(() => {
+        useCustomizeStore.setState({ session: null });
+      });
+    });
+
+    it("ghosts a dashed rail on the right while hidden and editing", async () => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "customize-hidden-minimap",
+      });
+      await settleLegendList();
+
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+      const ghost = screen.getByTestId("chat-minimap-ghost");
+      expect(ghost.className).toContain("right-3");
+      const instance = [
+        ...useCustomizeStore.getState().instances.values(),
+      ].find((candidate) => candidate.settingId === "chat.minimapSide");
+      expect(instance?.condition).toBe("Hidden");
+    });
+
+    // Rewritten (wave-3 fixup, B3): `chat.minimapSide`'s choice `change` is
+    // now a plain write with no `recordGesture` of its own - only the
+    // popover's `mutate` records it. Calling `options.control.change(...)`
+    // directly against a hand-built instance (as this test used to) pushes
+    // nothing onto `history.past`, so the `undo()` afterward had nothing to
+    // pop; the old assertion only read as passing because it checked the
+    // post-`change` value before ever exercising `undo`'s real behaviour.
+    // Drives the real popover instead, against the REAL registered instance
+    // (not a hand-built stand-in), and also checks the measurable side
+    // effect: going from "hide" to "left" swaps the dashed ghost rail for
+    // the real minimap, and Undo swaps it back.
+    it("choosing Left through the real popover writes the setting, swaps the ghost for the real minimap, and Undo restores both", async () => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "customize-choose-left",
+      });
+      await settleLegendList();
+
+      expect(screen.getByTestId("chat-minimap-ghost")).not.toBeNull();
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+
+      const instance = [
+        ...useCustomizeStore.getState().instances.values(),
+      ].find((candidate) => candidate.settingId === "chat.minimapSide");
+      expect(instance).toBeDefined();
+      if (!instance) throw new Error("chat.minimapSide did not register");
+      act(() => {
+        useCustomizeStore.setState({ popoverKey: instance.key });
+      });
+      const rects = new Map([[instance.key, new DOMRect(10, 10, 20, 20)]]);
+      render(<CustomizePopover rects={rects} />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Left" }));
+
+      expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
+      expect(useCustomizeStore.getState().history.past).toHaveLength(1);
+      // Measurable side effect, not just the store: content is present and
+      // the side is no longer "hide", so the ghost placeholder gives way to
+      // the real minimap.
+      await waitFor(() =>
+        expect(screen.queryByTestId("chat-minimap-ghost")).toBeNull(),
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("chat-turn-minimap")).not.toBeNull(),
+      );
+
+      act(() => undo());
+      expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
+      expect(useCustomizeStore.getState().history.past).toHaveLength(0);
+      await waitFor(() =>
+        expect(screen.queryByTestId("chat-turn-minimap")).toBeNull(),
+      );
+      expect(screen.getByTestId("chat-minimap-ghost")).not.toBeNull();
+    });
+    // Full-session regression on the REAL ChatMessages: LegendList, the
+    // minimap, the scroll cache and the customize hotspot are all real; only
+    // the row renderer is this file's lightweight mock. ChatMessages takes no
+    // host client (`hostId={null}`), so "the editor changed nothing" is
+    // measured on what it can actually disturb - scroll and anchor state,
+    // layout churn, and the side-effect counters - as a DELTA over the same
+    // mounted nodes, not against a second mount. The popover steps are
+    // store-driven (no overlay is mounted here); the overlay-driven,
+    // host-boundary version lives in the live-toolbar suite.
+    //
+    // Following-end continuously re-pins in the real scheduler, including
+    // during an idle control interval. For that mode assert stable geometry
+    // and cached intent; command counts cannot identify their initiator.
+    // A free-scrolling reader must receive NO scroll command from any step.
+    async function runFullEditingSession(scrolledAway: boolean): Promise<void> {
+      useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+      act(() => {
+        useCustomizeStore.setState({ session: null, instances: new Map() });
+      });
+      const onVisibleRange = vi.fn();
+      const view = renderChatMessages({
+        messages: makeCompletedTranscript(40),
+        scrollStateKey: scrolledAway
+          ? "customize-full-session-away"
+          : "customize-full-session",
+        onVisibleOrdinalRangeChange: onVisibleRange,
+      });
+      await waitForNavigationSettle();
+      if (scrolledAway) {
+        await enterFreeScrollingAwayFromEnd();
+        await waitForPillVisible();
+      }
+      const spies = spyLegendListScrollCommands();
+      onTestFinished(spies.restore);
+
+      const observe = () => ({
+        scrollTop: getScrollNode().scrollTop,
+        savedTabState: peekSavedChatTabState(view.identity),
+        jumpPillVisible: isJumpPillVisible(),
+        minimapTicks: screen.getAllByTestId("chat-turn-minimap-tick").length,
+        itemSizeChanges: legendListItemSizeChanges.count,
+        visibleRangeCalls: onVisibleRange.mock.calls.length,
+        activityGroupWrites: activityGroupOpenIds.setOpenCalls.length,
+      });
+      const before = observe();
+
+      // CONTROL: what a plain re-render costs in scroll commands.
+      const commandsBeforeControl = spies.totalCalls();
+      act(() => view.rerenderWith({}));
+      await settleLegendList();
+      const controlCommands = spies.totalCalls() - commandsBeforeControl;
+      expect(observe(), "control re-render").toEqual(before);
+      if (scrolledAway) expect(controlCommands).toBe(0);
+
+      const minimapInstance = () =>
+        [...useCustomizeStore.getState().instances.values()].find(
+          (candidate) => candidate.settingId === "chat.minimapSide",
+        );
+      const steps: ReadonlyArray<readonly [string, () => void]> = [
+        [
+          "enter the session",
+          () =>
+            useCustomizeStore.setState({
+              session: {
+                scene: "in-place",
+                opener: { kind: "none" },
+                startedAt: 0,
+              },
+              instances: new Map(),
+              activeKey: null,
+              popoverKey: null,
+              invoker: null,
+              disclosure: null,
+              pendingTarget: null,
+              preferredTileId: null,
+              history: { past: [], future: [] },
+            }),
+        ],
+        [
+          "open the minimap popover",
+          () => {
+            const found = minimapInstance();
+            if (found === undefined)
+              throw new Error("chat.minimapSide did not register");
+            useCustomizeStore
+              .getState()
+              .openPopover(found.key, found.key, null);
+          },
+        ],
+        [
+          "close the popover",
+          () => useCustomizeStore.getState().closePopover(),
+        ],
+        [
+          "exit the session",
+          () => useCustomizeStore.setState({ session: null }),
+        ],
+      ];
+      let commandsSoFar = spies.totalCalls();
+      for (const [name, run] of steps) {
+        act(run);
+        await settleLegendList();
+        // The editor is engaged while the session is live, so an unchanged
+        // observation is not just "nothing rendered".
+        if (name === "open the minimap popover")
+          expect(minimapInstance()).toBeDefined();
+        expect(observe(), name).toEqual(before);
+        const issued = spies.totalCalls() - commandsSoFar;
+        commandsSoFar = spies.totalCalls();
+        if (scrolledAway) expect(issued, `${name}: scroll commands`).toBe(0);
+      }
+      expect(useCustomizeStore.getState().instances.size).toBe(0);
+    }
+
+    it("a full editing session over the live, following chat leaves its scroll, anchor and layout untouched", async () => {
+      await runFullEditingSession(false);
+    });
+
+    it("a full editing session never yanks a reader who scrolled away from the end", async () => {
+      await runFullEditingSession(true);
+    });
+
+    describe("S4: coarse pointer (real ChatMessages wiring)", () => {
+      const COARSE_REASON = "Minimap is unavailable with a coarse pointer";
+      const TILE = "tile-coarse";
+
+      function setPointerForThisTest(coarse: boolean): void {
+        const original = window.matchMedia.bind(window);
+        const fake: MediaQueryList = {
+          ...original("(pointer: coarse)"),
+          matches: coarse,
+          media: "(pointer: coarse)",
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => true,
+        };
+        Object.defineProperty(window, "matchMedia", {
+          configurable: true,
+          writable: true,
+          value: (query: string): MediaQueryList =>
+            query.includes("pointer: coarse") ? fake : original(query),
+        });
+        onTestFinished(() => {
+          Object.defineProperty(window, "matchMedia", {
+            configurable: true,
+            writable: true,
+            value: original,
+          });
+        });
+      }
+
+      function minimapInstance() {
+        const found = [...useCustomizeStore.getState().instances.values()].find(
+          (candidate) => candidate.settingId === "chat.minimapSide",
+        );
+        if (found === undefined)
+          throw new Error("chat.minimapSide did not register");
+        return found;
+      }
+
+      function giveRect(node: HTMLElement): void {
+        const measured = new DOMRect(40, 40, 8, 200);
+        node.getBoundingClientRect = () => measured;
+        node.getClientRects = () =>
+          Object.assign([measured], {
+            item: (index: number) => (index === 0 ? measured : null),
+          });
+      }
+
+      function RealProxyLayer(): ReactNode {
+        const instances = useCustomizeStore((state) => state.instances);
+        const measurements = useHotspotRects(instances);
+        return (
+          <TooltipProvider>
+            <CustomizeDnd>
+              <CustomizeProxies
+                instances={[...instances.values()]}
+                rects={measurements.hitRects}
+              />
+            </CustomizeDnd>
+          </TooltipProvider>
+        );
+      }
+
+      function proxyFor(key: string): Element | null {
+        return document.querySelector(`[data-customize-proxy="${key}"]`);
+      }
+
+      it("registers a connected ghost anchor with the coarse reason, keeps the outline published, and gets a real proxy", async () => {
+        setPointerForThisTest(true);
+        useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+        renderChatMessages({
+          messages: makeTranscript(20),
+          scrollStateKey: "s4-coarse-ghost",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        // No drawn rail...
+        expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+        // ...a ghost anchor instead, and it IS the registered hotspot node.
+        const ghost = screen.getByTestId("chat-minimap-ghost");
+        expect(ghost.isConnected).toBe(true);
+        const instance = minimapInstance();
+        expect(instance.ghost).toBe(true);
+        expect(instance.condition).toBe(COARSE_REASON);
+        expect(instance.node).toBe(ghost);
+        // The live ChatTurnMinimap stayed MOUNTED for the tile bar's outline.
+        const adapter =
+          useTileMinimapStore.getState().targetsByTileInstanceId[TILE]?.adapter;
+        expect(adapter).toBeDefined();
+        expect(adapter?.getSnapshot().items.length).toBeGreaterThan(0);
+
+        // Real reachability + real proxy for that ghost.
+        giveRect(ghost);
+        render(<RealProxyLayer />);
+        await waitFor(() => expect(proxyFor(instance.key)).not.toBeNull());
+      });
+
+      it.each(["left", "right"] as const)(
+        "%s placement under coarse keeps the same ghost target on that side",
+        async (side) => {
+          setPointerForThisTest(true);
+          useSettingsStore.setState({ chatTurnMinimapSide: side });
+          renderChatMessages({
+            messages: makeTranscript(20),
+            scrollStateKey: `s4-coarse-${side}`,
+            tileMinimapInstanceId: TILE,
+          });
+          await settleLegendList();
+
+          expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+          const ghost = screen.getByTestId("chat-minimap-ghost");
+          expect(ghost.className).toContain(
+            side === "left" ? "left-3" : "right-3",
+          );
+          expect(minimapInstance()).toMatchObject({
+            ghost: true,
+            condition: COARSE_REASON,
+          });
+          expect(minimapInstance().node).toBe(ghost);
+        },
+      );
+
+      it("hide wins the wording over coarse, and stays a ghost", async () => {
+        setPointerForThisTest(true);
+        useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+        renderChatMessages({
+          messages: makeTranscript(20),
+          scrollStateKey: "s4-coarse-hide",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        expect(minimapInstance()).toMatchObject({
+          ghost: true,
+          condition: "Hidden",
+        });
+      });
+
+      it("coarse wins the wording over 'No messages yet'", async () => {
+        setPointerForThisTest(true);
+        useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+        renderChatMessages({
+          messages: [],
+          scrollStateKey: "s4-coarse-empty",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        expect(minimapInstance()).toMatchObject({
+          ghost: true,
+          condition: COARSE_REASON,
+        });
+      });
+
+      it("control: a fine pointer draws the real rail and registers IT (not a ghost)", async () => {
+        setPointerForThisTest(false);
+        useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+        renderChatMessages({
+          messages: makeTranscript(20),
+          scrollStateKey: "s4-fine",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        const region = await screen.findByRole("group", {
+          name: "Message minimap controls",
+        });
+        expect(screen.queryByTestId("chat-minimap-ghost")).toBeNull();
+        const instance = minimapInstance();
+        expect(instance.ghost).toBe(false);
+        expect(instance.condition).toBeNull();
+        expect(instance.node).toBe(region);
+
+        giveRect(region);
+        render(<RealProxyLayer />);
+        await waitFor(() => expect(proxyFor(instance.key)).not.toBeNull());
+      });
     });
   });
 

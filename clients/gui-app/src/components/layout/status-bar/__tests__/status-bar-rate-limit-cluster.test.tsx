@@ -80,6 +80,7 @@ function segmentFixture(
     providerId,
     profileId: null,
     account: null,
+    hidden: false,
     state: "live",
     reason: null,
     windows: tightest === null ? [] : [tightest],
@@ -123,6 +124,7 @@ function renderCluster(props: {
             hostId="host-a"
             providers={props.providers ?? []}
             profileSelection={PROFILE_SELECTION}
+            editing={false}
           />
         </Popover>
       </TooltipProvider>
@@ -373,6 +375,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               hostId={hostId}
               providers={[]}
               profileSelection={PROFILE_SELECTION}
+              editing={false}
             />
           </Popover>
         </TooltipProvider>
@@ -760,6 +763,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               hostId="host-a"
               providers={[]}
               profileSelection={PROFILE_SELECTION}
+              editing={false}
             />
           </Popover>
         </TooltipProvider>

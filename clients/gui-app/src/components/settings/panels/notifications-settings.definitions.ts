@@ -6,6 +6,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // every card and row here folds into the page.
 export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Notifications",
     description: "What this host surfaces, and what its automation receives.",
     keywords: [

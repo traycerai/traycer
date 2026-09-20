@@ -6,7 +6,7 @@ import {
   type StatusBarResourceMetricView,
 } from "@/lib/resources/status-bar-resource-reading";
 import { useGlobalResourceProjection } from "@/stores/resources/resources-registry";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useStatusBarResourceValue } from "@/lib/layout-overrides";
 
 /**
  * The resource segment's readings, as a hook two surfaces can ask for.
@@ -36,8 +36,10 @@ export function useStatusBarResourceMetricViews(input: {
    */
   readonly hasExplicitPick: boolean;
 }): ReadonlyArray<StatusBarResourceMetricView> {
-  const scope = useLayoutStore((state) => state.statusBar.resources.scope);
-  const metrics = useLayoutStore((state) => state.statusBar.resources.metrics);
+  // Leaf by leaf: the desktop-app poll below is gated on `scope`, and a hook
+  // subscribed to the whole slice would re-run this on any status-bar change.
+  const scope = useStatusBarResourceValue("scope");
+  const metrics = useStatusBarResourceValue("metrics");
   // Raw, and handed over raw: `statusBarResourceMetricViews` attributes it to
   // the watched host before reading a number out of it. The registry publishes
   // one projection for the window, which is not necessarily the watched host's.

@@ -81,6 +81,7 @@ function segmentFixture(overrides: {
   readonly tightest?: StatusBarRateLimitWindow | null;
   readonly profileId?: string | null;
   readonly account?: StatusBarProviderSegmentModel["account"];
+  readonly hidden?: boolean;
 }): StatusBarProviderSegmentModel {
   const windows = overrides.windows ?? [];
   const tightest =
@@ -89,6 +90,7 @@ function segmentFixture(overrides: {
     providerId: overrides.providerId ?? "codex",
     profileId: overrides.profileId ?? null,
     account: overrides.account ?? null,
+    hidden: overrides.hidden ?? false,
     state: overrides.state ?? "live",
     reason: overrides.reason ?? null,
     windows,
@@ -115,6 +117,7 @@ function renderSegment(props: {
         segment={props.segment}
         parts={parts}
         percentMode={props.percentMode ?? "used"}
+        interactive={false}
       />
     </TooltipProvider>,
   );

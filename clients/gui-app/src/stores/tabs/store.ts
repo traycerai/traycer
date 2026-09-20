@@ -20,6 +20,7 @@ import {
 } from "@/stores/tabs/registry";
 import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import {
+  withoutSampleWorkspace,
   createEmptySplit,
   DEFAULT_LEFT_RATIO,
   createLayoutItem,
@@ -254,7 +255,10 @@ function reconcileLayoutRefs(
   const wanted = new Set(nextRefs.map(tabRefKey));
   const withoutMissing = flattenLayoutRefs(layout)
     .filter((ref) => !wanted.has(tabRefKey(ref)))
-    .reduce(removeLayoutRef, layout);
+    .reduce(
+      (current, ref) => removeLayoutRef(current, ref, isHomeTabEnabled()),
+      layout,
+    );
   const withAdditions = nextRefs.reduce(
     (current, ref) =>
       findStripItemForRef(current, ref) === null
@@ -349,7 +353,7 @@ function parseTabRef(value: unknown): ReadonlyArray<TabRef> {
   if (value.kind === "settings" && value.id !== "settings") return [];
   // Home is never persisted as a strip ref; `repairLayout` would drop one
   // anyway, but refusing it here keeps the parsed layout honest.
-  if (value.kind === "home") return [];
+  if (value.kind === "home" || value.kind === "sample-workspace") return [];
   return [{ kind: value.kind, id: value.id }];
 }
 
@@ -493,7 +497,9 @@ export const useTabsStore = create<TabsStoreState>()(
       dropRef: (ref) => {
         if (isTabStructurallyLocked(ref)) return;
         set((state) =>
-          committedLayout(removeLayoutRef(layoutFromState(state), ref)),
+          committedLayout(
+            removeLayoutRef(layoutFromState(state), ref, isHomeTabEnabled()),
+          ),
         );
       },
 
@@ -550,7 +556,11 @@ export const useTabsStore = create<TabsStoreState>()(
       closeSystemTab: (kind) => {
         set((state) =>
           committedLayout({
-            ...removeLayoutRef(layoutFromState(state), { kind, id: kind }),
+            ...removeLayoutRef(
+              layoutFromState(state),
+              { kind, id: kind },
+              isHomeTabEnabled(),
+            ),
             systemTabs: { ...state.systemTabs, [kind]: null },
           }),
         );
@@ -733,7 +743,9 @@ export const useTabsStore = create<TabsStoreState>()(
       version: 2,
       storage: createJSONStorage(() => tabsStorage),
       partialize: (state): PersistedTabsStoreState =>
-        committedLayout(layoutFromState(state)),
+        committedLayout(
+          withoutSampleWorkspace(layoutFromState(state), isHomeTabEnabled()),
+        ),
       migrate: (persisted) => migrateTabsPersistedStorageState(persisted),
       merge: (persisted, current) => ({
         ...current,

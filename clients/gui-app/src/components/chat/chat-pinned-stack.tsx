@@ -114,7 +114,7 @@ interface TodoCounts {
   readonly total: number;
 }
 
-function PinnedTodoPanel(props: {
+export function PinnedTodoPanel(props: {
   readonly todo: PinnedTodoSnapshot;
   readonly scrollRegionMaxHeightClass: string;
   readonly separated: boolean;

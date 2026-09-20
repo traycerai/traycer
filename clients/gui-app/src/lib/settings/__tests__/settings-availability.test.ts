@@ -11,6 +11,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   mobileFooter: false,
+  customizeEditor: false,
 };
 
 const MOBILE_APP: SettingsAvailabilityContext = { ...DESKTOP, mobileApp: true };

@@ -1,7 +1,9 @@
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 export const KEYBINDINGS = defineSettingsSection("keybindings", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Keybindings",
     description: "Every chord the app listens for, and how to rebind it.",
     keywords: [

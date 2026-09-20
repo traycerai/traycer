@@ -804,36 +804,7 @@ export function BackgroundItemsPanel(props: {
       variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger
-          className="group/background flex min-w-0 flex-1 items-center text-left"
-          variant="panel"
-        >
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "size-3 shrink-0 text-muted-foreground/70 transition-transform",
-              open ? null : "-rotate-90",
-            )}
-          />
-          <LivePulse
-            size="xs"
-            tone="active"
-            ariaLabel="Background activity"
-            className={undefined}
-          />
-          <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
-            Background
-          </span>
-          <span aria-hidden className="shrink-0 text-muted-foreground/40">
-            ·
-          </span>
-          <span
-            data-testid="background-header-summary"
-            className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
-          >
-            {headerSummary}
-          </span>
-        </CollapsibleTrigger>
+        <BackgroundItemsHeader open={open} headerSummary={headerSummary} />
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
           {heldManagedCommands.length > 0 ? (
             <TooltipWrapper
@@ -990,4 +961,45 @@ function sessionStopDialogDescription(input: {
     blastRadius,
     ...(input.turnActive ? ["The active turn will also be stopped."] : []),
   ].join(" ");
+}
+
+export function BackgroundItemsHeader({
+  open,
+  headerSummary,
+}: {
+  open: boolean;
+  headerSummary: string;
+}) {
+  return (
+    <CollapsibleTrigger
+      className="group/background flex min-w-0 flex-1 items-center text-left"
+      variant="panel"
+    >
+      <ChevronDown
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 text-muted-foreground/70 transition-transform",
+          open ? null : "-rotate-90",
+        )}
+      />
+      <LivePulse
+        size="xs"
+        tone="active"
+        ariaLabel="Background activity"
+        className={undefined}
+      />
+      <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
+        Background
+      </span>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span
+        data-testid="background-header-summary"
+        className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
+      >
+        {headerSummary}
+      </span>
+    </CollapsibleTrigger>
+  );
 }

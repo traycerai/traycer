@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 const testState = vi.hoisted(() => ({ pathname: "/epics" }));
 
 vi.mock("@tanstack/react-router", () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
   useRouterState: ({
     select,
   }: {

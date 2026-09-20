@@ -2,7 +2,13 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { mergeOrder } from "@/lib/order-merge";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { fixedProviderWindowKeys } from "@/lib/rate-limits/rate-limit-window-catalog";
 
@@ -17,6 +23,16 @@ import { fixedProviderWindowKeys } from "@/lib/rate-limits/rate-limit-window-cat
  * than as one store per surface: chrome preferences are small, they are read at
  * first paint, and each one as its own localStorage key is a rehydration and a
  * registry entry per checkbox.
+ *
+ * Four fields here are ORDER rather than detail - `composer.toolbar`,
+ * `composer.dockOrder`, `statusBar.segmentOrder`, `statusBar.resourceSide` -
+ * and they are STRUCTURAL: no density preset carries one, `matchLayoutPreset`
+ * ignores them, and `resetLayoutToDefaults` is the only thing that puts them
+ * back (`lib/layout-presets.ts`). Every one of them reconciles a stored list
+ * with this build's canonical one through `mergeOrder` (`lib/order-merge.ts`),
+ * so an element this build added lands beside its neighbours rather than at the
+ * end. The fifth order field, the pinned context-breakdown rows, lives in
+ * `settings-store` beside the SET it orders.
  */
 
 /**
@@ -37,6 +53,9 @@ export type ResourceMetric = "cpu" | "memory" | "processes" | "ramShare";
 
 /** Traycer's processes on the watched host, or this desktop app's own. */
 export type ResourceScope = "host-tree" | "desktop-app";
+
+/** Which end of the status bar a segment sits at. */
+export type StatusBarSide = "left" | "right";
 
 /**
  * Which of one provider's limits its segment draws.
@@ -137,6 +156,24 @@ export interface StatusBarResourcePreferences {
 export interface StatusBarLayoutPreferences {
   readonly placement: UsageControlsPlacement;
   /**
+   * The order the usage segments are drawn in, by provider id. STRUCTURAL: no
+   * density bundle carries it, `matchLayoutPreset` ignores it, and only
+   * `resetLayoutToDefaults` puts it back.
+   *
+   * The empty list means "canonical", which is also the default - a provider
+   * that connects later is merged into whatever arrangement exists
+   * (`mergeOrder`) rather than appended, so it appears where the provider order
+   * would have put it. A stored id for a provider this build does not know is
+   * dropped by the resolver.
+   */
+  readonly segmentOrder: ReadonlyArray<RateLimitProviderId>;
+  /**
+   * Which end of the strip the resource segment sits at. Structural for the
+   * same reason `placement` is: it says where a thing LIVES, not how much of it
+   * is spelled out.
+   */
+  readonly resourceSide: StatusBarSide;
+  /**
    * Whether the footer strip is drawn on a mobile VIEWPORT, where the shell
    * otherwise withholds it whatever `placement` says. Off by default: the
    * footer competes with the software keyboard and the nav drawer, and the
@@ -183,6 +220,36 @@ export type ComposerReasoningIndicator = "text" | "bars" | "bars-text";
  */
 export type ComposerReasoningFooterControl = "slider" | "list";
 
+/**
+ * A toolbar element that can be moved. Send is deliberately NOT one: it always
+ * renders last on the right, because a composer whose submit button wandered is
+ * a composer a reader has to look for the way out of.
+ */
+export type ToolbarItemId =
+  | "attachImage"
+  | "access"
+  | "harness"
+  | "model"
+  | "mic";
+
+/**
+ * The toolbar as TWO lists rather than one with a side per item: the two
+ * clusters are separate grid columns, so "which column" and "where in it" are
+ * the same question asked once, and a single list would need a parallel side
+ * map that could disagree with it.
+ *
+ * Every `ToolbarItemId` appears exactly once across the two, and `model` is
+ * always in `right` - the picker anchors the footer controls that hang off it.
+ * The resolver enforces both.
+ */
+export interface ComposerToolbarOrder {
+  readonly left: ReadonlyArray<ToolbarItemId>;
+  readonly right: ReadonlyArray<ToolbarItemId>;
+}
+
+/** One dock row. The same three ids the visibility fields above name. */
+export type DockSection = "filesChanged" | "activeAgents" | "background";
+
 export interface ComposerLayoutPreferences {
   readonly filesChanged: ComposerCompactableMode;
   readonly activeAgents: ComposerCompactableMode;
@@ -193,6 +260,18 @@ export interface ComposerLayoutPreferences {
   readonly compactButton: ComposerHideableMode;
   readonly reasoningIndicator: ComposerReasoningIndicator;
   readonly reasoningFooterControl: ComposerReasoningFooterControl;
+  /**
+   * Where each toolbar element sits. STRUCTURAL, like the status bar's
+   * `segmentOrder`: carried by no density bundle, ignored by
+   * `matchLayoutPreset`, restored by `resetLayoutToDefaults` alone. An
+   * arrangement is not an amount of detail.
+   */
+  readonly toolbar: ComposerToolbarOrder;
+  /**
+   * The order of the dock rows, which drives both the expanded rows and the
+   * compact chips - one order, so folding a row does not move it.
+   */
+  readonly dockOrder: ReadonlyArray<DockSection>;
 }
 
 interface LayoutStoreState {
@@ -273,6 +352,17 @@ interface LayoutStoreState {
   readonly setComposerReasoningFooterControl: (
     control: ComposerReasoningFooterControl,
   ) => void;
+  /**
+   * Both clusters at once, because a move BETWEEN them changes two lists and
+   * two writes would leave an element briefly in neither or in both. Held to
+   * the same invariants the resolver enforces.
+   */
+  readonly setComposerToolbarOrder: (order: ComposerToolbarOrder) => void;
+  readonly setComposerDockOrder: (order: ReadonlyArray<DockSection>) => void;
+  readonly setStatusBarSegmentOrder: (
+    order: ReadonlyArray<RateLimitProviderId>,
+  ) => void;
+  readonly setStatusBarResourceSide: (side: StatusBarSide) => void;
 }
 
 /**
@@ -287,8 +377,14 @@ const RESOURCE_METRIC_ORDER: ReadonlyArray<ResourceMetric> = [
   "ramShare",
 ];
 
-/** What a provider draws until told otherwise: its tightest limit, and only that. */
-const AUTOMATIC_LIMIT_SELECTION: StatusBarProviderLimitSelection = {
+/**
+ * What a provider draws until told otherwise: its tightest limit, and only that.
+ *
+ * Exported for the override seam (`lib/layout-overrides.ts`), which resolves a
+ * partial override of a provider that has no stored entry against this same
+ * floor rather than restating it.
+ */
+export const AUTOMATIC_LIMIT_SELECTION: StatusBarProviderLimitSelection = {
   automatic: true,
   limitKeys: [],
 };
@@ -348,9 +444,41 @@ const DEFAULT_STATUS_BAR_RESOURCES: StatusBarResourcePreferences = {
 export const DEFAULT_STATUS_BAR_LAYOUT: StatusBarLayoutPreferences = {
   placement: "status-bar",
   mobileFooter: false,
+  // Empty means canonical: the strip already sorts providers for itself, so
+  // the default is "however the strip would have ordered them" rather than a
+  // snapshot of today's provider list frozen into a preference.
+  segmentOrder: [],
+  resourceSide: "right",
   rateLimits: DEFAULT_STATUS_BAR_RATE_LIMITS,
   resources: DEFAULT_STATUS_BAR_RESOURCES,
 };
+
+/**
+ * Every toolbar id in VISUAL READING ORDER across both clusters, which is what
+ * `mergeOrder` needs as its canonical sequence: an id that has to be
+ * re-inserted lands beside the neighbours it renders beside, whichever cluster
+ * it belongs to.
+ */
+export const TOOLBAR_ITEM_IDS: ReadonlyArray<ToolbarItemId> = [
+  "attachImage",
+  "access",
+  "harness",
+  "model",
+  "mic",
+];
+
+/** Today's render order, so an untouched install draws exactly what it drew. */
+export const DEFAULT_COMPOSER_TOOLBAR_ORDER: ComposerToolbarOrder = {
+  left: ["attachImage", "access", "harness"],
+  right: ["model", "mic"],
+};
+
+/** Today's dock order, top to bottom. */
+export const DOCK_SECTION_IDS: ReadonlyArray<DockSection> = [
+  "filesChanged",
+  "activeAgents",
+  "background",
+];
 
 /**
  * Every element as it renders today, so an untouched install sees no change -
@@ -368,6 +496,8 @@ export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
   compactButton: "visible",
   reasoningIndicator: "text",
   reasoningFooterControl: "slider",
+  toolbar: DEFAULT_COMPOSER_TOOLBAR_ORDER,
+  dockOrder: DOCK_SECTION_IDS,
 };
 
 const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
@@ -403,6 +533,10 @@ function isResourceMetric(value: unknown): value is ResourceMetric {
 
 function isResourceScope(value: unknown): value is ResourceScope {
   return value === "host-tree" || value === "desktop-app";
+}
+
+function isStatusBarSide(value: unknown): value is StatusBarSide {
+  return value === "left" || value === "right";
 }
 
 /**
@@ -656,6 +790,17 @@ function resolvePersistedStatusBar(value: unknown): StatusBarLayoutPreferences {
       stored.mobileFooter,
       DEFAULT_STATUS_BAR_LAYOUT.mobileFooter,
     ),
+    // `persistedProviderIds` already drops unknown ids and duplicates, and an
+    // empty result is the meaningful "canonical" value rather than a failure -
+    // so no `mergeOrder` here. The STRIP merges this against the provider order
+    // it actually has at read time, which is the only place that list exists.
+    segmentOrder: persistedProviderIds(
+      stored.segmentOrder,
+      DEFAULT_STATUS_BAR_LAYOUT.segmentOrder,
+    ),
+    resourceSide: isStatusBarSide(stored.resourceSide)
+      ? stored.resourceSide
+      : DEFAULT_STATUS_BAR_LAYOUT.resourceSide,
     rateLimits: persistedRateLimits(stored.rateLimits),
     resources: persistedResources(stored.resources),
   };
@@ -714,6 +859,75 @@ function reasoningFooterControl(
 }
 
 /**
+ * One cluster's stored list, reduced to ids this build knows, in stored order,
+ * with anything already claimed by the other cluster skipped - so an id written
+ * into both lists lands in exactly one, the first that names it.
+ */
+function persistedToolbarItems(
+  value: unknown,
+  claimed: Set<ToolbarItemId>,
+): ReadonlyArray<ToolbarItemId> {
+  if (!Array.isArray(value)) return [];
+  const items: ToolbarItemId[] = [];
+  for (const entry of value) {
+    const id = TOOLBAR_ITEM_IDS.find((candidate) => candidate === entry);
+    if (id === undefined || claimed.has(id)) continue;
+    claimed.add(id);
+    items.push(id);
+  }
+  return items;
+}
+
+/**
+ * One cluster, with the ids that belong here and are missing entirely merged
+ * back in at their canonical positions.
+ *
+ * The canonical sequence is built PER CLUSTER and per resolve, from what is
+ * actually on this side plus the missing ids whose default home is this side.
+ * Using the default cluster list as the canonical directly would be wrong in
+ * the ordinary case: an element the user moved to the other cluster is not
+ * missing, and `mergeOrder` against the default list would helpfully put it
+ * back.
+ */
+function resolveToolbarSide(
+  stored: ReadonlyArray<ToolbarItemId>,
+  missing: ReadonlyArray<ToolbarItemId>,
+  side: StatusBarSide,
+): ReadonlyArray<ToolbarItemId> {
+  const canonical = TOOLBAR_ITEM_IDS.filter(
+    (id) =>
+      stored.includes(id) ||
+      (missing.includes(id) &&
+        DEFAULT_COMPOSER_TOOLBAR_ORDER[side].includes(id)),
+  );
+  return mergeOrder(stored, canonical);
+}
+
+/**
+ * Both clusters, holding the two invariants the type states: every id exactly
+ * once across them, and `model` in `right`.
+ *
+ * `model` is stripped from `left` rather than swapped in place, which leaves it
+ * unclaimed and therefore MISSING - so it is re-inserted into `right` at its
+ * canonical position instead of appended. Same path a genuinely absent id
+ * takes, so there is one rule to reason about rather than two.
+ */
+function resolvePersistedToolbarOrder(value: unknown): ComposerToolbarOrder {
+  const stored: Record<string, unknown> = isRecord(value) ? value : {};
+  const claimed = new Set<ToolbarItemId>();
+  const storedLeft = persistedToolbarItems(stored.left, claimed).filter(
+    (id) => id !== "model",
+  );
+  const storedRight = persistedToolbarItems(stored.right, claimed);
+  const present = new Set([...storedLeft, ...storedRight]);
+  const missing = TOOLBAR_ITEM_IDS.filter((id) => !present.has(id));
+  return {
+    left: resolveToolbarSide(storedLeft, missing, "left"),
+    right: resolveToolbarSide(storedRight, missing, "right"),
+  };
+}
+
+/**
  * Field by field, like the status bar slice above and for the same reason: each
  * value picks a branch on a render path, and the two unions are NOT
  * interchangeable - a persisted `"hidden"` on a row that only compacts would
@@ -752,7 +966,28 @@ function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
       stored.reasoningFooterControl,
       DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
     ),
+    toolbar: resolvePersistedToolbarOrder(stored.toolbar),
+    dockOrder: mergeOrder(
+      Array.isArray(stored.dockOrder) ? stored.dockOrder : [],
+      DOCK_SECTION_IDS,
+    ),
   };
+}
+
+/**
+ * The array counterpart of the `===` guard every scalar setter here uses: an
+ * order setter is called on every drag frame's end and on every preset apply,
+ * and a fresh array with the same ids in the same places is not a change worth
+ * a persist and a re-render.
+ */
+function sameOrder<T extends string>(
+  left: ReadonlyArray<T>,
+  right: ReadonlyArray<T>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => item === right[index])
+  );
 }
 
 function toggledMembership<T>(
@@ -1036,6 +1271,37 @@ export const useLayoutStore = create<LayoutStoreState>()(
         if (composer.reasoningFooterControl === control) return;
         set({ composer: { ...composer, reasoningFooterControl: control } });
       },
+      setComposerToolbarOrder: (order) => {
+        const composer = get().composer;
+        // Through the resolver rather than trusted: a drag that lands
+        // impossibly (`model` dropped into the left cluster) is repaired here,
+        // where a persisted blob would be, rather than only on the next start.
+        const toolbar = resolvePersistedToolbarOrder(order);
+        if (
+          sameOrder(composer.toolbar.left, toolbar.left) &&
+          sameOrder(composer.toolbar.right, toolbar.right)
+        ) {
+          return;
+        }
+        set({ composer: { ...composer, toolbar } });
+      },
+      setComposerDockOrder: (order) => {
+        const composer = get().composer;
+        const dockOrder = mergeOrder(order, DOCK_SECTION_IDS);
+        if (sameOrder(composer.dockOrder, dockOrder)) return;
+        set({ composer: { ...composer, dockOrder } });
+      },
+      setStatusBarSegmentOrder: (order) => {
+        const statusBar = get().statusBar;
+        const segmentOrder = persistedProviderIds(order, []);
+        if (sameOrder(statusBar.segmentOrder, segmentOrder)) return;
+        set({ statusBar: { ...statusBar, segmentOrder } });
+      },
+      setStatusBarResourceSide: (resourceSide) => {
+        const statusBar = get().statusBar;
+        if (statusBar.resourceSide === resourceSide) return;
+        set({ statusBar: { ...statusBar, resourceSide } });
+      },
     }),
     {
       ...basePersistOptions(LAYOUT_PERSIST_KEY),
@@ -1067,6 +1333,15 @@ export const useLayoutStore = create<LayoutStoreState>()(
     },
   ),
 );
+
+/**
+ * Another window's Layout write reaches this one live, the same way the
+ * settings store's has since it shipped. Load-time rather than on demand: the
+ * strip and the composer read this store at first paint, so a window that
+ * hydrated before the write has to be told, and there is no later moment that
+ * is reliably earlier than the first read.
+ */
+installCrossWindowRehydrate(useLayoutStore, LAYOUT_PERSIST_KEY);
 
 /**
  * Whether the status bar strip is on screen: the ONE answer to that question,

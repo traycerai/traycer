@@ -15,10 +15,8 @@
  * React-free and leaf: a `*.definitions.ts` collection may import this module
  * and the availability predicates, never the assembled index or its consumer.
  */
-import {
-  alwaysAvailable,
-  type SettingsAvailabilityContext,
-} from "@/lib/settings/settings-availability";
+import type { CustomizeSettingId } from "@/lib/customize/customize-setting-id";
+import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 
 /** Whether an element exists in the given shell. */
@@ -55,6 +53,17 @@ export interface SettingsSearchEntry {
    * link to an element that is not there yet is worse than a link to the page.
    */
   readonly anchor: string | null;
+  /**
+   * The Customize setting this result LAUNCHES the editor on, or `null` for an
+   * ordinary result that navigates to `section` and reveals `anchor`.
+   *
+   * A launch entry is not an anchor: it has no element to land on (its `anchor`
+   * is `null`, and the `use-settings-anchor-reveal` watcher is never armed for
+   * it), so the exact-target invariant does not apply to it. `section` names
+   * the page whose breadcrumb it wears - Appearance, where the editor's card
+   * lives - not a page it opens.
+   */
+  readonly launch: CustomizeSettingId | null;
   readonly kind: SettingsSearchEntryKind;
   /**
    * Whether this entry's element exists in the given shell — the SAME
@@ -93,6 +102,13 @@ export type SettingsSearchPlacement<Target extends string> =
 
 /** A section's page entry. Every collection has exactly one. */
 export interface SettingsPageInput {
+  /**
+   * Whether the WHOLE page exists in the given shell. Composed into the page's
+   * own entry and into every member's gate, so a member cannot be offered by
+   * search in a shell where its page is withheld - the Layout page is the one
+   * that is, once the Customize editor takes its rows over.
+   */
+  readonly availableWhen: SettingsAvailability;
   readonly label: string;
   readonly description: string;
   readonly keywords: ReadonlyArray<string>;
@@ -285,7 +301,13 @@ export function defineSettingsSection<
   }
   const byKey = new Map<string, SettingsDefinition>();
   for (const [key, member] of members) {
-    byKey.set(key, defineMember(section, key, member, members));
+    byKey.set(
+      key,
+      defineMember(section, key, member, {
+        members,
+        page: input.page.availableWhen,
+      }),
+    );
   }
 
   const contributions = new Map<string, Array<string>>();
@@ -302,8 +324,9 @@ export function defineSettingsSection<
     {
       section,
       anchor: null,
+      launch: null,
       kind: "section",
-      availableWhen: alwaysAvailable,
+      availableWhen: page.availableWhen,
       label: page.label,
       description: page.description,
       group: null,
@@ -315,6 +338,7 @@ export function defineSettingsSection<
     entries.push({
       section,
       anchor: definition.search.anchor,
+      launch: null,
       kind: definition.kind === "row" ? "setting" : "group",
       availableWhen: definition.availableWhen,
       label: definition.label,
@@ -357,8 +381,12 @@ function defineMember(
   section: SettingsSectionId,
   key: string,
   member: SettingsMemberInput,
-  members: ReadonlyMap<string, SettingsMemberInput>,
+  scope: {
+    readonly members: ReadonlyMap<string, SettingsMemberInput>;
+    readonly page: SettingsAvailability;
+  },
 ): SettingsDefinition {
+  const { members, page: pageAvailability } = scope;
   const search: SettingsDefinitionSearch = member.search;
   const anchor = "anchor" in search ? search.anchor : null;
   if (member.kind === "group") {
@@ -372,7 +400,7 @@ function defineMember(
       description: member.description,
       breadcrumb: member.breadcrumb,
       keywords: member.keywords,
-      availableWhen: member.availableWhen,
+      availableWhen: withinPage(pageAvailability, member.availableWhen),
     };
   }
   return {
@@ -385,8 +413,19 @@ function defineMember(
     label: member.label,
     description: member.description,
     keywords: member.keywords,
-    availableWhen: rowAvailability(member, members),
+    availableWhen: withinPage(
+      pageAvailability,
+      rowAvailability(member, members),
+    ),
   };
+}
+
+/** A member exists only where its page does. */
+function withinPage(
+  page: SettingsAvailability,
+  own: SettingsAvailability,
+): SettingsAvailability {
+  return (context) => page(context) && own(context);
 }
 
 /**

@@ -1,5 +1,19 @@
 import { TabGroupChip } from "./tab-group-chip";
 import { stripItemGroupId } from "@/stores/tabs/tab-groups";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { House } from "lucide-react";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
+import { headerTabClassName } from "@/components/layout/tabs/tab-chrome-tokens";
+import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import {
   memo,
   Fragment,
@@ -51,7 +65,7 @@ import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { TabStripHomeItem } from "@/components/layout/tabs/tab-strip-home-item";
 import { useHomeBadgeCount } from "@/components/home-focus/use-home-badge-count";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutSetting } from "@/lib/layout-overrides";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useHeaderTabIndicators } from "./header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -77,7 +91,7 @@ import {
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((s) => s.stripOrder.length);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useLayoutSetting("homeTabEnabled");
   if (!hasHydrated) {
     return (
       <TabStripSkeleton
@@ -102,7 +116,13 @@ function TabStripBody() {
   const modalActive = useAnySystemOverlayActive();
   const handleWheel = useHorizontalWheelScroll();
   const activeItemId = useTabsStore((state) => state.activeItemId);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useLayoutSetting("homeTabEnabled");
+  const editing = useCustomizeStore((state) => state.session !== null);
+  const narrowViewport = useIsMobileViewport();
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !editing && !narrowViewport;
   // `activeItemId === null` over a populated strip means Home holds the
   // selection; over an empty one it means the same thing, since Home is the
   // only surface left to hold it.
@@ -342,90 +362,107 @@ function TabStripBody() {
         scopes={indicatorChatScopes}
         chatEpicIds={indicatorChatEpicIds}
       >
-        <div
-          role="tablist"
-          aria-label="Open tabs"
-          data-testid="tab-strip"
-          className="relative flex min-w-0 flex-1 items-end"
-        >
-          {/* Outside the scrollable list and before it: Home is fixed, so it
+        <TabStripContextMenu enabled={showCustomizeEntry}>
+          <div
+            role="tablist"
+            aria-label="Open tabs"
+            data-testid="tab-strip"
+            className="relative flex min-w-0 flex-1 items-end"
+          >
+            {/* Outside the scrollable list and before it: Home is fixed, so it
               must not scroll away with the task tabs, and it must not sit
               inside the `LayoutGroup` whose reorder animations belong to
               draggable items. */}
-          {homeTabEnabled ? (
-            <HomeStripSlot isActive={homeIsActive} onActivate={handleHomeTab} />
-          ) : null}
-          <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
-            <LayoutGroup id="header-tabs">
-              <div
-                ref={trailingSlotRef}
-                data-testid="header-tab-strip-scroll"
-                onWheel={handleWheel}
-                className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
-              >
-                {headerItemIds.map((itemId, index) => {
-                  const layoutItem = layoutItems.at(index);
-                  const groupId =
-                    layoutItem === undefined
-                      ? null
-                      : stripItemGroupId(layoutItem, customizations);
-                  const group =
-                    groupId === null ? undefined : groups?.[groupId];
-                  const previousItem =
-                    index === 0 ? undefined : layoutItems.at(index - 1);
-                  const firstInGroup =
-                    groupId !== null &&
-                    (previousItem === undefined ||
-                      stripItemGroupId(previousItem, customizations) !==
-                        groupId);
-                  return (
-                    <Fragment key={itemId}>
-                      {firstInGroup && group !== undefined ? (
-                        <TabGroupChip
-                          groupId={groupId}
-                          group={group}
-                          onClose={closeTabFlow.closeGroup}
-                        />
-                      ) : null}
-                      {group?.collapsed !== true ? (
-                        <HeaderStripItemRenderer
-                          itemId={itemId}
-                          stripIndex={index}
-                          offsetX={headerOffsets.get(itemId) ?? 0}
-                          memberOffset={memberOffsetBefore(layoutItems, index)}
-                          isActive={itemId === activeItemId}
-                          isNextActive={
-                            headerItemIds[index + 1] === activeItemId
-                          }
-                          nextIsSplit={layoutItems[index + 1]?.kind === "split"}
-                          isLastItem={index === headerItemIds.length - 1}
-                          showDropIndicatorBefore={dropIndicatorIndex === index}
-                          showDropIndicatorAfter={
-                            dropIndicatorIndex === index + 1 &&
-                            index === headerItemIds.length - 1
-                          }
-                          onClose={closeTabFlow.requestCloseTab}
-                          onCloseOtherTabs={closeTabFlow.closeOtherTabs}
-                          onDuplicateTab={handleDuplicateTab}
-                          canCloseOtherTabs={canCloseOtherTabs}
-                          onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-                          canOpenInNewWindow={openInNewWindowFlow.isAvailable}
-                          onSplitCommand={handleSplitCommand}
-                          taskPinnedStates={taskPinnedStates}
-                          pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-                          onSetTaskPinned={handleSetTaskPinned}
-                        />
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-              </div>
-            </LayoutGroup>
-            <TabStripNewButton onNewTab={handleNewTab} />
+            {(() => {
+              if (homeTabEnabled) {
+                return (
+                  <HomeStripSlot
+                    isActive={homeIsActive}
+                    onActivate={handleHomeTab}
+                  />
+                );
+              }
+              return editing ? <HomeGhostSlot /> : null;
+            })()}
+            <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
+              <LayoutGroup id="header-tabs">
+                <div
+                  ref={trailingSlotRef}
+                  data-testid="header-tab-strip-scroll"
+                  onWheel={handleWheel}
+                  className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
+                >
+                  {headerItemIds.map((itemId, index) => {
+                    const layoutItem = layoutItems.at(index);
+                    const groupId =
+                      layoutItem === undefined
+                        ? null
+                        : stripItemGroupId(layoutItem, customizations);
+                    const group =
+                      groupId === null ? undefined : groups?.[groupId];
+                    const previousItem =
+                      index === 0 ? undefined : layoutItems.at(index - 1);
+                    const firstInGroup =
+                      groupId !== null &&
+                      (previousItem === undefined ||
+                        stripItemGroupId(previousItem, customizations) !==
+                          groupId);
+                    return (
+                      <Fragment key={itemId}>
+                        {firstInGroup && group !== undefined ? (
+                          <TabGroupChip
+                            groupId={groupId}
+                            group={group}
+                            onClose={closeTabFlow.closeGroup}
+                          />
+                        ) : null}
+                        {group?.collapsed !== true ? (
+                          <HeaderStripItemRenderer
+                            itemId={itemId}
+                            stripIndex={index}
+                            offsetX={headerOffsets.get(itemId) ?? 0}
+                            memberOffset={memberOffsetBefore(
+                              layoutItems,
+                              index,
+                            )}
+                            isActive={itemId === activeItemId}
+                            isNextActive={
+                              headerItemIds[index + 1] === activeItemId
+                            }
+                            nextIsSplit={
+                              layoutItems[index + 1]?.kind === "split"
+                            }
+                            isLastItem={index === headerItemIds.length - 1}
+                            showDropIndicatorBefore={
+                              dropIndicatorIndex === index
+                            }
+                            showDropIndicatorAfter={
+                              dropIndicatorIndex === index + 1 &&
+                              index === headerItemIds.length - 1
+                            }
+                            onClose={closeTabFlow.requestCloseTab}
+                            onCloseOtherTabs={closeTabFlow.closeOtherTabs}
+                            onDuplicateTab={handleDuplicateTab}
+                            canCloseOtherTabs={canCloseOtherTabs}
+                            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+                            canOpenInNewWindow={openInNewWindowFlow.isAvailable}
+                            onSplitCommand={handleSplitCommand}
+                            taskPinnedStates={taskPinnedStates}
+                            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+                            onSetTaskPinned={handleSetTaskPinned}
+                          />
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                </div>
+              </LayoutGroup>
+              <TabStripNewButton onNewTab={handleNewTab} />
+            </div>
+            {closeTabFlow.unsyncedDialog}
+            <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
           </div>
-          {closeTabFlow.unsyncedDialog}
-          <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
-        </div>
+        </TabStripContextMenu>
       </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
   );
@@ -446,6 +483,54 @@ function HomeStripSlot(props: {
       onActivate={props.onActivate}
       badgeCount={badgeCount}
     />
+  );
+}
+
+/** Reserves Home's slot while it is off, so a Customize session can restore it. */
+function HomeGhostSlot(): ReactNode {
+  const { ref } = useLayoutHotspot({
+    settingId: "tabs.home",
+    tileId: null,
+    ghost: true,
+    condition: "Home tab is turned off",
+  });
+  return (
+    <div
+      ref={ref}
+      data-testid="tab-home-ghost"
+      className={cn(
+        headerTabClassName("own", false),
+        "w-auto shrink-0 justify-center rounded-md border border-dashed border-border/60 opacity-70",
+      )}
+    >
+      <House className="relative z-20 size-4" />
+    </div>
+  );
+}
+
+/**
+ * The tab strip's own right-click entry into Customize - the strip has no
+ * context menu of its own to append to, so this adds a minimal one, outside
+ * a session and only when the switch is on.
+ */
+function TabStripContextMenu(props: {
+  readonly enabled: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  // Gate interaction, not ancestors: switching Customize must retain live leaves.
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild disabled={!props.enabled}>
+        {props.children}
+      </ContextMenuTrigger>
+      {props.enabled ? (
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => customizeLayoutAction("direct_ui")}>
+            Customize layout…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      ) : null}
+    </ContextMenu>
   );
 }
 

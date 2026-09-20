@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import { GettingStartedSettingsPanel } from "./panels/getting-started-settings-panel";
 import { SettingsSetupGuide } from "./settings-setup-guide";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
@@ -28,6 +28,7 @@ import { PermissionsSettingsPanel } from "@/components/settings/panels/permissio
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
+import { useSettingsSectionSuccessor } from "@/hooks/settings/use-settings-section-successor";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import "./settings-search.css";
@@ -54,6 +55,18 @@ export function SettingsModalContent(
   const section: SettingsSectionId = isSettingsSectionVisible(requested)
     ? requested
     : "general";
+  // A section that has moved (Layout, once the editor exists) is rewritten in
+  // the modal's own store, so the state the modal keeps says where it is.
+  useSettingsSectionSuccessor(section, setSection);
+  // The modal is one surface with no partner to disturb, so writing its store
+  // is always possible and never activates anything else.
+  const writeSectionInPlace = useCallback(
+    (next: SettingsSectionId): boolean => {
+      setSection(next);
+      return true;
+    },
+    [setSection],
+  );
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -72,7 +85,10 @@ export function SettingsModalContent(
           data-settings-panel-pane
           className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
         >
-          <SettingsPanelForSection section={section} />
+          <SettingsPanelForSection
+            section={section}
+            writeSection={writeSectionInPlace}
+          />
         </div>
       </div>
     </SettingsDensityContext.Provider>
@@ -111,6 +127,14 @@ const SETTINGS_PANELS = {
 
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
+  /**
+   * Moves what THIS host shows without activating anything - the write for a
+   * guide that has to follow its step while Settings is on screen but not the
+   * focused surface. The host owns it because only the host knows which
+   * authority draws its section (the modal's store, or the tab's route or
+   * remembered path).
+   */
+  readonly writeSection: (section: SettingsSectionId) => boolean;
 }): ReactNode {
   // The one mount point for the settings-search reveal watcher, and the reason
   // it sits here rather than in either surface: both the modal and the routed
@@ -122,7 +146,11 @@ export function SettingsPanelForSection(props: {
   return (
     <div ref={rootRef} className="contents">
       <Panel />
-      <SettingsSetupGuide section={props.section} rootRef={rootRef} />
+      <SettingsSetupGuide
+        section={props.section}
+        rootRef={rootRef}
+        writeSection={props.writeSection}
+      />
     </div>
   );
 }

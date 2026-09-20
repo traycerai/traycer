@@ -14,7 +14,11 @@ import type {
   ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
+import {
+  ChatLowerDock,
+  type DockRowHotspot,
+} from "@/components/chat/chat-lower-dock";
+import type { DockSection } from "@/stores/settings/layout-store";
 import type { ChatDockSection } from "@/components/chat/chat-dock-compact-strip";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
@@ -426,6 +430,39 @@ interface DockInput {
   readonly onBackgroundItemsStopAll: () => string | null;
 }
 
+const DEFAULT_DOCK_ORDER: ReadonlyArray<DockSection> = [
+  "filesChanged",
+  "activeAgents",
+  "background",
+];
+
+function dockHotspot(ghost: boolean): DockRowHotspot {
+  return {
+    hotspotRef: () => undefined,
+    ghost,
+    condition: "",
+    editing: false,
+  };
+}
+
+/** Mirrors the real "has content" gates `useChatDockChrome` computes, so a
+ *  fixture built from the same `DockInput` the test already passes in cannot
+ *  drift from what the row would actually decide in the app. */
+function dockHotspotsFor(
+  input: DockInput,
+): Readonly<Record<DockSection, DockRowHotspot>> {
+  return {
+    filesChanged: dockHotspot(input.changes.length === 0),
+    activeAgents: dockHotspot(
+      !(input.activeAgents.length > 0 && input.selfAgent !== null),
+    ),
+    background: dockHotspot(
+      (input.backgroundItems?.length ?? 0) === 0 &&
+        input.heldManagedCommandCount === 0,
+    ),
+  };
+}
+
 function renderDock(input: DockInput) {
   return render(
     // The dock's background panel reads the tile's bound host to open a
@@ -443,6 +480,8 @@ function renderDock(input: DockInput) {
           restore={baseRestore(input.changes)}
           queue={input.queue}
           folded={input.folded ?? new Set()}
+          dockOrder={DEFAULT_DOCK_ORDER}
+          hotspots={dockHotspotsFor(input)}
           queueResumeRequested={false}
           queueKeepPausedRequested={false}
           backgroundItems={input.backgroundItems}

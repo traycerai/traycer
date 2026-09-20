@@ -189,6 +189,9 @@ export function searchSettings(
  * a page (Providers' seven concept rows).
  */
 export function settingsSearchResultKey(entry: SettingsSearchEntry): string {
+  // A launch result is told apart by the setting it launches: two of them can
+  // share a label ("Usage limits" is in the status bar and the header).
+  if (entry.launch !== null) return `${entry.section}:launch:${entry.launch}`;
   return `${entry.section}:${entry.anchor ?? entry.label}`;
 }
 

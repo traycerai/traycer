@@ -59,7 +59,7 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutSetting } from "@/lib/layout-overrides";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
@@ -803,7 +803,7 @@ function ArtifactHeadingMinimapMount(props: {
   readonly refreshRef: RefObject<() => void>;
   readonly scroller: HTMLElement | null;
 }) {
-  const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  const side = useLayoutSetting("chatTurnMinimapSide");
   const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||

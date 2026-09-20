@@ -13,6 +13,7 @@ import {
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
 import type { NavigatorResourceMetric } from "@/stores/settings/settings-store";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 function pluralize(count: number, singular: string, plural: string): string {
@@ -153,6 +154,122 @@ export function OwnerResourceChip(props: OwnerResourceChipProps) {
       label="Resource usage"
       className={props.className}
     />
+  );
+}
+
+export interface NavigatorResourceHotspotOwner {
+  readonly epicId: string;
+  readonly kind: ResourceOwnerKindWireV14;
+  readonly ownerId: string;
+  readonly hostId: string | null;
+}
+
+export interface NavigatorResourceHotspotChipProps {
+  /** Null for a row that never owns a tracked process (a spec, a ticket). */
+  readonly owner: NavigatorResourceHotspotOwner | null;
+  readonly metrics: ReadonlyArray<NavigatorResourceMetric>;
+  readonly className: string | undefined;
+  /**
+   * Whether THIS row is the navigator's designated hotspot carrier. Every
+   * navigator (chat tree, terminal sidebar) shows one `sidebar.resourceChips`
+   * setting for the whole list, so exactly one row - the first one rendered -
+   * registers it; every other row renders its chip passively, exactly as
+   * before. Passing this from more than one row would collide on the same
+   * instance key.
+   */
+  readonly registersHotspot: boolean;
+}
+
+/** Resolve the snapshot before deciding whether this row has a measurable chip. */
+export function NavigatorResourceHotspotChip(
+  props: NavigatorResourceHotspotChipProps,
+): ReactNode {
+  if (props.owner === null) {
+    if (!props.registersHotspot) return null;
+    return (
+      <NavigatorResourceHotspotFrame
+        condition={
+          props.metrics.length === 0
+            ? "No metrics selected"
+            : "This row has no resource usage to show"
+        }
+      >
+        {null}
+      </NavigatorResourceHotspotFrame>
+    );
+  }
+  if (!props.registersHotspot)
+    return (
+      <OwnerResourceChip
+        {...props.owner}
+        metrics={props.metrics}
+        className={props.className}
+      />
+    );
+  return (
+    <NavigatorOwnerResourceHotspotChip
+      owner={props.owner}
+      metrics={props.metrics}
+      className={props.className}
+    />
+  );
+}
+
+function NavigatorOwnerResourceHotspotChip(props: {
+  owner: NavigatorResourceHotspotOwner;
+  metrics: ReadonlyArray<NavigatorResourceMetric>;
+  className: string | undefined;
+}): ReactNode {
+  const usage = useOwnerResourceUsage(
+    props.owner.epicId,
+    props.owner.kind,
+    props.owner.ownerId,
+    props.owner.hostId,
+  );
+  let condition: string | null = null;
+  if (props.metrics.length === 0) condition = "No metrics selected";
+  else if (usage === null) condition = "No reading yet";
+  return (
+    <NavigatorResourceHotspotFrame condition={condition}>
+      {usage === null ? null : (
+        <ResourceUsageChip
+          {...usage}
+          metrics={props.metrics}
+          label="Resource usage"
+          className={props.className}
+        />
+      )}
+    </NavigatorResourceHotspotFrame>
+  );
+}
+
+function NavigatorResourceHotspotFrame(props: {
+  condition: string | null;
+  children: ReactNode;
+}): ReactNode {
+  const { ref, editing } = useLayoutHotspot({
+    settingId: "sidebar.resourceChips",
+    tileId: null,
+    ghost: props.condition !== null,
+    condition: props.condition,
+  });
+  if (props.condition !== null) {
+    if (!editing) return null;
+    return (
+      <span
+        ref={ref}
+        data-testid="sidebar-resource-chip-ghost"
+        className="inline-flex h-3 w-10 shrink-0 rounded-sm border border-dashed border-border/60 opacity-70"
+      />
+    );
+  }
+  return (
+    <span
+      ref={ref}
+      className={cn(editing ? "inline-flex shrink-0 items-center" : "contents")}
+    >
+      {props.children}
+    </span>
   );
 }
 

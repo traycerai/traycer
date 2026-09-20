@@ -4,10 +4,8 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import {
-  useLayoutStore,
-  type PercentMode,
-} from "@/stores/settings/layout-store";
+import { useStatusBarRateLimitValue } from "@/lib/layout-overrides";
+import type { PercentMode } from "@/stores/settings/layout-store";
 
 /**
  * The box the readings sit in, at its NATURAL width.
@@ -115,21 +113,22 @@ export function statusBarUsageParts(
 }
 
 /**
- * Field by field rather than one object selector: a selector returning a fresh
- * object every call makes `useSyncExternalStore` see a new snapshot on each
- * read and re-render forever.
+ * Field by field, through the override seam (`lib/layout-overrides.ts`) so a
+ * Customize popover can draw the real readings under a different answer.
+ *
+ * Four leaf hooks rather than one slice read, for two independent reasons that
+ * both point the same way. A selector that BUILDS an object each call makes
+ * `useSyncExternalStore` see a new snapshot on every read and re-render
+ * forever - the original reason these were four selectors. And a hook that
+ * subscribes to the whole slice re-renders every reading whenever an unrelated
+ * status-bar preference changes, which is what briefly happened when this moved
+ * onto `useStatusBarLayout()`.
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
-  const percentMode = useLayoutStore(
-    (state) => state.statusBar.rateLimits.percentMode,
-  );
-  const showModeWord = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showModeWord,
-  );
-  const showBar = useLayoutStore((state) => state.statusBar.rateLimits.showBar);
-  const showTimer = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showTimer,
-  );
+  const percentMode = useStatusBarRateLimitValue("percentMode");
+  const showModeWord = useStatusBarRateLimitValue("showModeWord");
+  const showBar = useStatusBarRateLimitValue("showBar");
+  const showTimer = useStatusBarRateLimitValue("showTimer");
   return { percentMode, showModeWord, showBar, showTimer };
 }
 

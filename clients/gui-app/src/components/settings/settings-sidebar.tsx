@@ -36,6 +36,8 @@ import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isLegacyLayoutAvailable } from "@/lib/settings/settings-availability";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -84,6 +86,14 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // `switchToSettingsSection` walks this list to resolve that digit back to a
   // section.
   const sections = visibleSettingsSections();
+  // Layout leaves the rail when the Customize editor takes its rows over. The
+  // row is SKIPPED at draw time rather than filtered out of `sections`: the
+  // digit badges and `switchToSettingsSection` index that list positionally,
+  // so dropping the entry would move every shortcut after it, and the digit
+  // left on Layout still lands (the route hands it on to Appearance).
+  const layoutOffered = isLegacyLayoutAvailable(
+    useSettingsAvailabilityContext(),
+  );
   // The host picker below shows a live dot and a health word per row, so this
   // is a liveness surface and opts into the registry poll. It is also the ONE
   // place in Settings that has to: the picker is mounted for as long as any
@@ -134,7 +144,8 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 )}
               >
                 {sections.map((section, index) =>
-                  section.group === group.id ? (
+                  section.group === group.id &&
+                  (section.id !== "layout" || layoutOffered) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}

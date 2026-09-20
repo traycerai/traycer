@@ -136,6 +136,7 @@ function renderSegmentsFor(
       providers,
       profileSelection,
       mode: "live",
+      editing: false,
     });
   });
 }
@@ -956,6 +957,7 @@ describe("useStatusBarRateLimitSegments", () => {
             providers: [codexWithAccounts()],
             profileSelection: props.selection,
             mode: "live",
+            editing: false,
           }),
         { initialProps: { selection: hostA } },
       );

@@ -25,6 +25,7 @@ import {
 } from "@/stores/onboarding/setup-guides";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useHostBinding } from "@/lib/host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
@@ -158,6 +159,7 @@ export function GettingStartedSettingsPanel() {
   const progress = useOnboardingStore((state) => state.setupProgress);
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
   const hostBinding = useHostBinding();
+  const availability = useSettingsAvailabilityContext();
   const phone = useIsMobileViewport();
   const shell = { browserView: browserView !== null };
   const complete = useOnboardingStore((state) =>
@@ -251,6 +253,7 @@ export function GettingStartedSettingsPanel() {
                   setupGuideStepSection(
                     card.id,
                     useOnboardingStore.getState().activeSetup?.step ?? 0,
+                    availability,
                   ),
                 );
               }}

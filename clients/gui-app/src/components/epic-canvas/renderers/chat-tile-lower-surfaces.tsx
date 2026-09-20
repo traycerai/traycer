@@ -22,7 +22,12 @@ import {
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
-import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
+import {
+  ChatLowerDock,
+  type DockRowHotspot,
+} from "@/components/chat/chat-lower-dock";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import type { DockSection } from "@/stores/settings/layout-store";
 import {
   ChatDockCompactStrip,
   ChatDockCompactStripProvider,
@@ -35,10 +40,7 @@ import {
   type ChatLowerSurfaceTopSpacing,
   type ChatPinnedStackTopSpacing,
 } from "@/components/chat/chat-pinned-stack";
-import {
-  chatChangesPanelHasContent,
-  chatPinnedStackVisible,
-} from "@/components/chat/chat-pinned-stack-utils";
+import { chatChangesPanelHasContent } from "@/components/chat/chat-pinned-stack-utils";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import {
   useAgentStopControls,
@@ -71,7 +73,7 @@ import {
   useHeldManagedCommandsForChat,
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useComposerLayout } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import type {
   PendingInterviewView,
@@ -420,6 +422,7 @@ export function ChatLowerInteractionSurfaces(
     stopControls.self !== null && activeAgents.length > 0;
   const chrome = useChatDockChrome({
     snapshotLoaded: props.runtime.snapshotLoaded,
+    chatId: props.chatId,
     restore: props.restoreContext,
     selfAgent: stopControls.self,
     activeAgents,
@@ -430,13 +433,13 @@ export function ChatLowerInteractionSurfaces(
     heldManagedCommands,
     queue: props.queue.value,
   });
-  const pinnedStackVisible =
-    props.runtime.snapshotLoaded &&
-    chatPinnedStackVisible({
-      todo: props.todo,
-      restore: props.restoreContext,
-      changesFolded: chrome.folded.has("filesChanged"),
-    });
+  const todoVisible = props.runtime.snapshotLoaded && props.todo !== null;
+  const dockFilesChangedVisible =
+    !chrome.hotspots.filesChanged.ghost && !chrome.folded.has("filesChanged");
+  // Kept as one boolean (rather than two) for the scroll-budget calc below,
+  // which has always treated Todo and Files changed as a single pressure
+  // unit - unchanged now that Files changed can render apart from Todo.
+  const pinnedStackVisible = todoVisible || dockFilesChangedVisible;
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only). Received rows
   // follow the Active agents mode, so a folded chip takes them with it and this
@@ -541,6 +544,8 @@ export function ChatLowerInteractionSurfaces(
           restore={props.restoreContext}
           queue={chrome.dockQueue}
           folded={chrome.folded}
+          dockOrder={chrome.dockOrder}
+          hotspots={chrome.hotspots}
           backgroundItems={props.backgroundItems}
           runningManagedCommandCount={runningManagedCommandCount}
           heldManagedCommandCount={heldManagedCommandCount}
@@ -596,10 +601,15 @@ interface ChatDockChrome {
   /** The queue as the dock should render it - see `foldedQueue`. */
   readonly dockQueue: ChatSessionState["queue"];
   readonly strip: ChatDockCompactStripValue;
+  /** The vertical order of the three reorderable dock rows. */
+  readonly dockOrder: ReadonlyArray<DockSection>;
+  /** This tile's Customize hotspot for each of the three reorderable rows. */
+  readonly hotspots: Readonly<Record<DockSection, DockRowHotspot>>;
 }
 
 interface ChatDockChromeInput {
   readonly snapshotLoaded: boolean;
+  readonly chatId: string;
   readonly restore: ChatRestoreContextValue;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
@@ -623,7 +633,7 @@ const NO_BACKGROUND_ITEMS: ReadonlyArray<BackgroundItem> = [];
  * per-tile reveal exists to avoid.
  */
 function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
-  const composer = useLayoutStore((state) => state.composer);
+  const composer = useComposerLayout();
   const [expanded, setExpanded] = useState<ReadonlySet<ChatDockSection>>(
     () => new Set<ChatDockSection>(),
   );
@@ -640,6 +650,29 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
   const receivedAgentCount = input.queue.items.filter(
     isReceivedAgentResponse,
   ).length;
+  // The row's own content gate (self + descendants), not the chip's broader
+  // one: a received-only queue item with no descendants keeps the chip alive
+  // (see `agentsChip` below) but the panel this hotspot anchors has nothing of
+  // its own to draw, so it is not what "ghost" is asking about here.
+  const activeAgentsHasContent = input.activeAgentsVisible;
+  const filesChangedHotspot = useLayoutHotspot({
+    settingId: "composer.filesChanged",
+    tileId: input.chatId,
+    ghost: !changesPresent,
+    condition: changesPresent ? null : "nothing changed in this chat",
+  });
+  const activeAgentsHotspot = useLayoutHotspot({
+    settingId: "composer.activeAgents",
+    tileId: input.chatId,
+    ghost: !activeAgentsHasContent,
+    condition: activeAgentsHasContent ? null : "no agents running",
+  });
+  const backgroundHotspot = useLayoutHotspot({
+    settingId: "composer.background",
+    tileId: input.chatId,
+    ghost: !input.backgroundVisible,
+    condition: input.backgroundVisible ? null : "nothing in the background",
+  });
   // The root agent counts as running too when it is itself active, exactly as
   // `ActiveAgentsPanel`'s own header counts it.
   const agentsRunningCount =
@@ -764,6 +797,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "filesChanged",
         glyph: "filesChanged",
+        hotspotRef: revealed.has("filesChanged")
+          ? null
+          : filesChangedHotspot.ref,
         working: false,
         // The file count leads and the line counts follow, the same order and
         // the same tones the panel's own header uses - the chip stands in for
@@ -785,6 +821,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "activeAgents",
         glyph: "activeAgents",
+        hotspotRef: revealed.has("activeAgents")
+          ? null
+          : activeAgentsHotspot.ref,
         // Mid-turn is the live state here, exactly as the roster in `label`
         // words it - the chip draws it, the sentence says it.
         working: agentsWorking,
@@ -809,6 +848,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         // The section's own mark whatever the rows are - activity lights it
         // rather than replacing it, and the kinds are the panel's to draw.
         glyph: "background",
+        hotspotRef: revealed.has("background") ? null : backgroundHotspot.ref,
         // The count IS the running count, so anything in it lights the chip -
         // and a shell whose process is alive is in that count whether or not it
         // is monitoring, since the host reports it as `running` either way
@@ -824,8 +864,12 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         pulseToken: backgroundRunning > 0 ? "running" : null,
       });
     }
-    return models;
+    return composer.dockOrder.flatMap((section) =>
+      models.filter((model) => model.section === section),
+    );
   }, [
+    composer.dockOrder,
+    revealed,
     filesChip,
     agentsChip,
     backgroundChip,
@@ -837,6 +881,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     agentsRoster,
     receivedAgentCount,
     backgroundRunning,
+    filesChangedHotspot.ref,
+    activeAgentsHotspot.ref,
+    backgroundHotspot.ref,
   ]);
 
   const strip = useMemo<ChatDockCompactStripValue>(
@@ -844,7 +891,28 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     [chips, revealed, onToggle],
   );
 
-  return { folded, dockQueue, strip };
+  const hotspots: Readonly<Record<DockSection, DockRowHotspot>> = {
+    filesChanged: {
+      hotspotRef: filesChangedHotspot.ref,
+      ghost: !changesPresent,
+      condition: "nothing changed in this chat",
+      editing: filesChangedHotspot.editing,
+    },
+    activeAgents: {
+      hotspotRef: activeAgentsHotspot.ref,
+      ghost: !activeAgentsHasContent,
+      condition: "no agents running",
+      editing: activeAgentsHotspot.editing,
+    },
+    background: {
+      hotspotRef: backgroundHotspot.ref,
+      ghost: !input.backgroundVisible,
+      condition: "nothing in the background",
+      editing: backgroundHotspot.editing,
+    },
+  };
+
+  return { folded, dockQueue, strip, dockOrder: composer.dockOrder, hotspots };
 }
 
 /** How many agents the chip's sentence names before it starts counting. */

@@ -1,3 +1,5 @@
+import { SAMPLE_RAIL_PRESENCE as SETTINGS_PRESENCE } from "@/components/sample-workspace/sample-workspace-scene";
+import { LeftPanelRailIcon } from "@/components/epic-canvas/sidebar/left-panel-rail-icon";
 /**
  * Layout ▸ Sidebar: the epic sidebar's own layout.
  *
@@ -103,14 +105,6 @@ import {
  * for an epic with no PRs and no open artifact, so the checkbox column here
  * describes the panel's standing preference rather than one epic's contents.
  */
-const SETTINGS_PRESENCE: Omit<
-  LeftPanelAvailabilityContext,
-  "visibilityOverrideById"
-> = {
-  commentsPanelRevealed: false,
-  hasActiveCommentableArtifact: false,
-  hasPullRequests: false,
-};
 
 // Mapped over the store's own metric order rather than re-listing it, so the
 // row cannot drift from the order the chip prints. The labels are the Resource
@@ -573,7 +567,6 @@ function SidebarPanelStripTile(props: SidebarPanelStripTileProps): ReactNode {
       ? preview.position
       : null;
   const hidden = !isLeftPanelVisible(definition, context);
-  const Icon = definition.icon;
 
   return (
     <div className="relative flex shrink-0 items-center">
@@ -608,7 +601,7 @@ function SidebarPanelStripTile(props: SidebarPanelStripTileProps): ReactNode {
           {/* The dim sits on the ICON, not the tile: nesting into a hidden
               panel is a legitimate drop, and the ring that offers it would be
               dimmed along with everything else if the tile carried it. */}
-          <Icon className={cn("size-4", hidden && "opacity-40")} />
+          <LeftPanelRailIcon panelId={panelId} hidden={hidden} />
         </div>
       </TooltipWrapper>
       {previewPosition === "after" ? (
@@ -731,6 +724,7 @@ interface SidebarPanelRowProps {
 
 function SidebarPanelRow(props: SidebarPanelRowProps): ReactNode {
   const { panelId, groups, context, visibleCount, onRunAction } = props;
+  const Icon = getLeftPanelDefinition(panelId).icon;
   const definition = getLeftPanelDefinition(panelId);
   const setOverride = useLeftPanelStore(
     (state) => state.setPanelVisibilityOverride,
@@ -743,7 +737,6 @@ function SidebarPanelRow(props: SidebarPanelRowProps): ReactNode {
   // two disagreeing with no icon to click back.
   const locked = visible && visibleCount === 1;
   const actions = sidebarPanelRowActions(groups, panelId);
-  const Icon = definition.icon;
 
   return (
     <div

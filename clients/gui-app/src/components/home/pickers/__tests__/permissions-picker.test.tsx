@@ -63,6 +63,7 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
       turnActive={options.turnActive}
       judgeBilling={options.judgeBilling}
       closeFocus="trigger"
+      interactive
     />,
   );
 }

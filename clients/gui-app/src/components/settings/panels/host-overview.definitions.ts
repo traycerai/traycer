@@ -6,6 +6,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // page itself is a stable destination. Every card and row here folds into it.
 export const HOST_OVERVIEW = defineSettingsSection("host", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Overview",
     description: "The selected host's status, version, and installation.",
     keywords: [

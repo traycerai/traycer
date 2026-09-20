@@ -1,3 +1,4 @@
+import { customizeSource } from "@/lib/commands/sources/customize.source";
 /**
  * React hook that aggregates items from every registered source
  * for the given `CommandContext`. Pure sources resolve through
@@ -27,6 +28,7 @@ export interface UseCommandItemsResult {
 
 export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
   const syncItems = useMemo(() => getAllItems(ctx), [ctx]);
+  const customizeItems = customizeSource.useItems(ctx);
   const actionItems = actionsSource.useItems(ctx);
   const navItems = navigationSource.useItems(ctx);
   const historyNavItems = historyNavigationSource.useItems(ctx);
@@ -37,6 +39,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
   const items = useMemo<ReadonlyArray<CommandItem>>(
     () => [
       ...syncItems,
+      ...customizeItems,
       ...actionItems,
       ...navItems,
       ...historyNavItems,
@@ -46,6 +49,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
     ],
     [
       syncItems,
+      customizeItems,
       actionItems,
       navItems,
       historyNavItems,

@@ -58,6 +58,18 @@ export interface SettingsAvailabilityContext {
    * footer unconditionally it decides nothing.
    */
   readonly mobileFooter: boolean;
+  /**
+   * The Customize editor's switch AND a window wide enough for it: the one
+   * member that reads the VIEWPORT, admitted because the rollout it serves is
+   * defined in those terms (D22). The editor replaces the Layout page only on
+   * a desktop-width window; a narrow one keeps the full page whatever the
+   * switch says, so neither input alone answers "which of the two exists
+   * here". Viewport-derived facts are otherwise banned from this context, and
+   * this one qualifies on the same terms `mobileFooter` does: device-local,
+   * one answer for the whole shell, and re-evaluated when it flips
+   * (`useSettingsAvailabilityContext` subscribes to both inputs).
+   */
+  readonly customizeEditor: boolean;
 }
 
 /** Rendered in every shell. */
@@ -128,6 +140,28 @@ export function isMobileFooterRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return context.mobileApp;
+}
+
+/**
+ * Appearance › Customize — the editor's card and its entry points. Exactly the
+ * complement of `isLegacyLayoutAvailable`: one of the two is always true, so a
+ * layout value is configurable in every shell and never in two places at once.
+ */
+export function isCustomizeAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return context.customizeEditor;
+}
+
+/**
+ * Settings › Layout's own page - every row it draws and every search result
+ * that points into it. Withheld exactly when the editor takes over, so the
+ * rows leave search in the same breath as the page.
+ */
+export function isLegacyLayoutAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.customizeEditor;
 }
 
 /** General › Experimental — the desktop feature-settings bridge. */

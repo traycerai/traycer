@@ -391,6 +391,107 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(480);
   });
 
+  it("rehydrates when another window writes the left-panel key", async () => {
+    // A legacy-version blob on purpose: the storage listener goes through the
+    // same `rehydrate` a start-up hydration does, so `migrate` still runs.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({ state: { sidebarWidthPx: 420 }, version: 1 }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    // The listener's rehydrate is fire-and-forget.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(420);
+  });
+
+  it("keeps an open Comments panel when another window writes", async () => {
+    // The Comments panel is a transient reveal that `partialize` deliberately
+    // never persists, so a remote blob CANNOT carry it. Before the merge guard,
+    // another window resizing its sidebar replaced the live map with one that
+    // by construction had no Comments entry, and the user's open panel became
+    // Chats for a reason they could not see.
+    useLeftPanelStore.getState().setActivePanelId("tab-a", "comments");
+    // The map is in the blob, exactly as the other window wrote it: that window
+    // had no Comments panel open, so `partialize` gave it an entry-less map.
+    // Omitting the key entirely would let the OLD shallow merge pass too - the
+    // local map would survive for want of anything to replace it - so the
+    // regression would go unwatched.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { sidebarWidthPx: 420, activePanelIdByTabId: {} },
+        version: 3,
+      }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "comments",
+    );
+    // The remote write still lands - this is a guard on one value, not a veto.
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(420);
+  });
+
+  it("takes the remote answer for a durable active panel", async () => {
+    // Only `"comments"` is layered back on. Every other panel id round-trips
+    // through `partialize`, so keeping the local one would ignore the very
+    // write this rehydrate exists to apply.
+    useLeftPanelStore.getState().setActivePanelId("tab-a", "artifacts");
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { activePanelIdByTabId: { "tab-a": "terminals" } },
+        version: 3,
+      }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "terminals",
+    );
+  });
+
+  it("ignores a storage event for an unrelated key", async () => {
+    useLeftPanelStore.getState().setSidebarWidthPx(DEFAULT_SIDEBAR_WIDTH_PX);
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({ state: { sidebarWidthPx: 460 }, version: 3 }),
+    );
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "some-other-app:left-panel" }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(
+      DEFAULT_SIDEBAR_WIDTH_PX,
+    );
+  });
+
+  it("restores the whole visibility map in one write", () => {
+    // What an undo needs: a walk over the per-panel setter would persist and
+    // re-render once per panel and show intermediate rails on the way.
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverrides({ terminals: false });
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual({
+      terminals: false,
+    });
+  });
+
   it("persists active chat and artifact filters set through actions", () => {
     act(() => {
       useLeftPanelStore.getState().setChatOrigin("epic-a", "gui");

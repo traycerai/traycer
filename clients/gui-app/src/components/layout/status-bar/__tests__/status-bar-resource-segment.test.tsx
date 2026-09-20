@@ -84,6 +84,7 @@ function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
         hostId="host-b"
         hostLabel="Office Linux"
         hasExplicitPick={props.hasExplicitPick}
+        interactive={false}
       />
     </TooltipProvider>,
   );

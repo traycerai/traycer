@@ -1,5 +1,11 @@
-import { Fragment, type ComponentPropsWithoutRef, type Ref } from "react";
+import {
+  Fragment,
+  useCallback,
+  type ComponentPropsWithoutRef,
+  type Ref,
+} from "react";
 import { Cpu } from "lucide-react";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import type { StatusBarResourceMetricView } from "@/lib/resources/status-bar-resource-reading";
@@ -22,6 +28,8 @@ interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button
    * and handlers to this component, and they have to reach the real `<button>`.
    */
   readonly ref?: Ref<HTMLButtonElement>;
+  /** `false` for every passive mount: the Settings preview, an option picture. */
+  readonly interactive: boolean;
 }
 
 /**
@@ -39,18 +47,43 @@ interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button
  * opening anything. So this is a trigger, never a second reader.
  */
 export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
-  const { hostId, hostLabel, hasExplicitPick, className, ...buttonProps } =
-    props;
+  const {
+    hostId,
+    hostLabel,
+    hasExplicitPick,
+    interactive,
+    className,
+    ref,
+    ...buttonProps
+  } = props;
   const views = useStatusBarResourceMetricViews({
     hostId,
     hostLabel,
     hasExplicitPick,
   });
-  const icon = <Cpu className="size-3 shrink-0" aria-hidden />;
   const noMetrics = views.length === 0;
+  const { ref: hotspotRef, editing } = useLayoutHotspot({
+    settingId: "statusBar.resources",
+    tileId: null,
+    ghost: noMetrics,
+    condition: noMetrics ? "No metrics selected" : null,
+  });
+  const icon = <Cpu className="size-3 shrink-0" aria-hidden />;
+  const setMergedRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      hotspotRef(node);
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref, hotspotRef],
+  );
 
   return (
     <button
+      ref={interactive ? setMergedRef : ref}
       type="button"
       // An `aria-label` REPLACES the flattened contents in the accessible-name
       // computation, so a hidden sentence inside the button would never be
@@ -68,6 +101,10 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
       className={cn(
         "inline-flex h-6 max-w-full shrink-0 items-center gap-1.5 px-2 text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground",
         "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+        interactive &&
+          editing &&
+          noMetrics &&
+          "rounded-sm border border-dashed border-border/60 opacity-70",
         className,
       )}
     >

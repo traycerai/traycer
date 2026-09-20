@@ -8,10 +8,12 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
+  type Ref,
 } from "react";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
   chatTurnMinimapItems,
+  type ChatTurnMinimapItem,
   resolveChatTurnMinimapCurrentIndex,
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapHitStripWidth,
@@ -29,6 +31,7 @@ import {
 } from "@/components/minimap/minimap-track-geometry";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
@@ -38,6 +41,7 @@ import {
 } from "@/stores/settings/settings-store";
 
 export interface ChatTurnMinimapProps {
+  readonly ref?: Ref<HTMLDivElement>;
   /** The array the list renders - the rail's `rowIndex` values feed
    *  `positionAtIndex`, so they must live in LIST index space, which on the
    *  windowed line includes placeholder rows. */
@@ -64,6 +68,7 @@ function clampIndex(index: number, itemCount: number): number {
 
 /** One compact window of turns. Hover or focus opens the full turn list. */
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
+  const { ref } = props;
   const {
     bottomInset,
     inViewRefreshRef,
@@ -106,6 +111,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const [maxVisibleItems, setMaxVisibleItems] = useState(2);
   const [open, setOpen] = useState(false);
   const regionRef = useRef<HTMLDivElement | null>(null);
+  const measuredRef = useMemo(() => mergeRefs(regionRef, ref), [ref]);
   const hitStripRef = useRef<HTMLButtonElement | null>(null);
 
   const refreshCurrent = useCallback((): void => {
@@ -290,6 +296,61 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   if (railHidden || !railActive || !visible || isInert) return null;
 
+  return (
+    <ChatTurnMinimapView
+      items={items}
+      currentIndex={resolvedCurrentIndex}
+      cursorIndex={resolvedCursorIndex}
+      maxVisibleItems={maxVisibleItems}
+      bottomInset={bottomInset}
+      hitStripWidth={hitStripWidth}
+      side={side}
+      open={open}
+      ref={measuredRef}
+      hitStripRef={hitStripRef}
+      onOpen={() => setOpen(true)}
+      onFocus={openAtCurrent}
+      onKeyDown={handleHitStripKeyDown}
+      onCursorIndexChange={setCursorIndex}
+      onSelect={(index) => onSelect(items[index].messageId)}
+    />
+  );
+}
+
+/** Drawing only: no transcript subscription, tile publication or keyboard slots. */
+export function ChatTurnMinimapView({
+  items,
+  currentIndex: resolvedCurrentIndex,
+  cursorIndex: resolvedCursorIndex,
+  maxVisibleItems,
+  bottomInset,
+  hitStripWidth,
+  side,
+  open,
+  ref: measuredRef,
+  hitStripRef,
+  onOpen,
+  onFocus: openAtCurrent,
+  onKeyDown: handleHitStripKeyDown,
+  onCursorIndexChange,
+  onSelect,
+}: {
+  readonly items: ReadonlyArray<ChatTurnMinimapItem>;
+  readonly currentIndex: number;
+  readonly cursorIndex: number;
+  readonly maxVisibleItems: number;
+  readonly bottomInset: number;
+  readonly hitStripWidth: number;
+  readonly side: "left" | "right";
+  readonly open: boolean;
+  readonly ref: Ref<HTMLDivElement>;
+  readonly hitStripRef: Ref<HTMLButtonElement>;
+  readonly onOpen: () => void;
+  readonly onFocus: () => void;
+  readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
+  readonly onCursorIndexChange: (index: number) => void;
+  readonly onSelect: (index: number) => void;
+}) {
   const window = resolveMinimapWindow({
     currentIndex: resolvedCurrentIndex,
     itemCount: items.length,
@@ -316,7 +377,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           side === "left" ? "left-3" : "right-3",
         )}
         {...paneActivationDeferProps}
-        ref={regionRef}
+        ref={measuredRef}
         role="group"
         style={{ height: resolveChatTurnMinimapHeightStyle(railItems.length) }}
       >
@@ -329,7 +390,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           )}
           data-testid="chat-turn-minimap-hit-strip"
           {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
-          onClick={() => setOpen(true)}
+          onClick={onOpen}
           onFocus={openAtCurrent}
           onKeyDown={handleHitStripKeyDown}
           ref={hitStripRef}
@@ -370,8 +431,8 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
               currentIndex={resolvedCurrentIndex}
               cursorIndex={resolvedCursorIndex}
               items={items}
-              onCursorIndexChange={setCursorIndex}
-              onSelect={(index) => onSelect(items[index].messageId)}
+              onCursorIndexChange={onCursorIndexChange}
+              onSelect={onSelect}
               side={side}
               title="Messages"
             />

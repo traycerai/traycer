@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
   DEFAULT_SORT_MODE,
@@ -316,6 +321,16 @@ interface LeftPanelStore {
     panelId: LeftPanelId,
     override: boolean | null,
   ) => void;
+  /**
+   * The whole map at once, for a caller holding a complete answer rather than
+   * one panel's - the Customize editor's undo, which restores the arrangement a
+   * gesture changed in ONE write. A walk over the per-panel setter would persist
+   * and re-render once per panel, and would leave the rail in intermediate
+   * states an undo never meant to show.
+   */
+  readonly setPanelVisibilityOverrides: (
+    overrides: PanelVisibilityOverrideById,
+  ) => void;
   readonly clearPanelVisibilityOverrides: () => void;
 
   readonly getLocalRootCreatePending: (
@@ -563,6 +578,45 @@ function getPersistedActivePanelIds(
     }
     return nextActivePanels;
   }, {});
+}
+
+/**
+ * The default shallow merge, except that a tab currently showing the Comments
+ * panel keeps showing it.
+ *
+ * `getPersistedActivePanelIds` deliberately never writes a `"comments"` entry:
+ * the Comments panel is a TRANSIENT reveal, opened by following a comment, and
+ * a restart is meant to land back on the durable panel underneath. That was
+ * harmless while hydration happened once at start-up, because there was no live
+ * selection to lose.
+ *
+ * Cross-window rehydrate broke exactly that assumption. The listener runs this
+ * merge against a RUNNING store, so any write from another window - a sidebar
+ * resize, a panel reorder - replaced the live map with one that, by
+ * construction, cannot contain the Comments entry. The user's open Comments
+ * panel silently became Chats because a different window changed its sidebar
+ * width.
+ *
+ * So the persisted map wins for everything it can express, and the one value it
+ * cannot express is layered back on from the live state. Only `"comments"` -
+ * every other panel id round-trips, so taking those from `current` would be
+ * ignoring the remote write this merge exists to apply.
+ */
+function mergeLeftPanelPersistedState(
+  persistedState: unknown,
+  currentState: LeftPanelStore,
+): LeftPanelStore {
+  if (!isRecord(persistedState)) return currentState;
+  const merged: LeftPanelStore = { ...currentState, ...persistedState };
+  const activePanelIdByTabId: Record<string, LeftPanelId> = {
+    ...merged.activePanelIdByTabId,
+  };
+  for (const [tabId, panelId] of Object.entries(
+    currentState.activePanelIdByTabId,
+  )) {
+    if (panelId === "comments") activePanelIdByTabId[tabId] = panelId;
+  }
+  return { ...merged, activePanelIdByTabId };
 }
 
 function getPersistedMainCollapsedByTabId(
@@ -1193,6 +1247,10 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
+      setPanelVisibilityOverrides: (overrides) => {
+        set({ panelVisibilityOverrideById: { ...overrides } });
+      },
+
       clearPanelVisibilityOverrides: () => {
         set((state) =>
           Object.keys(state.panelVisibilityOverrideById).length === 0
@@ -1568,9 +1626,18 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         ),
       }),
       migrate: (persisted) => migrateLeftPanelPersistedState(persisted),
+      merge: mergeLeftPanelPersistedState,
     },
   ),
 );
+
+/**
+ * Another window's rail change - a reorder, a group, a hidden panel - reaches
+ * this one live. The rehydrate runs this store's `migrate` exactly as a start-up
+ * hydration does, so a blob written by an older build is still repaired on the
+ * way in.
+ */
+installCrossWindowRehydrate(useLeftPanelStore, PERSIST_KEY);
 
 export const useEpicLeftPanelStore = useLeftPanelStore;
 

@@ -1,3 +1,4 @@
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
@@ -11,7 +12,9 @@ import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { cn } from "@/lib/utils";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useComposerLayoutValue } from "@/lib/layout-overrides";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
@@ -85,6 +88,10 @@ interface PermissionsPickerProps {
    * in) out from under the panel the user is reading.
    */
   closeFocus: "composer" | "trigger";
+  /** `false` for every mount that isn't a real toolbar slot (the Settings
+   *  default-permission row): keeps that row from registering the
+   *  `composer.access` hotspot under the shared `"landing"` tile id. */
+  readonly interactive: boolean;
 }
 
 export function PermissionsPicker(props: PermissionsPickerProps) {
@@ -99,6 +106,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     turnActive,
     judgeBilling,
     closeFocus,
+    interactive,
   } = props;
   // Display value is the *normalized* one: when the sticky value isn't in the
   // active harness's supported set (rehydration of a saved chat, the one-frame
@@ -119,7 +127,14 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // the permission the next send will run under, so `compact` takes it to the
   // shape a narrow composer already puts it in - icon alone, name on hover -
   // and no further.
-  const compact = useLayoutStore((s) => s.composer.access) === "compact";
+  const compact = useComposerLayoutValue("access") === "compact";
+  const tileId = useComposerTileId();
+  const { ref: hotspotRef } = useLayoutHotspot({
+    settingId: "composer.access",
+    tileId,
+    ghost: false,
+    condition: null,
+  });
 
   // No tooltip of its own: the wrapper below already renders one (both branches
   // ARE a `TooltipWrapper`), and the label is VISIBLE on this pill until the
@@ -131,30 +146,13 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // control.
   const trigger = (
     <DropdownMenuTrigger asChild>
-      <ToolbarPillButton
-        aria-label={label}
+      <PermissionsTrigger
+        ref={interactive ? hotspotRef : undefined}
+        label={label}
         disabled={disabled}
-        className={cn(
-          "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
-          compact && "justify-center",
-        )}
-      >
-        <Icon className="size-4 shrink-0" />
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
-            compact && "hidden",
-          )}
-        >
-          {label}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
-            compact && "hidden",
-          )}
-        />
-      </ToolbarPillButton>
+        compact={compact}
+        icon={<Icon className="size-4 shrink-0" />}
+      />
     </DropdownMenuTrigger>
   );
 
@@ -301,5 +299,46 @@ function PermissionOptionBody(props: {
         </span>
       ) : null}
     </span>
+  );
+}
+
+export function PermissionsTrigger({
+  label,
+  disabled,
+  compact,
+  icon,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  compact: boolean;
+  icon: ReactNode;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  return (
+    <ToolbarPillButton
+      {...rest}
+      aria-label={label}
+      disabled={disabled}
+      className={cn(
+        "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
+        compact && "justify-center",
+      )}
+    >
+      {icon}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
+          compact && "hidden",
+        )}
+      >
+        {label}
+      </span>
+      <ChevronDown
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
+          compact && "hidden",
+        )}
+      />
+    </ToolbarPillButton>
   );
 }

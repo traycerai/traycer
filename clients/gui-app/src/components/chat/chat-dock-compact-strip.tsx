@@ -1,3 +1,5 @@
+import { useCustomizeStore } from "@/stores/customize/customize-store";
+import { cn } from "@/lib/utils";
 import { useCallback, useRef, type ReactNode } from "react";
 import { Bot, FileDiff, type LucideIcon } from "lucide-react";
 import { MessageSquareClock } from "@/components/notifications/message-square-clock";
@@ -149,6 +151,7 @@ function ChipGlyph(props: {
  * is either on screen or empty.
  */
 export function ChatDockCompactStrip(): ReactNode {
+  const editing = useCustomizeStore((state) => state.session !== null);
   const value = useChatDockCompactStrip();
   if (value === null || value.chips.length === 0) return null;
   return (
@@ -157,20 +160,25 @@ export function ChatDockCompactStrip(): ReactNode {
       className="ml-auto flex min-w-0 shrink-0 items-center gap-1"
     >
       {value.chips.map((chip) => (
-        <ChatDockCompactChip
+        <span
           key={chip.section}
-          icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
-          text={chip.text}
-          working={chip.working}
-          lineDeltas={chip.lineDeltas}
-          label={chip.label}
-          pulseToken={chip.pulseToken}
-          expanded={value.expanded.has(chip.section)}
-          testId={`chat-dock-chip-${chip.section}`}
-          onClick={() => {
-            value.onToggle(chip.section);
-          }}
-        />
+          className={cn(editing ? "inline-flex items-center" : "contents")}
+          ref={chip.hotspotRef}
+        >
+          <ChatDockCompactChip
+            icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
+            text={chip.text}
+            working={chip.working}
+            lineDeltas={chip.lineDeltas}
+            label={chip.label}
+            pulseToken={chip.pulseToken}
+            expanded={value.expanded.has(chip.section)}
+            testId={`chat-dock-chip-${chip.section}`}
+            onClick={() => {
+              value.onToggle(chip.section);
+            }}
+          />
+        </span>
       ))}
     </div>
   );

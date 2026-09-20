@@ -31,6 +31,7 @@ import {
   type ProfileAccentDotInput,
 } from "@/components/providers/provider-profile-model";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { mergeOrder } from "@/lib/order-merge";
 import { sortProviderStatesByProviderOrder } from "@/lib/provider-ordering";
 import {
   isRateLimitProfileFetchEligible,
@@ -124,6 +125,13 @@ export interface StatusBarProviderSegmentModel {
    * (the same rule the composer's rail applies).
    */
   readonly account: ProfileAccentDotInput | null;
+  /**
+   * Whether this provider sits on the layout store's deny-list. Only ever
+   * `true` while a Customize session asked to see hidden providers too
+   * (`useStatusBarRateLimitSegments({ editing: true })`) - outside a session
+   * a hidden provider never reaches `toSegments` at all.
+   */
+  readonly hidden: boolean;
   readonly state: StatusBarProviderSegmentState;
   /**
    * Why this segment is degraded or unavailable, when the provider named a
@@ -432,13 +440,18 @@ interface OrderedSegment {
   readonly segment: StatusBarProviderSegmentModel;
 }
 
+interface ToSegmentsContext {
+  readonly selections: StatusBarProviderLimitSelections;
+  readonly hiddenProviders: ReadonlyArray<RateLimitProviderId>;
+  readonly now: number;
+}
+
 function toSegments(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
   queries: ReadonlyArray<
     UseQueryResult<ProviderRateLimitEnvelope, HostRpcError>
   >,
-  selections: StatusBarProviderLimitSelections,
-  now: number,
+  context: ToSegmentsContext,
 ): ReadonlyArray<OrderedSegment> {
   return targets.map((target, index) => {
     const query = queries[index];
@@ -448,10 +461,13 @@ function toSegments(
     // halves, so the state a segment reports and the windows it draws can never
     // describe two different snapshots.
     const retained = resolveRetainedProviderRateLimits(envelope);
-    const windows = liveWindows(retained, now);
+    const windows = liveWindows(retained, context.now);
     const shown = shownWindows(
       windows,
-      statusBarProviderLimitSelection(selections, target.provider.providerId),
+      statusBarProviderLimitSelection(
+        context.selections,
+        target.provider.providerId,
+      ),
     );
     return {
       order: target.order,
@@ -459,6 +475,7 @@ function toSegments(
         providerId: target.provider.providerId,
         profileId: target.profileId,
         account: target.account,
+        hidden: context.hiddenProviders.includes(target.provider.providerId),
         ...segmentState(retained, envelope, query.isError),
         windows,
         shown,
@@ -480,6 +497,29 @@ function clusterFor(
   if (providerCount === 0) return { kind: "no-providers" };
   if (segments.length === 0) return { kind: "hidden" };
   return { kind: "segments", segments };
+}
+
+/**
+ * Reorders segments provider-by-provider to match `segmentOrder`, keeping a
+ * provider's own accounts together and in the order they were already in.
+ * `mergeOrder` runs over PROVIDER ids (a segment list can hold several
+ * accounts of one provider), and a provider `mergeOrder` cannot place - one
+ * the strip is not currently drawing at all - is simply absent from its
+ * result and contributes nothing here.
+ */
+function applySegmentOrder(
+  segments: ReadonlyArray<StatusBarProviderSegmentModel>,
+  segmentOrder: ReadonlyArray<RateLimitProviderId>,
+): ReadonlyArray<StatusBarProviderSegmentModel> {
+  const presentProviderIds: RateLimitProviderId[] = [];
+  for (const segment of segments) {
+    if (!presentProviderIds.includes(segment.providerId))
+      presentProviderIds.push(segment.providerId);
+  }
+  const order = mergeOrder(segmentOrder, presentProviderIds);
+  return order.flatMap((providerId) =>
+    segments.filter((segment) => segment.providerId === providerId),
+  );
 }
 
 /**
@@ -513,20 +553,37 @@ export function useStatusBarRateLimitSegments(input: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
   readonly mode: StatusBarRateLimitMode;
+  /**
+   * A Customize session wants every provider to stay clickable, including a
+   * hidden one - so its segment is built (and marked `hidden`) instead of
+   * being filtered out before it can register a hotspot.
+   */
+  readonly editing: boolean;
 }): StatusBarRateLimitSegments {
   const passive = input.mode === "passive";
   const client = useHostClient();
   const rateLimits = useLayoutStore((state) => state.statusBar.rateLimits);
+  const segmentOrder = useLayoutStore((state) => state.statusBar.segmentOrder);
   // The shared 60s clock, so a window that expires while the strip is on screen
   // drops out of it within the minute rather than at the next fetch.
   const now = useSampledNow();
 
   const targets = input.providers
     .filter(
-      (provider) => !rateLimits.hiddenProviders.includes(provider.providerId),
+      (provider) =>
+        input.editing ||
+        !rateLimits.hiddenProviders.includes(provider.providerId),
     )
     .flatMap((provider) => resolveTargets(provider, input.profileSelection))
-    .map((target, order) => ({ ...target, order }));
+    .map((target, order) => ({
+      ...target,
+      order,
+      // Editor-only segments observe cached data without starting requests.
+      fetchEligible:
+        target.fetchEligible &&
+        rateLimits.enabled &&
+        !rateLimits.hiddenProviders.includes(target.provider.providerId),
+    }));
   const queueObserved = targets.filter(
     (target) => target.lane === "ephemeralProcess",
   );
@@ -579,25 +636,32 @@ export function useStatusBarRateLimitSegments(input: {
   // accounts to the order `resolveStatusBarProfileIds` gave them after the
   // lane split scattered them by eligibility; then the (stable) catalog sort
   // over providers on top.
-  const segments = sortProviderStatesByProviderOrder(
+  const canonicallyOrdered = sortProviderStatesByProviderOrder(
     [
-      ...toSegments(
-        queueObserved,
-        queueObservedQueries,
-        rateLimits.providers,
+      ...toSegments(queueObserved, queueObservedQueries, {
+        selections: rateLimits.providers,
+        hiddenProviders: rateLimits.hiddenProviders,
         now,
-      ),
-      ...toSegments(httpPolling, httpPollingQueries, rateLimits.providers, now),
-      ...toSegments(
-        httpObserved,
-        httpObservedQueries,
-        rateLimits.providers,
+      }),
+      ...toSegments(httpPolling, httpPollingQueries, {
+        selections: rateLimits.providers,
+        hiddenProviders: rateLimits.hiddenProviders,
         now,
-      ),
+      }),
+      ...toSegments(httpObserved, httpObservedQueries, {
+        selections: rateLimits.providers,
+        hiddenProviders: rateLimits.hiddenProviders,
+        now,
+      }),
     ]
       .sort((left, right) => left.order - right.order)
       .map((entry) => entry.segment),
   ).filter(hasContent);
+  // The user's own arrangement wins over the canonical one - the same
+  // `mergeOrder` every persisted order field resolves through, applied here
+  // rather than baked into the store so a late-connected provider still lands
+  // beside its canonical neighbour without a migration.
+  const segments = applySegmentOrder(canonicallyOrdered, segmentOrder);
 
   return {
     cluster: clusterFor(input.providers.length, segments),

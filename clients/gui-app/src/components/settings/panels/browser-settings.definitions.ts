@@ -3,6 +3,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 export const BROWSER = defineSettingsSection("browser", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Browser",
     description:
       "Search, agent access, tab placement, and saved website sessions.",

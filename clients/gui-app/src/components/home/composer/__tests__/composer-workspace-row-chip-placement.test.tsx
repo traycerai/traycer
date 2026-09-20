@@ -24,6 +24,7 @@ function renderRow(working: boolean) {
             {
               section: "activeAgents",
               glyph: "activeAgents",
+              hotspotRef: () => undefined,
               working,
               text: "2",
               lineDeltas: null,

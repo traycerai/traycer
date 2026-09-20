@@ -1,9 +1,11 @@
 import { Fragment, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
 import {
+  statusBarSegmentKey,
   statusBarSegmentTooltip,
   type StatusBarUsageParts,
 } from "@/components/layout/status-bar/status-bar-usage-display";
@@ -33,6 +35,13 @@ export interface StatusBarProviderSegmentProps {
   /** Which of the reading's optional parts the preferences switched on. */
   readonly parts: StatusBarUsageParts;
   readonly percentMode: PercentMode;
+  /**
+   * Whether this mount is the real strip rather than a passive preview (the
+   * Settings page, or a Customize option's picture). Only an interactive
+   * mount attaches the hotspot's `ref` - `useLayoutHotspot` still runs either
+   * way (rules of hooks), but a `ref` nobody attaches never registers.
+   */
+  readonly interactive: boolean;
 }
 
 /**
@@ -79,10 +88,27 @@ export interface StatusBarProviderSegmentProps {
  * So what carries "this reading is stale" is the glyph and its sentence, which
  * cost the numbers nothing.
  */
+function providerGhostCondition(
+  segment: StatusBarProviderSegmentModel,
+): string | null {
+  if (segment.hidden) return "Hidden from the status bar";
+  if (segment.state === "cold") return "No reading yet";
+  if (segment.state === "unavailable" || segment.state === "degraded")
+    return statusBarSegmentTooltip(segment);
+  return null;
+}
+
 export function StatusBarProviderSegment(
   props: StatusBarProviderSegmentProps,
 ): ReactNode {
   const segment = props.segment;
+  const ghost = segment.hidden || segment.state === "cold";
+  const { ref, editing } = useLayoutHotspot({
+    settingId: "statusBar.provider",
+    tileId: statusBarSegmentKey(segment),
+    ghost,
+    condition: providerGhostCondition(segment),
+  });
   const icon = (
     <HarnessIcon
       harnessId={providerIdToGuiHarnessId(segment.providerId)}
@@ -91,7 +117,14 @@ export function StatusBarProviderSegment(
   );
   return (
     <span
-      className="inline-flex min-w-0 items-center gap-1"
+      ref={props.interactive ? ref : undefined}
+      className={cn(
+        "inline-flex min-w-0 items-center gap-1",
+        props.interactive &&
+          editing &&
+          ghost &&
+          "rounded-sm border border-dashed border-border/60 px-1 opacity-70",
+      )}
       data-testid={`status-bar-provider-segment-${segment.providerId}`}
       data-provider-id={segment.providerId}
       data-profile-id={segment.profileId ?? ""}

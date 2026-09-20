@@ -18,6 +18,7 @@ import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-his
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
 import { MobileAppStatusBar } from "@/components/layout/status-bar/mobile-app-status-bar";
+import { StatusBarGhost } from "@/components/layout/status-bar/status-bar-ghost";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -103,9 +104,14 @@ export function AppShell(props: AppShellProps) {
               {/* Above the session strip: a wrong clock is the CAUSE of the
                 interruption the strip reports, so if both are showing the
                 actionable one has to be read first. */}
-              <ClockSkewBanner />
-              <SessionConnectivityStrip connectivity={sessionConnectivity} />
-              <main className="relative flex min-h-0 flex-1 flex-col">
+              <div data-customize-inert className="contents">
+                <ClockSkewBanner />
+                <SessionConnectivityStrip connectivity={sessionConnectivity} />
+              </div>
+              <main
+                data-customize-inert
+                className="relative flex min-h-0 flex-1 flex-col"
+              >
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal.
 
@@ -157,7 +163,12 @@ export function AppShell(props: AppShellProps) {
                 further gates that only exist there (the software keyboard and
                 the nav drawer) so their subscriptions stay out of this root. */}
               {showStatusBar && isMobile ? <MobileAppStatusBar /> : null}
-              {showStatusBar && !isMobile ? <AppStatusBar /> : null}
+              {showStatusBar && !isMobile ? (
+                <div data-customize-inert>
+                  <AppStatusBar />
+                </div>
+              ) : null}
+              {!showStatusBar && !isMobile ? <StatusBarGhost /> : null}
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />

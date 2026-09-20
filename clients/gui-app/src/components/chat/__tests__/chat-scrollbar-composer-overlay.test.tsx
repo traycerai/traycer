@@ -24,7 +24,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRef } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
-import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
+import {
+  ChatLowerDock,
+  type DockRowHotspot,
+} from "@/components/chat/chat-lower-dock";
+import type { DockSection } from "@/stores/settings/layout-store";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -198,6 +202,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               selfAgent={null}
               activeAgents={[]}
               folded={new Set()}
+              dockOrder={DEFAULT_DOCK_ORDER}
+              hotspots={ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -268,6 +274,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               selfAgent={null}
               activeAgents={[]}
               folded={new Set()}
+              dockOrder={DEFAULT_DOCK_ORDER}
+              hotspots={ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -503,6 +511,27 @@ function emptyRestore(): ChatRestoreContextValue {
 function emptyQueue(): ChatSessionState["queue"] {
   return { status: "idle", items: [] };
 }
+
+const DEFAULT_DOCK_ORDER: ReadonlyArray<DockSection> = [
+  "filesChanged",
+  "activeAgents",
+  "background",
+];
+
+function dockHotspot(ghost: boolean): DockRowHotspot {
+  return { hotspotRef: () => undefined, ghost, condition: "", editing: false };
+}
+
+/** Fixture for a dock rendered with an empty restore/agents and one
+ *  background item present - matches every `<ChatLowerDock>` call in this
+ *  file. */
+const ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS: Readonly<
+  Record<DockSection, DockRowHotspot>
+> = {
+  filesChanged: dockHotspot(true),
+  activeAgents: dockHotspot(true),
+  background: dockHotspot(false),
+};
 
 function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
   const runtime: ChatLowerRuntimeState = { snapshotLoaded: true };

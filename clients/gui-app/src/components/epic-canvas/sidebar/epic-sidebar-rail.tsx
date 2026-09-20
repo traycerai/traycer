@@ -13,6 +13,10 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -210,6 +214,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     () => getVisibleLeftPanelGroups(panelGroups, availabilityContext),
     [availabilityContext, panelGroups],
   );
+  const editing = useCustomizeStore((state) => state.session !== null);
   // Which icon lights up. Resolved rather than compared against `activePanelId`
   // directly so a hidden active panel highlights whatever the body fell back
   // to, instead of leaving the rail with nothing marked.
@@ -293,35 +298,63 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
                 orientation={orientation}
               />
             ) : null}
-            {visibleGroups.map((group, groupIndex) => {
-              const groupDropPosition =
-                railPanelDropPreview?.kind === "left-panel-rail" &&
-                railPanelDropPreview.panelId === group.primaryPanel.id
-                  ? railPanelDropPreview.position
-                  : null;
-              return (
-                <Fragment key={group.primaryPanel.id}>
-                  <RailGroupButton
-                    tabId={tabId}
-                    panelIds={group.panelIds}
-                    primaryPanel={group.primaryPanel}
-                    orientation={orientation}
-                    active={groupIndex === activeGroupIndex && !collapsed}
-                    onClick={() => handleClick(group.panelIds)}
-                    onContextMenu={setContextPanelId}
-                    dropPosition={
-                      groupDropPosition === "combine" ? "combine" : null
-                    }
-                  />
-                  {railBoundaryIndex === groupIndex + 1 ? (
-                    <RailBoundaryPreview
-                      definition={panelSectionDropDefinition}
-                      orientation={orientation}
-                    />
-                  ) : null}
-                </Fragment>
-              );
-            })}
+            {editing
+              ? panelGroups.flatMap((group) =>
+                  group.panelIds.map((panelId) => {
+                    const definition = getLeftPanelDefinition(panelId);
+                    return isLeftPanelVisible(
+                      definition,
+                      availabilityContext,
+                    ) ? (
+                      <RailGroupButton
+                        key={panelId}
+                        tabId={tabId}
+                        panelIds={[panelId]}
+                        primaryPanel={definition}
+                        orientation={orientation}
+                        active={activePanelId === panelId && !collapsed}
+                        onClick={() => handleClick(group.panelIds)}
+                        onContextMenu={setContextPanelId}
+                        dropPosition={null}
+                      />
+                    ) : (
+                      <RailGhostTile
+                        key={panelId}
+                        panelId={panelId}
+                        orientation={orientation}
+                      />
+                    );
+                  }),
+                )
+              : visibleGroups.map((group, groupIndex) => {
+                  const groupDropPosition =
+                    railPanelDropPreview?.kind === "left-panel-rail" &&
+                    railPanelDropPreview.panelId === group.primaryPanel.id
+                      ? railPanelDropPreview.position
+                      : null;
+                  return (
+                    <Fragment key={group.primaryPanel.id}>
+                      <RailGroupButton
+                        tabId={tabId}
+                        panelIds={group.panelIds}
+                        primaryPanel={group.primaryPanel}
+                        orientation={orientation}
+                        active={groupIndex === activeGroupIndex && !collapsed}
+                        onClick={() => handleClick(group.panelIds)}
+                        onContextMenu={setContextPanelId}
+                        dropPosition={
+                          groupDropPosition === "combine" ? "combine" : null
+                        }
+                      />
+                      {railBoundaryIndex === groupIndex + 1 ? (
+                        <RailBoundaryPreview
+                          definition={panelSectionDropDefinition}
+                          orientation={orientation}
+                        />
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
           </div>
         </ContextMenuTrigger>
         <RailContextMenuContent
@@ -372,6 +405,11 @@ function RailContextMenuContent(props: {
   const hasOverrides = Object.keys(context.visibilityOverrideById).length > 0;
   const pointedEntry =
     entries.find((entry) => entry.definition.id === contextPanelId) ?? null;
+  const editing = useCustomizeStore((state) => state.session !== null);
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !editing;
 
   return (
     <ContextMenuContent
@@ -422,6 +460,14 @@ function RailContextMenuContent(props: {
             data-testid="epic-rail-reset-panel-visibility"
           >
             Reset panel visibility
+          </ContextMenuItem>
+        </>
+      ) : null}
+      {showCustomizeEntry ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => customizeLayoutAction("direct_ui")}>
+            Customize layout…
           </ContextMenuItem>
         </>
       ) : null}
@@ -507,6 +553,12 @@ function RailGroupButton(props: RailGroupButtonProps) {
   const handleContextMenu = useCallback((): void => {
     onContextMenu(primaryPanel.id);
   }, [onContextMenu, primaryPanel.id]);
+  const { ref: hotspotRef } = useLayoutHotspot({
+    settingId: "sidebar.panel",
+    tileId: primaryPanel.id,
+    ghost: false,
+    condition: null,
+  });
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -540,8 +592,8 @@ function RailGroupButton(props: RailGroupButtonProps) {
     data: dropData,
   });
   const setButtonRef = useMemo(
-    () => mergeRefs<HTMLElement>(dragRef, dropRef),
-    [dragRef, dropRef],
+    () => mergeRefs<HTMLElement>(dragRef, dropRef, hotspotRef),
+    [dragRef, dropRef, hotspotRef],
   );
 
   return (
@@ -644,6 +696,46 @@ function RailButton(props: RailButtonProps) {
           ) : null}
         </span>
       </Button>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A panel the rail is not currently showing - presence-gated with nothing to
+ * show yet, or explicitly hidden - drawn while Customize is open so it stays
+ * a hotspot. `condition` is the definition's own forced-on hint where there is
+ * one; a plain hidden panel just says so.
+ */
+function RailGhostTile(props: {
+  readonly panelId: LeftPanelId;
+  readonly orientation: RailOrientation;
+}): ReactNode {
+  const definition = getLeftPanelDefinition(props.panelId);
+  const condition = definition.forcedOnHint ?? "Hidden from the sidebar";
+  const { ref } = useLayoutHotspot({
+    settingId: "sidebar.panel",
+    tileId: props.panelId,
+    ghost: true,
+    condition,
+  });
+  const Icon = definition.icon;
+  return (
+    <TooltipWrapper
+      label={`${definition.title} — ${condition}`}
+      side={props.orientation === "vertical" ? "right" : "bottom"}
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <div
+        ref={ref}
+        data-testid={`epic-rail-ghost-${props.panelId}`}
+        className={cn(
+          LEFT_PANEL_RAIL_TILE_CLASS,
+          "rounded-md border border-dashed border-border/60 text-muted-foreground/60 opacity-70",
+        )}
+      >
+        <Icon className="size-4" />
+      </div>
     </TooltipWrapper>
   );
 }
