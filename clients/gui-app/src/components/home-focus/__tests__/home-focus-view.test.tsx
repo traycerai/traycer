@@ -213,7 +213,6 @@ function model(overrides: Partial<FocusModel>): FocusModel {
       backgroundIsMountedOnly: true,
       browsersAreMountedOnly: true,
     },
-    badgeCount: 0,
     ...overrides,
   };
 }
@@ -340,7 +339,6 @@ describe("<HomeFocusView /> section presence", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-1" })],
       prompts: [promptRow({ epicId: "epic-1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -372,7 +370,6 @@ describe("<HomeFocusView /> section presence", () => {
   it("is not empty when a prompt names no task at all", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -499,7 +496,6 @@ describe("<HomeFocusView /> summary line", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -671,7 +667,6 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
       prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();
@@ -710,7 +705,6 @@ describe("<HomeFocusView /> nesting inside a task", () => {
           browserTabTitle: "Checkout",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();
@@ -737,7 +731,6 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
       prompts: [row],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();
@@ -1083,7 +1076,6 @@ describe("<HomeFocusView /> task row badges", () => {
         backgroundRow({ key: "j2", epicId: "epic-1", chatId: "chat-unknown" }),
       ],
       browsers: [browserRow({ epicId: "epic-1", tabId: "t1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -1436,13 +1428,12 @@ describe("<HomeFocusView /> a cold task", () => {
 });
 
 describe("<HomeFocusView /> unplaced prompts", () => {
-  // The tab badge counts prompts, so a prompt no group can carry would leave a
-  // badge over a page showing nothing.
+  // The header bell counts prompts, so a prompt no group can carry would leave
+  // a bell reading `1` over a page showing nothing.
   it("lists a prompt that names no task under Needs you, after the tasks", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -1461,7 +1452,6 @@ describe("<HomeFocusView /> unplaced prompts", () => {
     modelMock.value = model({
       tasks: [],
       prompts: [promptRow({ epicId: "epic-gone", taskTitle: "Payments" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2287,7 +2277,6 @@ describe("<HomeFocusView /> origin host chip", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2306,7 +2295,6 @@ describe("<HomeFocusView /> origin host chip", () => {
           originHostId: "host-local",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2401,7 +2389,6 @@ describe("<HomeFocusView /> relative time ticking", () => {
       prompts: [
         promptRow({ epicId: null, taskTitle: null, createdAt: base - 30_000 }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2433,7 +2420,6 @@ describe("<HomeFocusView /> has no trailing Open button", () => {
       prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
       browsers: [browserRow({ epicId: "epic-1", drivenByChatId: "chat-1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2501,7 +2487,6 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
       coverage: {
         activity: "disconnected",
         degradedHostIds: ["host-remote"],
@@ -2538,7 +2523,6 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
       coverage: {
         activity: "disconnected",
         degradedHostIds: ["host-remote"],
@@ -2583,7 +2567,6 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2629,7 +2612,6 @@ describe("<HomeFocusView /> no auto-expand", () => {
   it("opens nothing when tasks arrive after an orphan-prompt-only first frame", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     const view = render(<HomeFocusView />);
     expect(screen.queryAllByTestId("home-focus-task-group")).toHaveLength(0);
@@ -2637,7 +2619,6 @@ describe("<HomeFocusView /> no auto-expand", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
       tasks: someTasks(2),
-      badgeCount: 1,
     });
     view.rerender(<HomeFocusView />);
 
@@ -2723,7 +2704,6 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
       prompts: withPrompt
         ? [promptRow({ epicId: "epic-moving", chatId: "chat-1" })]
         : [],
-      badgeCount: withPrompt ? 1 : 0,
     });
   }
 
@@ -2873,7 +2853,6 @@ describe("<HomeFocusView /> a split task with a prompt on one host", () => {
           originHostId: "host-b",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();

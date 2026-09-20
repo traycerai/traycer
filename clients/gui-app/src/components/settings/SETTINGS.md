@@ -2392,8 +2392,8 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       approval whose payload carried no epic id (they are optional on the
       wire), an epic with a pending prompt and no running agent, warm chat or
       open page to make a group out of, and the host split's own per-host
-      prompt filter. Home's tab badge counts prompts, so a prompt the page
-      cannot show is a badge reading `1` over a page showing nothing. The
+      prompt filter. The header bell counts these same prompts, so a prompt
+      the page cannot show is a bell reading `1` over a page showing nothing. The
       leftovers are computed FROM the rendered slices rather than from a second
       guess at the same rule, which is what makes that impossible instead of
       merely unlikely; they render last, with `· in <task>` restored, since

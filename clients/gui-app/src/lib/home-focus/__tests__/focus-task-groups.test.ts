@@ -149,7 +149,6 @@ function model(overrides: Partial<FocusModel>): FocusModel {
       backgroundIsMountedOnly: true,
       browsersAreMountedOnly: true,
     },
-    badgeCount: 0,
     ...overrides,
   };
 }
@@ -421,8 +420,8 @@ describe("selectTaskGroups and browsers", () => {
 
 describe("unattributedPrompts", () => {
   // The page has no flat prompt list any more, so a prompt that names no task
-  // has no group to reach. It is still counted by the tab badge, so losing it
-  // would leave a badge over a page showing nothing.
+  // has no group to reach. It is still counted by the header bell, so losing
+  // it would leave a bell reading `1` over a page showing nothing.
   it("returns the prompts that name no epic, in model order", () => {
     const orphan = promptRow({ epicId: null, key: "orphan" });
     const placed = promptRow({ epicId: "epic-a", key: "placed" });

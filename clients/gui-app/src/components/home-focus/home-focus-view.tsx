@@ -339,9 +339,9 @@ function liveSliceKeys(sections: HomeSections): ReadonlySet<string> {
  * epic id (they are optional on the wire), an epic with a pending prompt and no
  * running agent, warm chat or open page to make a group out of, and the host
  * split, which files a prompt under the machine it was RAISED on and drops it
- * from the slices of machines that did not raise it. Home's tab badge counts
- * prompts, so a prompt the page cannot show is a badge reading `1` over a page
- * showing nothing. Listing what no slice took - computed FROM the slices rather
+ * from the slices of machines that did not raise it. The header bell counts
+ * these same prompts, so a prompt the page cannot show is a bell reading `1`
+ * over a page showing nothing. Listing what no slice took - computed FROM the slices rather
  * than from a second guess at the same rule - is what makes that impossible
  * instead of merely unlikely.
  */

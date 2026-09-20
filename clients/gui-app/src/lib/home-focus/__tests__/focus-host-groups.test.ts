@@ -162,7 +162,6 @@ function model(overrides: Partial<FocusModel>): FocusModel {
       backgroundIsMountedOnly: true,
       browsersAreMountedOnly: true,
     },
-    badgeCount: 0,
     ...overrides,
   };
 }
