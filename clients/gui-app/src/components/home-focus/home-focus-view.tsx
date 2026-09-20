@@ -18,9 +18,10 @@
  *
  * Live updates arrive as new model values on the same mounted tree: rows carry
  * stable keys (a prompt's feed id, a task's epic id, a background job's key),
- * so a store change repaints rows instead of remounting them, and the relative
- * timestamps subscribe to the app's shared 60s clock inside their own leaves
- * rather than holding a timer here.
+ * so a store change repaints rows instead of remounting them, and every ticking
+ * label - a prompt's age on the app's shared 60s clock, a running job's
+ * elapsed on its own 1s tick - subscribes inside its own leaf rather than
+ * holding a timer here.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
