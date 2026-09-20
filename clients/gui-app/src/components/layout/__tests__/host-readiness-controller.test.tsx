@@ -263,7 +263,7 @@ describe("local-plane admission for the removal-sentinel read", () => {
         if (userOutcome === "unreachable") {
           return Promise.reject(new Error("authn unreachable"));
         }
-        if (url.endsWith("/api/v3/user")) {
+        if (url.endsWith("/api/v3/user/negotiated")) {
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -300,7 +300,10 @@ describe("local-plane admission for the removal-sentinel read", () => {
                 teamSubscriptions: [],
                 payAsYouGoUsage: { allowPayAsYouGo: false },
               }),
-              { status: 200 },
+              {
+                status: 200,
+                headers: { "x-traycer-user-record-version": "2.0" },
+              },
             ),
           );
         }

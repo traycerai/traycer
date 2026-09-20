@@ -480,21 +480,22 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * Installs a fetch stub that satisfies AuthService's
- * `${authnBaseUrl}/api/v3/user` validation with a 200 response carrying a
- * structured `AuthenticatedUser` body (identity nested under `user`), and
- * rejects every other URL. Used by tree-level integration tests so the
- * post-T6 token validation path does not need a real network. The body
- * mirrors the real AuthnV3 v3 contract because AuthService now treats a
- * 2xx response without a usable profile (parsed from the nested `user`
- * object) as a session-expired-equivalent rejection. Returns a teardown
- * function that restores the previous fetch.
+ * Installs a fetch stub that satisfies AuthService's identity validation -
+ * `${authnBaseUrl}/api/v3/user/negotiated` (the negotiated route it now calls
+ * first) - with a 200 carrying a structured `AuthenticatedUser` body
+ * (identity nested under `user`) labelled major 2, and rejects every other
+ * URL. Used by tree-level integration tests so the post-T6 token validation
+ * path does not need a real network. The body mirrors the real AuthnV3 v3
+ * contract because AuthService now treats a 2xx response without a usable
+ * profile (parsed from the nested `user` object) as a session-expired-
+ * equivalent rejection. Returns a teardown function that restores the
+ * previous fetch.
  */
 export function installAuthValidationFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   const stub = (input: unknown): Promise<Response> => {
     const url = typeof input === "string" ? input : String(input);
-    if (url.endsWith("/api/v3/user")) {
+    if (url.endsWith("/api/v3/user/negotiated")) {
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -533,7 +534,10 @@ export function installAuthValidationFetch(): () => void {
           }),
           {
             status: 200,
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "x-traycer-user-record-version": "2.0",
+            },
           },
         ),
       );
