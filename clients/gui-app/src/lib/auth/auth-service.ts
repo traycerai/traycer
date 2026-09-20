@@ -710,12 +710,22 @@ export class AuthService {
    */
   private setSessionRecoveryTerminallyRejected(rejected: boolean): void {
     this.sessionRecoveryTerminallyRejected = rejected;
-    const loss: CloudVerdictLoss = !rejected
-      ? "unreachable"
-      : this.lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE
-        ? "account-unavailable"
-        : "session-rejected";
-    useAuthStore.getState().setCloudVerdictLoss(loss);
+    useAuthStore
+      .getState()
+      .setCloudVerdictLoss(this.cloudVerdictLoss(rejected));
+  }
+
+  /**
+   * Why this session holds no cloud verdict, as the store mirrors it. Three
+   * answers, and the order matters: a session authn has not refused is merely
+   * unreachable, whatever error is on record from an earlier attempt.
+   */
+  private cloudVerdictLoss(terminallyRejected: boolean): CloudVerdictLoss {
+    if (!terminallyRejected) return "unreachable";
+    if (this.lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE) {
+      return "account-unavailable";
+    }
+    return "session-rejected";
   }
   // Superseded-save undos whose conditional deletes have not LANDED yet
   // (in flight or failed): each stale pair may still be durable. Every
