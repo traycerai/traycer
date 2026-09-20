@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   groupSessionImportFailures,
+  importedCountNoun,
   sessionImportFailureDetailVaries,
   sessionImportNotImportedLine,
   type SessionImportFailureGroupView,
@@ -151,11 +152,11 @@ export function SessionImportProgress(props: {
           )}
         >
           {neverStarted
-            ? "Select your tasks again to retry."
+            ? "Select your sessions again to retry."
             : "The import continues on that device."}
         </p>
         {onboarding ? (
-          <SessionImportMoreButton hostId={hostId} label="Back to tasks" />
+          <SessionImportMoreButton hostId={hostId} label="Back to sessions" />
         ) : null}
       </div>
     );
@@ -352,7 +353,7 @@ function SummaryTail(props: {
           // Nothing landed, so there is nothing to add MORE to - the button
           // is the way back to the list either way, and only the label of a
           // run that imported something is an invitation to repeat it.
-          label={counts.imported > 0 ? "Import more" : "Back to tasks"}
+          label={counts.imported > 0 ? "Import more" : "Back to sessions"}
         />
       ) : null}
     </>
@@ -361,7 +362,7 @@ function SummaryTail(props: {
 
 function summaryHeadline(imported: number): string {
   if (imported === 0) return "Nothing was imported";
-  return `Imported ${imported} ${imported === 1 ? "task" : "tasks"}`;
+  return `Imported ${imported} ${importedCountNoun(imported)}`;
 }
 
 /**

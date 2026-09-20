@@ -57,7 +57,7 @@ export interface StopTerminalOwnerVariables {
  * "exited", and an orchestrator waiting on it is told its peer died without
  * replying - a verdict that then sticks until the agent is re-armed. Routing
  * the same gesture through `terminal.kill` lets the host record it as a user
- * stop: the sender is told the agent "was stopped by the user", the record is
+ * stop: the sender is told the agent "was stopped", the record is
  * stamped `sleeping`, and the next message resumes the same session.
  *
  * The visible verb follows: a terminal owner's row says Stop, for the same

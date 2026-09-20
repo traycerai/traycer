@@ -3,8 +3,13 @@
  * wizard submission's worth of native sessions.
  *
  * One subscription per wizard submission. The host materializes each selected
- * session into a real epic + chat and reports one `progress` frame per
- * selection, in submission order.
+ * session into a chat and reports one `progress` frame per selection, in
+ * COMPLETION order - the host imports several sessions at a time and publishes
+ * each frame as its session settles, so a client must key outcomes by
+ * `(harness, nativeSessionId)` (or by the frame's own `index`) rather than by
+ * arrival. A session's chat lands in the task for the REPOSITORY it ran in, so
+ * one submission of N sessions produces at most one task per distinct
+ * repository, not N tasks.
  *
  * ## The run outlives the socket, deliberately
  *
@@ -20,9 +25,11 @@
  * run it is watching from the one it asked for.
  *
  * Resumability across a host restart is free rather than engineered: import is
- * idempotent per `(harness, nativeSessionId)` (the chat id is derived from the
- * pair), so re-submitting a partially-completed selection set re-imports
- * nothing and reports the finished ones as `skipped_already_imported`. Note
+ * idempotent per `(harness, nativeSessionId)`. The idempotency is the host's
+ * durable index of that pair, NOT a derived id - ids are random, drawn once per
+ * logical job and never re-drawn - so re-submitting a partially-completed
+ * selection set re-imports nothing and reports the finished ones as
+ * `skipped_already_imported`. Note
  * what that does and does not promise: a restart drops the run, and the host
  * resumes NOTHING on its own - picking the remainder back up requires a client
  * to re-submit, which is safe precisely because the re-submission is

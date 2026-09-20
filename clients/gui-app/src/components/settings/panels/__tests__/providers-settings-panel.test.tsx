@@ -24,6 +24,10 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  PROVIDER_SETTINGS_UNREADABLE_COPY,
+  PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX,
+} from "@/lib/providers/provider-settings-unreadable-error";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -154,6 +158,7 @@ const providerMocks = vi.hoisted(() => ({
       | HostRpcError
       | { message: string; code: string }
       | undefined,
+    refetch: vi.fn(() => Promise.resolve({})),
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -1506,6 +1511,7 @@ describe("<ProvidersSettingsPanel />", () => {
     };
     providerMocks.listResult.isError = false;
     providerMocks.listResult.error = undefined;
+    providerMocks.listResult.refetch.mockClear();
     providerMocks.setSelectionMutate.mockClear();
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setEnvOverrideMutate.mockClear();
@@ -1866,6 +1872,46 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
     expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
     expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
+  it("shows the read-fault copy and a Retry action instead of the generic card on a provider-settings-unreadable rejection (H9)", () => {
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = {
+      message: `${PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX}: EIO reading config/provider-overrides.json`,
+      code: "RPC_ERROR",
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+    expect(retryButton).toBeDefined();
+
+    fireEvent.click(retryButton);
+    expect(providerMocks.listResult.refetch).toHaveBeenCalled();
+  });
+
+  it("still shows the generic 'host may need to be updated' card for an unrelated providers.list rejection", () => {
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = {
+      message: "secret-token-should-never-render",
+      code: "RPC_ERROR",
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+    expect(screen.queryByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {

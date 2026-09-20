@@ -229,7 +229,7 @@ function installAuthFetch(): () => void {
     writable: true,
     value: (input: unknown): Promise<Response> => {
       const url = typeof input === "string" ? input : String(input);
-      if (url.endsWith("/api/v3/user")) {
+      if (url.endsWith("/api/v3/user/negotiated")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({
@@ -266,7 +266,10 @@ function installAuthFetch(): () => void {
               teamSubscriptions: [],
               payAsYouGoUsage: { allowPayAsYouGo: false },
             }),
-            { status: 200 },
+            {
+              status: 200,
+              headers: { "x-traycer-user-record-version": "2.0" },
+            },
           ),
         );
       }
@@ -308,6 +311,61 @@ function expectedDefaultHistoryRequest(
     return { ...request, localFirstPhase: "initial" };
   }
   return { ...request, cursor };
+}
+
+function countTask(
+  id: string,
+  title: string,
+): ListTasksResponse["tasks"][number] {
+  const at = Date.parse("2026-04-22T11:30:00.000Z");
+  return {
+    epic: {
+      light: {
+        id,
+        title,
+        initialUserPrompt: "p",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "draft",
+        createdAt: at,
+        updatedAt: at,
+        createdBy: "u",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+  };
+}
+
+/** What the Tasks tab shows after its label: "2+", "Searching" or "". */
+function tasksBadge(): string {
+  const tab = screen
+    .getAllByRole("tab")
+    .find((candidate) => candidate.textContent.startsWith("Tasks"));
+  if (tab === undefined) throw new Error("no Tasks tab");
+  return tab.textContent.slice("Tasks".length);
+}
+
+/** The live status line's task half, e.g. "Searching tasks…" or "1+ tasks". */
+function tasksStatusText(): string {
+  const line = screen
+    .getAllByRole("status")
+    .map((node) => node.textContent)
+    .find((text) => text.includes("tasks"));
+  if (line === undefined) throw new Error("no tasks status line");
+  return line;
+}
+
+function searchHistoryFor(query: string): void {
+  fireEvent.change(
+    screen.getByRole("searchbox", { name: "Search tasks and messages" }),
+    { target: { value: query } },
+  );
 }
 
 describe("<EpicsList />", () => {
@@ -590,7 +648,9 @@ describe("<EpicsList />", () => {
     await screen.findByText("Alpha Epic");
     fireEvent.click(await screen.findByTestId("epics-list-show-more"));
     fireEvent.change(
-      await screen.findByRole("searchbox", { name: "Search tasks" }),
+      await screen.findByRole("searchbox", {
+        name: "Search tasks and messages",
+      }),
       { target: { value: "beta" } },
     );
 
@@ -708,5 +768,109 @@ describe("<EpicsList />", () => {
     expect(messengerRequestCount).toBe(requestCountBeforeSignOut);
     expect(screen.queryByTestId("epics-list-error")).toBeNull();
     result.cleanupOnly();
+  });
+  describe("the Tasks count while a search is still provisional", () => {
+    const cachedPage: ListTasksResponse = {
+      tasks: [
+        countTask("epic-alpha", "Alpha"),
+        countTask("epic-gamma", "Gamma"),
+      ],
+      hasMore: true,
+      nextCursor: "cursor-2",
+    };
+
+    it.each([
+      // Outside the cached page: the local projection of the old rows is empty.
+      { query: "zeta", title: "Zeta" },
+      // Partly inside it: the projection is a smaller, complete-looking list.
+      { query: "alpha", title: "Alpha" },
+    ])(
+      "says searching, never a settled count, from typing '$query' until the response lands",
+      async ({ query, title }) => {
+        let resolveSearch: (value: ListTasksResponse) => void = () => undefined;
+        const searchPage = new Promise<ListTasksResponse>((resolve) => {
+          resolveSearch = resolve;
+        });
+        const result = mountSignedInEpicsList((params) =>
+          params.filters?.query === query ? searchPage : cachedPage,
+        );
+
+        await screen.findByText("Gamma");
+        searchHistoryFor(query);
+
+        // Inside the 250ms debounce: no request for the new query exists yet.
+        expect(listTasksRequests.some((r) => r.filters?.query === query)).toBe(
+          false,
+        );
+        expect(tasksBadge()).toBe("Searching");
+        expect(tasksStatusText()).toContain("Searching tasks");
+
+        // The request is out and its response is deferred: the old page is
+        // still what the query serves as placeholder data.
+        await waitFor(() => {
+          expect(
+            listTasksRequests.some((r) => r.filters?.query === query),
+          ).toBe(true);
+        });
+        expect(tasksBadge()).toBe("Searching");
+        expect(tasksStatusText()).toContain("Searching tasks");
+        expect(tasksStatusText()).not.toMatch(/\b[01] tasks?\b/);
+
+        act(() => {
+          resolveSearch({
+            tasks: [countTask(`epic-${query}`, title)],
+            hasMore: true,
+            nextCursor: "cursor-search",
+          });
+        });
+
+        await waitFor(() => {
+          expect(tasksBadge()).toBe("1+");
+        });
+        expect(tasksStatusText()).toContain("1+ tasks");
+        result.cleanupOnly();
+      },
+    );
+
+    it("keeps the loaded count through a same-query background refresh", async () => {
+      let searchRequests = 0;
+      let resolveRefresh: (value: ListTasksResponse) => void = () => undefined;
+      const refreshPage = new Promise<ListTasksResponse>((resolve) => {
+        resolveRefresh = resolve;
+      });
+      const searchResponse: ListTasksResponse = {
+        tasks: [countTask("epic-alpha", "Alpha")],
+        hasMore: true,
+        nextCursor: "cursor-search",
+      };
+      const result = mountSignedInEpicsList((params) => {
+        if (params.filters?.query !== "alpha") return cachedPage;
+        searchRequests += 1;
+        return searchRequests === 1 ? searchResponse : refreshPage;
+      });
+
+      await screen.findByText("Gamma");
+      searchHistoryFor("alpha");
+      await waitFor(() => {
+        expect(tasksBadge()).toBe("1+");
+      });
+
+      fireEvent.click(screen.getByTestId("epics-list-refresh"));
+      await waitFor(() => {
+        expect(searchRequests).toBe(2);
+      });
+
+      // The refresh is outstanding for the SAME query: the count is still the
+      // loaded one, not a flash back to the spinner.
+      expect(tasksBadge()).toBe("1+");
+      expect(tasksStatusText()).toContain("1+ tasks");
+
+      await act(async () => {
+        resolveRefresh(searchResponse);
+        await refreshPage;
+      });
+      expect(tasksBadge()).toBe("1+");
+      result.cleanupOnly();
+    });
   });
 });

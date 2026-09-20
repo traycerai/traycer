@@ -41,7 +41,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // half of this same fix; this file pins that the auth boundary actually
 // drives it, and only when a verdict was genuinely lost.
 
-const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+// The identity route `validateAuthTokenIdentity*` calls FIRST (see
+// `auth-validation.ts`); every fixture in this file answers this one.
+const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
 
 type FetchHandler = (
@@ -108,7 +110,13 @@ function okWithProfile(): Promise<Response> {
         teamSubscriptions: [],
         payAsYouGoUsage: { allowPayAsYouGo: false },
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "x-traycer-user-record-version": "2.0",
+        },
+      },
     ),
   );
 }

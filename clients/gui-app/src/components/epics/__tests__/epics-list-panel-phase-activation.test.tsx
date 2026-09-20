@@ -50,7 +50,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -85,6 +85,12 @@ const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
+}));
+
+// The desktop scope bar names the host through the directory, which needs a
+// runtime provider this fixture does not mount.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -174,8 +180,10 @@ function renderPanel() {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <EpicsListPanel
-            variant="embedded"
+          <ScopedEpicsListPanel
+            initialScope="all"
+            onScopeSpy={null}
+            variant="page"
             className={undefined}
             onSelectEpic={null}
             onOpenItem={null}

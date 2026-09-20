@@ -124,7 +124,7 @@ import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { epicMutationKeys, queryKeys } from "@/lib/query-keys";
+import { cloudQueryKeys, epicMutationKeys, queryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
@@ -318,6 +318,56 @@ describe("useEpicSetPinned", () => {
       ),
     ).toEqual({ "epic-1": false });
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
+  });
+
+  it("flips a Current-tasks pin-tail row on mutate and restores it when the RPC fails", () => {
+    // The tail is a THIRD copy of the row (beside the first page and the
+    // retained pages): a pin of a tail-only task has no first-page row to flip.
+    const queryClient = new QueryClient();
+    const tailKey = cloudQueryKeys.currentTasksPinTail(
+      "host-1",
+      "user-1",
+      "cursor-1",
+    );
+    const otherHostTailKey = cloudQueryKeys.currentTasksPinTail(
+      "host-2",
+      "user-1",
+      "cursor-1",
+    );
+    queryClient.setQueryData(
+      tailKey,
+      pageWith([epicTask("tail-only", true), epicTask("tail-other", true)]),
+    );
+    queryClient.setQueryData(
+      otherHostTailKey,
+      pageWith([epicTask("tail-only", true)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    const context = capturedOptions.onMutate?.(
+      followingVars("tail-only", false),
+    );
+
+    expect(pinnedById(queryClient.getQueryData(tailKey))).toEqual({
+      "tail-only": false,
+      "tail-other": true,
+    });
+    expect(pinnedById(queryClient.getQueryData(otherHostTailKey))).toEqual({
+      "tail-only": true,
+    });
+
+    capturedOptions.onError?.(
+      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      followingVars("tail-only", false),
+      context,
+    );
+
+    expect(pinnedById(queryClient.getQueryData(tailKey))).toEqual({
+      "tail-only": true,
+      "tail-other": true,
+    });
   });
 
   it("refuses at dispatch without a cloud verdict, before the optimistic patch", () => {

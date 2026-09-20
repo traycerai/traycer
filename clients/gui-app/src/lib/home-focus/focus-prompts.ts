@@ -32,8 +32,7 @@ const PROMPT_KIND_BY_HOST_KIND: Readonly<Record<string, FocusPromptKind>> = {
  * The "Needs you" section: unresolved, unread prompts across every task on the
  * notification feed, in the bell's own attention order.
  *
- * THREE conditions, and all three are load-bearing (the badge
- * counts exactly these rows):
+ * THREE conditions, and all three are load-bearing:
  *
  * 1. The row's kind is a pending-prompt kind. A failure row is attention too,
  *    but it is history, not a question.
@@ -106,7 +105,7 @@ export function buildFocusPrompts(
  * every row object on any notification frame - a row marked read elsewhere, an
  * unrelated agent finishing. Comparing it by reference would therefore give
  * every prompt a new identity several times a minute, in the one section that
- * is non-empty precisely when the badge is non-zero.
+ * is non-empty precisely when something is waiting on the user.
  *
  * Comparing by `feedId` instead is safe for the one thing `activation` is used
  * for. The activation handler wants the occurrence AS IT WAS WHEN SHOWN
@@ -129,22 +128,6 @@ function sameFocusPromptRow(a: FocusPromptRow, b: FocusPromptRow): boolean {
     activationA.feedId === activationB.feedId &&
     shallowEqualRow(scalarsA, scalarsB)
   );
-}
-
-/**
- * The badge's number, without building a model.
- *
- * `badgeCount === prompts.length` by construction - {@link buildFocusPrompts}
- * maps its candidates one-to-one with no post-filter - so counting the
- * candidates through the SAME selector is provably the same number rather than
- * a second derivation that could drift. That is what lets the Home tab's badge,
- * which is mounted for the life of the window, avoid running the whole
- * cross-task join while Home is closed.
- */
-export function countPendingPromptRows(
-  rows: ReadonlyArray<MergedNotificationRow>,
-): number {
-  return selectPromptCandidates(rows).length;
 }
 
 /** Epic ids a prompt row points at - the set the task rows read to decide

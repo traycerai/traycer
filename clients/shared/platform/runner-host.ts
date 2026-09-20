@@ -125,8 +125,9 @@ export interface IRunnerHost {
   /**
    * Browser-safe base URL for the AuthnV3 service. Parity with `signInUrl`:
    * shell-owned, browser-safe, read-only. Used both for sign-in URL
-   * composition and by host-side token validation against
-   * `${authnBaseUrl}/api/v3/user`.
+   * composition and by host-side token validation against the identity routes
+   * under `${authnBaseUrl}/api/v3/user` (see `shared/auth/auth-validation.ts`
+   * for which one is reached and when).
    */
   readonly authnBaseUrl: string;
 
@@ -144,7 +145,7 @@ export interface IRunnerHost {
   /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
    * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
-   * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it
+   * §3): a single identity lookup with NO refresh-on-401 fallback, so it
    * can never spend a refresh token - a stale token comes back `rejected` and
    * the caller routes the spend through the locked `tokenStore.rotate`. Desktop
    * shells perform this in Electron main so renderer CSP/CORS cannot turn a

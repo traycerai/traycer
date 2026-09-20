@@ -17,6 +17,7 @@ import {
   sessionImportFailureLabel,
   sessionImportFailureDetailVaries,
   sessionImportNotImportedLine,
+  sessionImportProviderFailureLead,
   sessionImportGroupKey,
   sessionImportGroupViewKey,
   sessionImportScanWindowLabel,
@@ -490,12 +491,14 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
         harness: "codex",
         name: harnessDisplayName("codex"),
         count: 2,
+        scannedCount: 2,
         enabled: true,
       },
       {
         harness: "claude",
         name: harnessDisplayName("claude"),
         count: 3,
+        scannedCount: 3,
         enabled: true,
       },
     ]);
@@ -514,12 +517,14 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
         harness: "codex",
         name: harnessDisplayName("codex"),
         count: 0,
+        scannedCount: 0,
         enabled: true,
       },
       {
         harness: "claude",
         name: harnessDisplayName("claude"),
         count: 0,
+        scannedCount: 0,
         enabled: true,
       },
     ]);
@@ -575,12 +580,12 @@ describe("buildSessionImportView - search + provider filter", () => {
     expect(view.groups[0]?.rows).toHaveLength(2);
   });
 
-  it("matches a title:null candidate by firstPrompt, and candidateDisplayTitle falls back title -> firstPrompt -> Untitled task, collapsing/truncating a long prompt", () => {
+  it("matches a title:null candidate by firstPrompt, and candidateDisplayTitle falls back title -> firstPrompt -> Untitled session, collapsing/truncating a long prompt", () => {
     const withTitle = candidate({ title: "Explicit title" });
     expect(candidateDisplayTitle(withTitle)).toBe("Explicit title");
 
     const untitled = candidate({ title: null, firstPrompt: null });
-    expect(candidateDisplayTitle(untitled)).toBe("Untitled task");
+    expect(candidateDisplayTitle(untitled)).toBe("Untitled session");
 
     const whitespacePrompt = candidate({
       title: null,
@@ -827,6 +832,51 @@ describe("sessionImportWizardReducer - provider scope toggling", () => {
     );
   });
 
+  // The lead asks whether the provider ANSWERED, which the pill's count
+  // cannot say: with "Show imported" off, a harness whose every session is
+  // already in Traycer pills at 0 while having produced rows. Reading the
+  // pill there would print "Couldn't read Codex sessions" over a list the
+  // user sees the moment they turn the toggle on.
+  it("says a partial list, not an unreadable one, when every row a provider returned is a hidden already-imported session", () => {
+    const state = applyActions([
+      { kind: "scanStarted", providers: ["codex"] },
+      {
+        kind: "scanGroupArrived",
+        group: group(folderLocation("/repo/a"), [
+          candidate({
+            harness: "codex",
+            nativeSessionId: "x1",
+            state: { kind: "already_in_traycer", epicId: "e-1", chatId: "c-1" },
+          }),
+        ]),
+      },
+    ]);
+
+    const view = buildSessionImportView(state);
+    // Hidden: the pill reads 0, and the scan still produced one row.
+    expect(view.providers).toEqual([
+      {
+        harness: "codex",
+        name: harnessDisplayName("codex"),
+        count: 0,
+        scannedCount: 1,
+        enabled: true,
+      },
+    ]);
+    expect(sessionImportProviderFailureLead(view.providers, "codex")).toBe(
+      `Some ${harnessDisplayName("codex")} sessions are missing.`,
+    );
+  });
+
+  it("says unreadable when the provider produced no rows at all", () => {
+    const view = buildSessionImportView(
+      applyActions([{ kind: "scanStarted", providers: ["codex"] }]),
+    );
+    expect(sessionImportProviderFailureLead(view.providers, "codex")).toBe(
+      `Couldn’t read ${harnessDisplayName("codex")} sessions.`,
+    );
+  });
+
   it("keeps a disabled provider's pill at count 0 even when the groups on hand hold nothing for it", () => {
     // Nothing has arrived for codex - or anything else - yet, but the user
     // already switched it out; the pill has to survive that with no group to
@@ -841,6 +891,7 @@ describe("sessionImportWizardReducer - provider scope toggling", () => {
         harness: "codex",
         name: harnessDisplayName("codex"),
         count: 0,
+        scannedCount: 0,
         enabled: false,
       },
     ]);
@@ -1523,11 +1574,11 @@ describe("sessionImportNotImportedLine", () => {
       new Map(),
     );
     expect(sessionImportNotImportedLine(groups)).toBe(
-      "Not imported: 2 tasks with no messages",
+      "Not imported: 2 sessions with no messages",
     );
   });
 
-  it("keeps the line plain when the causes are mixed, and singular for one task", () => {
+  it("keeps the line plain when the causes are mixed, and singular for one session", () => {
     const mixed = groupSessionImportFailures(
       [
         failureEntry("s1", "source_empty", ""),
@@ -1535,13 +1586,15 @@ describe("sessionImportNotImportedLine", () => {
       ],
       new Map(),
     );
-    expect(sessionImportNotImportedLine(mixed)).toBe("Not imported: 2 tasks");
+    expect(sessionImportNotImportedLine(mixed)).toBe(
+      "Not imported: 2 sessions",
+    );
     const one = groupSessionImportFailures(
       [failureEntry("s1", "source_unreadable", "disk error")],
       new Map(),
     );
     expect(sessionImportNotImportedLine(one)).toBe(
-      "Not imported: 1 task that could not be read",
+      "Not imported: 1 session that could not be read",
     );
   });
 });
