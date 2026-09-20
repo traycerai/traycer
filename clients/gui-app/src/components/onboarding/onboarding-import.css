@@ -297,7 +297,7 @@
    wizard renders a different toolbar below 767px (`SessionImportPhoneToolbar`)
    rather than wrapping the pointer one into five rows - measured, those five
    rows took 261pt of an 852pt screen and left the list 176pt, which is 2.7 of
-   38 tasks.
+   38 sessions.
 
    The bar's own class names exist only in that shape, so they need no media
    query; what does is the handful the pointer toolbar shares. */

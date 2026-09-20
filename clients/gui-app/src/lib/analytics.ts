@@ -2699,6 +2699,7 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
 export function reportIssuePrivateSubmitPropertiesFromResult(
   result:
     | { readonly status: "delivered" }
+    | { readonly status: "queued" }
     | { readonly status: "unconfirmed" }
     | { readonly status: "unavailable" }
     | { readonly status: "failed" },
@@ -2731,6 +2732,11 @@ export function reportIssuePrivateSubmitPropertiesFromResult(
         blocker: null,
         attachment_count: attachmentCount,
       };
+    // An offline-queued report reports as `unconfirmed` rather than earning
+    // its own analytics value: delivery genuinely has not happened yet, and
+    // a new `outcome` literal is a change to every dashboard that reads this
+    // event - not something to add as a side effect of a delivery fix.
+    case "queued":
     case "unconfirmed":
       return {
         outcome: "unconfirmed",

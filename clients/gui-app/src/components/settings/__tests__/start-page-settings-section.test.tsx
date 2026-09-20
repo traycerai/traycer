@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -188,7 +194,7 @@ describe("StartPageSettingsSection", () => {
     ]);
   });
 
-  it("renders no preview card: the start page itself is the preview", () => {
+  it("renders no standalone preview card: the start page itself is the preview", () => {
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
       startPageWallpaper: {
@@ -332,6 +338,154 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
     expect(dunesImg?.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(dunesImg?.getAttribute("src")).toBe(dunes.thumbUrl);
     expect(ridgeTile).not.toBeNull();
+  });
+
+  it("renders tiles under the current effect once a wallpaper is set: grain", async () => {
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "Ridge" };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "grain",
+        intensity: 0.6,
+        tintWithAccent: false,
+        name: "Ridge",
+        curatedId: "ridge",
+      },
+    });
+    renderSection();
+
+    const dunesTile = await screen.findByRole("button", { name: "Dunes" });
+    // The tile is the start page's own component on its `preview` surface:
+    // the thumbnail as its image and the grain texture, at full opacity and
+    // without the page veil - the texture is what a tile has to show.
+    const surface = dunesTile.querySelector(".appearance-wallpaper");
+    expect(surface).not.toBeNull();
+    const img = surface?.querySelector("img");
+    expect(img?.getAttribute("src")).toBe(dunes.thumbUrl);
+    expect(img?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(img?.style.filter).toBe("saturate(0.8) contrast(1.05)");
+    expect(img?.style.opacity).toBe("1");
+    expect(
+      surface?.querySelector(".appearance-wallpaper-texture"),
+    ).not.toBeNull();
+    expect(surface?.querySelector(".appearance-wallpaper-mask")).toBeNull();
+    // Both tiles preview it, not only the applied one.
+    expect(
+      screen
+        .getByRole("button", { name: "Ridge" })
+        .querySelector(".appearance-wallpaper-texture"),
+    ).not.toBeNull();
+  });
+
+  it("renders tiles under the current effect once a wallpaper is set: dot pattern", async () => {
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "Ridge" };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: false,
+        name: "Ridge",
+        curatedId: "ridge",
+      },
+    });
+    renderSection();
+
+    const dunesTile = await screen.findByRole("button", { name: "Dunes" });
+    expect(dunesTile.querySelector("canvas")).not.toBeNull();
+    expect(dunesTile.querySelector("img")).toBeNull();
+  });
+
+  it("follows the effect controls: switching to photo drops the texture", async () => {
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "Ridge" };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "grain",
+        intensity: 0.6,
+        tintWithAccent: false,
+        name: "Ridge",
+        curatedId: "ridge",
+      },
+    });
+    renderSection();
+
+    const dunesTile = await screen.findByRole("button", { name: "Dunes" });
+    expect(
+      dunesTile.querySelector(".appearance-wallpaper-texture"),
+    ).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Photo" }));
+    expect(dunesTile.querySelector(".appearance-wallpaper-texture")).toBeNull();
+    expect(dunesTile.querySelector(".appearance-wallpaper")).not.toBeNull();
+  });
+
+  it("shows every tile and no more-tile when the catalog fits the six slots", async () => {
+    wallpaperMocks.fetchManifest.mockResolvedValue(
+      [1, 2, 3, 4, 5, 6].map((n) =>
+        manifestEntry({ id: `w${n}`, title: `Wallpaper ${n}` }),
+      ),
+    );
+    renderSection();
+
+    await screen.findByRole("button", { name: "Wallpaper 6" });
+    expect(
+      screen.queryByRole("button", { name: /more wallpapers/ }),
+    ).toBeNull();
+  });
+
+  it("caps the in-row gallery at five tiles plus a View-N-more tile", async () => {
+    wallpaperMocks.fetchManifest.mockResolvedValue(
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) =>
+        manifestEntry({ id: `w${n}`, title: `Wallpaper ${n}` }),
+      ),
+    );
+    renderSection();
+
+    await screen.findByRole("button", { name: "Wallpaper 5" });
+    expect(screen.queryByRole("button", { name: "Wallpaper 6" })).toBeNull();
+    const more = screen.getByRole("button", { name: "View 6 more wallpapers" });
+    expect(more.textContent).toBe("View 6 more");
+  });
+
+  it("opens the full catalog from the more-tile and applies from inside it", async () => {
+    wallpaperMocks.fetchManifest.mockResolvedValue(
+      [1, 2, 3, 4, 5, 6, 7].map((n) =>
+        manifestEntry({ id: `w${n}`, title: `Wallpaper ${n}` }),
+      ),
+    );
+    renderSection();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "View 2 more wallpapers" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Curated wallpapers",
+    });
+    // The whole catalog, not only the hidden tail.
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+      expect(
+        within(dialog).getByRole("button", { name: `Wallpaper ${n}` }),
+      ).not.toBeNull();
+    }
+    expect(
+      within(dialog).queryByRole("button", { name: /more wallpapers/ }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Wallpaper 7" }),
+    );
+    await vi.waitFor(() =>
+      expect(wallpaperMocks.applyCurated).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "w7" }),
+      ),
+    );
+    // Applying keeps the catalog open; Done closes it.
+    expect(
+      screen.getByRole("dialog", { name: "Curated wallpapers" }),
+    ).not.toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Curated wallpapers" }),
+      ).toBeNull(),
+    );
   });
 
   it("marks the tile matching the stored curatedId as pressed", async () => {

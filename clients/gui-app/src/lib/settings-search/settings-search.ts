@@ -167,7 +167,11 @@ export function searchSettings(
     buildSearchDocuments(context),
     trimmed,
     SEARCH_KEYS,
-    (document, score) => score * KIND_SCORE_FACTOR[document.entry.kind],
+    {
+      adjustScore: (document, score) =>
+        score * KIND_SCORE_FACTOR[document.entry.kind],
+      compareTies: null,
+    },
   );
   return resortByNameTier(matches, trimmed, (document) => document.label)
     .slice(0, MAX_RESULTS)

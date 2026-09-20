@@ -50,7 +50,6 @@ import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { TabStripHomeItem } from "@/components/layout/tabs/tab-strip-home-item";
-import { useHomeBadgeCount } from "@/components/home-focus/use-home-badge-count";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useHeaderTabIndicators } from "./header-tab-presentation";
@@ -353,7 +352,10 @@ function TabStripBody() {
               inside the `LayoutGroup` whose reorder animations belong to
               draggable items. */}
           {homeTabEnabled ? (
-            <HomeStripSlot isActive={homeIsActive} onActivate={handleHomeTab} />
+            <TabStripHomeItem
+              isActive={homeIsActive}
+              onActivate={handleHomeTab}
+            />
           ) : null}
           <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
             <LayoutGroup id="header-tabs">
@@ -428,24 +430,6 @@ function TabStripBody() {
         </div>
       </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
-  );
-}
-
-/**
- * Owns the badge subscription so a change to the cross-task prompt count
- * re-renders the Home control alone, not the whole strip body.
- */
-function HomeStripSlot(props: {
-  readonly isActive: boolean;
-  readonly onActivate: () => void;
-}): ReactNode {
-  const badgeCount = useHomeBadgeCount();
-  return (
-    <TabStripHomeItem
-      isActive={props.isActive}
-      onActivate={props.onActivate}
-      badgeCount={badgeCount}
-    />
   );
 }
 

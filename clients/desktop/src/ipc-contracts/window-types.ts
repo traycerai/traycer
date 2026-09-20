@@ -531,16 +531,37 @@ export interface SupportSubmitReportRequest {
   readonly privateDiagnostics?: SupportPrivateDiagnostics;
 }
 
-// Four states, not three: "no DSN" and "flush timed out" used to collapse
+// Five states, not three: "no DSN" and "flush timed out" used to collapse
 // onto the same `reportId: null`, which told users a report failed when it
 // may have arrived, and let a retry mint a duplicate. `failed` is reserved
 // for definite non-delivery (capture threw, DSN rejected); a flush timeout
 // maps to `unconfirmed`, never `failed` - the transport may still deliver it.
+//
+// `queued` is the fifth, and it is the opposite mistake being corrected: the
+// offline transport STORES an envelope it could not send and replays it from
+// its own timer, so "we could not confirm" understates it and a resend
+// against it is pure duplicate (the desktop reuses `event_id`). It is only
+// ever returned when the store was observed holding this exact envelope.
+//
+// `rate-limited` is a second `failed` reason rather than a flavour of
+// `error` because it is the one failure with a known remedy - waiting - and
+// the dialog says how long. `retryAfterSeconds` is `null` when the response
+// carried no `retry-after` and no window was in force to measure; the copy
+// then says "later" instead of inventing a number.
+//
+// MIRRORED BY HAND in `clients/gui-app/src/lib/windows/types.ts`
+// (`DesktopSubmitReportResult`). Not protocol; edit both.
 export type SupportSubmitReportResult =
   | { readonly status: "delivered"; readonly reportId: string }
+  | { readonly status: "queued"; readonly reportId: string }
   | { readonly status: "unconfirmed"; readonly reportId: string }
   | { readonly status: "unavailable" }
-  | { readonly status: "failed"; readonly reason: "error" };
+  | { readonly status: "failed"; readonly reason: "error" }
+  | {
+      readonly status: "failed";
+      readonly reason: "rate-limited";
+      readonly retryAfterSeconds: number | null;
+    };
 
 export interface SupportLogTailResult {
   readonly target: SupportLogTarget;
