@@ -2392,8 +2392,8 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       approval whose payload carried no epic id (they are optional on the
       wire), an epic with a pending prompt and no running agent, warm chat or
       open page to make a group out of, and the host split's own per-host
-      prompt filter. Home's tab badge counts prompts, so a prompt the page
-      cannot show is a badge reading `1` over a page showing nothing. The
+      prompt filter. The header bell counts these same prompts, so a prompt
+      the page cannot show is a bell reading `1` over a page showing nothing. The
       leftovers are computed FROM the rendered slices rather than from a second
       guess at the same rule, which is what makes that impossible instead of
       merely unlikely; they render last, with `· in <task>` restored, since
@@ -2490,6 +2490,16 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       stays out of that button's accessible name, but it is unpositioned and
       therefore still under its stretched overlay - by design, since everything
       that is not a control opens the row.
+    - **The status cell's trailing slot has two clocks, and the row decides
+      which.** A prompt row's `· 5m` is an AGE (`RowStatusDuration`:
+      `formatCompactRelativeTime` on the shared 60s clock) - how long a
+      question has sat unanswered, where nothing changes second to second. A
+      running shell's `· 42h 47m 13s` is a CLOCK (`RowStatusElapsed`:
+      `useElapsedSeconds` + `formatClockDuration`, a 1s tick confined to that
+      leaf) - the same reading the chat's Background panel prints for the same
+      shell, because a watcher that reads `42h 47m 13s` in the panel and `1d`
+      on Home is one fact in two vocabularies. Agent rows and in-turn
+      background items print neither: neither plane carries a start time.
     - **The duration hides on a narrow ROW, under Compact only.** An
       `@container` on the section and `@max-sm:hidden` on the duration, not a
       viewport breakpoint: a slim Home tile inside a wide window is exactly the

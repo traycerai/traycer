@@ -84,7 +84,6 @@ export const EMPTY_FOCUS_MODEL: FocusModel = Object.freeze({
     backgroundIsMountedOnly: true,
     browsersAreMountedOnly: true,
   }),
-  badgeCount: 0,
 });
 
 export interface FocusActivityHealth {
@@ -175,7 +174,6 @@ export function buildFocusModel(
     coverage: shallowEqualRow(coverage, previous.coverage)
       ? previous.coverage
       : coverage,
-    badgeCount: prompts.length,
   };
   return shallowEqualRow(next, previous) ? previous : next;
 }
