@@ -902,6 +902,37 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dial-only lease verbs: one host calls these on another, never the
+  // renderer. Here because this table is exhaustive over the registry. `fifo`
+  // because each acquires, releases or ends a lease and must never coalesce.
+  "host.portForward.acquireLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.releaseLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.leaseEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The host-level forwards listing: only the newest answer means anything.
+  "portForward.listForHost": { ...LATEST_SCHEDULING, poll: null },
+  // Stopping a forward and cutting a lease both tear down live sockets.
+  "portForward.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "portForward.cutLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Dial-only: one host calls this on another, never the renderer. It is here
   // because this table is exhaustive over the registry, not because the GUI
   // has a caller. `fifo` matches `agent.create`, whose effect it shares -
