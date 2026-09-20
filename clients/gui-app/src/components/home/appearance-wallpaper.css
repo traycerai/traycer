@@ -1,4 +1,6 @@
 .appearance-wallpaper {
+  /* Decoration stays below in-flow content in each isolated surface. */
+  z-index: -1;
   isolation: isolate;
   contain: strict;
 }

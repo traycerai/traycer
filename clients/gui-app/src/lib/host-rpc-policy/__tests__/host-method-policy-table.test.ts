@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import {
   CHAT_PUBLICATION_WAIT_POLL_LANE,
   GIT_DIRTY_SUBMODULE_POLL_LANE,
@@ -897,5 +905,102 @@ describe("epic.chatPublicationState poll lane terminates on `definitive`", () =>
         definitive: null,
       }),
     ).toBe(false);
+  });
+});
+
+const PUT_BLOB_PARAMS: RequestOfMethod<HostRpcRegistry, "drafts.putBlob"> = {
+  sha256: "ab".repeat(32),
+  bytesBase64: "AQID",
+};
+
+function buildPutBlobHostClient(): {
+  readonly requester: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "put-blob-req",
+    handlers: {
+      "drafts.putBlob": () => ({ ok: true as const }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    messenger,
+    invalidator: { invalidateHostScope: () => undefined },
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-put-blob",
+    }),
+  );
+  return {
+    requester: spine.createRequester(mockLocalHostEntry),
+    messenger,
+  };
+}
+
+describe("drafts.putBlob declared budget", () => {
+  it("declares fifo, the shared 120s join timeout, and no poll", () => {
+    expect(HOST_METHOD_POLL_TABLE["drafts.putBlob"]).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+      poll: null,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("drafts.putBlob"),
+    ).toBe(120_000);
+  });
+
+  it("HostClient dispatches only the declared 120s budget and refuses any other before the messenger", async () => {
+    const declared = buildPutBlobHostClient();
+    const declaredTimeoutSpy = vi.spyOn(
+      declared.messenger,
+      "requestWithResponseTimeout",
+    );
+
+    await expect(
+      declared.requester.requestWithOptions("drafts.putBlob", PUT_BLOB_PARAMS, {
+        idempotencyKey: PUT_BLOB_PARAMS.sha256,
+        responseTimeoutMs: 120_000,
+        requiredHostMethodVersion: null,
+        signal: undefined,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(declaredTimeoutSpy).toHaveBeenCalledTimes(1);
+    expect(declaredTimeoutSpy).toHaveBeenCalledWith(
+      "drafts.putBlob",
+      PUT_BLOB_PARAMS,
+      120_000,
+      expect.objectContaining({
+        idempotencyKey: PUT_BLOB_PARAMS.sha256,
+      }),
+    );
+    expect(declared.messenger.calls).toHaveLength(1);
+
+    const refused = buildPutBlobHostClient();
+    const refusedTimeoutSpy = vi.spyOn(
+      refused.messenger,
+      "requestWithResponseTimeout",
+    );
+    const refusedRequestSpy = vi.spyOn(refused.messenger, "request");
+
+    await expect(
+      refused.requester.requestWithOptions("drafts.putBlob", PUT_BLOB_PARAMS, {
+        idempotencyKey: PUT_BLOB_PARAMS.sha256,
+        responseTimeoutMs: 60_000,
+        requiredHostMethodVersion: null,
+        signal: undefined,
+      }),
+    ).rejects.toThrow("does not permit response timeout 60000");
+
+    expect(refusedRequestSpy).not.toHaveBeenCalled();
+    expect(refusedTimeoutSpy).not.toHaveBeenCalled();
+    expect(refused.messenger.calls).toHaveLength(0);
   });
 });

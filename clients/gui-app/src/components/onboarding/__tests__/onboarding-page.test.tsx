@@ -314,10 +314,17 @@ interface PointerPosition {
   readonly clientY: number;
 }
 
+/**
+ * The tracked drag reads `timeStamp` to get a release speed, so every synthetic
+ * pointer carries one: without it three events constructed in the same tick
+ * look like an infinitely fast flick, and the distance arm - the one most of
+ * these cases are about - is never reached.
+ */
 function dispatchPointer(
   target: EventTarget,
   type: "pointerdown" | "pointermove" | "pointerup",
   position: PointerPosition,
+  atMs: number,
 ): void {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
@@ -325,19 +332,34 @@ function dispatchPointer(
     clientY: { value: position.clientY },
     pointerId: { value: 1 },
     isPrimary: { value: true },
+    timeStamp: { value: atMs },
   });
   target.dispatchEvent(event);
 }
 
+/** A deliberate drag: 300ms of travel, which is well under the flick speed. */
 function drag(
   target: EventTarget,
   from: PointerPosition,
   to: PointerPosition,
 ): void {
   act(() => {
-    dispatchPointer(target, "pointerdown", from);
-    dispatchPointer(window, "pointermove", to);
-    dispatchPointer(window, "pointerup", to);
+    dispatchPointer(target, "pointerdown", from, 0);
+    dispatchPointer(window, "pointermove", to, 300);
+    dispatchPointer(window, "pointerup", to, 300);
+  });
+}
+
+/** A flick: the same travel spent in 40ms, so the speed arm decides. */
+function flick(
+  target: EventTarget,
+  from: PointerPosition,
+  to: PointerPosition,
+): void {
+  act(() => {
+    dispatchPointer(target, "pointerdown", from, 0);
+    dispatchPointer(window, "pointermove", to, 40);
+    dispatchPointer(window, "pointerup", to, 40);
   });
 }
 
@@ -355,9 +377,26 @@ function swipeSurface(container: HTMLElement): HTMLElement {
   return surface;
 }
 
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+
+/**
+ * The phone layout is keyed to the VIEWPORT (`useIsMobileViewport`, 768px), not
+ * to the installed app, so a width is all these suites have to set. The global
+ * `matchMedia` stub never fires a change, which is exactly right here: the
+ * snapshot is read at render and the width is fixed for the test.
+ */
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+}
+
 describe("OnboardingPage", () => {
   beforeEach(() => {
     stubElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     resetFeatureAnnouncementsStore();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
@@ -420,6 +459,31 @@ describe("OnboardingPage", () => {
     });
   });
 
+  // The desktop shell is not what the phone rework changed, and this is the
+  // guard that says so: the eyebrow, the wordmark and a footer Back are all
+  // things the phone branch removes, and all three still belong here.
+  it("keeps the desktop shell: the eyebrow, the wordmark, and Back in the footer", async () => {
+    const { container } = renderPage(false);
+
+    expect(container.querySelector(".onboarding-eyebrow")?.textContent).toBe(
+      "Workspace · 1 of 3",
+    );
+    expect(container.querySelector(".onboarding-wordmark")).not.toBeNull();
+    expect(screen.getByTestId("onboarding-skip").textContent).toBe(
+      "Skip intro",
+    );
+    expect(screen.getByTestId("onboarding-advance").className).not.toContain(
+      "onboarding-button--block",
+    );
+
+    await advanceToStep("providers");
+
+    const back = screen.getByTestId("onboarding-back");
+    expect(back.closest("footer")).not.toBeNull();
+    expect(back.closest("header")).toBeNull();
+    expect(back.textContent).toBe("Back");
+  });
+
   it("shows the welcome first, prefetches provider data, then reveals the tour after both transitions", () => {
     vi.useFakeTimers();
     try {
@@ -478,7 +542,13 @@ describe("OnboardingPage", () => {
   });
 
   it("uses the short welcome and leave timings when reduced motion is preferred", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    // Enough of a MediaQueryList for every reader on this screen: the welcome's
+    // own timings read `matches`, and `useIsMobileViewport` subscribes.
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
     vi.useFakeTimers();
     try {
       render(<OnboardingPage replay={false} />);
@@ -545,6 +615,22 @@ describe("OnboardingPage", () => {
     expect(useFeatureAnnouncementsStore.getState().claim("login-import")).toBe(
       false,
     );
+  });
+
+  it("spends the import announcement only once the import act is on screen", async () => {
+    renderPage(false);
+
+    // Still owed: someone who skips from here never saw the act, so the toast
+    // is how they hear about importing.
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toBeUndefined();
+
+    await advanceToStep("session-import");
+
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toEqual(expect.any(Number));
   });
 
   it("does not consume the login import announcement when onboarding is replayed", () => {
@@ -716,12 +802,218 @@ describe("OnboardingPage", () => {
   });
 });
 
-describe("OnboardingPage mobile swipe", () => {
+/**
+ * The installed app, which is a PRODUCT branch and not a width: about nine in
+ * ten people who open it have already run the tour on the desktop app, so the
+ * acts are dropped there and the welcome hands straight over to the landing
+ * guide. Everything here is keyed to `setMobileApp(true)` and nothing to the
+ * viewport - the phone-layout suite below is the same width with the flag off,
+ * and it still gets all three acts.
+ */
+describe("OnboardingPage on the installed mobile app", () => {
   beforeEach(() => {
     stubElementScrollTo();
+    setViewportWidth(393);
+    resetFeatureAnnouncementsStore();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
+    useFirstTaskGuideStore.setState({
+      status: "inactive",
+      imports: new Map(),
+      workspaceReviewed: false,
+      acknowledgedHints: new Set(),
+    });
     setMobileApp(true);
+    capabilityMock.available = true;
+    hostsMock.ids = ["host-a"];
+    prefetchMock.renders = 0;
+    scanMock.activeCalls.length = 0;
+    navigateMock.mockReset();
+    historyBackMock.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    restoreElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    resetFeatureAnnouncementsStore();
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    setMobileApp(false);
+  });
+
+  it("plays only the welcome, then completes and opens a new draft with the guide armed", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
+      // Not a hidden tour layer - no tour at all. Nothing of the acts exists to
+      // flash between the welcome leaving and the draft arriving.
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+      expect(screen.queryByTestId("onboarding-advance")).toBeNull();
+      expect(screen.queryByTestId("onboarding-skip")).toBeNull();
+      // And none of the acts' work is started either: no provider prefetch, and
+      // the session-import scan is never even asked about.
+      expect(screen.queryByTestId("provider-prefetch")).toBeNull();
+      expect(prefetchMock.renders).toBe(0);
+      expect(scanMock.activeCalls).toEqual([]);
+
+      // The desktop's own welcome timings, unchanged.
+      void act(() => vi.advanceTimersByTime(1799));
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      void act(() => vi.advanceTimersByTime(1));
+      expect(
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(319));
+      expect(navigateMock).not.toHaveBeenCalled();
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+      expect(useOnboardingStore.getState().completedAt).toEqual(
+        expect.any(Number),
+      );
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      // The phone has no import act, so nothing is left for the import toast
+      // to follow up on.
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["session-import"],
+      ).toEqual(expect.any(Number));
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(historyBackMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the short welcome and leave timings when reduced motion is preferred", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      void act(() => vi.advanceTimersByTime(300));
+      expect(
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(149));
+      expect(navigateMock).not.toHaveBeenCalled();
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Skipping is not skipping guidance here: the welcome IS the tour on this
+  // shell, so the only thing the button shortens is the animation.
+  it("gives Skip welcome the same outcome as letting the welcome finish", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
+
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      void act(() => vi.advanceTimersByTime(320));
+
+      expect(useOnboardingStore.getState().completedAt).toEqual(
+        expect.any(Number),
+      );
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // "Replay" has to show the tour again, and on this shell the tour the user
+  // would recognise is the landing guide - so the replay re-arms it from
+  // scratch and goes to the page it lives on, rather than back to Settings.
+  it("re-arms the landing guide on replay and navigates instead of going back", () => {
+    useOnboardingStore.setState({ completedAt: 123, step: 0 });
+    useFirstTaskGuideStore.setState({
+      status: "finished",
+      acknowledgedHints: new Set(["tasks-menu"]),
+    });
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
+      void act(() => vi.advanceTimersByTime(320));
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      // `prepare()` ran, so last run's acknowledgements are not still retiring
+      // the steps this replay is meant to show.
+      expect(useFirstTaskGuideStore.getState().acknowledgedHints.size).toBe(0);
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(historyBackMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A replay is not a first run: the announcement it would otherwise consume is
+  // still owed to the user, exactly as on the desktop.
+  it("consumes the login import announcement on first run only", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["login-import"],
+      ).toEqual(expect.any(Number));
+
+      cleanup();
+      resetFeatureAnnouncementsStore();
+      render(<OnboardingPage replay />);
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["login-import"],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("OnboardingPage phone layout", () => {
+  beforeEach(() => {
+    stubElementScrollTo();
+    setViewportWidth(393);
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    // Deliberately NOT the installed app: the phone shell, the phone copy and
+    // the drag all come from the viewport, so a narrow desktop window gets
+    // exactly this layout.
+    setMobileApp(false);
     capabilityMock.available = true;
     hostsMock.ids = ["host-a"];
     hostReadinessMock.streamMismatchFor = null;
@@ -735,6 +1027,7 @@ describe("OnboardingPage mobile swipe", () => {
   afterEach(() => {
     cleanup();
     restoreElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
     setMobileApp(false);
@@ -742,33 +1035,136 @@ describe("OnboardingPage mobile swipe", () => {
     safeAreaInsetsMock.right = 0;
   });
 
-  it("keeps mobile to two steps, leaves vertical drags alone, and navigates on horizontal swipes", async () => {
+  it("puts Back in the header past act one, and renders no eyebrow or wordmark", async () => {
+    const { container } = renderPage(false);
+
+    // Act 1's leading slot is the brand mark, so there is nothing to go back to.
+    expect(screen.queryByTestId("onboarding-back")).toBeNull();
+    expect(container.querySelector(".onboarding-eyebrow")).toBeNull();
+    expect(container.querySelector(".onboarding-wordmark")).toBeNull();
+    expect(screen.getByTestId("onboarding-skip").textContent).toBe("Skip");
+
+    await advanceToStep("providers");
+
+    const back = screen.getByRole("button", { name: "Back" });
+    expect(back.getAttribute("data-testid")).toBe("onboarding-back");
+    // In the HEADER, not in the footer: the footer is one full-width primary on
+    // every act, and a phone's back affordance belongs at the top.
+    expect(back.closest("header")).not.toBeNull();
+    expect(back.closest("footer")).toBeNull();
+
+    fireEvent.click(back);
+    await waitFor(() => expect(currentStepId()).toBe("task-tabs"));
+  });
+
+  it("gives act one a subtitle and the later acts none", async () => {
+    const { container } = renderPage(false);
+
+    const subtitle = container.querySelector(".onboarding-subtitle");
+    expect(subtitle?.textContent).toBe(
+      "Tasks in the menu. Swipe for the rest.",
+    );
+
+    await advanceToStep("providers");
+    expect(container.querySelector(".onboarding-subtitle")).toBeNull();
+  });
+
+  it("shows one full-width primary, and hands act three's footer to the wizard", async () => {
+    const { container } = renderPage(false);
+
+    const advance = screen.getByTestId("onboarding-advance");
+    expect(advance.className).toContain("onboarding-button--block");
+    expect(advance.className).toContain("onboarding-button--primary");
+    expect(advance.textContent).toContain("Continue");
+    expect(container.querySelector("footer")?.dataset.quiet).toBe("false");
+
+    await advanceToStep("session-import");
+
+    // The wizard owns the primary on act 3, so the shell keeps only the quiet
+    // way past it - centred, and spelled the same as the header's.
+    const footerAction = screen.getByTestId("onboarding-advance");
+    expect(footerAction.className).toContain("onboarding-button--quiet");
+    expect(footerAction.className).not.toContain("onboarding-button--block");
+    // The Enter cap rides along in the DOM (it is CSS-hidden below `md`), so
+    // this asks what the label says rather than what the node contains.
+    expect(footerAction.textContent).toContain("Skip");
+    expect(footerAction.textContent).not.toContain("for now");
+    expect(container.querySelector("footer")?.dataset.quiet).toBe("true");
+  });
+
+  it("runs the whole step list, leaves vertical drags alone, and navigates on horizontal ones", async () => {
     const { container } = renderPage(false);
     const surface = swipeSurface(container);
 
     expect(currentStepId()).toBe("task-tabs");
-    expect(scanMock.activeCalls.at(-1)).toBe(false);
+    // The import act is offered on a phone under the same host gate as on the
+    // desktop, so its early scan arms there too.
+    expect(scanMock.activeCalls.at(-1)).toBe(true);
 
     drag(
       surface,
-      { clientX: 400, clientY: 300 },
-      { clientX: 400, clientY: 420 },
+      { clientX: 200, clientY: 300 },
+      { clientX: 200, clientY: 420 },
     );
     expect(currentStepId()).toBe("task-tabs");
 
     drag(
       surface,
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     await waitFor(() => expect(currentStepId()).toBe("providers"));
 
     drag(
       surface,
       { clientX: 280, clientY: 300 },
-      { clientX: 400, clientY: 306 },
+      { clientX: 160, clientY: 306 },
     );
-    await waitFor(() => expect(currentStepId()).toBe("task-tabs"));
+    await waitFor(() => expect(currentStepId()).toBe("session-import"));
+
+    drag(
+      surface,
+      { clientX: 160, clientY: 300 },
+      { clientX: 280, clientY: 306 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+  });
+
+  it("springs a short drag home and commits a flick that barely travelled", async () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    // 60px of a 393px surface is under the quarter a slow release has to cover,
+    // and 200px/s is under the flick speed.
+    drag(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 220, clientY: 302 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    // The same distance thrown in 40ms is 1500px/s, which commits on its own.
+    flick(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 220, clientY: 302 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+  });
+
+  it("resists at the ends instead of leaving the tour", () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    // Back from the first act: there is nothing behind it, so the act rubber
+    // bands and the tour stays where it is.
+    drag(
+      surface,
+      { clientX: 120, clientY: 300 },
+      { clientX: 320, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+    expect(useOnboardingStore.getState().completedAt).toBeNull();
   });
 
   it("does not steal swipes from controls or the platform edge zones", async () => {
@@ -777,8 +1173,8 @@ describe("OnboardingPage mobile swipe", () => {
 
     drag(
       screen.getByTestId("onboarding-advance"),
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     expect(currentStepId()).toBe("task-tabs");
 
@@ -792,8 +1188,8 @@ describe("OnboardingPage mobile swipe", () => {
     await advanceToStep("providers");
     drag(
       screen.getByTestId("provider-editor"),
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     expect(currentStepId()).toBe("providers");
   });

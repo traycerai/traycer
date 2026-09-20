@@ -53,10 +53,9 @@ export interface ChatSearchState {
    * Open the dialog on a query another surface already has, in a scope it
    * names - the sidebar's "All tasks", History's "Open in Search chats".
    *
-   * Unlike {@link ChatSearchState.setOpen} this re-anchors the date presets
-   * even when the dialog is already open: it is a new search being handed
-   * over, not a redundant open, and its relative window is measured from the
-   * hand-off.
+   * Unlike {@link ChatSearchState.setOpen}, a hand-off resets the role and
+   * date filters, even when the dialog is already open. It also refreshes the
+   * date anchor for any relative preset selected during this new search.
    */
   readonly openWith: (
     handoff: {
@@ -116,6 +115,8 @@ export const useChatSearchStore = create<ChatSearchState>((set) => ({
     set({
       open: true,
       scope: handoff.scope,
+      roleFilter: INITIAL.roleFilter,
+      datePreset: INITIAL.datePreset,
       dateAnchorMs: now,
       initialQuery: handoff.query,
     }),

@@ -745,32 +745,195 @@
     opacity: 1;
   }
 }
-/* ------------------------------------------------------------- mobile */
+/* -------------------------------------------------------- act 1 on a phone */
 
-.onboarding-workspace--mobile {
+/* Full-bleed, 1:1, no bezel. The scene is not scaled to fit the region; it is
+   the app's own geometry CROPPED by the region, so a 40pt header is 40pt and
+   16pt type is 16pt. The frame it replaced was 222pt wide inside a 393pt
+   screen: a quarter of the act spent drawing the device the viewer is holding,
+   with the app inside it too small to read. */
+.onboarding-workspace--phone {
+  gap: 0;
+}
+
+/* The gesture surface is the whole act; only `.diorama-phone` moves. `pan-y`
+   is the declaration that the horizontal axis is this pager's and the vertical
+   one is still the scroller's. */
+.diorama-phone-pager {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  touch-action: pan-y;
+}
+
+/* A picture, not the app: no pointer events, and rounded where it meets the
+   shell. The mask is what makes the scene END in the caption rather than at a
+   cut edge - it fades into whatever is behind the tour, which is the dithered
+   field itself rather than a gradient guessing at its colour. */
+.diorama-phone {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  border-start-start-radius: 1.25rem;
+  border-start-end-radius: 1.25rem;
+  background: var(--background);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--foreground) 10%, transparent);
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2rem), transparent);
+}
+
+/* The page is absolute so the scene's height is the region's, never the
+   content's: a thread that would overflow is cropped at the bottom fade the
+   way the app itself is cropped by the screen. */
+.diorama-phone-page {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Both surfaces live in the page the whole time and start off-frame on their
+   own edge, so a scene change is the surface travelling rather than appearing.
+   Their own edge, in both directions: whatever arrives from the leading edge
+   leaves through it. */
+.diorama-phone-drawer,
+.diorama-phone-sheet {
+  transition:
+    transform 300ms var(--diorama-ease),
+    opacity 200ms var(--diorama-ease),
+    box-shadow 220ms var(--diorama-ease);
+}
+.diorama-phone-drawer {
+  transform: translateX(-102%);
+  opacity: 0;
+}
+.diorama-phone-page[data-surface="drawer"] .diorama-phone-drawer {
+  transform: translateX(0);
+  opacity: 1;
+}
+.diorama-phone-sheet {
+  transform: translateY(102%);
+  opacity: 0;
+}
+.diorama-phone-page[data-surface="sheet"] .diorama-phone-sheet {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* Not a surface of its own - it is the room behind whichever surface is up. */
+.diorama-phone-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #0000;
+  pointer-events: none;
+  transition: background-color 240ms var(--diorama-ease);
+}
+.diorama-phone-page:not([data-surface="task"]) .diorama-phone-scrim {
+  background: #0006;
+}
+
+/* The header controls a scene points at. The ring is the diorama's own, drawn
+   on a box with room inside it so the line never lands on the glyph. */
+.diorama-phone-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
   justify-content: center;
+  padding: 0.375rem;
+  border-radius: 0.5rem;
+  transition: box-shadow 220ms var(--diorama-ease);
 }
-.diorama-mobile {
-  width: min(100%, 24rem);
-  max-height: 100%;
-  aspect-ratio: 390 / 620;
-  margin-inline: auto;
+.diorama-phone [data-ring="true"] {
+  box-shadow: var(--diorama-ring);
 }
-.diorama-mobile .diorama-pane-tabs {
-  display: none;
+
+/* The turn, revealed off the beat rather than off a delayed keyframe chain: a
+   chain rewinds on every restart and cannot be retargeted, and a dot tapped
+   mid-reply has to be able to interrupt this. Hiding is faster than showing
+   and unstaggered, so the scene that loops back to the start clears the reply
+   at once instead of un-writing it clause by clause. */
+/* No `display` here on purpose: the blocks that wear this are a clause, a row
+   and a paragraph, and each keeps its own. A clause carries `inline-block` at
+   its call site, because a transform does not apply to an inline box. */
+.diorama-phone-reveal {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 140ms var(--diorama-ease),
+    transform 140ms var(--diorama-ease);
 }
-.diorama-mobile-sheet {
-  animation: diorama-sheet 350ms var(--diorama-ease) 900ms both;
+.diorama-phone-reveal[data-shown="true"] {
+  opacity: 1;
+  transform: translateY(0);
+  transition-duration: 240ms;
 }
-@keyframes diorama-sheet {
-  from {
-    opacity: 0;
-    transform: translateY(12%);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* The stream: about 1.2s from the first clause to the last. */
+.diorama-phone-reveal[data-shown="true"][data-stagger="1"] {
+  transition-delay: 480ms;
+}
+.diorama-phone-reveal[data-shown="true"][data-stagger="2"] {
+  transition-delay: 960ms;
+}
+
+/* ------------------------------------------------- caption and page control */
+
+.diorama-phone-caption {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-inline: var(--onboarding-gutter, 1rem);
+  padding-top: 0.5rem;
+}
+.diorama-phone-caption-line {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--foreground);
+  animation: diorama-fade-in 200ms var(--diorama-ease) both;
+}
+/* The row is 44pt of touch target per dot, and the first dot's MARK - not its
+   box - lines up with the caption's leading edge. */
+.diorama-phone-dots {
+  display: flex;
+  align-items: center;
+  margin-inline-start: -1.15625rem;
+}
+.diorama-phone-dot {
+  display: inline-flex;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.diorama-phone-dot:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -6px;
+  border-radius: 0.75rem;
+}
+/* `width`, not a transform: a pill that grows by `scaleX` distorts the round
+   caps that make it a pill. Three 7px elements, once every four seconds. */
+.diorama-phone-dot-mark {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 30%, transparent);
+  transition:
+    width 260ms var(--diorama-ease),
+    background-color 260ms ease;
+}
+.diorama-phone-dot[data-active="true"] .diorama-phone-dot-mark {
+  width: 1.125rem;
+  background: var(--foreground);
 }
 
 /* ---------------------------------------------------- reduced motion */
@@ -820,7 +983,25 @@
   .diorama-tiled {
     transition: none;
   }
-  .diorama-mobile-sheet {
+  /* The surfaces still have to be somewhere. They cross-fade in place instead
+     of travelling, which is the gentler equivalent rather than no feedback. */
+  .diorama-phone-drawer,
+  .diorama-phone-sheet {
+    transition: opacity 200ms ease;
+    transform: translateY(0);
+  }
+  .diorama-phone-reveal {
+    transform: translateY(0);
+    transition: opacity 200ms ease;
+  }
+  /* Nothing streams here, so nothing waits its turn either. */
+  .diorama-phone-reveal[data-shown="true"][data-stagger] {
+    transition-delay: 0ms;
+  }
+  .diorama-phone-dot-mark {
+    transition: background-color 200ms ease;
+  }
+  .diorama-phone-caption-line {
     animation-name: diorama-fade-in;
   }
 }

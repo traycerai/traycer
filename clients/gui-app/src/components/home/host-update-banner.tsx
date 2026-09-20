@@ -680,8 +680,11 @@ function OperationContent(props: OperationContentProps) {
   const failedAttemptId = view.kind === "failed" ? view.attemptId : null;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1" data-testid="host-update-banner-phase">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span
+          className="min-w-0 flex-1 @max-sm:basis-full"
+          data-testid="host-update-banner-phase"
+        >
           {props.copy.primary}
           {/*
             Freshness, stated rather than implied. A qualified view is the last
@@ -936,11 +939,12 @@ function deriveBannerClassName(
   destructive: boolean,
   className: string | undefined,
 ): string {
+  // Resolve the tint against the theme background rather than the wallpaper.
   const stateClassName = destructive
-    ? "border-destructive/30 bg-destructive/10 text-destructive"
-    : "border-info/30 bg-info/10 text-info-foreground";
+    ? "border-destructive/30 bg-[color-mix(in_srgb,var(--destructive)_10%,var(--background))] text-destructive"
+    : "border-info/30 bg-[color-mix(in_srgb,var(--info)_10%,var(--background))] text-info-foreground";
   return cn(
-    "flex items-center gap-2 rounded-md border px-3 py-2 text-ui-sm",
+    "@container flex items-center gap-2 rounded-md border px-3 py-2 text-ui-sm wrap-anywhere",
     stateClassName,
     className,
   );

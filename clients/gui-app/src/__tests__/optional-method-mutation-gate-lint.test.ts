@@ -129,6 +129,8 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "reachable only as a post-write consistency read inside the already-gated useEpicArchiveChatMutation (use-epic-chat-mutations.ts)",
   "epic.recordViewed":
     "doc comment: the local-home arm exists on every host this client negotiates with, unlike epic.setPinned's cloud arm (use-epic-record-viewed-mutation.ts)",
+  "epic.setPinned":
+    "render gate in JSX children outside the scan's call graph: HistoryPinControl in history-task-row.tsx (History and Current tasks), mobile-history-row.tsx, and tab-strip-context-menu.tsx use useEpicPinLocalHomeSupported -> useHostNegotiatedMethodVersion(client, 'epic.setPinned'); historyPinUnavailableReason / tabPinUnavailableReason blocks activation",
   "providers.clearProfileApiKey":
     "response-data-shape gate: hidden by apiKey.supported / apiKey !== null, not a capability hook (provider-profile-edit-dialog.tsx)",
   "providers.setProfileApiKey":

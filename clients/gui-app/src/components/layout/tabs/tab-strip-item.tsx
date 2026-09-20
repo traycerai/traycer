@@ -47,7 +47,7 @@ import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   settleDetachedEpicTitleCommit,
   settleEpicTitleWrite,
@@ -331,7 +331,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
           onCommitted: () => {
             if (userId === null) return;
-            updateEpicTitleInCloudTaskCaches(
+            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
               queryClient,
               { hostId, userId },
               epicId,
@@ -369,7 +369,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         .then(
           () => {
             if (userId === null) return;
-            updateEpicTitleInCloudTaskCaches(
+            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
               queryClient,
               { hostId, userId },
               epicId,

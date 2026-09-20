@@ -21,8 +21,9 @@
 // same cliff is ahead for the default listing too.
 //
 // Two "obvious" flushes that DO NOT work - both measured against bun, the
-// runtime the CLI ships as (`bun --compile`), writing 70,000 bytes to a pipe.
-// Both delivered exactly 65,536:
+// runtime of this CLI's tree and dev paths, writing 70,000 bytes to a pipe.
+// (The released binary is a Node SEA built by `build:sea`.) Both delivered
+// exactly 65,536:
 //
 //   - `process.stdout.write("", cb)` as a flush sentinel after the real
 //     write: bun fires that callback immediately rather than behind the

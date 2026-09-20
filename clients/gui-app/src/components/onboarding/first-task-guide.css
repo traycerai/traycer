@@ -19,13 +19,13 @@
     0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
     0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
   --coachmark-glide: 320ms;
-  /* Two stacking homes, not a dynamic value: above the app, or above a
-     popover's own layer when the step's target lives inside one. */
+  /* Two stacking homes, not a dynamic value: above the app, or above an
+     overlay's own layer when the step's target lives inside one. */
   --coachmark-z: 40;
 }
-.first-task-coachmark-floater[data-over-popover="true"],
-.first-task-coachmark-halo[data-over-popover="true"],
-.first-task-coachmark-dim[data-over-popover="true"] {
+.first-task-coachmark-floater[data-over-overlay="true"],
+.first-task-coachmark-halo[data-over-overlay="true"],
+.first-task-coachmark-dim[data-over-overlay="true"] {
   --coachmark-z: 60;
 }
 
@@ -40,10 +40,29 @@
   width: max-content;
   z-index: var(--coachmark-z);
 }
+/* A target that scrolled out of sight takes its card and halo with it (see
+   `targetOccluded`). Opacity rather than unmounting: the row is one flick away
+   from coming back, and a remount would replay the entrance each time. */
+.first-task-coachmark-floater {
+  transition:
+    opacity 120ms var(--coachmark-ease),
+    visibility 0s;
+}
+.first-task-coachmark-floater[data-occluded="true"],
+.first-task-coachmark-halo[data-occluded="true"] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 120ms var(--coachmark-ease),
+    visibility 0s 120ms;
+}
 /* Only a step change glides. `autoUpdate` fires on every scroll and resize
    too, and a card that eased after a scrolling target would never catch it. */
 .first-task-coachmark-floater[data-glide="true"] {
-  transition: transform var(--coachmark-glide) var(--coachmark-ease-in-out);
+  transition:
+    transform var(--coachmark-glide) var(--coachmark-ease-in-out),
+    opacity 120ms var(--coachmark-ease);
 }
 
 /* Transitions rather than keyframes: a step change hands the card a new anchor
@@ -86,13 +105,31 @@
 /* --------------------------------------------------------------------- card */
 
 /* Surface, ring and shadow are `PopoverContent`'s own utilities on the element;
-   what is left here is the box. */
+   what is left here is the box.
+
+   The width is capped against the SURFACE the card is portalled into, not
+   against the viewport: measured, a 22rem card inside the 295pt mobile
+   navigation drawer overhung it by 145pt, because `100vw` is the screen and the
+   drawer is three quarters of it. `--coachmark-available` is that surface's
+   width, written on the floater every time the card is positioned
+   (`onboarding-coachmark.tsx`); the 2rem it leaves is the 16pt gutter on each
+   side that Floating UI's own `shift` padding then honours, so the two agree
+   instead of fighting over which edge to clear. The viewport fallback is for
+   the frame before the first placement. */
 .first-task-coachmark {
   position: relative;
-  width: min(22rem, calc(100vw - 2rem));
+  width: min(22rem, calc(var(--coachmark-available, 100vw) - 2rem));
   padding: 1rem;
   border-radius: 1rem;
   outline: none;
+}
+
+/* Inside a drawer or sheet the card sits on a surface of its own colour, where
+   `shadow-md` disappears and the plate reads as part of the list under it. */
+.first-task-coachmark-floater[data-over-overlay="true"] .first-task-coachmark {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 16px 40px -12px rgb(0 0 0 / 0.6);
 }
 
 .first-task-coachmark-eyebrow-row {
@@ -245,6 +282,22 @@
    it is the colour of the page it was meant to dim. */
 .first-task-coachmark-dim-fill {
   fill: rgb(0 0 0 / 0.32);
+}
+
+/* ----------------------------------------------------------------- phone */
+
+/* One step up the phone type scale for both lines: 15pt over 13pt is the
+   pointer card's density, and on a phone this card is the only thing on screen
+   the user is being asked to read. */
+@media (max-width: 767px) {
+  .first-task-coachmark-title {
+    font-size: 1.0625rem;
+    line-height: 1.3;
+  }
+  .first-task-coachmark-body {
+    font-size: 0.9375rem;
+    line-height: 1.45;
+  }
 }
 
 /* The dim stays - it is what makes the target findable, not decoration. What

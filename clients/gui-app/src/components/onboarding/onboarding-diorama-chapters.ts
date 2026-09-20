@@ -185,9 +185,12 @@ export function dioramaChapterStarts(
   });
 }
 
-/** The beat in effect `elapsedMs` into the chapter. */
+/**
+ * The beat in effect `elapsedMs` into the chapter. Typed to the one field it
+ * reads, so the phone walkthrough's own chapters run on this clock too.
+ */
 export function dioramaBeatAt(
-  chapter: DioramaChapter,
+  chapter: { readonly beats: readonly { readonly atMs: number }[] },
   elapsedMs: number,
 ): number {
   let index = 0;
@@ -198,10 +201,128 @@ export function dioramaBeatAt(
 }
 
 /** Moves along the strip, wrapping at both ends - autoplay and the arrow keys. */
-export function stepDioramaChapter(index: number, delta: number): number {
-  const count = DIORAMA_CHAPTERS.length;
+export function stepDioramaChapter(
+  index: number,
+  delta: number,
+  count: number,
+): number {
   return (index + delta + count) % count;
 }
+
+/* ----------------------------------------------------------------- phone */
+
+/**
+ * Act 1 on a phone is three full-bleed scenes of the real app at 1:1 - not a
+ * phone drawn inside the phone. So a beat here carries what the app itself
+ * would be showing: which surface is on top, which control is being pressed,
+ * and how far the one conversation has got. The clock, the loop and the
+ * beat lookup are shared with the desktop diorama; nothing else is.
+ */
+export type PhoneSceneId = "menu" | "task" | "tabs";
+
+/** The surface sitting on top of the task. */
+export type PhoneSurfaceId = "task" | "drawer" | "sheet";
+
+/** A control a scene can press. */
+export type PhoneSpotlightId =
+  | "menu-trigger"
+  | "drawer"
+  | "tab-trigger"
+  | "switcher";
+
+/**
+ * How far the task's one turn has got.
+ *
+ * It only ever rises, and both surface scenes open on `answered`: the
+ * conversation is the room their drawer and sheet arrive over, so it has to be
+ * finished before they get there. Only the Task scene plays the turn out, which
+ * is what makes that scene a sequence rather than a four-second hold on a frame
+ * nothing changes.
+ */
+export type PhoneTurnStage = "asked" | "answering" | "reading" | "answered";
+
+const PHONE_TURN_ORDER: readonly PhoneTurnStage[] = [
+  "asked",
+  "answering",
+  "reading",
+  "answered",
+];
+
+/**
+ * Whether the turn has got as far as `stage`, which is how each block of the
+ * reply decides whether it is on screen. A monotonic stage rather than one flag
+ * per block: the blocks arrive in one order and only that order, and a set of
+ * booleans can express states the conversation never has.
+ */
+export function phoneTurnReached(
+  turn: PhoneTurnStage,
+  stage: PhoneTurnStage,
+): boolean {
+  return PHONE_TURN_ORDER.indexOf(turn) >= PHONE_TURN_ORDER.indexOf(stage);
+}
+
+export type PhoneSceneBeat = {
+  /** Offset from the scene's start. The first beat of a scene is 0. */
+  readonly atMs: number;
+  readonly surface: PhoneSurfaceId;
+  /** The one control wearing the spotlight ring, or none. */
+  readonly spotlight: PhoneSpotlightId | null;
+  readonly turn: PhoneTurnStage;
+};
+
+export type PhoneScene = {
+  readonly id: PhoneSceneId;
+  /** The page control's accessible name for this scene. */
+  readonly label: string;
+  /** The one line that sits under the scene while it plays. */
+  readonly caption: string;
+  readonly durationMs: number;
+  readonly beats: readonly PhoneSceneBeat[];
+};
+
+/**
+ * Three scenes, evenly held. Menu and Tabs open on the control being pressed
+ * and bring their surface in a beat later, so the eye is on the trigger rather
+ * than on a panel that appeared from nowhere. Task spends its four seconds on
+ * the turn itself.
+ */
+export const PHONE_SCENES: readonly PhoneScene[] = [
+  {
+    id: "menu",
+    label: "Menu",
+    caption: "Every task you start lives in the menu.",
+    durationMs: 4000,
+    beats: [
+      { atMs: 0, surface: "task", spotlight: "menu-trigger", turn: "answered" },
+      { atMs: 760, surface: "drawer", spotlight: "drawer", turn: "answered" },
+    ],
+  },
+  {
+    id: "task",
+    label: "Task",
+    caption: "One task holds its chat and its agent.",
+    durationMs: 4000,
+    // The turn, beat by beat: the message lands, the reply streams for about
+    // 1.5s (the lines are staggered in CSS from `answering`), the tool row
+    // runs, then it resolves and the closing line arrives.
+    beats: [
+      { atMs: 0, surface: "task", spotlight: null, turn: "asked" },
+      { atMs: 520, surface: "task", spotlight: null, turn: "answering" },
+      { atMs: 2200, surface: "task", spotlight: null, turn: "reading" },
+      { atMs: 3050, surface: "task", spotlight: null, turn: "answered" },
+    ],
+  },
+  {
+    id: "tabs",
+    label: "Tabs",
+    caption: "Swipe between agents, terminals and browsers.",
+    durationMs: 4000,
+    beats: [
+      { atMs: 0, surface: "task", spotlight: "tab-trigger", turn: "answered" },
+      { atMs: 760, surface: "sheet", spotlight: "switcher", turn: "answered" },
+    ],
+  },
+];
 
 /**
  * The autoplay clock. A rAF loop reads elapsed time off it rather than chaining

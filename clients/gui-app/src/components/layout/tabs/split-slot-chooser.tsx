@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useSyncExternalStore } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { FilePlus2 } from "lucide-react";
 import { toast } from "sonner";
-import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import { PickerEpicsListPanel } from "@/components/epics/epics-list-panel";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { Button } from "@/components/ui/button";
 import {
@@ -215,12 +215,10 @@ export function SplitSlotChooserContent(
           bodyClassName="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pt-1"
         >
           {props.historyAvailable ? (
-            <EpicsListPanel
-              variant="picker"
+            <PickerEpicsListPanel
               className="mt-0"
               onSelectEpic={null}
               onOpenItem={openHistoryItem}
-              routeSearch={null}
               historyNowMs={null}
               // A ternary, not `&&`: the leaked-render lint rewrites a JSX
               // `&&` into a null-armed ternary, and this prop is strictly

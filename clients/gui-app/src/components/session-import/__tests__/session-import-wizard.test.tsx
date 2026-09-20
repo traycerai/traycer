@@ -1659,3 +1659,98 @@ describe("<SessionImportWizard />", () => {
     ).toHaveLength(2);
   });
 });
+
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+
+/**
+ * The phone shape is keyed to the VIEWPORT (`useIsMobileViewport`, 768px), so a
+ * width is all these tests have to set. The global `matchMedia` stub never
+ * fires a change, which is right here: the snapshot is read at render.
+ */
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+}
+
+describe("<SessionImportWizard /> on a phone", () => {
+  afterEach(() => setViewportWidth(DESKTOP_VIEWPORT_WIDTH));
+
+  function renderPhoneTour(): void {
+    setViewportWidth(393);
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            importableCandidate("claude", "s1", "One"),
+            importableCandidate("claude", "s2", "Two"),
+          ],
+        }),
+      );
+    });
+  }
+
+  it("collapses the toolbar into one bar: a filter control, a search that expands, and no loose scope chips", () => {
+    renderPhoneTour();
+
+    // One bar. The four controls the pointer toolbar spreads over five rows are
+    // behind the filter sheet, so none of them is on the act.
+    expect(screen.getByTestId("session-import-filters")).toBeTruthy();
+    expect(screen.queryByTestId("session-import-scan-window")).toBeNull();
+    expect(
+      screen.queryAllByTestId("session-import-provider-pill"),
+    ).toHaveLength(0);
+    expect(screen.queryByTestId("session-import-show-imported")).toBeNull();
+    expect(screen.queryByRole("radio", { name: "By project" })).toBeNull();
+
+    // Search is an icon until it is asked for.
+    expect(screen.queryByTestId("session-import-search")).toBeNull();
+    fireEvent.click(screen.getByTestId("session-import-search-toggle"));
+    expect(screen.getByTestId("session-import-search")).toBeTruthy();
+
+    // The selection line still heads the list, and the button carries the count
+    // so the standalone label does not repeat it.
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("2 of 2 selected");
+    expect(screen.queryByTestId("session-import-footer-count")).toBeNull();
+    expect(screen.getByTestId("session-import-submit").textContent).toContain(
+      "Import 2 tasks",
+    );
+  });
+
+  it("marks the filter control once any filter differs from its default", () => {
+    renderPhoneTour();
+
+    expect(screen.queryByTestId("session-import-filters-dot")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("session-import-filters"));
+    fireEvent.click(screen.getByRole("radio", { name: "By project" }));
+
+    expect(screen.getByTestId("session-import-filters-dot")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("session-import-filters")
+        .getAttribute("data-filtered"),
+    ).toBe("true");
+  });
+
+  it("leaves the Settings dialog's own toolbar alone at the same width", () => {
+    setViewportWidth(393);
+    renderWizard(vi.fn());
+
+    expect(screen.queryByTestId("session-import-filters")).toBeNull();
+    expect(screen.getByTestId("session-import-search")).toBeTruthy();
+    expect(screen.getByTestId("session-import-scan-window")).toBeTruthy();
+  });
+});

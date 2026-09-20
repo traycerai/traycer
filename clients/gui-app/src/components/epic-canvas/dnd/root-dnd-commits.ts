@@ -65,6 +65,9 @@ import {
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
 import type { QueryClient } from "@tanstack/react-query";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import {
   getEpicSessionHandleHostClient,
   getEpicSessionHandleHostId,
@@ -643,6 +646,10 @@ export function commitHeaderStripDrop(
 }
 
 export interface SidebarReparentDropInput {
+  readonly hostBinding: Pick<
+    HostRuntimeBinding<HostRpcRegistry>,
+    "hostClient"
+  > | null;
   readonly epicId: string;
   readonly sourceNodeId: string;
   /** The new parent (a row's nodeId) or null to un-nest to root. */
@@ -752,6 +759,18 @@ function agentReparentRoute(
   });
 }
 
+function reparentOwnerHostId(
+  state: OpenEpicState,
+  node: ProjectedReparentNode,
+  sessionHostId: string | null,
+): string | null {
+  return (
+    (node.type === "terminal-agent"
+      ? state.tuiAgents.byId[node.id]?.hostId
+      : state.chats.byId[node.id]?.hostId) ?? sessionHostId
+  );
+}
+
 /**
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
@@ -802,13 +821,15 @@ export async function commitSidebarReparentDrop(
   ) {
     return;
   }
-  // Resolved before the branch: the chat arm of the addressability test needs
-  // the session host to read this host's negotiated record-plane coverage, and
-  // the terminal arm needs nothing - so one read serves both.
-  const reparentHostId = getEpicSessionHandleHostId(handle);
+  // Judge addressability against the same host that will receive the write.
+  const sessionHostId = getEpicSessionHandleHostId(handle);
+  const ownerHostId =
+    evaluation.node.family === "agent"
+      ? reparentOwnerHostId(state, evaluation.node, sessionHostId)
+      : sessionHostId;
   const agentRoute =
     evaluation.node.family === "agent"
-      ? agentReparentRoute(state, evaluation.node, reparentHostId)
+      ? agentReparentRoute(state, evaluation.node, ownerHostId)
       : "doc";
   // A chat the host's record plane will not address has nowhere to go, so the
   // drop is a silent cancel - this file's own rule for a move it cannot make -
@@ -826,10 +847,13 @@ export async function commitSidebarReparentDrop(
     // back into the tree. Refusals (`E_AGENT_NOT_LOCAL` for a row another
     // host owns) are the host's answer and are surfaced as a toast, the same
     // way the hook-based chat mutations surface theirs.
-    const client = getEpicSessionHandleHostClient(handle);
-    if (client === null) return;
-    const sessionHostId = reparentHostId;
     const movedNodeType = evaluation.node.type;
+    if (ownerHostId === null) return;
+    const client =
+      ownerHostId === sessionHostId
+        ? getEpicSessionHandleHostClient(handle)
+        : resolveNamedHostClient(input.hostBinding, ownerHostId);
+    if (client === null) return;
     // The optimistic overlay (Phase 1.1): a registry-backed row has no doc
     // entry, so without this the drop had no local feedback and the node sat
     // under its old parent until the record round-trip - the one branch of
@@ -888,18 +912,20 @@ export async function commitSidebarReparentDrop(
         // the moved pointer back when it is live; when it is disconnected,
         // unsupported, or (for a terminal agent) negotiated below @1.1, only
         // the 20s poll would - so re-ask now, the way every hook-based record
-        // mutation does on success. Scoped to the session's host: that is
-        // the client the request was sent on.
+        // mutation does on success. Refresh both the owner and the viewing
+        // session, which may display a cloud replica of the moved record.
         //
         // "landed" keeps the overlay patch applied until the refreshed rows
         // actually arrive - the ack is proof the host holds the new parent -
         // so the row never snaps back under the old one while the refetch
         // (or, on a refetch failure, the next poll) is in flight. The
         // projection's dead sweep forgets the stamp once the row catches up.
-        if (movedNodeType === "terminal-agent") {
-          invalidateEpicTuiAgentRecords(input.queryClient, sessionHostId);
-        } else {
-          invalidateEpicChatRecords(input.queryClient, sessionHostId);
+        for (const hostId of new Set([ownerHostId, sessionHostId])) {
+          if (movedNodeType === "terminal-agent") {
+            invalidateEpicTuiAgentRecords(input.queryClient, hostId);
+          } else {
+            invalidateEpicChatRecords(input.queryClient, hostId);
+          }
         }
         // `void`: the retire is a round trip now, and this settle handler
         // returns synchronously.

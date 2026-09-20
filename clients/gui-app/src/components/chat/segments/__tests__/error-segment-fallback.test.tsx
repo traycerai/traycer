@@ -1,12 +1,138 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  LastFailedAttempt,
+  PendingFallback,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AgentFailure } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ErrorSegment } from "../error-segment";
+import {
+  FAILED_CLAUDE_TUPLE,
+  lastFailedAttempt,
+  pendingFallback,
+} from "../../fallback/__tests__/fallback-fixtures";
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: vi.fn() }),
+}));
+
+// The mocks below are the same shape `fallback-manual-rungs.test.tsx` uses to
+// exercise `ManualRungActions` directly - lifted here because this file is
+// where its HOST, `FallbackManualRungActions`, is actually mounted (via
+// `ErrorSegment`) and where the traversal-is-live gate this suite is about
+// (`fallback-manual-rungs.tsx`'s `if (traversalIsLive) return null;`) can be
+// driven end to end. Every mock below stands in for a real host RPC or query
+// hook this component tree reaches - `useHostClientForHostId` (null client is
+// fine: nothing here presses a button that dispatches), the manual-rung
+// mutation, the fallback-target catalogue list, and the providers catalogue -
+// none of which this suite's earlier cases needed because they never mount a
+// transcript context for `FallbackManualRungActions` to find.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: () => ({
+    mutate: () => {},
+    isPending: false,
+    variables: undefined,
+  }),
+}));
+
+vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
+  useFallbackListTargets: () => ({
+    data: undefined,
+    isPending: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined }),
+}));
+
+// `useFallbackModelLabels` alone, same as `fallback-manual-rungs.test.tsx`'s
+// own copy of this double: the real hook mounts a TanStack query
+// (`useGuiHarnessesQueryForClient`) this suite has no `QueryClientProvider`
+// for, and no case below asserts on a rendered model label.
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
+const FALLBACK_EPIC_ID = "epic-fallback-live-gate";
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: FALLBACK_EPIC_ID }),
+}));
+
+/**
+ * The session slice `use-last-failed-attempt.ts` and `use-confirmed-manual-
+ * action.ts` read off `useExistingChatSessionHandle(...).store` - the two
+ * fields under test (`lastFailedAttempt`, `pendingFallback`) plus the two
+ * publishers `ManualRungAffordances` reaches unconditionally on mount, so a
+ * slice omitting either fails as a production-looking `TypeError` thrown
+ * inside those hook modules rather than as a fixture gap (see
+ * `fallback-manual-rungs.test.tsx`'s own comment on this same shape).
+ */
+type FallbackSessionSlice = {
+  lastFailedAttempt: LastFailedAttempt | undefined;
+  pendingFallback: PendingFallback | undefined;
+  access: { readonly canAct: boolean } | null;
+  connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+  publishConfirmedManualFallbackAction: (input: unknown) => void;
+  publishUnattendedFallbackOutcome: (input: unknown) => void;
+};
+
+const fallbackSessionHarness = vi.hoisted(() => {
+  const initialSlice = (): FallbackSessionSlice => ({
+    lastFailedAttempt: undefined,
+    pendingFallback: undefined,
+    access: { canAct: true },
+    connectionStatus: "open",
+    publishConfirmedManualFallbackAction: () => {},
+    publishUnattendedFallbackOutcome: () => {},
+  });
+  let state: FallbackSessionSlice = initialSlice();
+  const listeners = new Set<() => void>();
+  const store = {
+    getState: (): FallbackSessionSlice => state,
+    getInitialState: (): FallbackSessionSlice => initialSlice(),
+    setState: (next: Partial<FallbackSessionSlice>): FallbackSessionSlice => {
+      state = { ...state, ...next };
+      for (const listener of listeners) listener();
+      return state;
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return {
+    store,
+    reset: (): void => {
+      state = initialSlice();
+    },
+  };
+});
+
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  useExistingChatSessionHandle: () => ({ store: fallbackSessionHarness.store }),
 }));
 
 function renderError(failure: AgentFailure | null) {
@@ -177,6 +303,106 @@ describe("ErrorSegment fallback settings link", () => {
     }).not.toThrow();
     // Falsification: move the host hooks from ManualRungActions up into FallbackManualRungActions above the identity gate — this assertion must go red with the "Host runtime hooks must be used inside a <HostRuntimeProvider>" error.
     expect(screen.getByText("The turn failed.")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+const FALLBACK_LIVE_GATE_CHAT_ID = "chat-fallback-live-gate";
+const FALLBACK_LIVE_GATE_HOST_ID = "host-fallback-live-gate";
+const FALLBACK_LIVE_GATE_TURN_ID = "turn-fallback-live-gate";
+
+function renderErrorRowWithFallbackAttempt() {
+  return render(
+    <TooltipProvider>
+      <TabHostProvider hostId={FALLBACK_LIVE_GATE_HOST_ID}>
+        <ChatTranscriptProvider
+          value={{
+            chatId: FALLBACK_LIVE_GATE_CHAT_ID,
+            hostId: FALLBACK_LIVE_GATE_HOST_ID,
+          }}
+        >
+          <ErrorSegment
+            turnId={FALLBACK_LIVE_GATE_TURN_ID}
+            message="Hit a rate limit."
+            code="rate_limit"
+            recoverable
+            findUnitId={null}
+            harnessId="claude"
+            failure={{ reason: "rate_limit" }}
+          />
+        </ChatTranscriptProvider>
+      </TabHostProvider>
+    </TooltipProvider>,
+  );
+}
+
+/**
+ * The transcript error row reads `lastFailedAttempt` off the same session
+ * field the countdown card does - the host defines it during a `hold` too,
+ * for the card's own manual rungs (`use-last-failed-attempt.ts`'s module
+ * doc). So a row and a live grace card can both have something to render for
+ * the identical attempt, and `useChatFallbackTraversalIsLive` is the row's own
+ * gate against rendering a SECOND, leaseless copy of the card's controls
+ * while the card owns the routing conversation - see `ManualRungActions`'s
+ * `if (traversalIsLive) return null;` and its own comment for why the two
+ * copies would not simply be redundant (the row's menu is built
+ * `preparing={false}` and cannot take the grace-hold lease the card's own
+ * menu takes).
+ */
+describe("ErrorSegment's manual rungs stand down while a fallback traversal is live", () => {
+  afterEach(() => {
+    fallbackSessionHarness.reset();
+    cleanup();
+  });
+
+  it("renders the row's own rungs when pendingFallback is undefined", () => {
+    fallbackSessionHarness.store.setState({
+      lastFailedAttempt: lastFailedAttempt({
+        userMessageId: "user-msg-fallback-live-gate",
+        turnId: FALLBACK_LIVE_GATE_TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ["retry"],
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "unknown",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+      pendingFallback: undefined,
+    });
+
+    renderErrorRowWithFallbackAttempt();
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+
+  it("does NOT render the row's own rungs while a traversal is live (pendingFallback defined) - ablate the gate and this goes red", () => {
+    fallbackSessionHarness.store.setState({
+      lastFailedAttempt: lastFailedAttempt({
+        userMessageId: "user-msg-fallback-live-gate",
+        turnId: FALLBACK_LIVE_GATE_TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ["retry"],
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "unknown",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+      pendingFallback: pendingFallback({
+        state: "hold",
+        reason: "rate_limit",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        targetTuple: null,
+        impendingAction: null,
+        deadline: Date.now() + 60_000,
+        attempt: 1,
+        maxAttempts: 3,
+        queuedItemsMoving: 0,
+        siblingSwitching: 0,
+        traversalId: "fallback:live-gate",
+        revision: 1,
+      }),
+    });
+
+    renderErrorRowWithFallbackAttempt();
+
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

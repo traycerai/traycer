@@ -7,18 +7,29 @@
  * (`useChatSearchResults` -> `mergeChatSearchPages`); expanding a group renders
  * whatever `renderExpansion` returns, which in the app is a chat-scoped query.
  */
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { ChevronRightIcon } from "lucide-react";
 import type {
   ChatSearchChatMatch,
   ChatSearchMessageMatch,
+  ChatSearchMessageHit,
   ChatSearchRange,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   chatSearchGroupKey,
-  chatSearchTierLabel,
+  chatSearchRoleLabels,
+  chatSearchSnippetWindow,
   formatMatchCount,
   highlightSegments,
   type ChatSearchMergedResults,
@@ -41,6 +52,10 @@ export interface ChatSearchOpenTarget {
 export interface ChatSearchExpansionTarget {
   readonly epicId: string;
   readonly chatId: string;
+  readonly best: ChatSearchMessageHit | null;
+  readonly matchCount: number;
+  readonly expanded: boolean;
+  readonly variant: ChatSearchRowVariant;
 }
 
 export interface ChatSearchResultsViewProps {
@@ -179,7 +194,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
           {messageMatches.length === 0 ? <EmptyPageNote /> : null}
           <SectionContinuation
             error={messagesError}
-            label="Show more message matches"
+            label="Show more matches"
             disabled={loadingMore}
             onShowMore={loadMoreMessages}
           />
@@ -226,42 +241,62 @@ function ChatMatchRow(props: RowProps<ChatSearchChatMatch>) {
     taskTitle,
   } = props;
   const title = displayChatTitle(match.title);
+  const expansionId = useId();
+  const onKeyDown = useDisclosureKeys(
+    expanded,
+    onToggleExpanded,
+    match.messageMatchCount > 0,
+  );
   return (
-    <li className="flex flex-col">
-      <button
-        type="button"
-        {...navProps}
-        className={ROW_BUTTON_CLASS}
-        onClick={() =>
-          onOpen({
+    <li className="flex min-w-0 flex-col py-1">
+      <div className="flex min-w-0 items-start gap-2">
+        <button
+          type="button"
+          {...navProps}
+          onKeyDown={onKeyDown}
+          className={ROW_BUTTON_CLASS}
+          onClick={() =>
+            onOpen({
+              epicId: match.epicId,
+              chatId: match.chatId,
+              messageId: null,
+            })
+          }
+        >
+          <span className="max-w-full truncate font-medium text-foreground">
+            <ChatSearchHighlightedText
+              text={title}
+              ranges={title === match.title ? match.titleHighlights : []}
+            />
+          </span>
+          <RowMeta>
+            <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
+            <ChatSearchResultTime at={match.updatedAt} />
+            {match.lifecycleState === "archived" ? <span>archived</span> : null}
+          </RowMeta>
+        </button>
+        {match.messageMatchCount > 0 ? (
+          <ExpandToggle
+            label={formatMatchCount(match.messageMatchCount)}
+            expanded={expanded}
+            onToggle={onToggleExpanded}
+            controls={expansionId}
+          />
+        ) : null}
+      </div>
+      <div id={expansionId}>
+        <LazyExpansion
+          target={{
             epicId: match.epicId,
             chatId: match.chatId,
-            messageId: null,
-          })
-        }
-      >
-        <span className="truncate font-medium text-foreground">
-          <ChatSearchHighlightedText
-            text={title}
-            ranges={title === match.title ? match.titleHighlights : []}
-          />
-        </span>
-        <RowMeta>
-          <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
-          <ChatSearchResultTime at={match.updatedAt} />
-          {match.lifecycleState === "archived" ? <span>archived</span> : null}
-        </RowMeta>
-      </button>
-      {match.messageMatchCount > 0 ? (
-        <ExpandToggle
-          label={`also ${formatMatchCount(match.messageMatchCount)} in messages`}
-          expanded={expanded}
-          onToggle={onToggleExpanded}
+            best: null,
+            matchCount: match.messageMatchCount,
+            expanded,
+            variant: "full",
+          }}
+          renderExpansion={renderExpansion}
         />
-      ) : null}
-      {expanded
-        ? renderExpansion({ epicId: match.epicId, chatId: match.chatId })
-        : null}
+      </div>
     </li>
   );
 }
@@ -299,60 +334,219 @@ export function MessageMatchRow(props: ChatSearchMessageMatchRowProps) {
     taskTitle,
     variant,
   } = props;
-  const best = match.best;
+  const expansionId = useId();
+  const onKeyDown = useDisclosureKeys(
+    expanded,
+    onToggleExpanded,
+    match.matchCount > 1,
+  );
   return (
-    <li className="flex flex-col">
-      <button
-        type="button"
-        {...navProps}
-        className={ROW_BUTTON_CLASS}
-        onClick={() =>
-          onOpen({
+    <li
+      className={cn(
+        "flex min-w-0 flex-col gap-1 px-2",
+        variant === "full"
+          ? "border-b border-border py-3 last:border-b-0"
+          : "py-1",
+      )}
+    >
+      <div className="flex min-w-0 items-start gap-2">
+        <button
+          type="button"
+          {...navProps}
+          onKeyDown={onKeyDown}
+          className={ROW_BUTTON_CLASS}
+          aria-label={`Open chat ${displayChatTitle(match.title)} at its best match`}
+          onClick={() =>
+            onOpen({
+              epicId: match.epicId,
+              chatId: match.chatId,
+              messageId: match.best.messageId,
+            })
+          }
+        >
+          <span
+            className={cn(
+              "max-w-full truncate text-foreground",
+              variant === "full" ? "font-semibold" : "font-medium",
+            )}
+          >
+            {displayChatTitle(match.title)}
+          </span>
+          {variant === "full" ? (
+            <RowMeta>
+              <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
+            </RowMeta>
+          ) : null}
+        </button>
+        {match.matchCount > 1 ? (
+          <ExpandToggle
+            label={formatMatchCount(match.matchCount)}
+            expanded={expanded}
+            onToggle={onToggleExpanded}
+            controls={expansionId}
+          />
+        ) : null}
+      </div>
+      <div
+        id={expansionId}
+        className="min-w-0 rounded-md bg-foreground/4 p-0.5"
+      >
+        <LazyExpansion
+          target={{
             epicId: match.epicId,
             chatId: match.chatId,
-            messageId: best.messageId,
-          })
-        }
-      >
-        <span className="truncate font-medium text-foreground">
-          {displayChatTitle(match.title)}
-        </span>
-        <span
-          className={cn(
-            "text-ui-xs text-foreground/80",
-            variant === "compact" ? "line-clamp-1" : "line-clamp-2",
-          )}
+            best: match.best,
+            matchCount: match.matchCount,
+            expanded,
+            variant,
+          }}
+          renderExpansion={renderExpansion}
         >
-          <ChatSearchHighlightedText
-            text={best.snippet.text}
-            ranges={best.snippet.highlights}
+          <ChatSearchMessageRow
+            hit={match.best}
+            count={1}
+            onOpenMessage={(messageId) =>
+              onOpen({ epicId: match.epicId, chatId: match.chatId, messageId })
+            }
+            variant={variant}
+            disabled={false}
           />
-        </span>
-        <RowMeta>
-          {variant === "compact" ? null : (
-            <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
-          )}
-          <span>{chatSearchTierLabel(best)}</span>
-          <ChatSearchResultTime at={best.createdAt} />
-          <span>{formatMatchCount(match.matchCount)}</span>
-        </RowMeta>
-      </button>
-      {match.matchCount > 1 ? (
-        <ExpandToggle
-          label={`Show all ${formatMatchCount(match.matchCount)}`}
-          expanded={expanded}
-          onToggle={onToggleExpanded}
-        />
-      ) : null}
-      {expanded
-        ? renderExpansion({ epicId: match.epicId, chatId: match.chatId })
-        : null}
+        </LazyExpansion>
+      </div>
     </li>
   );
 }
 
+/** Fetch on the first disclosure only; retain the content for the closing transition. */
+function LazyExpansion(props: {
+  readonly target: ChatSearchExpansionTarget;
+  readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
+  readonly children?: ReactNode;
+}) {
+  const [opened, setOpened] = useState(false);
+  if (props.target.expanded && !opened) setOpened(true);
+  return opened ? props.renderExpansion(props.target) : props.children;
+}
+
+function useDisclosureKeys(
+  expanded: boolean,
+  toggle: () => void,
+  expandable: boolean,
+) {
+  const navProps = useChatSearchNavProps();
+  return (event: KeyboardEvent<HTMLElement>) => {
+    if (
+      expandable &&
+      (event.key === "ArrowRight" || event.key === "ArrowLeft")
+    ) {
+      event.preventDefault();
+      if ((event.key === "ArrowRight") !== expanded) toggle();
+      return;
+    }
+    navProps.onKeyDown?.(event);
+  };
+}
+
 const ROW_BUTTON_CLASS =
-  "flex w-full min-w-0 flex-col items-start gap-0.5 px-3 py-1.5 text-left text-ui-sm outline-none hover:bg-foreground/5 focus-visible:bg-foreground/8";
+  "relative flex w-full min-w-0 flex-col items-start gap-1 rounded-md px-2.5 py-1.5 text-left text-ui-sm outline-none transition-colors duration-120 hover:bg-foreground/5 active:press-scrim focus-visible:bg-foreground/8 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+
+/** One real message, shared by the collapsed best hit and fetched snippets. */
+export function ChatSearchMessageRow(props: {
+  readonly hit: ChatSearchMessageHit;
+  readonly count: number;
+  readonly onOpenMessage: (messageId: string) => void;
+  readonly variant: ChatSearchRowVariant;
+  readonly disabled: boolean;
+}) {
+  const { hit, count, onOpenMessage, variant, disabled } = props;
+  const navProps = useChatSearchNavProps();
+  const role = chatSearchRoleLabels(hit);
+  const date = new Date(hit.createdAt).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  const repeated = count > 1 ? `, repeated ${count} times` : "";
+  return (
+    <button
+      type="button"
+      {...navProps}
+      // Without arrow navigation (the sidebar), children remain ordinary Tab stops.
+      // ponytail: not a true roving composite; use a shared roving controller if a screen-reader pass asks for it.
+      tabIndex={navProps.onKeyDown === undefined ? 0 : -1}
+      disabled={disabled}
+      aria-label={`${role.full}, ${date}${repeated}: ${hit.snippet.text}`}
+      onClick={() => onOpenMessage(hit.messageId)}
+      className="relative flex w-full min-w-0 items-baseline gap-2 rounded-sm px-2 py-1.5 text-left text-ui-xs outline-none transition-colors duration-120 hover:bg-foreground/6 active:press-scrim focus-visible:bg-foreground/8 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+    >
+      <TooltipWrapper
+        label={role.full}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span
+          aria-label={role.full}
+          className={cn(
+            "shrink-0 truncate text-muted-foreground",
+            variant === "compact" ? "w-[7ch]" : "w-[11ch]",
+            role.short === "You" && "text-foreground",
+          )}
+        >
+          {role.short}
+        </span>
+      </TooltipWrapper>
+      <CenteredSnippet hit={hit} />
+      {count > 1 ? (
+        <span
+          aria-label={`Repeated ${count} times`}
+          className="shrink-0 text-micro font-medium whitespace-nowrap text-muted-foreground tabular-nums"
+        >
+          ×{count}
+        </span>
+      ) : null}
+      <ChatSearchResultTime at={hit.createdAt} />
+    </button>
+  );
+}
+
+function CenteredSnippet(props: { readonly hit: ChatSearchMessageHit }) {
+  const [element, setElement] = useState<HTMLSpanElement | null>(null);
+  const [length, setLength] = useState(64);
+  useEffect(() => {
+    if (element === null) return;
+    const measure = () => {
+      const width = element.getBoundingClientRect().width;
+      // ponytail: conservative average glyph width; measure actual glyphs if proportional-font snippets need tighter fitting.
+      const glyphWidth =
+        Number.parseFloat(getComputedStyle(element).fontSize) * 0.65;
+      if (width > 0 && glyphWidth > 0)
+        setLength(Math.max(1, Math.floor(width / glyphWidth) - 2));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  const { snippet } = props.hit;
+  const window = chatSearchSnippetWindow(
+    snippet.text,
+    snippet.highlights,
+    length,
+  );
+  return (
+    <span
+      ref={setElement}
+      className="min-w-0 flex-1 truncate text-foreground/80"
+    >
+      {window.start > 0 ? "…" : null}
+      <ChatSearchHighlightedText
+        text={window.text}
+        ranges={window.highlights}
+      />
+      {window.end < snippet.text.length ? "…" : null}
+    </span>
+  );
+}
 
 function RowMeta(props: { readonly children: ReactNode }) {
   return (
@@ -366,24 +560,25 @@ function ExpandToggle(props: {
   readonly label: string;
   readonly expanded: boolean;
   readonly onToggle: () => void;
+  readonly controls: string;
 }) {
   const navProps = useChatSearchNavProps();
+  const onKeyDown = useDisclosureKeys(props.expanded, props.onToggle, true);
   return (
     <button
       type="button"
       {...navProps}
+      onKeyDown={onKeyDown}
       aria-expanded={props.expanded}
+      aria-controls={props.controls}
       onClick={props.onToggle}
-      className="flex items-center gap-1 self-start px-3 pb-1 text-ui-xs text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground focus-visible:underline"
+      className="relative mt-1.5 mr-1 flex min-h-6 shrink-0 items-center gap-1 rounded-sm bg-foreground/6 px-2 py-0.5 text-ui-xs whitespace-nowrap text-muted-foreground tabular-nums outline-none transition-colors duration-120 hover:bg-foreground/12 active:press-scrim focus-visible:bg-foreground/8 focus-visible:ring-2 focus-visible:ring-ring"
     >
+      {props.label}
       <ChevronRightIcon
         aria-hidden
-        className={cn(
-          "size-3 transition-transform",
-          props.expanded && "rotate-90",
-        )}
+        className={cn("size-3", props.expanded && "rotate-90")}
       />
-      {props.label}
     </button>
   );
 }
@@ -512,7 +707,14 @@ function ShowMoreButton(props: {
 
 /** A leaf, so the shared minute clock repaints the label and not the row. */
 export function ChatSearchResultTime(props: { readonly at: number }) {
-  return <span>{useRelativeTimestamp(props.at)}</span>;
+  return (
+    <time
+      dateTime={new Date(props.at).toISOString()}
+      className="shrink-0 text-right text-ui-xs whitespace-nowrap text-muted-foreground tabular-nums"
+    >
+      {useRelativeTimestamp(props.at)}
+    </time>
+  );
 }
 
 /**
@@ -540,7 +742,7 @@ export function ChatSearchHighlightedText(props: {
           // Keyed by offset: segments never overlap, so the start is unique.
           <mark
             key={segment.start}
-            className="rounded-xs bg-primary/25 text-foreground"
+            className="rounded-xs bg-foreground px-0.5 font-medium text-background"
           >
             {segment.text}
           </mark>
