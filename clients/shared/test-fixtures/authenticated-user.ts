@@ -54,3 +54,25 @@ export function createAuthenticatedUserFixture(
 
   return { ...base, ...effectiveOverrides };
 }
+
+/**
+ * Same fixture, with `user.providerType` forced to `APPLE` - the major-2 value
+ * a frozen (major-1) reader must refuse. `overrides.user`, if supplied, is
+ * merged UNDER the forced `providerType` so a caller cannot accidentally
+ * un-Apple the fixture by passing an unrelated `user` override.
+ */
+export function createAppleAuthenticatedUserFixture(
+  overrides: Partial<AuthenticatedUser> | undefined,
+): AuthenticatedUser {
+  const effectiveOverrides = overrides ?? {};
+  const base = createAuthenticatedUserFixture(undefined);
+  return {
+    ...base,
+    ...effectiveOverrides,
+    user: {
+      ...base.user,
+      ...effectiveOverrides.user,
+      providerType: "APPLE",
+    },
+  };
+}

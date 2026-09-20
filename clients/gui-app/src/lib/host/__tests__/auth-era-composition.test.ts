@@ -35,7 +35,9 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const AUTHN_BASE_URL = "http://localhost:5005";
-const VALIDATION_URL = `${AUTHN_BASE_URL}/api/v3/user`;
+// The identity route `validateAuthTokenIdentity*` calls FIRST (see
+// `auth-validation.ts`); every fixture in this file answers this one.
+const VALIDATION_URL = `${AUTHN_BASE_URL}/api/v3/user/negotiated`;
 const HOSTS_URL = `${AUTHN_BASE_URL}/api/v3/hosts`;
 
 const TOKEN_A = "token-a";
@@ -138,7 +140,13 @@ function userResponse(userId: string): Response {
       teamSubscriptions: [],
       payAsYouGoUsage: { allowPayAsYouGo: false },
     }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "2.0",
+      },
+    },
   );
 }
 

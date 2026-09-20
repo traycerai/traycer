@@ -23,15 +23,52 @@ import { z } from "zod";
  * Date fields use `z.coerce.date()` so wire JSON (ISO strings) and
  * native `Date` instances both validate; the inferred TypeScript type
  * remains `Date`.
+ *
+ * ## The `*PreApple` schemas
+ *
+ * Adding `APPLE` to the provider enum is a breaking change by the
+ * framework's rules - a released client validating `GET /api/v3/user`
+ * refuses a value its closed enum does not list - so the records that
+ * carry a user went to major 2 with a 2-to-1 downgrade bridge. The
+ * `*PreApple` name is the shape major 1 is FROZEN at, and it is the
+ * schema the major-1 contract in `registry.ts` binds. Every pair is
+ * spelled as `<frozen>.extend({ ... })` so the two majors differ only in
+ * what the bump is about; `auth-record-major-1-frozen.test.ts`
+ * fingerprints the frozen side so an in-place edit fails there rather
+ * than on a released client.
  */
 
 // ---- Enums -------------------------------------------------------------- //
 
-export const providerTypeSchema = z.enum([
+/**
+ * The provider enum as it shipped before Sign in with Apple - the shape
+ * every RELEASED client validates `GET /api/v3/user` against, and the one
+ * record major 1 is frozen at.
+ *
+ * Its own `z.enum(...)` instance, never an alias of `providerTypeSchema`:
+ * the whole point of the major-2 split is that growing the latest enum
+ * must not grow the frozen one. `providerTypeSchema` composes from
+ * `.options` (the `harnessIdSchema` pattern) so the four shared values
+ * cannot drift apart, while the two remain distinct schemas - and
+ * `auth-record-major-1-frozen.test.ts` fingerprints this one, so an edit
+ * HERE fails loudly instead of silently widening every frozen record.
+ */
+export const providerTypeSchemaPreApple = z.enum([
   "GITHUB",
   "GOOGLE",
   "GITLAB",
   "EMAIL",
+]);
+
+/**
+ * The latest provider enum (record major 2). Closed, by decision D3 of the
+ * Sign in with Apple plan: the next provider is another major plus another
+ * bridge, rather than an `UNKNOWN` fallback that every reader would have to
+ * handle.
+ */
+export const providerTypeSchema = z.enum([
+  ...providerTypeSchemaPreApple.options,
+  "APPLE",
 ]);
 
 export const seatAllocationSchema = z.enum(["MANUAL", "AUTO_ALLOCATION"]);
@@ -58,23 +95,30 @@ export const subscriptionStatusSchema = z.enum([
 
 // ---- Core entities (registered records) -------------------------------- //
 
+/**
+ * The `organization` record stays at major 1 forever: its `providerType` is
+ * always `EMAIL` on the wire, so it has no reason to carry the wider enum,
+ * and widening it would break the out-of-repo readers of the legacy
+ * envelope it is embedded in.
+ */
 export const organizationSchema = z.object({
   id: z.string(),
   providerId: z.string(),
   providerHandle: z.string(),
-  providerType: providerTypeSchema,
+  providerType: providerTypeSchemaPreApple,
   privacyMode: z.boolean(),
   seatAllocation: seatAllocationSchema,
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });
 
-export const userSchema = z.object({
+/** The `user` record at major 1 - four provider values, frozen. */
+export const userSchemaPreApple = z.object({
   id: z.string(),
   name: z.string().nullable(),
   providerId: z.string(),
   providerHandle: z.string(),
-  providerType: providerTypeSchema,
+  providerType: providerTypeSchemaPreApple,
   email: z.string().nullable(),
   avatarUrl: z.string().nullable(),
   activatedAt: z.coerce.date().nullable(),
@@ -83,6 +127,17 @@ export const userSchema = z.object({
   lastSeenAt: z.coerce.date().nullable(),
   privacyMode: z.boolean(),
   isLearningEnabled: z.boolean(),
+});
+
+/**
+ * The `user` record at major 2 - identical to major 1 but for the provider
+ * enum. Spelled as an `.extend` of the frozen shape rather than a second
+ * field list so the two majors cannot drift on any field except the one
+ * the major bump is ABOUT; `.extend` replaces the key in place, so the
+ * rendered property order is unchanged too.
+ */
+export const userSchema = userSchemaPreApple.extend({
+  providerType: providerTypeSchema,
 });
 
 export const teamSchema = z.object({
@@ -163,15 +218,26 @@ export const traycerTeamSubscriptionSchema = subscriptionSchema.extend({
   hasActiveBundle: z.boolean(),
 });
 
-export const authenticatedUserBaseSchema = z.object({
-  user: userSchema,
+export const authenticatedUserBaseSchemaPreApple = z.object({
+  user: userSchemaPreApple,
   userSubscription: traycerUserSubscriptionSchema,
   payAsYouGoUsage: payAsYouGoUsageSchema,
 });
 
+export const authenticatedUserBaseSchema =
+  authenticatedUserBaseSchemaPreApple.extend({
+    user: userSchema,
+  });
+
 // ---- Authenticated-user response records ------------------------------- //
 
-export const authenticatedUserSchema = authenticatedUserBaseSchema.extend({
+/**
+ * What `authenticated-user-response` adds to the base, shared by both
+ * majors so the two cannot drift on anything the major bump is not about.
+ * A field added here lands on major 1 as well, which is exactly what
+ * `auth-record-major-1-frozen.test.ts` exists to catch.
+ */
+const authenticatedUserResponseFields = {
   /**
    * Verified device identity for a host-audience bearer. User-audience and
    * legacy bearers resolve to null/absence. Data-plane writers that require
@@ -179,33 +245,55 @@ export const authenticatedUserSchema = authenticatedUserBaseSchema.extend({
    */
   hostId: z.string().nullable().optional(),
   teamSubscriptions: z.array(traycerTeamSubscriptionSchema),
-});
+};
 
-export const legacyAuthenticatedUserSchema = authenticatedUserBaseSchema.extend(
-  {
+export const authenticatedUserSchemaPreApple =
+  authenticatedUserBaseSchemaPreApple.extend(authenticatedUserResponseFields);
+
+export const authenticatedUserSchema = authenticatedUserBaseSchema.extend(
+  authenticatedUserResponseFields,
+);
+
+/**
+ * `legacy-authenticated-user-response` is the frozen wire contract for
+ * out-of-repo extension builds, so it stays at major 1 and keeps the
+ * pre-Apple user. An Apple user reaching this envelope is downgraded
+ * through the `user` bridge at send time, never widened here.
+ */
+export const legacyAuthenticatedUserSchema =
+  authenticatedUserBaseSchemaPreApple.extend({
     organizationSubscription: traycerOrganizationSubscriptionSchema.optional(),
     rechargeRateSeconds: z.number(),
     organizationSubscriptions: z
       .array(traycerOrganizationSubscriptionSchema)
       .optional(),
-  },
-);
+  });
 
 // ---- HTTP response envelopes (token / auth) ---------------------------- //
 
 // Existing cloud-ui/extension auth routes return a single opaque combined JWE
 // token. The app-stack `/api/v3/auth/*` routes return a JWS access token plus
 // a separate refresh token.
-export const providerLoginResponseSchema = z.object({
+export const providerLoginResponseSchemaPreApple = z.object({
   token: z.string(),
   refreshToken: z.string().optional(),
-  user: userSchema,
+  user: userSchemaPreApple,
 });
+
+export const providerLoginResponseSchema =
+  providerLoginResponseSchemaPreApple.extend({
+    user: userSchema,
+  });
 
 export const refreshTokenResponseSchema = z.object({
   token: z.string(),
   refreshToken: z.string().optional(),
 });
+
+export const exchangeTokenResponseSchemaPreApple =
+  refreshTokenResponseSchema.extend({
+    user: authenticatedUserSchemaPreApple,
+  });
 
 export const exchangeTokenResponseSchema = refreshTokenResponseSchema.extend({
   user: authenticatedUserSchema,
@@ -297,9 +385,13 @@ export const listMcpServersResponseSchema = z.object({
 
 export const refreshMcpServersResponseSchema = listMcpServersResponseSchema;
 
-export const userMcpServersSchema = z.object({
-  user: userSchema,
+export const userMcpServersSchemaPreApple = z.object({
+  user: userSchemaPreApple,
   servers: z.array(mcpServerSchema),
+});
+
+export const userMcpServersSchema = userMcpServersSchemaPreApple.extend({
+  user: userSchema,
 });
 
 export const organizationMcpServersSchema = z.object({
@@ -307,10 +399,15 @@ export const organizationMcpServersSchema = z.object({
   servers: z.array(mcpServerSchema),
 });
 
-export const listAllMcpServersResponseSchema = z.object({
-  user: userMcpServersSchema,
+export const listAllMcpServersResponseSchemaPreApple = z.object({
+  user: userMcpServersSchemaPreApple,
   organizations: z.array(organizationMcpServersSchema),
 });
+
+export const listAllMcpServersResponseSchema =
+  listAllMcpServersResponseSchemaPreApple.extend({
+    user: userMcpServersSchema,
+  });
 
 export const disconnectMcpServerResponseSchema = listMcpServersResponseSchema;
 
