@@ -259,8 +259,16 @@ function officialNodeDistTuple() {
 //
 // Retired versions can be dropped once no lane and no dev box runs them.
 const OFFICIAL_NODE_TARBALL_SHA256 = {
-  // The version every SEA-building lane pins via actions/setup-node:
-  // release-host.yml, release-cli.yml and host-sea-smoke.yaml.
+  // The version this repo's SEA lanes pin via actions/setup-node.
+  //
+  // Which lanes actually execute THIS file matters, and is narrower than it
+  // looks: the internal release workflow overlays its own `scripts/` tree
+  // over this one before building, so that lane runs the internal copy, not
+  // this one. What reaches this code is a standalone `build:sea` - a
+  // developer's, or the CLI SEA build in `.github/workflows/test.yml` - and
+  // in CI `setup-node` supplies a fuse-bearing Node, so even there the
+  // download path is skipped. The case it exists for is a dev box whose
+  // `node` is a shared build.
   "v24.20.0": {
     "darwin-arm64":
       "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8",

@@ -16,6 +16,7 @@ import { createContext, runInContext } from "node:vm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { parse as parseYaml } from "yaml";
 
 // Verification of the official Node tarball the SEA build downloads when the
 // build machine's own `node` has no SEA fuse. Ported from the internal
@@ -24,10 +25,14 @@ import { createRequire } from "node:module";
 // verification at all - it downloaded, extracted, and checked only that the
 // result carried the fuse sentinel, which any substituted tarball satisfies.
 //
-// The second block is the one that matters. Helper tests over the parser and
-// the comparison stay green even if `provisionOfficialNode` stops calling
-// them, so the wiring block drives the real function in a vm over a synthetic
-// filesystem, and every case is gated by an ablation that must redden it.
+// Three blocks, in the order a reader should distrust them. The first asserts
+// that CI actually runs this project, because the first version of this port
+// added the tests and no caller - they passed on demand and ran nowhere. The
+// second covers the parser and the comparison as pure helpers, and is the
+// weakest: those cases stay green even if `provisionOfficialNode` stops
+// calling either one. The third is the one that matters - it drives the real
+// function in a vm over a synthetic filesystem, and every case is gated by an
+// ablation that must redden that named case.
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -40,6 +45,119 @@ const TOOLCHAIN_PATH = path.join(
   "native-packaging",
   "sea-toolchain.cjs",
 );
+
+describe("this project is actually called by CI", () => {
+  // The gap a cold review found in the first version of this port: adding
+  // `scripts/project.json` gives the project a `test` target, and nothing in
+  // CI calls it. `.github/workflows/test.yml` drives tests from a STATIC
+  // matrix, so a project missing from that list has its tests run by nobody,
+  // while `nx run scripts:test` passes locally and looks like coverage.
+  //
+  // The matrix's own comment states the contract ("Keep in sync with
+  // `nx show projects --with-target test`"). This asserts it for THIS project
+  // rather than restating it in prose, because the prose was already there
+  // and did not prevent the omission.
+  //
+  // It PARSES the workflow. Five rounds of review killed the line-scanning
+  // version, each time with valid YAML the scanner read differently from the
+  // way GitHub does: an include list in another job, a commented-out command,
+  // an inline comment after one, `if: false # temporarily disabled`, and a
+  // block scalar in `env:` whose text looks like a matrix. Every repair
+  // narrowed the pattern and the next counterexample lived in what was left.
+  // A scanner cannot win that argument - the authority on what this file
+  // means is a YAML parser, so use one. `yaml` is the parser this repo
+  // already uses (clients/shared's issue-template contract test).
+  const WORKFLOW = path.join(REPO_ROOT, ".github", "workflows", "test.yml");
+
+  // Exactly the command the Test step is expected to run. Pinned whole, not
+  // matched by parts: "runs the tests" is not a property of the tokens a
+  // command contains. `echo '<the command>'` contains all of them and runs
+  // nothing; `<the command> || true` contains all of them and reports success
+  // whatever the tests do. Neither is reachable when the accepted value is a
+  // single exact string.
+  //
+  // The cost is deliberate: changing a flag here reds this case until the pin
+  // is updated with it. That is the trade - a check that needs maintaining
+  // when the invocation genuinely changes, over one that cannot distinguish
+  // running the tests from printing them.
+  const EXPECTED_TEST_COMMAND =
+    'bunx nx run-many --target=test --projects="${{ matrix.project }}" ' +
+    "--outputStyle=stream ${{ matrix.test_args }}";
+
+  it("test.yml's matrix carries a row for the scripts project", () => {
+    const workflow = parseYaml(readFileSync(WORKFLOW, "utf8"));
+    const job = workflow.jobs.test;
+
+    // Controls. Each can fail, and each is about the real `jobs.test`
+    // structure, so a restructured workflow fails loudly here instead of
+    // letting the assertions below pass over something that merely reads like
+    // a matrix.
+    expect(job).toBeTypeOf("object");
+    const include = job.strategy.matrix.include;
+    expect(Array.isArray(include)).toBe(true);
+    const projects = include.map((row) => row.project);
+    expect(projects).toContain("@traycer/protocol");
+    expect(projects.length).toBeGreaterThan(5);
+
+    // The step that runs the matrix against the test target, identified by the
+    // parsed `run` value rather than by text anywhere in the file.
+    const testSteps = job.steps.filter(
+      (step) => step.run === EXPECTED_TEST_COMMAND,
+    );
+    expect(testSteps).toHaveLength(1);
+
+    // And it must be switched on and gating, read as PARSED values. `if: false`
+    // and `continue-on-error: true` are how work is actually disabled, and a
+    // trailing comment on either (`if: false # temporarily disabled`) is
+    // invisible to a raw-line check while YAML honours the boolean.
+    //
+    // `if` is required to be ABSENT rather than merely not-false: a dynamic
+    // `${{ ... }}` cannot be evaluated here, so a guard that allowed one would
+    // be asserting something it cannot see. If a condition is ever added
+    // deliberately, this reds and the decision gets made explicitly.
+    for (const scope of [testSteps[0], job]) {
+      expect(scope.if).toBeUndefined();
+      expect(scope["continue-on-error"]).toBeUndefined();
+    }
+
+    expect(projects).toContain("scripts");
+  });
+
+  // The row naming `scripts` and the row RUNNING something are different
+  // claims, and `nx run-many` does not join them: given a project selector it
+  // matches nothing, it exits 0. So a rename of the project, or a test target
+  // that lost its config, leaves the matrix row pointing at nothing while
+  // every assertion above still passes and CI stays green.
+  //
+  // The standard to hold, from the internal macOS watcher job that caught this
+  // shape for real: a job must be unable to report success while running
+  // nothing. Vitest already fails closed - it exits 1 on "No test files found"
+  // and nothing here passes `--passWithNoTests` - so what is left to establish
+  // is that the target actually reaches vitest with a config that exists.
+  it("the matrix row names a project whose test target really runs vitest", () => {
+    const project = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "scripts", "project.json"), "utf8"),
+    );
+    expect(project.name).toBe("scripts");
+
+    const command = project.targets.test.options.command;
+    expect(command).toContain("vitest run");
+
+    // Resolve the config the command names and require it on disk, so a
+    // rename cannot leave this pointing at a file nobody has.
+    const configArg = /--config\s+(\S+)/.exec(command);
+    expect(configArg).not.toBeNull();
+    expect(existsSync(path.join(REPO_ROOT, configArg[1]))).toBe(true);
+
+    // And this very file must be inside the project the row selects - the
+    // cheapest possible proof that the selected target has something to run.
+    expect(
+      fileURLToPath(import.meta.url).startsWith(
+        path.join(REPO_ROOT, "scripts") + path.sep,
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("official Node tarball download verification (Node-download pin)", () => {
   const requireFromHere = createRequire(import.meta.url);
@@ -366,6 +484,10 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
     const sharedTarballPath = path.join(cacheRoot, TARBALL_NAME);
     const calls = [];
     let tarballSeenByTar = null;
+    // `calls` records that tar was INVOKED; this records that it finished.
+    // Tar is pushed to `calls` before it runs, so `calls` alone cannot tell a
+    // failed extraction apart from a failed publication.
+    let tarSucceeded = false;
 
     const spawnSync = (command, args) => {
       const last = args.at(-1);
@@ -405,6 +527,7 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
         // these cases are asserting about, so it is not stubbed.
         try {
           execFileSync("tar", args, { stdio: "ignore" });
+          tarSucceeded = true;
           return { status: 0 };
         } catch {
           return { status: 1 };
@@ -477,6 +600,7 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
       cacheRoot,
       sharedTarballPath,
       tarballSeenByTar,
+      tarSucceeded,
       returnedBytes: returned === null ? null : readFileSync(returned, "utf8"),
       // Residue is only observable from OUTSIDE the function, and `afterAll`
       // would wipe it, so it is captured here at the moment the call returns.
@@ -642,9 +766,26 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
 
     expect(run.error).not.toBeNull();
     expect(run.returned).toBeNull();
-    // It got as far as extracting, so this is the publication step failing
-    // rather than an earlier guard rejecting the input.
-    expect(run.calls).toContain("tar");
+    // This must be the PUBLICATION step failing, not extraction or layout.
+    // `calls` cannot say so - tar is recorded before it runs - so assert that
+    // extraction actually COMPLETED and that the error is the rename's own.
+    expect(run.tarSucceeded).toBe(true);
+    // A rename refusal SPECIFICALLY, not merely "something threw after tar
+    // ran". `provisionOfficialNode` rethrows the original `renameSync` error
+    // rather than wrapping it, so the syscall and code are the ones libuv
+    // set. That is a much narrower claim than a message match: the earlier
+    // `/...|Directory/i` alternation would have accepted an unrelated
+    // directory error raised after a successful extraction, which is the
+    // exact confusion this case exists to rule out.
+    //
+    // The codes are the POSIX destination-occupied family. Both lanes that
+    // run this project are Linux, and dev boxes here are macOS; a Windows
+    // run would report EPERM and is deliberately not accommodated, because
+    // widening the list is how this assertion stops discriminating.
+    expect(run.error.syscall).toBe("rename");
+    expect(["ENOTEMPTY", "EEXIST", "ENOTDIR"]).toContain(run.error.code);
+    // And the failure still cleans up after itself.
+    expect(run.stagingLeftovers).toEqual([]);
   });
 
   // The SHASUMS cross-check's three refusal branches. Raised by the second
@@ -697,13 +838,14 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
     expect(run.calls).toEqual(["curl:shasums"]);
   });
 
-  it("accepts a completed competing publisher and returns its tree", () => {
+  it("accepts a completed competing publisher and returns its verified tree", () => {
     // The other side of the rename-loser branch, and the reason it cannot
     // simply throw: a concurrent invocation that has ALREADY published a
     // complete, fuse-bearing tree at this key is a legitimate winner. Without
     // a case here, replacing the catch body with an unconditional `throw`
     // would leave the suite green while breaking every concurrent build.
     const syntheticRoot = mkdtempSync(path.join(scratch, "winner-"));
+    let inner = null;
     const run = drive({
       scratch,
       goodTarball,
@@ -711,28 +853,48 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
       pin: goodPin,
       syntheticRoot,
       interleave: () => {
-        // Publish a COMPLETE tree at the destination while this invocation
-        // is still extracting, exactly as a second provisioner would.
-        const winnerBin = path.join(
+        // A second LEGITIMATE publisher, not a hand-written tree. Writing the
+        // winner's binary directly would prove only that the catch must not
+        // always throw; it would not prove that two real provisions of the
+        // same pinned digest agree. This runs the whole download, hash,
+        // extract and rename against the SAME synthetic root.
+        if (inner !== null) {
+          return;
+        }
+        inner = drive({
+          scratch,
+          goodTarball,
+          badTarball,
+          pin: goodPin,
           syntheticRoot,
-          "node_modules",
-          ".cache",
-          "traycer-sea-node",
-          `s2-${VERSION}-${TUPLE}-${goodPin}`,
-          DIST,
-          "bin",
-        );
-        mkdirSync(winnerBin, { recursive: true });
-        writeFileSync(path.join(winnerBin, "node"), `winner ${SENTINEL}`, {
-          mode: 0o755,
         });
       },
     });
 
+    // The competing publisher really did provision, all the way through.
+    expect(inner).not.toBeNull();
+    expect(inner.error).toBeNull();
+    expect(inner.calls).toEqual(["curl:shasums", "curl:tarball", "tar"]);
+    expect(inner.returnedBytes).toMatch(/^verified /);
+
+    // And this invocation, whose rename lost, returns the SAME verified path
+    // and the SAME bytes rather than failing.
     expect(run.error).toBeNull();
-    // Losing the publish race is a success, and the bytes are the winner's.
-    expect(run.returnedBytes).toMatch(/^winner /);
-    expect(run.calls).toContain("tar");
+    expect(run.returned).toBe(inner.returned);
+    expect(run.returnedBytes).toBe(inner.returnedBytes);
+    expect(run.tarSucceeded).toBe(true);
+
+    // Two INDEPENDENT provisions, not one archive seen twice. Both runs fetch
+    // identical good bytes, so agreement on the returned bytes would hold just
+    // as well for two invocations sharing a single fixed archive path - which
+    // is precisely the pre-fix shared-path design this whole case is
+    // downstream of. The distinctness of the paths `tar` was pointed at is
+    // what says each invocation staged into its own private mkdtemp.
+    expect(run.tarballSeenByTar).not.toBeNull();
+    expect(inner.tarballSeenByTar).not.toBeNull();
+    expect(run.tarballSeenByTar).not.toBe(inner.tarballSeenByTar);
+    // Only THIS snapshot is meaningful: the inner one was taken while this
+    // staging directory was still live, so it legitimately sees that sibling.
     expect(run.stagingLeftovers).toEqual([]);
   });
 
@@ -784,6 +946,43 @@ describe("provisionOfficialNode production wiring (K2 cold review)", () => {
     expect(run.error).not.toBeNull();
     expect(run.error.message).toMatch(/simulated staging mkdir failure/);
     expect(run.stagingLeftovers).toEqual([]);
+  });
+
+  it("reuses a verified cache without touching the network", () => {
+    // The fast return at the top of `provisionOfficialNode`. Every other case
+    // here starts from a cold, legacy, occupied or mid-race cache, so none of
+    // them enters it - and a regression that fetched SHASUMS before returning
+    // a warm verified cache would pass all of them while breaking every
+    // offline and air-gapped rebuild.
+    const syntheticRoot = mkdtempSync(path.join(scratch, "warm-"));
+
+    const cold = drive({
+      scratch,
+      goodTarball,
+      badTarball,
+      pin: goodPin,
+      syntheticRoot,
+    });
+    expect(cold.error).toBeNull();
+    expect(cold.calls).toEqual(["curl:shasums", "curl:tarball", "tar"]);
+
+    // Same root, and now the published SHASUMS fetch FAILS. Against a cold
+    // cache that is fatal - the "cannot be fetched" case above proves it - so
+    // surviving here can only mean nothing was fetched at all.
+    const warm = drive({
+      scratch,
+      goodTarball,
+      badTarball,
+      pin: goodPin,
+      syntheticRoot,
+      shasumsStatus: 22,
+    });
+
+    expect(warm.error).toBeNull();
+    expect(warm.calls).toEqual([]);
+    expect(warm.returned).toBe(cold.returned);
+    expect(warm.returnedBytes).toBe(cold.returnedBytes);
+    expect(warm.stagingLeftovers).toEqual([]);
   });
 
   it("refuses an unpinned version before any network call is made", () => {

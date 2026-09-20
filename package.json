@@ -54,7 +54,8 @@
     "postject": "^1.0.0-alpha.6",
     "typescript-eslint": "catalog:",
     "vitest": "^4.1.11",
-    "wait-on": "^9.1.0"
+    "wait-on": "^9.1.0",
+    "yaml": "catalog:"
   },
   "overrides": {
     "@codemirror/language": "^6.12.4",
