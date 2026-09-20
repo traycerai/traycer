@@ -494,7 +494,7 @@ function OnboardingTour(props: {
   });
 
   const motionProps = stepMotion(stepDirection, reducedMotion);
-  // Act 3's wizard owns the phone's primary action ("Import N tasks"), so the
+  // Act 3's wizard owns the phone's primary action ("Import N sessions"), so the
   // shell's footer there is the quiet way past it and nothing else. Two
   // primaries on one 393pt column is one too many.
   const wizardOwnsPrimary = phone && step.id === "session-import";

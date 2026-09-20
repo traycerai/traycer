@@ -59,7 +59,7 @@ export function OnboardingSessionImportStage(props: {
             picker={hostPicker}
             refusal={
               hostReady
-                ? `${hostPicker.scope.hostLabel} can't import tasks`
+                ? `${hostPicker.scope.hostLabel} can't import sessions`
                 : null
             }
           />

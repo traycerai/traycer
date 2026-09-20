@@ -1,5 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  disposeManagedCommandChatSessions,
+  installManagedCommandChatSession,
+} from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // The one faked boundary: the host RPCs behind the managed-command rows. This
@@ -936,6 +941,47 @@ describe("<BackgroundItemsPanel />", () => {
       weekday: "short",
     });
     expect(waitTitle).toContain(weekday);
+  });
+
+  it("held-output tooltip names no actor", () => {
+    const session = installManagedCommandChatSession({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-1",
+    });
+    session.setHeldUpdates([
+      {
+        commandId: "cmd-held",
+        description: "deploy watcher",
+        heldAtMs: 10,
+      },
+    ]);
+    try {
+      render(
+        <TooltipProvider delayDuration={0}>
+          {panelElement({
+            items: [],
+            onItemClick: () => undefined,
+            onStopItem: () => null,
+            onStopAll: () => null,
+          })}
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+      const row = screen.getByTestId("held-managed-command-row-cmd-held");
+      fireEvent.pointerEnter(row);
+      fireEvent.focus(row);
+      const tooltip = screen.getByText(
+        /output that arrived as this chat was stopped is held back/,
+      );
+      expect(tooltip.textContent).toContain(
+        "output that arrived as this chat was stopped is held back",
+      );
+      expect(tooltip.textContent).not.toContain("as you stopped this chat");
+    } finally {
+      session.dispose();
+      disposeManagedCommandChatSessions();
+    }
   });
 });
 
