@@ -211,6 +211,17 @@ describe("the regression the framer exists for, with readline as the control", (
     const lines = framer.push(bytes);
     expect(lines).toHaveLength(1);
 
+    // Everything above holds on every runtime the CLI supports. The CONTROL
+    // does not: node:readline treats U+2028/U+2029 as line terminators only
+    // from Node 24, and ignored them before. The CLI's engine floor is 22.13,
+    // so below 24 there is no shredding to observe - the framer is still the
+    // right reader there, it just is not the readline bug that proves it.
+    const nodeMajor = Number.parseInt(
+      process.versions.node.split(".")[0] ?? "",
+      10,
+    );
+    if (!Number.isInteger(nodeMajor) || nodeMajor < 24) return;
+
     const collected: string[] = [];
     const rl = createInterface({ input: Readable.from([bytes]) });
     for await (const line of rl) collected.push(line);

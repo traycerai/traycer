@@ -59,9 +59,9 @@ describe("latestCheckpointPerTurn", () => {
 });
 
 describe("checkpointEventTurnKey", () => {
-  it("keys an event by its turn id", () => {
+  it("keys an event by its turn id, namespaced", () => {
     expect(checkpointEventTurnKey({ turnId: "t-1", eventId: "e-1" })).toBe(
-      "t-1",
+      "turn:t-1",
     );
   });
 
@@ -84,5 +84,23 @@ describe("checkpointEventTurnKey", () => {
     expect(checkpointEventTurnKey({ turnId: null, eventId: "t-1" })).not.toBe(
       checkpointEventTurnKey({ turnId: "t-1", eventId: "e-9" }),
     );
+  });
+
+  // The inverse of the row above, and the one an unprefixed turn key could not
+  // survive: a turn id that literally reads like the fallback. Both keys are
+  // namespaced, so the two spaces never meet and neither checkpoint is lost.
+  it("cannot collide a turn id shaped like a fallback key with that fallback", () => {
+    expect(
+      checkpointEventTurnKey({ turnId: "event:e-1", eventId: "e-9" }),
+    ).not.toBe(checkpointEventTurnKey({ turnId: null, eventId: "e-1" }));
+    expect(
+      latestCheckpointPerTurn(
+        [
+          { turnId: "event:e-1", eventId: "e-9" },
+          { turnId: null, eventId: "e-1" },
+        ],
+        checkpointEventTurnKey,
+      ),
+    ).toHaveLength(2);
   });
 });

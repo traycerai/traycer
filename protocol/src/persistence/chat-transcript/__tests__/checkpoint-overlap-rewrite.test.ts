@@ -91,6 +91,44 @@ describe("turnKeysWithLaterOverlappingChanges over a rewritten checkpoint", () =
     ).toEqual(new Set(["t"]));
   });
 
+  it("does not judge a turn on the checkpoint an UNREADABLE rewrite replaced", () => {
+    // The selection reads RAW events and the parse comes after it, so a
+    // rewrite this reader cannot parse still supersedes its predecessor and
+    // the turn then contributes no manifest at all.
+    //
+    // Parsing first would drop the rewrite before it could supersede anything
+    // and leave t2 judged on entries the writer has already replaced - here
+    // that would flag t1, for an overlap stated by a manifest that is no
+    // longer t2's. It also has to be the answer `restoreCumulative` gives:
+    // `earliestEntriesByPath` skips an unparseable manifest too, so a warning
+    // derived from the superseded one would describe a restore that will not
+    // happen.
+    const t1 = checkpointEvent({
+      eventId: "e-t1",
+      turnId: "t1",
+      checkpointId: "t1",
+      entries: [{ filePath: P, beforeHash: "x0", afterHash: "x1" }],
+    });
+    const t2First = checkpointEvent({
+      eventId: "e-t2-first",
+      turnId: "t2",
+      checkpointId: "t2",
+      entries: [{ filePath: P, beforeHash: "x1", afterHash: "x2" }],
+    });
+    const t2Unreadable = chatEventSchema.parse({
+      ...t2First,
+      eventId: "e-t2-rewrite",
+      metadata: { ...t2First.metadata, schemaVersion: 2 },
+    });
+    // Its predecessor alone would flag t1; the pair must not.
+    expect(turnKeysWithLaterOverlappingChanges([t1, t2First])).toEqual(
+      new Set(["t1"]),
+    );
+    expect(
+      turnKeysWithLaterOverlappingChanges([t1, t2First, t2Unreadable]),
+    ).toEqual(new Set());
+  });
+
   it("does not flag an earlier turn by a later turn's SUPERSEDED checkpoint", () => {
     // t2 first touched P for real; its rewrite settles the path as a net
     // no-op. Only t2's last checkpoint counts, and a no-op drives no note.

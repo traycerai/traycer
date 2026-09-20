@@ -8,6 +8,15 @@
  * emits them unescaped - so one message arrives as several fragments, none of
  * which parses. Measured on node v24.20.0.
  *
+ * That split arrived IN Node 24; before it, readline ignored both characters.
+ * This package's engine floor is 22.13, so the shredding is not something every
+ * supported runtime does - which changes what a CONTROL can assert, and nothing
+ * about this framer. Splitting on `\n` alone is the correct framing on every
+ * version, and on a runtime that does not shred, readline is merely
+ * unnecessary rather than wrong. The version is named here because a reader on
+ * 22 who tries to reproduce the defect will not see it, and "the premise is
+ * false" is the wrong conclusion to reach from that.
+ *
  * ## This file is a COPY. A change here is a change in two places.
  *
  * The host has the same framer at `traycer-host/src/util/jsonl-line-framer.ts`

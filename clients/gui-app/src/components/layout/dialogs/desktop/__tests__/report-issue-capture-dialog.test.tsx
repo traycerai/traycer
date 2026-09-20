@@ -1441,7 +1441,13 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
     });
 
+    // 1 is the table's other boundary and the one it used to miss: the header
+    // parse rounds a positive delay up, so 1 is the smallest wait that reaches
+    // the label at all - and it read as "1 seconds" while the minute branch
+    // next to it already singularized.
     it.each([
+      [1, "a second"],
+      [2, "2 seconds"],
       [30, "30 seconds"],
       [60, "a minute"],
       [61, "2 minutes"],

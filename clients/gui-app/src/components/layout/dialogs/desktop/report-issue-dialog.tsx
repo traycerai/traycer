@@ -2284,7 +2284,11 @@ function deliveryOutcomeMessage(
 // person can act on where "in 154 seconds" reads as false precision.
 function rateLimitWaitLabel(retryAfterSeconds: number): string {
   if (retryAfterSeconds < 60) {
-    return `${String(retryAfterSeconds)} seconds`;
+    // 1 is the smallest value that reaches here: `retryAfterSecondsFromHeader`
+    // rounds a positive delay up with `Math.ceil` and answers `null` below it.
+    return retryAfterSeconds === 1
+      ? "a second"
+      : `${String(retryAfterSeconds)} seconds`;
   }
   const minutes = Math.ceil(retryAfterSeconds / 60);
   return minutes === 1 ? "a minute" : `${String(minutes)} minutes`;

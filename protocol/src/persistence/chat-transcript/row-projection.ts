@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 import {
+  checkpointEventTurnKey,
   latestCheckpointPerTurn,
   overlappingCheckpointIds,
   turnCheckpointManifestSchema,
@@ -792,8 +793,17 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
 export function turnKeysWithLaterOverlappingChanges(
   events: readonly ChatEvent[],
 ): ReadonlySet<string> {
-  const parsed = events.flatMap((event) => {
-    if (event.type !== "checkpoint.captured") return [];
+  // Select the retained checkpoint per turn from the RAW events, then parse
+  // only what survived - the order `restoreCumulative` and the two
+  // revert-scope scans already use, and the one `latestCheckpointPerTurn`
+  // documents. Parsing first would drop an unreadable rewrite before it could
+  // supersede anything and leave this rule judging the turn on the manifest
+  // that rewrite replaced.
+  const retained = latestCheckpointPerTurn(
+    events.filter((event) => event.type === "checkpoint.captured"),
+    checkpointEventTurnKey,
+  );
+  const current = retained.flatMap((event) => {
     if (event.turnId === null || event.metadata === null) return [];
     const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
     // A manifest this reader cannot parse is one whose overlap it cannot judge.
@@ -803,8 +813,7 @@ export function turnKeysWithLaterOverlappingChanges(
     if (!manifest.success) return [];
     return [{ turnId: event.turnId, manifest: manifest.data }];
   });
-  if (parsed.length === 0) return EMPTY_TURN_KEYS;
-  const current = latestCheckpointPerTurn(parsed, (entry) => entry.turnId);
+  if (current.length === 0) return EMPTY_TURN_KEYS;
   const overlapping = overlappingCheckpointIds(
     current.map((entry) => entry.manifest),
   );
