@@ -37,9 +37,9 @@ import {
  *
  * Not listed, deliberately: the zoom chords (Cmd +/-/0), which the guest
  * handler claims for the page's own zoom factor
- * (`browser-view-entry-factory.ts`), and Electron's role-built items
- * (reload, cut/copy/paste, select-all), which already act on the focused
- * web contents and are therefore correct as they are.
+ * (`browser-view-entry-factory.ts`), the native Reload menu commands (which
+ * resolve the owning window's focused frame), and Electron's editing roles
+ * (cut/copy/paste, select-all).
  *
  * `@/lib/keybindings/conflicts.ts` reads the browser-scoped rows so the
  * rebinding UI can warn about a chord a focused browser tile would swallow -
