@@ -15,17 +15,12 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Registers each worktree SETUP terminal as a real (background) canvas tab the
- * first time setup starts running, so it survives a host/GUI restart exactly
- * like a user-opened terminal.
+ * first time setup starts running, so the saved tab can reattach after a GUI
+ * restart. The host owns the setup session: a missing session must be retried
+ * through the setup controls, never recreated by the terminal tile.
  *
- * The host keeps no terminal state across a restart - persistence comes only
- * from a saved canvas tab, which re-creates the shell on next open. The setup
- * PTY is spawned server-side (never through the renderer's `terminal.create`),
- * so without this it has no saved tab and vanishes on a host restart while
- * user terminals (always opened as tabs) come back. This registers it as a
- * BACKGROUND tab (no focus change, so the user is not yanked off the chat /
- * terminal agent), keyed on the SAME id the card's "Open terminal" uses - so
- * the two converge on one tab.
+ * Registration leaves the chat / terminal agent focused and uses the SAME
+ * id as the setup card's "Open terminal", so both converge on one tab.
  *
  * The tab is auto-opened EXACTLY ONCE PER VIEW. Two guards together give that:
  *  - the `running` gate, so a settled (succeeded / failed / cancelled) or
@@ -36,9 +31,9 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
  * Registration is VIEW-scoped: the same owner shown in two view tabs auto-opens
  * the terminal in each, while within one view it pops once and, once closed,
  * stays closed - never returning on binding churn, remount, or completion.
- * Restart survival is unaffected (it comes from the persisted canvas tab); a
- * finished setup terminal the user wants back is one click away on the setup
- * card's "Open terminal".
+ * The persisted tab can reattach while its session is live. A completed setup
+ * whose shell is still running remains reachable through "Open terminal";
+ * once that session is gone, the setup controls own starting another run.
  *
  * Live-stream (worktree binding) -> external-store (canvas tabs) sync, so it
  * legitimately lives in an effect. Bound to the tab host, matching the setup
