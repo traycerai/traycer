@@ -1,8 +1,11 @@
-import { app } from "electron";
+import { app, autoUpdater as nativeAutoUpdater } from "electron";
 import { autoUpdater } from "electron-updater";
 // Type-only: erased at compile time, so it is unaffected by the unit suite's
 // `electron-updater` package-root mock (which exports `autoUpdater` alone).
-import type { VerifyUpdateCodeSignature } from "electron-updater";
+import type {
+  UpdateDownloadedEvent,
+  VerifyUpdateCodeSignature,
+} from "electron-updater";
 import { execFileSync } from "node:child_process";
 import { access } from "node:fs/promises";
 import { release as osRelease } from "node:os";
@@ -232,6 +235,9 @@ let checkIntent: DesktopAppUpdateCheckIntent | null = null;
 let checkErrorEmitted = false;
 let downloadInProgress = false;
 let downloadIntent: DesktopAppUpdateCheckIntent | null = null;
+// On macOS the ZIP download completes before Squirrel.Mac has validated and
+// staged the app. Only its native completion makes a restart installable.
+let pendingMacUpdate: UpdateDownloadedEvent | null = null;
 let lastResumeCheckAtMs = 0;
 // The channel mode the updater is CONFIGURED with right now: what
 // `autoUpdater.allowPrerelease` was derived from, and what the namespaced
@@ -569,7 +575,7 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     });
   });
   autoUpdater.on("update-downloaded", (info) => {
-    log.info("[updater] update downloaded - ready to install", info);
+    log.info("[updater] update downloaded", info);
     // An artifact is now physically staged on disk and electron-updater's
     // quit-time handler could apply it. Record that before any early return so a
     // later channel switch is refused (finding 2) even if this event is dropped
@@ -583,36 +589,53 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     if (candidateGeneration !== channelGeneration) {
       return;
     }
-    linuxDownloadedFile = info.downloadedFile;
-    linuxInstallGuidance =
-      linuxPackageType !== null && !linuxSilentInstallSupported
-        ? buildLinuxUpdateGuidance(
-            linuxPackageType,
-            info.version,
-            linuxDownloadedFile,
-          )
-        : null;
-    const intent = downloadIntent ?? checkIntent ?? "automatic";
-    downloadInProgress = false;
-    downloadIntent = null;
-    emitSnapshot({
-      status: "ready",
-      latestVersion: info.version,
-      // Re-read rather than carried forward from `available`: this is the
-      // event that describes the artifact actually ON DISK, and if the two ever
-      // disagreed the staged bytes are what a restart would apply.
-      latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
-      downloadProgress: null,
-      errorMessage: null,
-      lastCheckedAt: new Date().toISOString(),
-      lastCheckIntent: intent,
-    });
-    notifyUpdateWhenUnfocused("ready", info.version);
+    if (process.platform === "darwin") {
+      pendingMacUpdate = info;
+      downloadInProgress = true;
+      emitSnapshot({ status: "downloading", downloadProgress: 100 });
+      return;
+    }
+    completeUpdateDownload(info);
   });
+  if (process.platform === "darwin") {
+    nativeAutoUpdater.on("update-downloaded", () => {
+      const info = pendingMacUpdate;
+      pendingMacUpdate = null;
+      if (info !== null && candidateGeneration === channelGeneration) {
+        completeUpdateDownload(info);
+      }
+    });
+  }
   autoUpdater.on("error", (err) => {
     log.error("[updater] error", credentialSafeLogValue(err));
     handleUpdaterError(err);
   });
+}
+
+function completeUpdateDownload(info: UpdateDownloadedEvent): void {
+  log.info("[updater] update ready to install", { version: info.version });
+  linuxDownloadedFile = info.downloadedFile;
+  linuxInstallGuidance =
+    linuxPackageType !== null && !linuxSilentInstallSupported
+      ? buildLinuxUpdateGuidance(
+          linuxPackageType,
+          info.version,
+          linuxDownloadedFile,
+        )
+      : null;
+  const intent = downloadIntent ?? checkIntent ?? "automatic";
+  downloadInProgress = false;
+  downloadIntent = null;
+  emitSnapshot({
+    status: "ready",
+    latestVersion: info.version,
+    latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
+    downloadProgress: null,
+    errorMessage: null,
+    lastCheckedAt: new Date().toISOString(),
+    lastCheckIntent: intent,
+  });
+  notifyUpdateWhenUnfocused("ready", info.version);
 }
 
 /**
@@ -2320,6 +2343,10 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
 // to suppress an error path that the supported builds can no longer reach.
 
 function handleUpdaterError(error: unknown): void {
+  // MacUpdater forwards native preparation failures through its error event.
+  // Keep them on the download error path, and discard the pending completion
+  // so a late native event cannot restore a rejected update to ready.
+  pendingMacUpdate = null;
   // An error after the user chose "Restart" (quitAndInstall) must NOT be
   // swallowed by the "ready" guard below: the install failed, the app won't
   // relaunch, and the user is left staring at a confirmation that did nothing
