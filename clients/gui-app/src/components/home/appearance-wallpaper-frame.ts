@@ -1,17 +1,30 @@
 /**
- * The last completed dither. A host switch remounts the start page, and a
- * new canvas is transparent until its effect finishes. That empty frame is
- * the full-screen flash. The layout effect copies this bitmap on before the
- * browser paints, so the picture never leaves.
+ * Who a dither frame belongs to. The landing page and the sidebar are both
+ * full-bleed "page" treatments, but they rasterize at different sizes. A
+ * Settings thumbnail is smaller still. One shared slot lets whichever
+ * surface painted last delete the landing page's frame, and the next host
+ * switch has nothing to restore.
  *
- * One frame is enough: the start page has one visible raster, and a resize
- * replaces it. Keeping every size would retain a full bitmap per step of a
- * window drag.
+ * Previews are not a slot. A thumbnail does not have to survive a remount,
+ * and there are many of them. They paint their own canvas and leave these
+ * two frames alone.
+ *
+ * Each slot keeps one bitmap. A resize of that surface replaces it.
  *
  * Kept beside the component so the component file only exports components.
  * A non-component export there breaks fast refresh.
  */
-const retainedWallpaperFrames = new Map<string, HTMLCanvasElement>();
+export type WallpaperFrameSlot = "page" | "sidebar";
+
+interface RetainedWallpaperFrame {
+  readonly id: string;
+  readonly canvas: HTMLCanvasElement;
+}
+
+const retainedWallpaperFrames = new Map<
+  WallpaperFrameSlot,
+  RetainedWallpaperFrame
+>();
 
 function wallpaperFrameId(
   style: string,
@@ -29,43 +42,44 @@ function releaseWallpaperFrame(canvas: HTMLCanvasElement): void {
 }
 
 export function retainWallpaperFrame(
+  slot: WallpaperFrameSlot,
   style: string,
   source: HTMLCanvasElement,
 ): void {
   if (source.width === 0 || source.height === 0) return;
   const id = wallpaperFrameId(style, source.width, source.height);
+  const existing = retainedWallpaperFrames.get(slot);
   const copy =
-    retainedWallpaperFrames.get(id) ?? document.createElement("canvas");
+    existing?.id === id ? existing.canvas : document.createElement("canvas");
   copy.width = source.width;
   copy.height = source.height;
   const context = copy.getContext("2d");
   if (context === null) return;
   context.drawImage(source, 0, 0);
-  for (const [key, canvas] of retainedWallpaperFrames) {
-    if (key === id) continue;
-    releaseWallpaperFrame(canvas);
-    retainedWallpaperFrames.delete(key);
+  if (existing !== undefined && existing.canvas !== copy) {
+    releaseWallpaperFrame(existing.canvas);
   }
-  retainedWallpaperFrames.set(id, copy);
+  retainedWallpaperFrames.set(slot, { id, canvas: copy });
 }
 
 /** Draws the retained frame when this canvas's raster size matches. */
 export function restoreWallpaperFrame(
+  slot: WallpaperFrameSlot,
   style: string,
   canvas: HTMLCanvasElement,
-  width: number,
-  height: number,
+  size: { readonly width: number; readonly height: number },
 ): boolean {
-  if (width <= 0 || height <= 0) return false;
-  const copy = retainedWallpaperFrames.get(
-    wallpaperFrameId(style, width, height),
-  );
-  if (copy === undefined) return false;
+  if (size.width <= 0 || size.height <= 0) return false;
+  const retained = retainedWallpaperFrames.get(slot);
+  if (retained === undefined) return false;
+  if (retained.id !== wallpaperFrameId(style, size.width, size.height)) {
+    return false;
+  }
   const context = canvas.getContext("2d");
   if (context === null) return false;
-  canvas.width = width;
-  canvas.height = height;
-  context.drawImage(copy, 0, 0);
+  canvas.width = size.width;
+  canvas.height = size.height;
+  context.drawImage(retained.canvas, 0, 0);
   return true;
 }
 

@@ -11,6 +11,7 @@ import { useThemeRevision } from "@/providers/use-theme-revision";
 import {
   retainWallpaperFrame,
   restoreWallpaperFrame,
+  type WallpaperFrameSlot,
 } from "@/components/home/appearance-wallpaper-frame";
 import "./appearance-wallpaper.css";
 
@@ -66,8 +67,14 @@ export function AppearanceWallpaper(props: {
   /** Dither tint. `null` reads the theme accent (`--primary`) instead. */
   readonly tint: string | null;
   readonly surface: WallpaperSurface;
+  /**
+   * Which retained dither this page-sized surface owns. The landing page
+   * and the sidebar both use `surface="page"` and rasterize at different
+   * sizes, so they cannot share a frame. Previews never retain one.
+   */
+  readonly frameSlot?: WallpaperFrameSlot;
 }) {
-  const { wallpaper, url, tint, surface } = props;
+  const { wallpaper, url, tint, surface, frameSlot } = props;
   if (wallpaper === null || url === null) return null;
   const onPage = surface === "page";
   // Subtle leaves a 20% veil at the centre, strong reaches 65%. The same knob
@@ -88,6 +95,7 @@ export function AppearanceWallpaper(props: {
           intensity={wallpaper.intensity}
           tint={tint}
           tintWithAccent={wallpaper.tintWithAccent}
+          frameSlot={surface === "page" ? (frameSlot ?? "page") : null}
         />
       ) : (
         <img
@@ -154,8 +162,9 @@ function DitheredWallpaper(props: {
   readonly intensity: number;
   readonly tint: string | null;
   readonly tintWithAccent: boolean;
+  readonly frameSlot: WallpaperFrameSlot | null;
 }) {
-  const { url, intensity, tint, tintWithAccent } = props;
+  const { url, intensity, tint, tintWithAccent, frameSlot } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // The theme is not readable as a value here - it lives in CSS custom
   // properties - so the revision is subscribed to purely as a repaint trigger
@@ -178,17 +187,22 @@ function DitheredWallpaper(props: {
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
-    const width = Math.round(canvas.clientWidth / CELL);
-    const height = Math.round(canvas.clientHeight / CELL);
+    if (frameSlot === null) {
+      restoredStyleRef.current = null;
+      return;
+    }
     restoredStyleRef.current = restoreWallpaperFrame(
+      frameSlot,
       frameStyle,
       canvas,
-      width,
-      height,
+      {
+        width: Math.round(canvas.clientWidth / CELL),
+        height: Math.round(canvas.clientHeight / CELL),
+      },
     )
       ? frameStyle
       : null;
-  }, [frameStyle]);
+  }, [frameSlot, frameStyle]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -226,7 +240,9 @@ function DitheredWallpaper(props: {
         .then((complete) => {
           if (complete && !pass.signal.aborted) {
             painted = true;
-            retainWallpaperFrame(frameStyle, canvas);
+            if (frameSlot !== null) {
+              retainWallpaperFrame(frameSlot, frameStyle, canvas);
+            }
           }
         })
         // Aborts (unmount, a newer pass) and a canvas-less environment are the
@@ -268,7 +284,7 @@ function DitheredWallpaper(props: {
       image.onload = null;
       image.onerror = null;
     };
-  }, [frameStyle, intensity, tint, tintWithAccent, url]);
+  }, [frameSlot, frameStyle, intensity, tint, tintWithAccent, url]);
 
   return (
     <canvas ref={canvasRef} className="appearance-wallpaper-canvas size-full" />
