@@ -477,6 +477,29 @@ describe("stop confirmation on a phone layout", () => {
     expect(onStopTurn).not.toHaveBeenCalled();
   });
 
+  it("hands over to the cascade prompt when a sub-agent starts while it is open", async () => {
+    viewportMock.phone = true;
+    const onStopTurn = vi.fn((): string | null => null);
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const view = render(tile(surfacesProps(onStopTurn), client));
+
+    fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    agentStopControlsMock = {
+      self: agentRow(CHAT_ID, "This chat"),
+      descendants: [agentRow("child-1", "Child one")],
+    };
+    view.rerender(tile(surfacesProps(onStopTurn), client));
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
+
+    // Confirming must not stop only this turn behind the sub-agent's back.
+    expect(onStopTurn).not.toHaveBeenCalled();
+    expect(await screen.findByText("Child one")).not.toBeNull();
+  });
+
   it("stops immediately on a desktop layout, with no confirmation at all", () => {
     viewportMock.phone = false;
     const onStopTurn = vi.fn((): string | null => null);

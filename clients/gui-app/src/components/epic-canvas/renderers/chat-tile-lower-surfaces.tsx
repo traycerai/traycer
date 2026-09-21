@@ -612,8 +612,14 @@ export function ChatLowerInteractionSurfaces(
           blockedReason={null}
           isPending={false}
           onConfirm={() => {
-            turnOnStopTurn();
             setStopConfirmOpen(false);
+            // A sub-agent can start while this dialog is open. Go back through
+            // the same gate Stop uses, so the cascade prompt is never skipped.
+            if (activeAgents.length > 0) {
+              setStopChildrenOpen(true);
+              return;
+            }
+            turnOnStopTurn();
           }}
         />
       </ChatDockCompactStripProvider>
