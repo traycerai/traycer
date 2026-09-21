@@ -285,15 +285,12 @@ const MAX_DISCOVERY_PAGES = 10;
 // of intercepting it with the unsynced-edits prompt - the user already chose
 // to restart, so blocking the quit would silently swallow the install.
 let installingUpdate = false;
-// A downloaded update artifact is staged inside electron-updater from the moment
-// an `update-downloaded` event fires; from then on its normal-quit install
-// handler (`autoInstallOnAppQuit`, enabled on macOS/Windows/AppImage) can apply
-// it. Crucially this stays raised through an install *attempt that then errors* -
-// a failed install does not un-stage the artifact - so a channel switch must be
-// refused as long as any staged artifact could still auto-install on quit, not
-// merely while the status reads "ready" (cold-review finding 2). Never lowered
-// within the process: a successful install ends the process, and any other
-// transition leaves the artifact staged.
+// An update can apply on quit once electron-updater stages it. On macOS this
+// requires NATIVE preparation success; the wrapper's download alone leaves
+// only a ZIP that Squirrel may reject. This stays raised through an install
+// attempt that errors, since a failed install does not un-stage the artifact.
+// A channel switch must account for that artifact even after status leaves
+// "ready"; only platforms with a supported discard path can lower the flag.
 let updateArtifactStaged = false;
 
 // Serialized updater-initialization barrier. `installAutoUpdater` runs in a
@@ -576,11 +573,13 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   });
   autoUpdater.on("update-downloaded", (info) => {
     log.info("[updater] update downloaded", info);
-    // An artifact is now physically staged on disk and electron-updater's
-    // quit-time handler could apply it. Record that before any early return so a
-    // later channel switch is refused (finding 2) even if this event is dropped
-    // by a guard below or the ready status is later replaced by an install error.
-    updateArtifactStaged = true;
+    // Outside macOS this event arms the quit-time install. Squirrel.Mac still
+    // has to prepare the ZIP, so its native success owns the staged flag below.
+    // Recording it early on macOS would prevent channel changes even after
+    // native preparation rejects the update.
+    if (process.platform !== "darwin") {
+      updateArtifactStaged = true;
+    }
     if (currentSnapshot.status === "ready") {
       return;
     }
@@ -599,11 +598,25 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   });
   if (process.platform === "darwin") {
     nativeAutoUpdater.on("update-downloaded", () => {
+      // Native staging cannot be withdrawn, even if an earlier error cleared
+      // our pending candidate. Keep channel changes blocked in that case too.
+      updateArtifactStaged = true;
       const info = pendingMacUpdate;
       pendingMacUpdate = null;
       if (info !== null && candidateGeneration === channelGeneration) {
         completeUpdateDownload(info);
       }
+    });
+    nativeAutoUpdater.on("error", (err) => {
+      if (pendingMacUpdate === null) {
+        return;
+      }
+      // MacUpdater forwards this error to its wrapper listener first. That
+      // listener cannot distinguish a native failure from cache bookkeeping
+      // failing while Squirrel still works, so only this native event releases
+      // preparation ownership and allows a retry.
+      pendingMacUpdate = null;
+      handleUpdaterError(err);
     });
   }
   autoUpdater.on("error", (err) => {
@@ -2343,10 +2356,16 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
 // to suppress an error path that the supported builds can no longer reach.
 
 function handleUpdaterError(error: unknown): void {
-  // MacUpdater forwards native preparation failures through its error event.
-  // Keep them on the download error path, and discard the pending completion
-  // so a late native event cannot restore a rejected update to ready.
-  pendingMacUpdate = null;
+  // MacUpdater resolves downloadUpdate after serving the ZIP, before Squirrel
+  // finishes preparing it. A later wrapper failure (such as copying the cached
+  // blockmap) does not cancel that native work. Keep its ownership until native
+  // success or error; reopening retry now could overlap two preparations and
+  // let the first one's success mark the second candidate ready. Callers log
+  // wrapper errors; the native error listener clears pendingMacUpdate before
+  // returning here to publish an actual preparation failure.
+  if (pendingMacUpdate !== null) {
+    return;
+  }
   // An error after the user chose "Restart" (quitAndInstall) must NOT be
   // swallowed by the "ready" guard below: the install failed, the app won't
   // relaunch, and the user is left staring at a confirmation that did nothing

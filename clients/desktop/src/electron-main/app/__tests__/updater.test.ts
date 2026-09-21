@@ -3824,6 +3824,179 @@ describe("macOS native update preparation", () => {
     updater.installDownloadedUpdate();
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
+
+  // PR review finding: `updateArtifactStaged` used to be raised at the
+  // WRAPPER's own `update-downloaded` (`stageMacDownload`'s last line), before
+  // Squirrel.Mac had validated anything - so a failed native preparation left
+  // it permanently `true` (nothing ever un-sets it on error) and every later
+  // channel-switch attempt was refused as `refused-update-pending` forever,
+  // even though nothing was ever actually staged natively. The fix raises it
+  // for darwin only once native preparation succeeds; non-mac keeps raising it
+  // at the wrapper event, same as before.
+  it("refuses a channel switch while native preparation is still pending", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+
+    expect(change.outcome).toBe("refused-update-pending");
+    expect(change.snapshot.allowPrerelease).toBe(false);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+  });
+
+  it("allows a channel switch once native preparation has failed, since nothing was ever actually staged", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+
+    expect(change.outcome).toBe("changed");
+    expect(change.snapshot.allowPrerelease).toBe(true);
+  });
+
+  // Companion to the two tests above, from the other caller that reads
+  // `updateArtifactStaged` (the compat-recovery dialog): a failed native
+  // preparation must not be reported as a build that will apply at the next
+  // quit whatever the user does.
+  it("stops reporting a native preparation failure as a staged build blocking recovery", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    autoUpdater.autoForwardNativeSuccess = false;
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", {
+        version: "2.0.0",
+        compatibilityEpoch: 1,
+      });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    updater.startUpdateDownload();
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      compatibilityEpoch: 1,
+    });
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+
+    // Not "restart-to-clear-staged": nothing is staged to clear.
+    expect(plan.route).toBe("manual");
+  });
+
+  // Not duplicated here: "keeps a channel switch refused after an install
+  // attempt on a staged artifact errors (finding 2)" (RC release discovery
+  // describe block) already runs on the default darwin platform and covers
+  // native success followed by a POST-install `quitAndInstall` failure -
+  // `updateArtifactStaged` is raised at native success there, same as it is
+  // under this fix, and the switch stays refused.
+
+  // PR review finding: electron-updater's wrapper can emit its OWN `error`
+  // for something that has nothing to do with native preparation (e.g. a
+  // blockmap-caching I/O failure logged after the ZIP HTTP transfer
+  // resolves), while Squirrel.Mac is still working in the background.
+  // Mistaking that for a native preparation failure would abandon a download
+  // that was actually still going to succeed (or would still eventually fail
+  // on its own, native, terms). Ownership of a pending download stays with
+  // native preparation until a NATIVE terminal event decides it either way;
+  // a wrapper-only error while `pendingMacUpdate` is set is a no-op.
+  it("ignores a wrapper-only error while native preparation is still pending, keeping the download intact", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+    autoUpdater.checkForUpdates.mockClear();
+    autoUpdater.downloadUpdate.mockClear();
+
+    autoUpdater.emit(
+      "error",
+      new Error(
+        "EACCES: permission denied, open '/Users/x/Library/Caches/traycer.ShipIt/pending/current.blockmap'",
+      ),
+    );
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "downloading",
+      downloadProgress: 100,
+    });
+    // Neither a fresh check nor a fresh download attempt does anything while
+    // the download is still pending native preparation - same guards as the
+    // ordinary "already downloading" case, undisturbed by the ignored error.
+    await updater.checkForUpdatesNow(false, "manual");
+    updater.startUpdateDownload();
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("still reaches ready via native success after a wrapper-only error was ignored", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    autoUpdater.emit(
+      "error",
+      new Error(
+        "EACCES: permission denied, open '/Users/x/Library/Caches/traycer.ShipIt/pending/current.blockmap'",
+      ),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    nativeAutoUpdater.emit("update-downloaded");
+
+    // The candidate native preparation resolves is the one staged before the
+    // ignored error, not something re-fetched or re-derived.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      latestVersion: "2.0.0",
+    });
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  it("still reaches error via a genuine native failure after a wrapper-only error was ignored, and permits a retry", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    autoUpdater.emit(
+      "error",
+      new Error(
+        "EACCES: permission denied, open '/Users/x/Library/Caches/traycer.ShipIt/pending/current.blockmap'",
+      ),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      downloadProgress: null,
+      errorMessage:
+        "Traycer couldn't download and install the latest update. Please try again in a little while.",
+    });
+
+    // The earlier ignored wrapper-only error did not strand ownership of the
+    // download: this genuine native failure released it, so a retry actually
+    // reaches the feed again rather than silently no-opping.
+    autoUpdater.checkForUpdates.mockClear();
+    await updater.checkForUpdatesNow(false, "automatic");
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+  });
 });
 
 interface LinuxGuidanceTestConfig {
