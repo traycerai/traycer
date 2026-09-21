@@ -27,6 +27,7 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── `providers.setAutoJudge` ─────────────────────────────────────────────
 
@@ -40,25 +41,31 @@ import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
  * resolves the effective judge per turn from catalog facts, so `"provider"`
  * here is a PREFERENCE, not a guarantee that the native judge ran.
  */
-export const autoJudgeKindSchema = z.enum(["provider", "traycer"]);
+export const autoJudgeKindSchema = lazySchema(() =>
+  z.enum(["provider", "traycer"]),
+);
 export type AutoJudgeKind = z.infer<typeof autoJudgeKindSchema>;
 
-export const providersSetAutoJudgeRequestSchema = z.object({
-  // The live GUI harness enum: this is a client→host slot, and the host
-  // re-validates against its own adapter roster regardless, so accepting an id
-  // a given build does not implement is a clean rejection rather than a
-  // handshake problem.
-  harnessId: guiHarnessIdSchema,
-  autoJudge: autoJudgeKindSchema,
-});
+export const providersSetAutoJudgeRequestSchema = lazySchema(() =>
+  z.object({
+    // The live GUI harness enum: this is a client→host slot, and the host
+    // re-validates against its own adapter roster regardless, so accepting an id
+    // a given build does not implement is a clean rejection rather than a
+    // handshake problem.
+    harnessId: guiHarnessIdSchema,
+    autoJudge: autoJudgeKindSchema,
+  }),
+);
 export type ProvidersSetAutoJudgeRequest = z.infer<
   typeof providersSetAutoJudgeRequestSchema
 >;
 
-export const providersSetAutoJudgeResponseSchema = z.object({
-  /** The value now persisted, echoed so the settings row can settle on truth. */
-  autoJudge: autoJudgeKindSchema,
-});
+export const providersSetAutoJudgeResponseSchema = lazySchema(() =>
+  z.object({
+    /** The value now persisted, echoed so the settings row can settle on truth. */
+    autoJudge: autoJudgeKindSchema,
+  }),
+);
 export type ProvidersSetAutoJudgeResponse = z.infer<
   typeof providersSetAutoJudgeResponseSchema
 >;
@@ -87,37 +94,45 @@ export const providersSetAutoJudgeV10 = defineRpcContract({
  * `traycer` harness and the model the server catalog flags as the auto-judge
  * default, which is what makes auto mode work before anyone opens Settings.
  */
-export const autoJudgeSelectionSchema = z.object({
-  harnessId: z.string().min(1),
-  model: z.string().min(1),
-  /** Which of the harness's logged-in profiles to bill; `null` is ambient. */
-  profileId: z.string().nullable(),
-});
+export const autoJudgeSelectionSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.string().min(1),
+    model: z.string().min(1),
+    /** Which of the harness's logged-in profiles to bill; `null` is ambient. */
+    profileId: z.string().nullable(),
+  }),
+);
 export type AutoJudgeSelection = z.infer<typeof autoJudgeSelectionSchema>;
 
-export const autoJudgeEffectiveSchema = z.object({
-  harnessId: z.string().min(1),
-  model: z.string().min(1),
-  source: z.enum(["selection", "default"]),
-});
+export const autoJudgeEffectiveSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.string().min(1),
+    model: z.string().min(1),
+    source: z.enum(["selection", "default"]),
+  }),
+);
 export type AutoJudgeEffective = z.infer<typeof autoJudgeEffectiveSchema>;
 
 /** Known configuration blockers only; this does not probe availability. */
-export const autoJudgeBlockedSchema = z.object({
-  reason: z.enum(["provider-disabled", "no-default", "unsupported-harness"]),
-});
+export const autoJudgeBlockedSchema = lazySchema(() =>
+  z.object({
+    reason: z.enum(["provider-disabled", "no-default", "unsupported-harness"]),
+  }),
+);
 export type AutoJudgeBlocked = z.infer<typeof autoJudgeBlockedSchema>;
 
-export const autoJudgeGetRequestSchema = z.object({});
+export const autoJudgeGetRequestSchema = lazySchema(() => z.object({}));
 export type AutoJudgeGetRequest = z.infer<typeof autoJudgeGetRequestSchema>;
 
-export const autoJudgeGetResponseSchema = z.object({
-  selection: autoJudgeSelectionSchema.nullable(),
-  // Unreleased 1.0 widened in place, like autoPolicy.get.readState. Older
-  // hosts omit these fields; readers preserve their existing copy then.
-  effective: autoJudgeEffectiveSchema.nullable().optional(),
-  blocked: autoJudgeBlockedSchema.nullable().optional(),
-});
+export const autoJudgeGetResponseSchema = lazySchema(() =>
+  z.object({
+    selection: autoJudgeSelectionSchema.nullable(),
+    // Unreleased 1.0 widened in place, like autoPolicy.get.readState. Older
+    // hosts omit these fields; readers preserve their existing copy then.
+    effective: autoJudgeEffectiveSchema.nullable().optional(),
+    blocked: autoJudgeBlockedSchema.nullable().optional(),
+  }),
+);
 export type AutoJudgeGetResponse = z.infer<typeof autoJudgeGetResponseSchema>;
 
 export const autoJudgeGetV10 = defineRpcContract({
@@ -127,17 +142,21 @@ export const autoJudgeGetV10 = defineRpcContract({
   responseSchema: autoJudgeGetResponseSchema,
 });
 
-export const autoJudgeSetRequestSchema = z.object({
-  /** `null` clears the selection and restores the catalog default. */
-  selection: autoJudgeSelectionSchema.nullable(),
-});
+export const autoJudgeSetRequestSchema = lazySchema(() =>
+  z.object({
+    /** `null` clears the selection and restores the catalog default. */
+    selection: autoJudgeSelectionSchema.nullable(),
+  }),
+);
 export type AutoJudgeSetRequest = z.infer<typeof autoJudgeSetRequestSchema>;
 
-export const autoJudgeSetResponseSchema = z.object({
-  selection: autoJudgeSelectionSchema.nullable(),
-  effective: autoJudgeEffectiveSchema.nullable().optional(),
-  blocked: autoJudgeBlockedSchema.nullable().optional(),
-});
+export const autoJudgeSetResponseSchema = lazySchema(() =>
+  z.object({
+    selection: autoJudgeSelectionSchema.nullable(),
+    effective: autoJudgeEffectiveSchema.nullable().optional(),
+    blocked: autoJudgeBlockedSchema.nullable().optional(),
+  }),
+);
 export type AutoJudgeSetResponse = z.infer<typeof autoJudgeSetResponseSchema>;
 
 export const autoJudgeSetV10 = defineRpcContract({
@@ -164,7 +183,7 @@ export const autoJudgeSetV10 = defineRpcContract({
  * workspace overrides your account policy", the field is already on the wire
  * and a new member rides an ordinary minor.
  */
-export const autoPolicySourceSchema = z.enum(["account"]);
+export const autoPolicySourceSchema = lazySchema(() => z.enum(["account"]));
 export type AutoPolicySource = z.infer<typeof autoPolicySourceSchema>;
 
 /**
@@ -183,57 +202,57 @@ export type AutoPolicySource = z.infer<typeof autoPolicySourceSchema>;
  *   here means NOTHING; it is not "never saved". A panel must not offer to
  *   write over a policy it could not read.
  */
-export const autoPolicyReadStateSchema = z.enum([
-  "fresh",
-  "stale",
-  "unreadable",
-]);
+export const autoPolicyReadStateSchema = lazySchema(() =>
+  z.enum(["fresh", "stale", "unreadable"]),
+);
 export type AutoPolicyReadState = z.infer<typeof autoPolicyReadStateSchema>;
 
-export const autoPolicyGetRequestSchema = z.object({});
+export const autoPolicyGetRequestSchema = lazySchema(() => z.object({}));
 export type AutoPolicyGetRequest = z.infer<typeof autoPolicyGetRequestSchema>;
 
-export const autoPolicyGetResponseSchema = z.object({
-  /** The policy prose; `null` when the account has never saved one. */
-  body: z.string().nullable(),
-  /**
-   * ISO-8601 of the last save, so the panel can warn before clobbering an edit
-   * made on another device. `null` whenever `body` is - and also when the host
-   * is serving a CACHED copy it could not refresh, which is why the panel must
-   * treat a null here as "cannot tell", not as "never edited".
-   */
-  updatedAt: z.string().nullable(),
-  source: autoPolicySourceSchema,
-  /**
-   * See {@link autoPolicyReadStateSchema}.
-   *
-   * `.optional()`, not required and not `.default("fresh")`, because this
-   * property was added to `1.0` IN PLACE - the line is unreleased, so it takes
-   * no minor of its own, and the consequence of that is that nothing on the
-   * wire distinguishes a host whose resolver fills this field from one that
-   * predates it. The negotiated version is `1.0` either way, so the READER has
-   * to spell the fallback (`autoPolicyReadStateFor` in the GUI), exactly as
-   * `ProviderCliState.autoJudge` makes its reader spell `?? "traycer"`. The
-   * fallback is `fresh`: it reproduces the panel's behaviour before the field
-   * existed, which is the only behaviour an older host can support.
-   */
-  readState: autoPolicyReadStateSchema.optional(),
-  /**
-   * The WHOLE shipped judge policy this host would apply, verbatim.
-   *
-   * The document, not a parsed tier: the client renders sections of it under
-   * user-facing labels, and parsing it on the wire would freeze the section
-   * list into the contract - every edit to the shipped policy would then be a
-   * protocol change. It is bundled with the host
-   * (`resources/auto-judge/defaults.md`) rather than fetched, so it is
-   * readable even when the account policy above is not.
-   *
-   * `.optional()` for the same reason as `readState`. A client that does not
-   * receive it renders no shipped-policy view at all - the right direction,
-   * since a view is only honest about rules the host actually applies.
-   */
-  shippedDefaults: z.string().optional(),
-});
+export const autoPolicyGetResponseSchema = lazySchema(() =>
+  z.object({
+    /** The policy prose; `null` when the account has never saved one. */
+    body: z.string().nullable(),
+    /**
+     * ISO-8601 of the last save, so the panel can warn before clobbering an edit
+     * made on another device. `null` whenever `body` is - and also when the host
+     * is serving a CACHED copy it could not refresh, which is why the panel must
+     * treat a null here as "cannot tell", not as "never edited".
+     */
+    updatedAt: z.string().nullable(),
+    source: autoPolicySourceSchema,
+    /**
+     * See {@link autoPolicyReadStateSchema}.
+     *
+     * `.optional()`, not required and not `.default("fresh")`, because this
+     * property was added to `1.0` IN PLACE - the line is unreleased, so it takes
+     * no minor of its own, and the consequence of that is that nothing on the
+     * wire distinguishes a host whose resolver fills this field from one that
+     * predates it. The negotiated version is `1.0` either way, so the READER has
+     * to spell the fallback (`autoPolicyReadStateFor` in the GUI), exactly as
+     * `ProviderCliState.autoJudge` makes its reader spell `?? "traycer"`. The
+     * fallback is `fresh`: it reproduces the panel's behaviour before the field
+     * existed, which is the only behaviour an older host can support.
+     */
+    readState: autoPolicyReadStateSchema.optional(),
+    /**
+     * The WHOLE shipped judge policy this host would apply, verbatim.
+     *
+     * The document, not a parsed tier: the client renders sections of it under
+     * user-facing labels, and parsing it on the wire would freeze the section
+     * list into the contract - every edit to the shipped policy would then be a
+     * protocol change. It is bundled with the host
+     * (`resources/auto-judge/defaults.md`) rather than fetched, so it is
+     * readable even when the account policy above is not.
+     *
+     * `.optional()` for the same reason as `readState`. A client that does not
+     * receive it renders no shipped-policy view at all - the right direction,
+     * since a view is only honest about rules the host actually applies.
+     */
+    shippedDefaults: z.string().optional(),
+  }),
+);
 export type AutoPolicyGetResponse = z.infer<typeof autoPolicyGetResponseSchema>;
 
 export const autoPolicyGetV10 = defineRpcContract({
@@ -243,15 +262,19 @@ export const autoPolicyGetV10 = defineRpcContract({
   responseSchema: autoPolicyGetResponseSchema,
 });
 
-export const autoPolicySetRequestSchema = z.object({
-  /** Last-write-wins; an empty string is a real value that clears the policy. */
-  body: z.string(),
-});
+export const autoPolicySetRequestSchema = lazySchema(() =>
+  z.object({
+    /** Last-write-wins; an empty string is a real value that clears the policy. */
+    body: z.string(),
+  }),
+);
 export type AutoPolicySetRequest = z.infer<typeof autoPolicySetRequestSchema>;
 
-export const autoPolicySetResponseSchema = z.object({
-  updatedAt: z.string().nullable(),
-});
+export const autoPolicySetResponseSchema = lazySchema(() =>
+  z.object({
+    updatedAt: z.string().nullable(),
+  }),
+);
 export type AutoPolicySetResponse = z.infer<typeof autoPolicySetResponseSchema>;
 
 export const autoPolicySetV10 = defineRpcContract({

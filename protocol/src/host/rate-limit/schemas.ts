@@ -11,6 +11,7 @@ import {
   providerIdSchemaV70,
   providerIdSchemaV80,
 } from "@traycer/protocol/host/provider-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
 // v1.1 client can Zod-strip its `accountContext` away when projecting the request
@@ -18,7 +19,7 @@ import {
 // field instead of dropping it, breaking the minor downgrade. The shipped v1.0.0
 // host parses the resulting `{}` identically (it never carried extra keys), so
 // dropping `.strict()` here is invisible on the wire.
-export const rateLimitUsageRequestSchemaV10 = z.object({});
+export const rateLimitUsageRequestSchemaV10 = lazySchema(() => z.object({}));
 export type RateLimitUsageRequestV10 = z.infer<
   typeof rateLimitUsageRequestSchemaV10
 >;
@@ -27,10 +28,11 @@ export type RateLimitUsageRequestV10 = z.infer<
 // org/personal context. Added as a minor (NOT an in-place edit to v1.0) so a
 // shipped v1.0.0 host still negotiates. Defaulted so a caller that omits it - and
 // the v1.0 -> v1.1 upgrade path - resolves to the personal context.
-export const rateLimitUsageRequestSchemaV11 =
+export const rateLimitUsageRequestSchemaV11 = lazySchema(() =>
   rateLimitUsageRequestSchemaV10.extend({
     accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
-  });
+  }),
+);
 export type RateLimitUsageRequestV11 = z.infer<
   typeof rateLimitUsageRequestSchemaV11
 >;
@@ -38,11 +40,13 @@ export type RateLimitUsageRequestV11 = z.infer<
 // Mirrors the aperture rate-limit shape defined in an internal shared package
 // (not in this repo) - the aperture gRPC return shape the Traycer cloud
 // backend maps straight onto this wire contract. Unchanged across v1.0 / v1.1.
-export const rateLimitUsageResponseSchema = z.object({
-  totalTokens: z.number(),
-  remainingTokens: z.number(),
-  retryAfter: z.number().optional(),
-});
+export const rateLimitUsageResponseSchema = lazySchema(() =>
+  z.object({
+    totalTokens: z.number(),
+    remainingTokens: z.number(),
+    retryAfter: z.number().optional(),
+  }),
+);
 export type RateLimitUsageResponse = z.infer<
   typeof rateLimitUsageResponseSchema
 >;
@@ -61,11 +65,12 @@ export type RateLimitUsageResponse = z.infer<
 // ambient-only usage; an old client's omitted key resolves to `null` here) -
 // see the released-peer compat gate's "added optional properties are safe"
 // rule.
-export const rateLimitUsageRequestSchemaV12 =
+export const rateLimitUsageRequestSchemaV12 = lazySchema(() =>
   rateLimitUsageRequestSchemaV11.extend({
     providerId: providerIdSchema.optional(),
     profileId: z.string().nullable().default(null),
-  });
+  }),
+);
 export type RateLimitUsageRequestV12 = z.infer<
   typeof rateLimitUsageRequestSchemaV12
 >;
@@ -93,10 +98,11 @@ export type RateLimitUsageRequestV12 = z.infer<
 // Travelling down to a released peer (the 4->3/2/1 bridges in `contracts.ts`)
 // drops the key, so an old host still forces - a strictly safe degradation
 // (an extra spawn), never a stale read.
-export const rateLimitUsageRequestSchemaV40 =
+export const rateLimitUsageRequestSchemaV40 = lazySchema(() =>
   rateLimitUsageRequestSchemaV12.extend({
     force: z.boolean().optional(),
-  });
+  }),
+);
 export type RateLimitUsageRequestV40 = z.infer<
   typeof rateLimitUsageRequestSchemaV40
 >;
@@ -104,11 +110,13 @@ export type RateLimitUsageRequestV40 = z.infer<
 // A normalized rolling rate-limit window, shared by every provider arm below.
 // `resetsAt` is epoch-ms (each provider's native reset representation is
 // normalized to this at the host boundary).
-export const providerRateLimitWindowSchema = z.object({
-  usedPercent: z.number(),
-  resetsAt: z.number().nullable(),
-  durationMinutes: z.number().nullable(),
-});
+export const providerRateLimitWindowSchema = lazySchema(() =>
+  z.object({
+    usedPercent: z.number(),
+    resetsAt: z.number().nullable(),
+    durationMinutes: z.number().nullable(),
+  }),
+);
 export type ProviderRateLimitWindow = z.infer<
   typeof providerRateLimitWindowSchema
 >;
@@ -117,101 +125,113 @@ export type ProviderRateLimitWindow = z.infer<
 // available arms below tag on it, the host's reader dispatch narrows to it
 // (exhaustively), and the GUI derives its `RateLimitProviderId` from it - so
 // adding a provider is one edit the compiler propagates across all three.
-export const rateLimitCapableProviderIdSchema = z.enum([
-  "codex",
-  "claude-code",
-  "openrouter",
-  "kilocode",
-  "grok",
-  "huggingface",
-  "opencode",
-  "cursor",
-]);
+export const rateLimitCapableProviderIdSchema = lazySchema(() =>
+  z.enum([
+    "codex",
+    "claude-code",
+    "openrouter",
+    "kilocode",
+    "grok",
+    "huggingface",
+    "opencode",
+    "cursor",
+  ]),
+);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
 >;
 
-const codexResetCreditsSchemaV20 = z.object({
-  availableCount: z.number(),
-});
+const codexResetCreditsSchemaV20 = lazySchema(() =>
+  z.object({
+    availableCount: z.number(),
+  }),
+);
 
-const codexResetCreditsSchema = codexResetCreditsSchemaV20.extend({
-  // Newer Codex app-server builds enrich the summary with individual
-  // credits. `null` is the backward-compatible count-only response; an empty
-  // array means the detail fetch completed with no rows. The backend may cap
-  // this list, so it can be shorter than `availableCount`.
-  credits: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        resetType: z.enum(["codexRateLimits", "unknown"]),
-        status: z.enum(["available", "redeeming", "redeemed", "unknown"]),
-        grantedAt: z.number(),
-        expiresAt: z.number().nullable(),
-        title: z.string().nullable(),
-        description: z.string().nullable(),
-      }),
-    )
-    .nullable()
-    .default(null),
-});
+const codexResetCreditsSchema = lazySchema(() =>
+  codexResetCreditsSchemaV20.extend({
+    // Newer Codex app-server builds enrich the summary with individual
+    // credits. `null` is the backward-compatible count-only response; an empty
+    // array means the detail fetch completed with no rows. The backend may cap
+    // this list, so it can be shorter than `availableCount`.
+    credits: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          resetType: z.enum(["codexRateLimits", "unknown"]),
+          status: z.enum(["available", "redeeming", "redeemed", "unknown"]),
+          grantedAt: z.number(),
+          expiresAt: z.number().nullable(),
+          title: z.string().nullable(),
+          description: z.string().nullable(),
+        }),
+      )
+      .nullable()
+      .default(null),
+  }),
+);
 
 // Frozen Codex arm used by released host.getRateLimitUsage v1/v2 schemas.
 // Per-credit details ship behind v3 so older clients never receive a new key.
-const codexRateLimitsSchemaV20 = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum.codex),
-  available: z.literal(true),
-  planType: z.string().nullable(),
-  limitId: z.string().nullable(),
-  limitName: z.string().nullable(),
-  primary: providerRateLimitWindowSchema.nullable(),
-  secondary: providerRateLimitWindowSchema.nullable(),
-  extraWindows: z.array(
-    z.object({
-      limitId: z.string(),
-      limitName: z.string().nullable(),
-      primary: providerRateLimitWindowSchema.nullable(),
-      secondary: providerRateLimitWindowSchema.nullable(),
-    }),
-  ),
-  credits: z
-    .object({
-      hasCredits: z.boolean(),
-      unlimited: z.boolean(),
-      balance: z.string().nullable(),
-    })
-    .nullable(),
-  individualLimit: z
-    .object({
-      limit: z.string(),
-      used: z.string(),
-      remainingPercent: z.number(),
-      resetsAt: z.number(),
-    })
-    .nullable(),
-  resetCredits: codexResetCreditsSchemaV20.nullable(),
-  rateLimitReachedType: z.string().nullable(),
-});
+const codexRateLimitsSchemaV20 = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.codex),
+    available: z.literal(true),
+    planType: z.string().nullable(),
+    limitId: z.string().nullable(),
+    limitName: z.string().nullable(),
+    primary: providerRateLimitWindowSchema.nullable(),
+    secondary: providerRateLimitWindowSchema.nullable(),
+    extraWindows: z.array(
+      z.object({
+        limitId: z.string(),
+        limitName: z.string().nullable(),
+        primary: providerRateLimitWindowSchema.nullable(),
+        secondary: providerRateLimitWindowSchema.nullable(),
+      }),
+    ),
+    credits: z
+      .object({
+        hasCredits: z.boolean(),
+        unlimited: z.boolean(),
+        balance: z.string().nullable(),
+      })
+      .nullable(),
+    individualLimit: z
+      .object({
+        limit: z.string(),
+        used: z.string(),
+        remainingPercent: z.number(),
+        resetsAt: z.number(),
+      })
+      .nullable(),
+    resetCredits: codexResetCreditsSchemaV20.nullable(),
+    rateLimitReachedType: z.string().nullable(),
+  }),
+);
 
-const codexRateLimitsSchema = codexRateLimitsSchemaV20.extend({
-  resetCredits: codexResetCreditsSchema.nullable(),
-});
+const codexRateLimitsSchema = lazySchema(() =>
+  codexRateLimitsSchemaV20.extend({
+    resetCredits: codexResetCreditsSchema.nullable(),
+  }),
+);
 
 // OpenRouter arm - httpFetch-class provider (a plain GET against OpenRouter's
 // key/credits endpoints, no subprocess). Field names are a sketch, not yet
 // verified against a live call - see the Tech Plan's "Open items".
-const openRouterRateLimitsSchema = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum.openrouter),
-  available: z.literal(true),
-  limit: z.number().nullable(),
-  limitRemaining: z.number().nullable(),
-  dailySpend: z.number().nullable(),
-  weeklySpend: z.number().nullable(),
-  monthlySpend: z.number().nullable(),
-  totalCredits: z.number().nullable(),
-  totalUsage: z.number().nullable(),
-  balance: z.number().nullable(),
-});
+const openRouterRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.openrouter),
+    available: z.literal(true),
+    limit: z.number().nullable(),
+    limitRemaining: z.number().nullable(),
+    dailySpend: z.number().nullable(),
+    weeklySpend: z.number().nullable(),
+    monthlySpend: z.number().nullable(),
+    totalCredits: z.number().nullable(),
+    totalUsage: z.number().nullable(),
+    balance: z.number().nullable(),
+  }),
+);
 
 // Hugging Face arm - httpFetch-class provider (a plain GET against
 // `huggingface.co/api/settings/billing/usage-v2` with the personal token, no
@@ -226,64 +246,74 @@ const openRouterRateLimitsSchema = z.object({
 // therefore only derivable when their base is present, and the host sends null
 // rather than a misleading zero. Values are USD floats - the wire carries
 // nano-USD integers and the host divides, so no consumer has to know the unit.
-const huggingFaceRateLimitsSchema = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum.huggingface),
-  available: z.literal(true),
-  includedUsd: z.number().nullable(),
-  usedUsd: z.number(),
-  remainingIncludedUsd: z.number().nullable(),
-  limitUsd: z.number().nullable(),
-  remainingLimitUsd: z.number().nullable(),
-  numRequests: z.number().nullable(),
-  periodStart: z.string().nullable(),
-  periodEnd: z.string().nullable(),
-});
+const huggingFaceRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.huggingface),
+    available: z.literal(true),
+    includedUsd: z.number().nullable(),
+    usedUsd: z.number(),
+    remainingIncludedUsd: z.number().nullable(),
+    limitUsd: z.number().nullable(),
+    remainingLimitUsd: z.number().nullable(),
+    numRequests: z.number().nullable(),
+    periodStart: z.string().nullable(),
+    periodEnd: z.string().nullable(),
+  }),
+);
 
-const openCodeGoWindowSchema = providerRateLimitWindowSchema.extend({
-  status: z.enum(["ok", "rate-limited"]),
-});
+const openCodeGoWindowSchema = lazySchema(() =>
+  providerRateLimitWindowSchema.extend({
+    status: z.enum(["ok", "rate-limited"]),
+  }),
+);
 
-const openCodeRateLimitsSchema = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum.opencode),
-  available: z.literal(true),
-  // Opaque renderer-cache epoch. The credential fingerprint never leaves the
-  // host; this random generation only prevents retaining another key's usage.
-  credentialGeneration: z.string().min(1),
-  fiveHour: openCodeGoWindowSchema,
-  weekly: openCodeGoWindowSchema,
-  monthly: openCodeGoWindowSchema,
-});
+const openCodeRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.opencode),
+    available: z.literal(true),
+    // Opaque renderer-cache epoch. The credential fingerprint never leaves the
+    // host; this random generation only prevents retaining another key's usage.
+    credentialGeneration: z.string().min(1),
+    fiveHour: openCodeGoWindowSchema,
+    weekly: openCodeGoWindowSchema,
+    monthly: openCodeGoWindowSchema,
+  }),
+);
 
 // Kilo Code arm - httpFetch-class provider (reads its own credential file,
 // no subprocess). Field names are a sketch, not yet verified against a live
 // call - see the Tech Plan's "Open items".
-const kiloCodeRateLimitsSchema = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum.kilocode),
-  available: z.literal(true),
-  creditBalance: z.number().nullable(),
-  passState: z.string().nullable(),
-});
+const kiloCodeRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.kilocode),
+    available: z.literal(true),
+    creditBalance: z.number().nullable(),
+    passState: z.string().nullable(),
+  }),
+);
 
-const claudeCodeRateLimitsSchema = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum["claude-code"]),
-  available: z.literal(true),
-  subscriptionType: z.string().nullable(),
-  fiveHour: providerRateLimitWindowSchema.nullable(),
-  sevenDay: providerRateLimitWindowSchema.nullable(),
-  sevenDayOpus: providerRateLimitWindowSchema.nullable(),
-  sevenDaySonnet: providerRateLimitWindowSchema.nullable(),
-  modelScoped: z.array(
-    z.object({ displayName: z.string() }).and(providerRateLimitWindowSchema),
-  ),
-  extraUsage: z
-    .object({
-      isEnabled: z.boolean(),
-      monthlyLimit: z.number().nullable(),
-      usedCredits: z.number().nullable(),
-      utilization: z.number().nullable(),
-    })
-    .nullable(),
-});
+const claudeCodeRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum["claude-code"]),
+    available: z.literal(true),
+    subscriptionType: z.string().nullable(),
+    fiveHour: providerRateLimitWindowSchema.nullable(),
+    sevenDay: providerRateLimitWindowSchema.nullable(),
+    sevenDayOpus: providerRateLimitWindowSchema.nullable(),
+    sevenDaySonnet: providerRateLimitWindowSchema.nullable(),
+    modelScoped: z.array(
+      z.object({ displayName: z.string() }).and(providerRateLimitWindowSchema),
+    ),
+    extraUsage: z
+      .object({
+        isEnabled: z.boolean(),
+        monthlyLimit: z.number().nullable(),
+        usedCredits: z.number().nullable(),
+        utilization: z.number().nullable(),
+      })
+      .nullable(),
+  }),
+);
 
 // Grok arm - ephemeral-CLI-class provider (usage is read over the vendored
 // grok CLI's own `_x.ai/billing` ACP extension, so Traycer never touches the
@@ -293,40 +323,43 @@ const claudeCodeRateLimitsSchema = z.object({
 // shared window primitive with zero special-casing) plus the raw credit
 // fields. Every payload-derived field is nullable: xAI omits fields freely by
 // account type, and a zero-usage subscription reports only period + tier.
-const grokRateLimitsSchema = z
-  .object({
-    provider: z.literal(rateLimitCapableProviderIdSchema.enum.grok),
-    available: z.literal(true),
-    subscriptionTier: z.string().nullable(),
-    periodType: z.string().nullable(),
-    periodStart: z.number().nullable(),
-    periodEnd: z.number().nullable(),
-    period: providerRateLimitWindowSchema.nullable(),
-    monthlyLimit: z.number().nullable(),
-    onDemandCap: z.number().nullable(),
-    onDemandUsed: z.number().nullable(),
-    prepaidBalance: z.number().nullable(),
-  })
-  .superRefine((value, ctx) => {
-    // `period.resetsAt` and `periodEnd` denote the same instant by
-    // construction - the host synthesizes the window's reset FROM the period
-    // end. The redundancy is deliberate: `periodEnd` is kept as its own field
-    // so the billing-period bounds survive a period-less, unmeasured snapshot
-    // (`period` is null and only `periodEnd` carries the end). Enforce that
-    // invariant at the wire boundary so a measured period can never omit or
-    // disagree with the known reset instant.
-    if (
-      value.periodEnd !== null &&
-      value.period !== null &&
-      value.period.resetsAt !== value.periodEnd
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "grok period.resetsAt must equal periodEnd when period is set",
-        path: ["period", "resetsAt"],
-      });
-    }
-  });
+const grokRateLimitsSchema = lazySchema(() =>
+  z
+    .object({
+      provider: z.literal(rateLimitCapableProviderIdSchema.enum.grok),
+      available: z.literal(true),
+      subscriptionTier: z.string().nullable(),
+      periodType: z.string().nullable(),
+      periodStart: z.number().nullable(),
+      periodEnd: z.number().nullable(),
+      period: providerRateLimitWindowSchema.nullable(),
+      monthlyLimit: z.number().nullable(),
+      onDemandCap: z.number().nullable(),
+      onDemandUsed: z.number().nullable(),
+      prepaidBalance: z.number().nullable(),
+    })
+    .superRefine((value, ctx) => {
+      // `period.resetsAt` and `periodEnd` denote the same instant by
+      // construction - the host synthesizes the window's reset FROM the period
+      // end. The redundancy is deliberate: `periodEnd` is kept as its own field
+      // so the billing-period bounds survive a period-less, unmeasured snapshot
+      // (`period` is null and only `periodEnd` carries the end). Enforce that
+      // invariant at the wire boundary so a measured period can never omit or
+      // disagree with the known reset instant.
+      if (
+        value.periodEnd !== null &&
+        value.period !== null &&
+        value.period.resetsAt !== value.periodEnd
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "grok period.resetsAt must equal periodEnd when period is set",
+          path: ["period", "resetsAt"],
+        });
+      }
+    }),
+);
 
 // Cursor arm - httpFetch-class provider (two plain POSTs, no subprocess).
 //
@@ -370,55 +403,57 @@ const grokRateLimitsSchema = z
 // read those as whole dollars and displayed $100; the cents rule has no
 // exceptions.) The on-demand fields carry the dashboard's "On-Demand
 // Spending" numbers and are named for it.
-const cursorRateLimitsSchema = z
-  .object({
-    provider: z.literal(rateLimitCapableProviderIdSchema.enum.cursor),
-    available: z.literal(true),
-    cycleStart: z.number().nullable(),
-    cycleEnd: z.number().nullable(),
-    cursorModels: providerRateLimitWindowSchema.nullable(),
-    otherModels: providerRateLimitWindowSchema.nullable(),
-    includedLimitUsd: z.number().nullable(),
-    usedUsd: z.number().nullable(),
-    remainingUsd: z.number().nullable(),
-    // Spend covered by Cursor's bonus grant ("free usage beyond what you've
-    // purchased") - the payload's `bonusSpend`, expected to populate once
-    // `usedUsd` crosses `includedLimitUsd`. Null until then (proto3 omits
-    // zero-valued fields), so a consumer can distinguish "no bonus consumed"
-    // from a payload that never carried the field.
-    bonusUsedUsd: z.number().nullable(),
-    onDemandLimitType: z.string().nullable(),
-    onDemandLimitUsd: z.number().nullable(),
-    onDemandUsedUsd: z.number().nullable(),
-    onDemandRemainingUsd: z.number().nullable(),
-    // Cursor's own rendering of the blended headline ("You've used 79% of
-    // your included usage"). Carried so a consumer can show the provider's
-    // wording for the pool the money fields describe.
-    displayMessage: z.string().nullable(),
-  })
-  .superRefine((value, ctx) => {
-    // Same invariant grok's arm enforces, for the same reason: the host
-    // synthesizes each window's reset FROM the billing-cycle end, so the two
-    // denote one instant by construction. `cycleEnd` is kept as its own field
-    // so the cycle bounds survive a snapshot whose usage could not be
-    // measured (both windows null, `cycleEnd` still known). Enforce it at the
-    // wire boundary so a measured window can never omit or disagree with the
-    // known reset.
-    for (const key of ["cursorModels", "otherModels"] as const) {
-      const window = value[key];
-      if (
-        value.cycleEnd !== null &&
-        window !== null &&
-        window.resetsAt !== value.cycleEnd
-      ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `cursor ${key}.resetsAt must equal cycleEnd when the window is set`,
-          path: [key, "resetsAt"],
-        });
+const cursorRateLimitsSchema = lazySchema(() =>
+  z
+    .object({
+      provider: z.literal(rateLimitCapableProviderIdSchema.enum.cursor),
+      available: z.literal(true),
+      cycleStart: z.number().nullable(),
+      cycleEnd: z.number().nullable(),
+      cursorModels: providerRateLimitWindowSchema.nullable(),
+      otherModels: providerRateLimitWindowSchema.nullable(),
+      includedLimitUsd: z.number().nullable(),
+      usedUsd: z.number().nullable(),
+      remainingUsd: z.number().nullable(),
+      // Spend covered by Cursor's bonus grant ("free usage beyond what you've
+      // purchased") - the payload's `bonusSpend`, expected to populate once
+      // `usedUsd` crosses `includedLimitUsd`. Null until then (proto3 omits
+      // zero-valued fields), so a consumer can distinguish "no bonus consumed"
+      // from a payload that never carried the field.
+      bonusUsedUsd: z.number().nullable(),
+      onDemandLimitType: z.string().nullable(),
+      onDemandLimitUsd: z.number().nullable(),
+      onDemandUsedUsd: z.number().nullable(),
+      onDemandRemainingUsd: z.number().nullable(),
+      // Cursor's own rendering of the blended headline ("You've used 79% of
+      // your included usage"). Carried so a consumer can show the provider's
+      // wording for the pool the money fields describe.
+      displayMessage: z.string().nullable(),
+    })
+    .superRefine((value, ctx) => {
+      // Same invariant grok's arm enforces, for the same reason: the host
+      // synthesizes each window's reset FROM the billing-cycle end, so the two
+      // denote one instant by construction. `cycleEnd` is kept as its own field
+      // so the cycle bounds survive a snapshot whose usage could not be
+      // measured (both windows null, `cycleEnd` still known). Enforce it at the
+      // wire boundary so a measured window can never omit or disagree with the
+      // known reset.
+      for (const key of ["cursorModels", "otherModels"] as const) {
+        const window = value[key];
+        if (
+          value.cycleEnd !== null &&
+          window !== null &&
+          window.resetsAt !== value.cycleEnd
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `cursor ${key}.resetsAt must equal cycleEnd when the window is set`,
+            path: [key, "resetsAt"],
+          });
+        }
       }
-    }
-  });
+    }),
+);
 
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
@@ -438,16 +473,18 @@ const cursorRateLimitsSchema = z
 // in-place edit here. Widening this enum in place would make the v1.2
 // contract accept and forward the new value straight through to an old GUI
 // whose baked schema only knows these eight.
-export const rateLimitUnavailableReasonSchemaV1 = z.enum([
-  "cli_not_found",
-  "unsupported_provider",
-  "invalid_response",
-  "timeout",
-  "connection_failed",
-  "rate_limits_not_available",
-  "sdk_incompatible",
-  "insufficient_permissions",
-]);
+export const rateLimitUnavailableReasonSchemaV1 = lazySchema(() =>
+  z.enum([
+    "cli_not_found",
+    "unsupported_provider",
+    "invalid_response",
+    "timeout",
+    "connection_failed",
+    "rate_limits_not_available",
+    "sdk_incompatible",
+    "insufficient_permissions",
+  ]),
+);
 export type RateLimitUnavailableReasonV1 = z.infer<
   typeof rateLimitUnavailableReasonSchemaV1
 >;
@@ -461,17 +498,19 @@ export type RateLimitUnavailableReasonV1 = z.infer<
 // code gets the new value from the default import path; a
 // `host.getRateLimitUsage@1.2` caller keeps seeing only the frozen v1 enum,
 // via the downgrade bridge in `rate-limit/contracts.ts`.
-export const rateLimitUnavailableReasonSchemaV2 = z.enum([
-  "cli_not_found",
-  "unsupported_provider",
-  "invalid_response",
-  "timeout",
-  "connection_failed",
-  "rate_limits_not_available",
-  "sdk_incompatible",
-  "insufficient_permissions",
-  "usage_fetch_failed",
-]);
+export const rateLimitUnavailableReasonSchemaV2 = lazySchema(() =>
+  z.enum([
+    "cli_not_found",
+    "unsupported_provider",
+    "invalid_response",
+    "timeout",
+    "connection_failed",
+    "rate_limits_not_available",
+    "sdk_incompatible",
+    "insufficient_permissions",
+    "usage_fetch_failed",
+  ]),
+);
 export type RateLimitUnavailableReason = z.infer<
   typeof rateLimitUnavailableReasonSchemaV2
 >;
@@ -491,46 +530,55 @@ export type RateLimitUnavailableReason = z.infer<
 // frozen v1 enum (feeds `providerRateLimitsSchemaV1`, which only the v1.2
 // response uses); `unavailableProviderRateLimitsSchemaV2` tags it with the
 // v2 enum used by every frozen newer response and the latest response.
-const unavailableProviderRateLimitsSchemaV1 = z.object({
-  provider: providerIdSchema,
-  available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchemaV1,
-});
+const unavailableProviderRateLimitsSchemaV1 = lazySchema(() =>
+  z.object({
+    provider: providerIdSchema,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV1,
+  }),
+);
 
-const unavailableProviderRateLimitsSchemaV2 = z.object({
-  provider: providerIdSchema,
-  available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchemaV2,
-});
+const unavailableProviderRateLimitsSchemaV2 = lazySchema(() =>
+  z.object({
+    provider: providerIdSchema,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV2,
+  }),
+);
 
-const unavailableProviderRateLimitsSchema =
+const unavailableProviderRateLimitsSchema = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV2.extend({
     // Present on OpenCode snapshots so renderer retention is scoped to the
     // credential observed by the host. Other providers omit it.
     credentialGeneration: z.string().min(1).optional(),
-  });
+  }),
+);
 
 // Provider-tagged union of account rate-limit snapshots, frozen at the v1
 // reason enum. Feeds `rateLimitUsageResponseSchemaV12` only, so the
 // still-installed v1.2 response schema keeps rejecting `usage_fetch_failed`.
-export const providerRateLimitsSchemaV1 = z.union([
-  codexRateLimitsSchemaV20,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV1,
-]);
+export const providerRateLimitsSchemaV1 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchemaV20,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV1,
+  ]),
+);
 export type ProviderRateLimitsV1 = z.infer<typeof providerRateLimitsSchemaV1>;
 
 // Frozen v2 provider union: v2 adds the usage-fetch reason but retains the
 // count-only Codex reset-credit shape released at this wire version.
-export const providerRateLimitsSchemaV2 = z.union([
-  codexRateLimitsSchemaV20,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV2,
-]);
+export const providerRateLimitsSchemaV2 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchemaV20,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV2,
+  ]),
+);
 
 // Frozen v2.1 provider union - a byte-for-byte snapshot of the live union as
 // shipped in `rateLimitUsageResponseSchemaV21` (host.getRateLimitUsage@2.1):
@@ -540,13 +588,15 @@ export const providerRateLimitsSchemaV2 = z.union([
 // live union below gains grok. New available arms travel behind a new major
 // (`host.getRateLimitUsage@3.0`) with a downgrade bridge, never an in-place
 // edit here. Do NOT widen this schema.
-export const providerRateLimitsSchemaV21 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV2,
-]);
+export const providerRateLimitsSchemaV21 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV2,
+  ]),
+);
 export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 
 // Latest provider union, carried by `host.getRateLimitUsage@4.0` and
@@ -562,17 +612,19 @@ export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 // unbound union documenting a freeze that no longer exists. Adding an arm here
 // therefore GROWS THE 4.0 WIRE immediately; the bridges below are what keep the
 // released 3.0/2.1/1.2 lines parsing.
-export const providerRateLimitsSchema = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  huggingFaceRateLimitsSchema,
-  openCodeRateLimitsSchema,
-  cursorRateLimitsSchema,
-  unavailableProviderRateLimitsSchema,
-]);
+export const providerRateLimitsSchema = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    unavailableProviderRateLimitsSchema,
+  ]),
+);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
 
 // Frozen v3.0-line union - the live union as `cli-v1.1.8` first shipped it and
@@ -586,14 +638,16 @@ export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
 // client's frozen union has no such variant and strict-decodes the frame - so
 // the arm travels on v4.0 with a bridge that degrades it. Do NOT widen this
 // schema.
-export const providerRateLimitsSchemaV30 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV2,
-]);
+export const providerRateLimitsSchemaV30 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV2,
+  ]),
+);
 export type ProviderRateLimitsV30 = z.infer<typeof providerRateLimitsSchemaV30>;
 
 // Single home for the grok available -> unavailable degrade every downgrade
@@ -696,11 +750,13 @@ export function mapOpenCodeAvailableToUnavailable(
 // host-v1.1.7, before Hermes/omp) so an already-shipped
 // `agent.getProviderProfileRateLimits@1.0` caller's strict decode never sees a
 // post-v4.0 `provider` (`"hermes"`, `"omp"`) in the `available: false` arm.
-const unavailableProviderRateLimitsSchemaV40 = z.object({
-  provider: providerIdSchemaV40,
-  available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchemaV2,
-});
+const unavailableProviderRateLimitsSchemaV40 = lazySchema(() =>
+  z.object({
+    provider: providerIdSchemaV40,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV2,
+  }),
+);
 
 /**
  * Frozen pre-Hermes provider union - identical to the latest `providerRateLimitsSchema`
@@ -713,13 +769,15 @@ const unavailableProviderRateLimitsSchemaV40 = z.object({
  * mis-decoding it. Do NOT widen this schema - extend the latest schema and use
  * that v2 bridge instead.
  */
-export const providerRateLimitsSchemaV40 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV40,
-]);
+export const providerRateLimitsSchemaV40 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV40,
+  ]),
+);
 export type ProviderRateLimitsV40 = z.infer<typeof providerRateLimitsSchemaV40>;
 
 // Frozen pre-omp unavailable arm: same v2 reason enum, but `provider` is
@@ -727,11 +785,13 @@ export type ProviderRateLimitsV40 = z.infer<typeof providerRateLimitsSchemaV40>;
 // cli-v1.1.8 / host-v1.1.8, with Hermes and before omp) so an already-shipped
 // `agent.getProviderProfileRateLimits@2.0` caller's strict decode never sees
 // `"omp"` in the `available: false` arm.
-const unavailableProviderRateLimitsSchemaV50 = z.object({
-  provider: providerIdSchemaV50,
-  available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchemaV2,
-});
+const unavailableProviderRateLimitsSchemaV50 = lazySchema(() =>
+  z.object({
+    provider: providerIdSchemaV50,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV2,
+  }),
+);
 
 /**
  * Frozen pre-omp provider union - identical to the latest
@@ -748,14 +808,16 @@ const unavailableProviderRateLimitsSchemaV50 = z.object({
  * of silently mis-decoding it. Do NOT widen this schema - extend the latest
  * schema and use that v3 bridge instead.
  */
-export const providerRateLimitsSchemaV50 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV50,
-]);
+export const providerRateLimitsSchemaV50 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV50,
+  ]),
+);
 export type ProviderRateLimitsV50 = z.infer<typeof providerRateLimitsSchemaV50>;
 
 // Frozen pre-Hugging-Face unavailable arm: same v2 reason enum, but `provider`
@@ -763,11 +825,13 @@ export type ProviderRateLimitsV50 = z.infer<typeof providerRateLimitsSchemaV50>;
 // cli-v1.1.9 / host-v1.1.9, with omp and before Hugging Face) so an
 // already-shipped `agent.getProviderProfileRateLimits@3.0` caller's strict
 // decode never sees `"huggingface"` in the `available: false` arm.
-const unavailableProviderRateLimitsSchemaV60 = z.object({
-  provider: providerIdSchemaV60,
-  available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchemaV2,
-});
+const unavailableProviderRateLimitsSchemaV60 = lazySchema(() =>
+  z.object({
+    provider: providerIdSchemaV60,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV2,
+  }),
+);
 
 /**
  * Frozen pre-Hugging-Face provider union - identical to the latest
@@ -789,14 +853,16 @@ const unavailableProviderRateLimitsSchemaV60 = z.object({
  * degraded Hugging Face snapshot would still reach a v3.0 caller as an
  * `available: false` row naming a provider that line has never heard of.
  */
-export const providerRateLimitsSchemaV60 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV60,
-]);
+export const providerRateLimitsSchemaV60 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV60,
+  ]),
+);
 export type ProviderRateLimitsV60 = z.infer<typeof providerRateLimitsSchemaV60>;
 
 // Frozen pre-Reasonix unavailable arm: same v2 reason enum, but `provider` is
@@ -804,11 +870,13 @@ export type ProviderRateLimitsV60 = z.infer<typeof providerRateLimitsSchemaV60>;
 // cli-v1.2.0 / host-v1.2.0, with Hugging Face and before Reasonix) so an
 // already-shipped `agent.getProviderProfileRateLimits@4.0` caller's strict
 // decode never sees `"reasonix"` in the `available: false` arm.
-const unavailableProviderRateLimitsSchemaV70 = z.object({
-  provider: providerIdSchemaV70,
-  available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchemaV2,
-});
+const unavailableProviderRateLimitsSchemaV70 = lazySchema(() =>
+  z.object({
+    provider: providerIdSchemaV70,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV2,
+  }),
+);
 
 /**
  * Frozen `agent.getProviderProfileRateLimits@4.0` provider union - the live
@@ -835,19 +903,21 @@ const unavailableProviderRateLimitsSchemaV70 = z.object({
  *
  * Do NOT widen this schema - extend the latest union and use the v5 bridge.
  */
-export const providerRateLimitsSchemaV70 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  huggingFaceRateLimitsSchema,
-  openCodeRateLimitsSchema,
-  cursorRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV70.extend({
-    credentialGeneration: z.string().min(1).optional(),
-  }),
-]);
+export const providerRateLimitsSchemaV70 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV70.extend({
+      credentialGeneration: z.string().min(1).optional(),
+    }),
+  ]),
+);
 export type ProviderRateLimitsV70 = z.infer<typeof providerRateLimitsSchemaV70>;
 
 // Frozen pre-Antigravity unavailable arm: `provider` pinned to
@@ -855,11 +925,12 @@ export type ProviderRateLimitsV70 = z.infer<typeof providerRateLimitsSchemaV70>;
 // already-shipped `agent.getProviderProfileRateLimits@5.0` /
 // `providers.refreshProfileStatus@1.0` caller's strict decode never sees
 // `"antigravity"` in the `available: false` arm.
-const unavailableProviderRateLimitsSchemaV80 =
+const unavailableProviderRateLimitsSchemaV80 = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV2.extend({
     provider: providerIdSchemaV80,
     credentialGeneration: z.string().min(1).optional(),
-  });
+  }),
+);
 
 /**
  * Frozen provider union as the 1.3.0 tags shipped it - the live union with the
@@ -875,17 +946,19 @@ const unavailableProviderRateLimitsSchemaV80 =
  * Every other arm is shared with the live union by reference: they carry no
  * provider-id enum, so there is nothing for them to drift on.
  */
-export const providerRateLimitsSchemaV80 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  huggingFaceRateLimitsSchema,
-  openCodeRateLimitsSchema,
-  cursorRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV80,
-]);
+export const providerRateLimitsSchemaV80 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV80,
+  ]),
+);
 export type ProviderRateLimitsV80 = z.infer<typeof providerRateLimitsSchemaV80>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
@@ -893,10 +966,11 @@ export type ProviderRateLimitsV80 = z.infer<typeof providerRateLimitsSchemaV80>;
 // `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
 // for a provider (aperture calls) and when a v1.1 host answers a v1.2
 // request (see the v1.1 -> v1.2 upgrade path).
-export const rateLimitUsageResponseSchemaV12 =
+export const rateLimitUsageResponseSchemaV12 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchemaV1.nullable(),
-  });
+  }),
+);
 export type RateLimitUsageResponseV12 = z.infer<
   typeof rateLimitUsageResponseSchemaV12
 >;
@@ -907,10 +981,11 @@ export type RateLimitUsageResponseV12 = z.infer<
 // `providerId`), so `hostGetRateLimitUsageV20` in `contracts.ts` reuses
 // `rateLimitUsageRequestSchemaV12` directly instead of defining a new request
 // schema here.
-export const rateLimitUsageResponseSchemaV20 =
+export const rateLimitUsageResponseSchemaV20 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchemaV2.nullable(),
-  });
+  }),
+);
 export type RateLimitUsageResponseV20 = z.infer<
   typeof rateLimitUsageResponseSchemaV20
 >;
@@ -922,10 +997,11 @@ export type RateLimitUsageResponseV20 = z.infer<
 // `providerRateLimitsSchemaV21` (NOT the live union) so the grok arm added to
 // the live union never reaches this shipped response - grok travels on the
 // v3.0 line below.
-export const rateLimitUsageResponseSchemaV21 =
+export const rateLimitUsageResponseSchemaV21 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchemaV21.nullable(),
-  });
+  }),
+);
 export type RateLimitUsageResponseV21 = z.infer<
   typeof rateLimitUsageResponseSchemaV21
 >;
@@ -938,10 +1014,11 @@ export type RateLimitUsageResponseV21 = z.infer<
 // strippable by the within-major skew handler - an old peer's frozen union has
 // no grok arm - so it needs an explicit downgrade bridge that degrades a
 // grok-available snapshot to the unavailable `unsupported_provider` shape.
-export const rateLimitUsageResponseSchemaV30 =
+export const rateLimitUsageResponseSchemaV30 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchemaV30.nullable(),
-  });
+  }),
+);
 export type RateLimitUsageResponseV30 = z.infer<
   typeof rateLimitUsageResponseSchemaV30
 >;
@@ -958,10 +1035,11 @@ export type RateLimitUsageResponseV30 = z.infer<
 // a frozen snapshot, because `4` is the newest major and no released peer has
 // ever negotiated it (the newest released baseline tops out at `3`). Freezing
 // it costs a pre-image and buys nothing until it ships.
-export const rateLimitUsageResponseSchemaV40 =
+export const rateLimitUsageResponseSchemaV40 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchema.nullable(),
-  });
+  }),
+);
 export type RateLimitUsageResponseV40 = z.infer<
   typeof rateLimitUsageResponseSchemaV40
 >;
@@ -972,17 +1050,21 @@ export type RateLimitUsageResponseV40 = z.infer<
  * deliberately has no `force`/bypass flag: reaching the dedicated method is
  * the user-maintenance intent, while ordinary reads remain execution-gated.
  */
-export const providersRefreshProfileStatusRequestSchema = z.object({
-  providerId: providerIdSchema,
-  profileId: z.string(),
-});
+export const providersRefreshProfileStatusRequestSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string(),
+  }),
+);
 export type ProvidersRefreshProfileStatusRequest = z.infer<
   typeof providersRefreshProfileStatusRequestSchema
 >;
 
-export const providersRefreshProfileStatusResponseSchema = z.object({
-  providerRateLimits: providerRateLimitsSchema,
-});
+export const providersRefreshProfileStatusResponseSchema = lazySchema(() =>
+  z.object({
+    providerRateLimits: providerRateLimitsSchema,
+  }),
+);
 export type ProvidersRefreshProfileStatusResponse = z.infer<
   typeof providersRefreshProfileStatusResponseSchema
 >;
@@ -993,9 +1075,11 @@ export type ProvidersRefreshProfileStatusResponse = z.infer<
  * first id added since. v2.0 carries the live union with a fail-closed v2->v1
  * bridge.
  */
-export const providersRefreshProfileStatusResponseSchemaV10 = z.object({
-  providerRateLimits: providerRateLimitsSchemaV80,
-});
+export const providersRefreshProfileStatusResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    providerRateLimits: providerRateLimitsSchemaV80,
+  }),
+);
 export type ProvidersRefreshProfileStatusResponseV10 = z.infer<
   typeof providersRefreshProfileStatusResponseSchemaV10
 >;
@@ -1005,32 +1089,35 @@ export type ProvidersRefreshProfileStatusResponseV10 = z.infer<
  * selected profile. The idempotency key is generated once by the GUI for a
  * confirmation attempt and reused by the transport if that request is retried.
  */
-export const providersConsumeRateLimitResetCreditRequestSchema = z.object({
-  providerId: z.literal("codex"),
-  profileId: z.string().nullable(),
-  idempotencyKey: z.string().min(1),
-  // `null` preserves the count-only/older-Codex fallback where the backend
-  // chooses a credit. A concrete id targets the earliest-expiring available
-  // credit selected by the GUI.
-  creditId: z.string().min(1).nullable().default(null),
-});
+export const providersConsumeRateLimitResetCreditRequestSchema = lazySchema(
+  () =>
+    z.object({
+      providerId: z.literal("codex"),
+      profileId: z.string().nullable(),
+      idempotencyKey: z.string().min(1),
+      // `null` preserves the count-only/older-Codex fallback where the backend
+      // chooses a credit. A concrete id targets the earliest-expiring available
+      // credit selected by the GUI.
+      creditId: z.string().min(1).nullable().default(null),
+    }),
+);
 export type ProvidersConsumeRateLimitResetCreditRequest = z.infer<
   typeof providersConsumeRateLimitResetCreditRequestSchema
 >;
 
-export const codexRateLimitResetOutcomeSchema = z.enum([
-  "reset",
-  "nothingToReset",
-  "noCredit",
-  "alreadyRedeemed",
-]);
+export const codexRateLimitResetOutcomeSchema = lazySchema(() =>
+  z.enum(["reset", "nothingToReset", "noCredit", "alreadyRedeemed"]),
+);
 export type CodexRateLimitResetOutcome = z.infer<
   typeof codexRateLimitResetOutcomeSchema
 >;
 
-export const providersConsumeRateLimitResetCreditResponseSchema = z.object({
-  outcome: codexRateLimitResetOutcomeSchema,
-});
+export const providersConsumeRateLimitResetCreditResponseSchema = lazySchema(
+  () =>
+    z.object({
+      outcome: codexRateLimitResetOutcomeSchema,
+    }),
+);
 export type ProvidersConsumeRateLimitResetCreditResponse = z.infer<
   typeof providersConsumeRateLimitResetCreditResponseSchema
 >;

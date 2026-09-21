@@ -231,6 +231,7 @@ import {
   epicMigrationPhaseSchema,
   epicPromotionStateSchema,
 } from "@traycer/protocol/host/epic/subscribe";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,
@@ -247,10 +248,12 @@ const permissionRoleSchema = getRecordSchema(
  * best-effort: the host may know the epic is gone without knowing who removed
  * it, and "deleted by nobody we can name" must stay renderable.
  */
-export const epicDeletionAttributionSchema = z.object({
-  deletedByDisplayName: z.string().nullable(),
-  deletedByTraycerUserId: z.string().nullable(),
-});
+export const epicDeletionAttributionSchema = lazySchema(() =>
+  z.object({
+    deletedByDisplayName: z.string().nullable(),
+    deletedByTraycerUserId: z.string().nullable(),
+  }),
+);
 export type EpicDeletionAttribution = z.infer<
   typeof epicDeletionAttributionSchema
 >;
@@ -302,14 +305,16 @@ export type EpicDeletionAttribution = z.infer<
  * exists only where it is meaningful; there is no `unknown` state carrying a
  * vestigial null attribution for a reader to misinterpret.
  */
-export const epicDeletionStatusSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("unknown") }),
-  z.object({ state: z.literal("none") }),
-  z.object({
-    state: z.literal("deleted"),
-    attribution: epicDeletionAttributionSchema,
-  }),
-]);
+export const epicDeletionStatusSchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({ state: z.literal("unknown") }),
+    z.object({ state: z.literal("none") }),
+    z.object({
+      state: z.literal("deleted"),
+      attribution: epicDeletionAttributionSchema,
+    }),
+  ]),
+);
 export type EpicDeletionStatus = z.infer<typeof epicDeletionStatusSchema>;
 
 /**
@@ -344,25 +349,27 @@ export type EpicDeletionStatus = z.infer<typeof epicDeletionStatusSchema>;
  * needed one" and "finished". Adding a terminal success state would create a
  * value every snapshot would have to carry forever with nothing to say.
  */
-export const epicMigrationStatusSchema = z.discriminatedUnion("state", [
-  z.object({
-    state: z.literal("running"),
-    progress: z
-      .object({
-        phase: epicMigrationPhaseSchema,
-        chunksDone: z.number().int().nonnegative(),
-        chunksTotal: z.number().int().positive(),
-      })
-      .nullable(),
-  }),
-  z.object({
-    state: z.literal("failed"),
-    reason: z.string(),
-  }),
-  z.object({
-    state: z.literal("notAllowed"),
-  }),
-]);
+export const epicMigrationStatusSchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({
+      state: z.literal("running"),
+      progress: z
+        .object({
+          phase: epicMigrationPhaseSchema,
+          chunksDone: z.number().int().nonnegative(),
+          chunksTotal: z.number().int().positive(),
+        })
+        .nullable(),
+    }),
+    z.object({
+      state: z.literal("failed"),
+      reason: z.string(),
+    }),
+    z.object({
+      state: z.literal("notAllowed"),
+    }),
+  ]),
+);
 export type EpicMigrationStatus = z.infer<typeof epicMigrationStatusSchema>;
 
 /**
@@ -378,7 +385,9 @@ export type EpicMigrationStatus = z.infer<typeof epicMigrationStatusSchema>;
  * useful operation is "is this newer than the one I acted under", which is an
  * ORDER, and the host is the sole writer so the order is well defined.
  */
-export const epicSecurityEpochSchema = z.number().int().nonnegative();
+export const epicSecurityEpochSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
 export type EpicSecurityEpoch = z.infer<typeof epicSecurityEpochSchema>;
 
 /**
@@ -387,16 +396,18 @@ export type EpicSecurityEpoch = z.infer<typeof epicSecurityEpochSchema>;
  * optional, and an absent `durability` / `localProtection` means UNKNOWN.
  */
 export const epicStatusDurabilityLegFields = {
-  durability: epicDurabilityStatusSchemaV15.optional(),
+  durability: lazySchema(() => epicDurabilityStatusSchemaV15.optional()),
   /** Meaningful only beside `durability: "paused"`. */
-  pauseReason: epicDurabilityPauseReasonSchemaV15.optional(),
+  pauseReason: lazySchema(() => epicDurabilityPauseReasonSchemaV15.optional()),
   /** Meaningful only beside `durability: "promoting"`. */
-  promotionState: epicPromotionStateSchema.optional(),
-  localProtection: epicLocalProtectionSchema.optional(),
-  freshness: epicCloudFreshnessSchema.optional(),
+  promotionState: lazySchema(() => epicPromotionStateSchema.optional()),
+  localProtection: lazySchema(() => epicLocalProtectionSchema.optional()),
+  freshness: lazySchema(() => epicCloudFreshnessSchema.optional()),
 } as const;
 
-const epicStatusDurabilityLegsSchema = z.object(epicStatusDurabilityLegFields);
+const epicStatusDurabilityLegsSchema = lazySchema(() =>
+  z.object(epicStatusDurabilityLegFields),
+);
 export type EpicStatusDurabilityLegs = z.infer<
   typeof epicStatusDurabilityLegsSchema
 >;
@@ -405,9 +416,11 @@ export type EpicStatusDurabilityLegs = z.infer<
  * The open request. `epicId` and nothing else - see the module doc for why
  * there is no resume cursor at `@1.0`.
  */
-export const epicStatusSubscribeOpenRequestSchemaV10 = z.object({
-  epicId: z.string().min(1),
-});
+export const epicStatusSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
 export type EpicStatusSubscribeOpenRequestV10 = z.infer<
   typeof epicStatusSubscribeOpenRequestSchemaV10
 >;
@@ -426,72 +439,74 @@ export type EpicStatusSubscribeOpenRequestV10 = z.infer<
  * Before this frame arrives, every field it carries is UNKNOWN to the client -
  * emphatically including `dirty`, which must not render as clean.
  */
-const epicStatusSubscribeSnapshotFrameSchemaV10 = z.object({
-  kind: z.literal("snapshot"),
-  ...epicLaneEpochFrameFields,
-  securityEpoch: epicSecurityEpochSchema,
-  /**
-   * The caller's role on this epic, or `null` when the host cannot currently
-   * attribute one. `null` is not "no access" - it is "not known here" - and a
-   * client must gate on an authority check rather than reading it as a
-   * permission verdict.
-   */
-  permissionRole: permissionRoleSchema.nullable(),
-  /**
-   * Host-observed cloud room state. Truthful even on a pre-open snapshot: a
-   * host that has not opened the room has no cloud connection for this epic, so
-   * `disconnected` is an OBSERVATION, not a placeholder, and it is the safe
-   * direction (nothing renders as synced). Do not "fix" this into a tri-state -
-   * unlike `dirty` and `deletion` below, this field has a truthful value in
-   * every state the lane can be in.
-   */
-  cloudSyncStatus: epicCloudSyncStatusSchema,
-  /**
-   * The aggregate dirty flag, or `null` when the host cannot answer yet.
-   *
-   * Three states, mapping 1:1 onto the pill's `unknown | clean | dirty`.
-   * `null` is not a default and never synthesized - it is the host stating that
-   * it has not established dirtiness, which is the honest answer on a snapshot
-   * emitted before the epic is open.
-   *
-   * Why it cannot be answered pre-open: dirtiness composes from LIVE CONNECTION
-   * state, and the offline-teardown path folds a session's edits back into the
-   * seed. Nothing on disk distinguishes a seed carrying unsynced offline edits
-   * from a fully reconciled one. So `false` pre-open would be precisely the
-   * false-clean claim this lane forbids - "all changes synced" over work the
-   * cloud has never seen.
-   *
-   * `null` is NOT a one-way latch: a snapshot re-issued after an
-   * `authorityEpoch` change may return to `null`, because a replica replacement
-   * puts the host back in the pre-open state.
-   */
-  dirty: z.boolean().nullable(),
-  /**
-   * The current migration state, or `null` when no migration is running,
-   * failed, or blocked. See {@link epicMigrationStatusSchema} - this field is
-   * what makes the cursor-less model honest for a client that reconnects
-   * mid-migration.
-   *
-   * Truthful pre-open, unlike its two neighbours: a migration is host-domain
-   * state the host owns directly, so it knows whether one is running before any
-   * room is open. This is in fact the reason a pre-open snapshot has to exist at
-   * all - see the module doc.
-   */
-  migration: epicMigrationStatusSchema.nullable(),
-  /**
-   * Whether the epic has been deleted - `unknown` / `none` / `deleted`, never a
-   * bare nullable. See {@link epicDeletionStatusSchema} for why this fact needs
-   * three states and why `null` could not be reused for the third.
-   *
-   * The current-state projection of the `epicDeleted` frame. Without it, a
-   * client reconnecting after a deletion - a persisted tab list, or a reconnect
-   * that raced the delete - would receive a snapshot describing a healthy
-   * session for an epic that no longer exists, and could only learn otherwise
-   * if a transition frame it already missed were somehow re-sent.
-   */
-  deletion: epicDeletionStatusSchema,
-  ...epicLaneTextFrameFields,
-});
+const epicStatusSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...epicLaneEpochFrameFields,
+    securityEpoch: epicSecurityEpochSchema,
+    /**
+     * The caller's role on this epic, or `null` when the host cannot currently
+     * attribute one. `null` is not "no access" - it is "not known here" - and a
+     * client must gate on an authority check rather than reading it as a
+     * permission verdict.
+     */
+    permissionRole: permissionRoleSchema.nullable(),
+    /**
+     * Host-observed cloud room state. Truthful even on a pre-open snapshot: a
+     * host that has not opened the room has no cloud connection for this epic, so
+     * `disconnected` is an OBSERVATION, not a placeholder, and it is the safe
+     * direction (nothing renders as synced). Do not "fix" this into a tri-state -
+     * unlike `dirty` and `deletion` below, this field has a truthful value in
+     * every state the lane can be in.
+     */
+    cloudSyncStatus: epicCloudSyncStatusSchema,
+    /**
+     * The aggregate dirty flag, or `null` when the host cannot answer yet.
+     *
+     * Three states, mapping 1:1 onto the pill's `unknown | clean | dirty`.
+     * `null` is not a default and never synthesized - it is the host stating that
+     * it has not established dirtiness, which is the honest answer on a snapshot
+     * emitted before the epic is open.
+     *
+     * Why it cannot be answered pre-open: dirtiness composes from LIVE CONNECTION
+     * state, and the offline-teardown path folds a session's edits back into the
+     * seed. Nothing on disk distinguishes a seed carrying unsynced offline edits
+     * from a fully reconciled one. So `false` pre-open would be precisely the
+     * false-clean claim this lane forbids - "all changes synced" over work the
+     * cloud has never seen.
+     *
+     * `null` is NOT a one-way latch: a snapshot re-issued after an
+     * `authorityEpoch` change may return to `null`, because a replica replacement
+     * puts the host back in the pre-open state.
+     */
+    dirty: z.boolean().nullable(),
+    /**
+     * The current migration state, or `null` when no migration is running,
+     * failed, or blocked. See {@link epicMigrationStatusSchema} - this field is
+     * what makes the cursor-less model honest for a client that reconnects
+     * mid-migration.
+     *
+     * Truthful pre-open, unlike its two neighbours: a migration is host-domain
+     * state the host owns directly, so it knows whether one is running before any
+     * room is open. This is in fact the reason a pre-open snapshot has to exist at
+     * all - see the module doc.
+     */
+    migration: epicMigrationStatusSchema.nullable(),
+    /**
+     * Whether the epic has been deleted - `unknown` / `none` / `deleted`, never a
+     * bare nullable. See {@link epicDeletionStatusSchema} for why this fact needs
+     * three states and why `null` could not be reused for the third.
+     *
+     * The current-state projection of the `epicDeleted` frame. Without it, a
+     * client reconnecting after a deletion - a persisted tab list, or a reconnect
+     * that raced the delete - would receive a snapshot describing a healthy
+     * session for an epic that no longer exists, and could only learn otherwise
+     * if a transition frame it already missed were somehow re-sent.
+     */
+    deletion: epicDeletionStatusSchema,
+    ...epicLaneTextFrameFields,
+  }),
+);
 
 /**
  * A permission transition, STAMPED with the epoch that produced it.
@@ -502,29 +517,32 @@ const epicStatusSubscribeSnapshotFrameSchemaV10 = z.object({
  * "stop further hydration and mutation the moment any serving node learns"
  * enforceable rather than aspirational.
  */
-const epicStatusSubscribePermissionChangedFrameSchemaV10 = z.object({
-  kind: z.literal("permissionChanged"),
-  ...epicLaneEpochFrameFields,
-  securityEpoch: epicSecurityEpochSchema,
-  permissionRole: permissionRoleSchema.nullable(),
-  ...epicLaneTextFrameFields,
-});
+const epicStatusSubscribePermissionChangedFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("permissionChanged"),
+    ...epicLaneEpochFrameFields,
+    securityEpoch: epicSecurityEpochSchema,
+    permissionRole: permissionRoleSchema.nullable(),
+    ...epicLaneTextFrameFields,
+  }),
+);
 
 /**
  * Host-observed cloud room connection state. The client's own transport to
  * the host can be healthy while this is `disconnected`, which is exactly
  * why the pill cannot derive cloud freshness from its own socket.
  */
-const epicStatusSubscribeCloudSyncStatusFrameSchemaV10 = z.object({
-  kind: z.literal("cloudSyncStatus"),
-  ...epicLaneEpochFrameFields,
-  status: epicCloudSyncStatusSchema,
-  ...epicLaneTextFrameFields,
-});
+const epicStatusSubscribeCloudSyncStatusFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("cloudSyncStatus"),
+    ...epicLaneEpochFrameFields,
+    status: epicCloudSyncStatusSchema,
+    ...epicLaneTextFrameFields,
+  }),
+);
 
-export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const epicStatusSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     // These two lead the tuple because `@1.1` below rebuilds the union from
     // it: the leg-carrying variants are replaced by position, and every other
     // variant is shared by reference so the two minors cannot drift apart in
@@ -639,7 +657,7 @@ export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("pong"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type EpicStatusSubscribeServerFrameV10 = z.infer<
   typeof epicStatusSubscribeServerFrameSchemaV10
@@ -669,28 +687,30 @@ export const EPIC_STATUS_DURABILITY_LEGS_MINOR = 1;
  * stronger property instead: `@1.1` differs from `@1.0` in exactly the two
  * variants named below, and no reviewer has to diff 130 lines to believe it.
  */
-const [, , ...epicStatusSubscribeSharedFrameSchemasV10] =
-  epicStatusSubscribeServerFrameSchemaV10.options;
-
-const epicStatusSubscribeSnapshotFrameSchemaV11 =
+const epicStatusSubscribeSnapshotFrameSchemaV11 = lazySchema(() =>
   epicStatusSubscribeSnapshotFrameSchemaV10.extend(
     epicStatusDurabilityLegFields,
-  );
+  ),
+);
 /** Re-emitted whenever a leg moves, connection status unchanged or not - see
  * the module doc's durability section. */
-const epicStatusSubscribeCloudSyncStatusFrameSchemaV11 =
+const epicStatusSubscribeCloudSyncStatusFrameSchemaV11 = lazySchema(() =>
   epicStatusSubscribeCloudSyncStatusFrameSchemaV10.extend(
     epicStatusDurabilityLegFields,
-  );
+  ),
+);
 
-export const epicStatusSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
-  "kind",
-  [
+export const epicStatusSubscribeServerFrameSchemaV11 = lazySchema(() => {
+  // Read inside the thunk: a module-scope `.options` read builds `@1.0`'s
+  // union at import.
+  const [, , ...epicStatusSubscribeSharedFrameSchemasV10] =
+    epicStatusSubscribeServerFrameSchemaV10.options;
+  return z.discriminatedUnion("kind", [
     epicStatusSubscribeSnapshotFrameSchemaV11,
     epicStatusSubscribeCloudSyncStatusFrameSchemaV11,
     ...epicStatusSubscribeSharedFrameSchemasV10,
-  ],
-);
+  ]);
+});
 export type EpicStatusSubscribeServerFrameV11 = z.infer<
   typeof epicStatusSubscribeServerFrameSchemaV11
 >;
@@ -743,14 +763,13 @@ export function epicStatusFrameForNegotiatedMinor(
  * frame on a fire-and-forget stream can give it neither. It moves to
  * `epic.retryMigration` as a unary.
  */
-export const epicStatusSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const epicStatusSubscribeClientFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type EpicStatusSubscribeClientFrameV10 = z.infer<
   typeof epicStatusSubscribeClientFrameSchemaV10

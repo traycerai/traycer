@@ -30,22 +30,29 @@
  * epic's owners", not "the owners with no epic".
  */
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const epicHostResourceScopeSchema = z.strictObject({
-  kind: z.literal("epic"),
-  epicId: z.string().min(1),
-});
+export const epicHostResourceScopeSchema = lazySchema(() =>
+  z.strictObject({
+    kind: z.literal("epic"),
+    epicId: z.string().min(1),
+  }),
+);
 export type EpicHostResourceScope = z.infer<typeof epicHostResourceScopeSchema>;
 
-export const independentHostResourceScopeSchema = z.strictObject({
-  kind: z.literal("independent"),
-});
+export const independentHostResourceScopeSchema = lazySchema(() =>
+  z.strictObject({
+    kind: z.literal("independent"),
+  }),
+);
 export type IndependentHostResourceScope = z.infer<
   typeof independentHostResourceScopeSchema
 >;
 
-export const hostResourceScopeSchema = z.discriminatedUnion("kind", [
-  epicHostResourceScopeSchema,
-  independentHostResourceScopeSchema,
-]);
+export const hostResourceScopeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicHostResourceScopeSchema,
+    independentHostResourceScopeSchema,
+  ]),
+);
 export type HostResourceScope = z.infer<typeof hostResourceScopeSchema>;

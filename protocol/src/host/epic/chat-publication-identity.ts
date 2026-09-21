@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Which cloud row each LOCAL chat publishes into.
@@ -49,16 +50,18 @@ import { z } from "zod";
  * being wrong the old way beats rendering nothing.
  */
 
-export const listChatPublicationTargetsRequestSchema = z.object({
-  /** In the 3.0 model an epic id IS the task id; there is no mapping layer. */
-  epicId: z.string().min(1),
-  /**
-   * The local chats to resolve, so the host answers a bounded question instead
-   * of enumerating its whole registry. A client asks for the ids its tree
-   * actually renders.
-   */
-  chatIds: z.array(z.string().min(1)),
-});
+export const listChatPublicationTargetsRequestSchema = lazySchema(() =>
+  z.object({
+    /** In the 3.0 model an epic id IS the task id; there is no mapping layer. */
+    epicId: z.string().min(1),
+    /**
+     * The local chats to resolve, so the host answers a bounded question instead
+     * of enumerating its whole registry. A client asks for the ids its tree
+     * actually renders.
+     */
+    chatIds: z.array(z.string().min(1)),
+  }),
+);
 export type ListChatPublicationTargetsRequest = z.infer<
   typeof listChatPublicationTargetsRequestSchema
 >;
@@ -77,15 +80,19 @@ export type ListChatPublicationTargetsRequest = z.infer<
  * its owning host), while a fabricated one would fold away a chat that is
  * really there.
  */
-export const chatPublicationTargetSchema = z.object({
-  chatId: z.string().min(1),
-  publicationChatId: z.string().min(1),
-});
+export const chatPublicationTargetSchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    publicationChatId: z.string().min(1),
+  }),
+);
 export type ChatPublicationTarget = z.infer<typeof chatPublicationTargetSchema>;
 
-export const listChatPublicationTargetsResponseSchema = z.object({
-  redirected: z.array(chatPublicationTargetSchema),
-});
+export const listChatPublicationTargetsResponseSchema = lazySchema(() =>
+  z.object({
+    redirected: z.array(chatPublicationTargetSchema),
+  }),
+);
 export type ListChatPublicationTargetsResponse = z.infer<
   typeof listChatPublicationTargetsResponseSchema
 >;

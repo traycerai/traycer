@@ -52,6 +52,7 @@ import {
   guiHarnessIdSchemaV70,
   guiHarnessIdSchemaV80,
 } from "@traycer/protocol/host/agent/shared";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── `agent.listProviderProfiles@1.0` ─────────────────────────────────────
 //
@@ -61,11 +62,13 @@ import {
 // and model catalogs are also keyed by `harnessId`; the response echoes the
 // mapped `providerId` for transparency.
 
-export const agentListProviderProfilesRequestSchema = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-  harnessId: agentFacingHarnessIdSchema,
-});
+export const agentListProviderProfilesRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+    harnessId: agentFacingHarnessIdSchema,
+  }),
+);
 export type AgentListProviderProfilesRequest = z.infer<
   typeof agentListProviderProfilesRequestSchema
 >;
@@ -84,22 +87,26 @@ export type AgentListProviderProfilesRequest = z.infer<
  * selection (the batch-1 review's "structurally correlate or remove the
  * redundant independent kind" finding).
  */
-export const agentProviderProfileSummarySchema = z.object({
-  selection: concreteProfileSelectionSchema,
-  label: z.string(),
-  authStatus: PROVIDER_AUTH_STATUS_SCHEMA,
-  rateLimitStatus: providerProfileRateLimitStatusSchema,
-  usageUpdatedAt: z.number().nullable(),
-  isEffectiveLastUsed: z.boolean(),
-});
+export const agentProviderProfileSummarySchema = lazySchema(() =>
+  z.object({
+    selection: concreteProfileSelectionSchema,
+    label: z.string(),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA,
+    rateLimitStatus: providerProfileRateLimitStatusSchema,
+    usageUpdatedAt: z.number().nullable(),
+    isEffectiveLastUsed: z.boolean(),
+  }),
+);
 export type AgentProviderProfileSummary = z.infer<
   typeof agentProviderProfileSummarySchema
 >;
 
-export const agentListProviderProfilesResponseSchema = z.object({
-  providerId: providerIdSchema,
-  profiles: z.array(agentProviderProfileSummarySchema),
-});
+export const agentListProviderProfilesResponseSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
 export type AgentListProviderProfilesResponse = z.infer<
   typeof agentListProviderProfilesResponseSchema
 >;
@@ -114,10 +121,12 @@ export type AgentListProviderProfilesResponse = z.infer<
  * provider id instead of silently mis-decoding it. Do NOT widen this schema -
  * extend the latest schema and use the v2 bridge instead.
  */
-export const agentListProviderProfilesResponseSchemaV1 = z.object({
-  providerId: providerIdSchemaV40,
-  profiles: z.array(agentProviderProfileSummarySchema),
-});
+export const agentListProviderProfilesResponseSchemaV1 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV40,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
 export type AgentListProviderProfilesResponseV1 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV1
 >;
@@ -141,10 +150,12 @@ export const agentListProviderProfilesV10 = defineRpcContract({
  * (`DOWNGRADE_UNSUPPORTED`) for a post-v5.0-only provider id. Do NOT widen
  * this schema - extend the latest schema and use the v3 bridge instead.
  */
-export const agentListProviderProfilesResponseSchemaV2 = z.object({
-  providerId: providerIdSchemaV50,
-  profiles: z.array(agentProviderProfileSummarySchema),
-});
+export const agentListProviderProfilesResponseSchemaV2 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV50,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
 export type AgentListProviderProfilesResponseV2 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV2
 >;
@@ -168,10 +179,12 @@ export const agentListProviderProfilesV20 = defineRpcContract({
  * (`DOWNGRADE_UNSUPPORTED`) for a post-v6.0-only provider id. Do NOT widen
  * this schema - extend the latest schema and use the v4 bridge instead.
  */
-export const agentListProviderProfilesResponseSchemaV3 = z.object({
-  providerId: providerIdSchemaV60,
-  profiles: z.array(agentProviderProfileSummarySchema),
-});
+export const agentListProviderProfilesResponseSchemaV3 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV60,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
 export type AgentListProviderProfilesResponseV3 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV3
 >;
@@ -196,10 +209,12 @@ export const agentListProviderProfilesV30 = defineRpcContract({
  * Do NOT widen this schema - extend the latest schema and use the v5 bridge
  * instead.
  */
-export const agentListProviderProfilesResponseSchemaV4 = z.object({
-  providerId: providerIdSchemaV70,
-  profiles: z.array(agentProviderProfileSummarySchema),
-});
+export const agentListProviderProfilesResponseSchemaV4 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV70,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
 export type AgentListProviderProfilesResponseV4 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV4
 >;
@@ -220,10 +235,12 @@ export const agentListProviderProfilesV40 = defineRpcContract({
  * the same defect that let `omp` first try to ride v2.0, `huggingface` v3.0
  * and `reasonix` v4.0. v6.0 now carries the live schema.
  */
-export const agentListProviderProfilesResponseSchemaV5 = z.object({
-  providerId: providerIdSchemaV80,
-  profiles: z.array(agentProviderProfileSummarySchema),
-});
+export const agentListProviderProfilesResponseSchemaV5 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV80,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
 export type AgentListProviderProfilesResponseV5 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV5
 >;
@@ -710,12 +727,14 @@ export const agentListProviderProfilesDowngradeV60ToV10 = defineDowngradePath<
 // row. `last_used`/`inherit_sender` are not accepted: the caller must
 // already know which concrete profile it wants a fresh read for.
 
-export const agentGetProviderProfileRateLimitsRequestSchema = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-  harnessId: agentFacingHarnessIdSchema,
-  profileSelection: concreteProfileSelectionSchema,
-});
+export const agentGetProviderProfileRateLimitsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+    harnessId: agentFacingHarnessIdSchema,
+    profileSelection: concreteProfileSelectionSchema,
+  }),
+);
 export type AgentGetProviderProfileRateLimitsRequest = z.infer<
   typeof agentGetProviderProfileRateLimitsRequestSchema
 >;
@@ -726,10 +745,12 @@ export type AgentGetProviderProfileRateLimitsRequest = z.infer<
 // truth that could disagree with the nested one (the batch-1 review's
 // "remove or validate redundant provider identity" finding). Callers read
 // `rateLimits.provider`.
-export const agentGetProviderProfileRateLimitsResponseSchema = z.object({
-  rateLimits: providerRateLimitsSchema,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchema = lazySchema(() =>
+  z.object({
+    rateLimits: providerRateLimitsSchema,
+    usageUpdatedAt: z.number().nullable(),
+  }),
+);
 export type AgentGetProviderProfileRateLimitsResponse = z.infer<
   typeof agentGetProviderProfileRateLimitsResponseSchema
 >;
@@ -745,10 +766,13 @@ export type AgentGetProviderProfileRateLimitsResponse = z.infer<
  * rate-limit read instead of silently mis-decoding it. Do NOT widen this
  * schema - extend the latest schema and use the v2 bridge instead.
  */
-export const agentGetProviderProfileRateLimitsResponseSchemaV1 = z.object({
-  rateLimits: providerRateLimitsSchemaV40,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchemaV1 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchemaV40,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
 export type AgentGetProviderProfileRateLimitsResponseV1 = z.infer<
   typeof agentGetProviderProfileRateLimitsResponseSchemaV1
 >;
@@ -773,10 +797,13 @@ export const agentGetProviderProfileRateLimitsV10 = defineRpcContract({
  * closed (`DOWNGRADE_UNSUPPORTED`). Do NOT widen this schema - extend the
  * latest schema and use the v3 bridge instead.
  */
-export const agentGetProviderProfileRateLimitsResponseSchemaV2 = z.object({
-  rateLimits: providerRateLimitsSchemaV50,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchemaV2 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchemaV50,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
 export type AgentGetProviderProfileRateLimitsResponseV2 = z.infer<
   typeof agentGetProviderProfileRateLimitsResponseSchemaV2
 >;
@@ -802,10 +829,13 @@ export const agentGetProviderProfileRateLimitsV20 = defineRpcContract({
  * (`DOWNGRADE_UNSUPPORTED`). Do NOT widen this schema - extend the latest
  * schema and use the v4 bridge instead.
  */
-export const agentGetProviderProfileRateLimitsResponseSchemaV3 = z.object({
-  rateLimits: providerRateLimitsSchemaV60,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchemaV3 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchemaV60,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
 export type AgentGetProviderProfileRateLimitsResponseV3 = z.infer<
   typeof agentGetProviderProfileRateLimitsResponseSchemaV3
 >;
@@ -831,10 +861,13 @@ export const agentGetProviderProfileRateLimitsV30 = defineRpcContract({
  * closed (`DOWNGRADE_UNSUPPORTED`). Do NOT widen this schema - extend the
  * latest schema and use the v5 bridge instead.
  */
-export const agentGetProviderProfileRateLimitsResponseSchemaV4 = z.object({
-  rateLimits: providerRateLimitsSchemaV70,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchemaV4 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchemaV70,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
 export type AgentGetProviderProfileRateLimitsResponseV4 = z.infer<
   typeof agentGetProviderProfileRateLimitsResponseSchemaV4
 >;
@@ -852,10 +885,13 @@ export const agentGetProviderProfileRateLimitsV40 = defineRpcContract({
 // the sentence the v4.0 block above already records as the exact thing that
 // stops being true the moment a tag ships. It happened again here, and
 // Antigravity is the id that reached the released wire through it.
-export const agentGetProviderProfileRateLimitsResponseSchemaV5 = z.object({
-  rateLimits: providerRateLimitsSchemaV80,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchemaV5 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchemaV80,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
 
 export const agentGetProviderProfileRateLimitsV50 = defineRpcContract({
   method: "agent.getProviderProfileRateLimits",
@@ -877,10 +913,13 @@ export const agentGetProviderProfileRateLimitsV50 = defineRpcContract({
 // `clients/traycer-cli/src/internal/__tests__/host-rpc.test.ts` uses to prove
 // the CLI's `assertCanonicalResponseSchema` backstop actually fires. Collapse
 // the two and that test has nothing left to falsify with.
-export const agentGetProviderProfileRateLimitsResponseSchemaV6 = z.object({
-  rateLimits: providerRateLimitsSchema,
-  usageUpdatedAt: z.number().nullable(),
-});
+export const agentGetProviderProfileRateLimitsResponseSchemaV6 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchema,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
 
 export const agentGetProviderProfileRateLimitsV60 = defineRpcContract({
   method: "agent.getProviderProfileRateLimits",
@@ -1442,51 +1481,58 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV10 =
 // full future-run tuple. `null` is compatibility-only and is produced by the
 // v1->v2 upgrade so old callers retain the preserve-current behavior.
 
-export const agentConfigureRequestSchema = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-  agentId: z.string(),
-  harnessId: guiHarnessIdSchema,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-});
+export const agentConfigureRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+    agentId: z.string(),
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+  }),
+);
 export type AgentConfigureRequest = z.infer<typeof agentConfigureRequestSchema>;
 
-export const agentConfigureRequestSchemaV20 =
+export const agentConfigureRequestSchemaV20 = lazySchema(() =>
   agentConfigureRequestSchema.extend({
     permissionMode: permissionModeSchema.nullable(),
-  });
+  }),
+);
 export type AgentConfigureRequestV20 = z.infer<
   typeof agentConfigureRequestSchemaV20
 >;
 
-export const agentConfigureSettingsSchema = z.object({
-  harnessId: guiHarnessIdSchema,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-  permissionMode: permissionModeSchema,
-  /**
-   * RETAINED even though Epic Mode was removed from the product. `agent.configure`
-   * v3.0 is itself RELEASED, and its baseline requires this key on the response -
-   * a released peer parsing a payload built from this tree would fail outright if
-   * it were dropped. The host states the one remaining mode. It goes when the
-   * released floor passes this version, together with the equally-blocked
-   * `chatActiveTurn.agentMode` and `createAgentRequestSchemaV30.agentMode`.
-   */
-  agentMode: agentModeSchema,
-});
+export const agentConfigureSettingsSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+    permissionMode: permissionModeSchema,
+    /**
+     * RETAINED even though Epic Mode was removed from the product. `agent.configure`
+     * v3.0 is itself RELEASED, and its baseline requires this key on the response -
+     * a released peer parsing a payload built from this tree would fail outright if
+     * it were dropped. The host states the one remaining mode. It goes when the
+     * released floor passes this version, together with the equally-blocked
+     * `chatActiveTurn.agentMode` and `createAgentRequestSchemaV30.agentMode`.
+     */
+    agentMode: agentModeSchema,
+  }),
+);
 export type AgentConfigureSettings = z.infer<
   typeof agentConfigureSettingsSchema
 >;
 
-export const agentConfigureResponseSchema = z.object({
-  settings: agentConfigureSettingsSchema,
-  warnings: z.array(z.string()),
-});
+export const agentConfigureResponseSchema = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchema,
+    warnings: z.array(z.string()),
+  }),
+);
 export type AgentConfigureResponse = z.infer<
   typeof agentConfigureResponseSchema
 >;
@@ -1502,23 +1548,27 @@ export type AgentConfigureResponse = z.infer<
  * a v1.0 caller. Do NOT widen this schema - extend the latest schema and use
  * the existing v2 bridge instead.
  */
-export const agentConfigureSettingsSchemaV1 = z.object({
-  harnessId: guiHarnessIdSchemaV40,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-  permissionMode: permissionModeSchemaPreAuto,
-  agentMode: agentModeSchema,
-});
+export const agentConfigureSettingsSchemaV1 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaV40,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+    permissionMode: permissionModeSchemaPreAuto,
+    agentMode: agentModeSchema,
+  }),
+);
 export type AgentConfigureSettingsV1 = z.infer<
   typeof agentConfigureSettingsSchemaV1
 >;
 
-export const agentConfigureResponseSchemaV1 = z.object({
-  settings: agentConfigureSettingsSchemaV1,
-  warnings: z.array(z.string()),
-});
+export const agentConfigureResponseSchemaV1 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV1,
+    warnings: z.array(z.string()),
+  }),
+);
 export type AgentConfigureResponseV1 = z.infer<
   typeof agentConfigureResponseSchemaV1
 >;
@@ -1546,23 +1596,27 @@ export const agentConfigureV10 = defineRpcContract({
  * harness enum because the request is a client→host slot: a released client
  * simply never sends `omp`, and widening what the host accepts breaks nobody.
  */
-export const agentConfigureSettingsSchemaV2 = z.object({
-  harnessId: guiHarnessIdSchemaV50,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-  permissionMode: permissionModeSchemaPreAuto,
-  agentMode: agentModeSchema,
-});
+export const agentConfigureSettingsSchemaV2 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaV50,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+    permissionMode: permissionModeSchemaPreAuto,
+    agentMode: agentModeSchema,
+  }),
+);
 export type AgentConfigureSettingsV2 = z.infer<
   typeof agentConfigureSettingsSchemaV2
 >;
 
-export const agentConfigureResponseSchemaV2 = z.object({
-  settings: agentConfigureSettingsSchemaV2,
-  warnings: z.array(z.string()),
-});
+export const agentConfigureResponseSchemaV2 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV2,
+    warnings: z.array(z.string()),
+  }),
+);
 export type AgentConfigureResponseV2 = z.infer<
   typeof agentConfigureResponseSchemaV2
 >;
@@ -1592,23 +1646,27 @@ export const agentConfigureV20 = defineRpcContract({
  * simply never sends `huggingface`, and widening what the host accepts breaks
  * nobody.
  */
-export const agentConfigureSettingsSchemaV3 = z.object({
-  harnessId: guiHarnessIdSchemaV60,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-  permissionMode: permissionModeSchemaPreAuto,
-  agentMode: agentModeSchema,
-});
+export const agentConfigureSettingsSchemaV3 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaV60,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+    permissionMode: permissionModeSchemaPreAuto,
+    agentMode: agentModeSchema,
+  }),
+);
 export type AgentConfigureSettingsV3 = z.infer<
   typeof agentConfigureSettingsSchemaV3
 >;
 
-export const agentConfigureResponseSchemaV3 = z.object({
-  settings: agentConfigureSettingsSchemaV3,
-  warnings: z.array(z.string()),
-});
+export const agentConfigureResponseSchemaV3 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV3,
+    warnings: z.array(z.string()),
+  }),
+);
 export type AgentConfigureResponseV3 = z.infer<
   typeof agentConfigureResponseSchemaV3
 >;
@@ -1647,23 +1705,27 @@ export const agentConfigureV30 = defineRpcContract({
  * what the agent is now configured to, and a released caller decodes it
  * strictly.
  */
-export const agentConfigureSettingsSchemaV4 = z.object({
-  harnessId: guiHarnessIdSchemaV70,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-  permissionMode: permissionModeSchemaPreAuto,
-  agentMode: agentModeSchema,
-});
+export const agentConfigureSettingsSchemaV4 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaV70,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+    permissionMode: permissionModeSchemaPreAuto,
+    agentMode: agentModeSchema,
+  }),
+);
 export type AgentConfigureSettingsV4 = z.infer<
   typeof agentConfigureSettingsSchemaV4
 >;
 
-export const agentConfigureResponseSchemaV4 = z.object({
-  settings: agentConfigureSettingsSchemaV4,
-  warnings: z.array(z.string()),
-});
+export const agentConfigureResponseSchemaV4 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV4,
+    warnings: z.array(z.string()),
+  }),
+);
 export type AgentConfigureResponseV4 = z.infer<
   typeof agentConfigureResponseSchemaV4
 >;
@@ -1686,28 +1748,32 @@ export const agentConfigureV40 = defineRpcContract({
  * Only the RESPONSE is frozen; the request keeps the live enum for the reason
  * the v4.0 freeze gives - it is a client→host slot.
  */
-export const agentConfigureSettingsSchemaV5 = z.object({
-  harnessId: guiHarnessIdSchemaV80,
-  model: z.string().min(1),
-  profileSelection: concreteProfileSelectionSchema,
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean(),
-  // Pinned pre-`auto` on the same asymmetry as the four freezes above: 5.0 is
-  // RELEASED, and its caller decodes this response strictly. The REQUEST keeps
-  // the live mode enum deliberately - an A2A caller asking for `auto` against
-  // a host too old to know it gets a clean validation error, which is the
-  // documented behaviour.
-  permissionMode: permissionModeSchemaPreAuto,
-  agentMode: agentModeSchema,
-});
+export const agentConfigureSettingsSchemaV5 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaV80,
+    model: z.string().min(1),
+    profileSelection: concreteProfileSelectionSchema,
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean(),
+    // Pinned pre-`auto` on the same asymmetry as the four freezes above: 5.0 is
+    // RELEASED, and its caller decodes this response strictly. The REQUEST keeps
+    // the live mode enum deliberately - an A2A caller asking for `auto` against
+    // a host too old to know it gets a clean validation error, which is the
+    // documented behaviour.
+    permissionMode: permissionModeSchemaPreAuto,
+    agentMode: agentModeSchema,
+  }),
+);
 export type AgentConfigureSettingsV5 = z.infer<
   typeof agentConfigureSettingsSchemaV5
 >;
 
-export const agentConfigureResponseSchemaV5 = z.object({
-  settings: agentConfigureSettingsSchemaV5,
-  warnings: z.array(z.string()),
-});
+export const agentConfigureResponseSchemaV5 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV5,
+    warnings: z.array(z.string()),
+  }),
+);
 export type AgentConfigureResponseV5 = z.infer<
   typeof agentConfigureResponseSchemaV5
 >;
