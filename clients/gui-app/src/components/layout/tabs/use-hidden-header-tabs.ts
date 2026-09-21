@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { TaskTabLayout } from "@/stores/settings/settings-store";
+import { readHeaderStripLayoutRect } from "./header-strip-geometry";
 
 const TAB_SELECTOR = "[data-header-tab-key]";
 const PIXEL_TOLERANCE = 1;
@@ -39,7 +40,7 @@ export function useHiddenHeaderTabs(layout: TaskTabLayout) {
             TAB_SELECTOR,
           )) {
             const key = tab.dataset.headerTabKey;
-            const rect = tab.getBoundingClientRect();
+            const rect = readHeaderStripLayoutRect(tab);
             if (
               key !== undefined &&
               rect.width > 0 &&
@@ -136,7 +137,8 @@ function preserveActiveTabVisibility(
   ) {
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
-  const activeRect = activeTab?.getBoundingClientRect();
+  const activeRect =
+    activeTab === null ? undefined : readHeaderStripLayoutRect(activeTab);
   return {
     width: element.clientWidth,
     key: activeKey,

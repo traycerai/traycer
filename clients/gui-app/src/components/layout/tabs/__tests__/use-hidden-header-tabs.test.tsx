@@ -406,4 +406,178 @@ describe("useHiddenHeaderTabs", () => {
       }
     });
   });
+
+  describe("reordering frames with a translate transform", () => {
+    const TRANSLATE_72 = "matrix(1, 0, 0, 1, 72, 0)";
+    const TRANSLATE_MINUS_72 = "matrix(1, 0, 0, 1, -72, 0)";
+    const TRANSLATE_72_3D =
+      "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 72, 0, 0, 1)";
+    const TRANSLATE_MINUS_72_3D =
+      "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -72, 0, 0, 1)";
+
+    interface Frame {
+      readonly id: string;
+      readonly keys: ReadonlyArray<string>;
+      readonly transform: string;
+    }
+
+    function FrameHarness(props: { readonly frames: ReadonlyArray<Frame> }) {
+      const { setScrollElement, hiddenTabKeys } = useHiddenHeaderTabs("scroll");
+      return (
+        <div>
+          <div ref={setScrollElement} data-testid="viewport">
+            {props.frames.map((frame) => (
+              <div
+                key={frame.id}
+                data-strip-item-id={frame.id}
+                style={{ transform: frame.transform }}
+              >
+                {frame.keys.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    data-header-tab-key={key}
+                    aria-selected={key === activeKey}
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          {hiddenTabKeys.length > 0 ? (
+            <span data-hidden-tabs-control>{hiddenTabKeys.length}</span>
+          ) : null}
+          <output data-testid="hidden">{hiddenTabKeys.join(",")}</output>
+        </div>
+      );
+    }
+
+    // Viewport 0..444, three 192px tabs. Initially A,B,C sit untransformed
+    // (A 0..192, B 192..384, C 384..576, so only C is clipped). After the
+    // reorder to A,C,B the final layout is A 0..192, C 192..384, B 384..576
+    // (only B is clipped), while mid-flip the rendered rects are shifted by
+    // the frames' transforms: C 264..456 (+72), B 312..504 (-72).
+    function initialGeometry(): void {
+      geometry.viewport = { left: 0, right: 444 };
+      geometry.outerWidth = 444;
+      geometry.scrollWidth = 576;
+      geometry.tabs = {
+        a: { left: 0, right: 192 },
+        b: { left: 192, right: 384 },
+        c: { left: 384, right: 576 },
+      };
+    }
+
+    function midFlipGeometry(): void {
+      geometry.tabs = {
+        a: { left: 0, right: 192 },
+        c: { left: 264, right: 456 },
+        b: { left: 312, right: 504 },
+      };
+    }
+
+    function settleGeometry(): void {
+      geometry.tabs = {
+        a: { left: 0, right: 192 },
+        c: { left: 192, right: 384 },
+        b: { left: 384, right: 576 },
+      };
+    }
+
+    const ABC: ReadonlyArray<Frame> = [
+      { id: "a", keys: ["a"], transform: "none" },
+      { id: "b", keys: ["b"], transform: "none" },
+      { id: "c", keys: ["c"], transform: "none" },
+    ];
+
+    function reorderedFrames(
+      cTransform: string,
+      bTransform: string,
+    ): ReadonlyArray<Frame> {
+      return [
+        { id: "a", keys: ["a"], transform: "none" },
+        { id: "c", keys: ["c"], transform: cTransform },
+        { id: "b", keys: ["b"], transform: bTransform },
+      ];
+    }
+
+    it.each([
+      { name: "2D", c: TRANSLATE_72, b: TRANSLATE_MINUS_72 },
+      { name: "3D", c: TRANSLATE_72_3D, b: TRANSLATE_MINUS_72_3D },
+    ])(
+      "hides only the tab clipped in its final layout, mid-flip and after it settles ($name matrix)",
+      async ({ c, b }) => {
+        initialGeometry();
+        const { rerender } = render(<FrameHarness frames={ABC} />);
+        expect(hidden()).toBe("c");
+
+        midFlipGeometry();
+        await act(async () => {
+          rerender(<FrameHarness frames={reorderedFrames(c, b)} />);
+          await Promise.resolve();
+        });
+        expect(hidden()).toBe("b");
+
+        // Only the transforms settle: same children, no resize, scroll or
+        // selection change.
+        settleGeometry();
+        await act(async () => {
+          rerender(<FrameHarness frames={reorderedFrames("none", "none")} />);
+          await Promise.resolve();
+        });
+        expect(hidden()).toBe("b");
+      },
+    );
+
+    it("keeps member offsets when split members share one translated frame", () => {
+      geometry.viewport = { left: 0, right: 444 };
+      geometry.outerWidth = 444;
+      geometry.scrollWidth = 576;
+      // Frame translated +72: members rendered 264..456 and 456..648, final
+      // 192..384 and 384..576.
+      geometry.tabs = {
+        x: { left: 264, right: 456 },
+        y: { left: 456, right: 648 },
+      };
+      render(
+        <FrameHarness
+          frames={[{ id: "split", keys: ["x", "y"], transform: TRANSLATE_72 }]}
+        />,
+      );
+      expect(hidden()).toBe("y");
+    });
+
+    it("keeps tabs without a frame working", () => {
+      // The plain harness renders bare buttons with no [data-strip-item-id].
+      render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
+      expect(hidden()).toBe("a,d");
+    });
+
+    it("snapshots active visibility by its final position, so a later shrink reveals it", async () => {
+      initialGeometry();
+      midFlipGeometry();
+      activeKey = "c";
+      const scroll = vi
+        .spyOn(Element.prototype, "scrollIntoView")
+        .mockImplementation(() => undefined);
+      render(
+        <FrameHarness
+          frames={reorderedFrames(TRANSLATE_72, TRANSLATE_MINUS_72)}
+        />,
+      );
+      // Rendered 264..456 looks clipped, but C's final 192..384 is visible.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      scroll.mockClear();
+      geometry.outerWidth = 360;
+      fireResize();
+      expect(scroll).toHaveBeenCalled();
+      for (const context of scroll.mock.contexts) {
+        expect(context).toBe(screen.getByText("c"));
+      }
+    });
+  });
 });
