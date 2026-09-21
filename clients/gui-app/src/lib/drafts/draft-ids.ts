@@ -60,5 +60,9 @@ export function interviewDraftBindingKey(
   chatId: string,
   blockId: string,
 ): string {
+  // The separator is U+0000, WRITTEN AS AN ESCAPE. It was a literal NUL byte,
+  // which makes grep and ripgrep treat this whole file as binary and skip it
+  // in a directory walk, so every search of the codebase silently missed this
+  // module. The runtime string is unchanged, so persisted keys still match.
   return `${chatId}\u0000${blockId}`;
 }
