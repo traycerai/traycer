@@ -50,6 +50,7 @@ import type {
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -149,6 +150,20 @@ describe("host method poll policy table", () => {
         entry.joinResponseTimeoutMs === null || entry.joinResponseTimeoutMs > 0,
       ).toBe(true);
     }
+  });
+
+  it("keeps usage summary above the host and server response budgets", () => {
+    expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBe(90_000);
+    expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBeGreaterThan(75_000);
+    expect(HOST_METHOD_POLL_TABLE["host.usage.summary"]).toMatchObject({
+      joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("host.usage.summary"),
+    ).toBe(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS);
+    expect(HOST_METHOD_POLL_TABLE["host.status"].joinResponseTimeoutMs).toBe(
+      null,
+    );
   });
 
   it("keeps ambiguous verbs on their declared side of the command/read boundary", () => {

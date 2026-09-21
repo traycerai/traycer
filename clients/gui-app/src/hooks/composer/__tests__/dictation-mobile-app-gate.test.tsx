@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setMobileApp } from "@/lib/mobile-app";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 
 const recorder = vi.hoisted(() => ({
@@ -104,12 +105,14 @@ function pressDictationChord(): void {
 
 beforeEach(() => {
   host.statusQueryEnabled.length = 0;
+  useSettingsStore.setState({ voiceInputEnabled: true });
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   setMobileApp(false);
+  useSettingsStore.setState({ voiceInputEnabled: true });
 });
 
 describe("dictation on the installed mobile app", () => {
@@ -139,6 +142,17 @@ describe("dictation on the installed mobile app", () => {
 });
 
 describe("dictation on other builds", () => {
+  it("offers no mic, no hotkey, and no model check when voice input is off", () => {
+    useSettingsStore.setState({ voiceInputEnabled: false });
+    const { result } = renderComposerDictation();
+    expect(result.current.dictationControl).toBeNull();
+    expect(result.current.dictationPreparing).toBeNull();
+    pressDictationChord();
+    expect(recorder.start).not.toHaveBeenCalled();
+    expect(host.statusQueryEnabled).not.toContain(true);
+    expect(host.ensureModel).not.toHaveBeenCalled();
+  });
+
   it("still offers the mic and the hotkey", () => {
     setMobileApp(false);
     const { result } = renderComposerDictation();

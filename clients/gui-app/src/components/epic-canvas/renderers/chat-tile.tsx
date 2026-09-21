@@ -138,6 +138,7 @@ import {
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
+import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -3319,6 +3320,15 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().activeTurn,
     [handle.store],
   );
+  const getStopConfirmationTarget =
+    useCallback((): ChatStopConfirmationTarget => {
+      const live = handle.store.getState();
+      return {
+        turnId: live.activeTurn?.turnId ?? null,
+        revision: live.turnLifecycleRevision,
+        connectionEpoch: live.connectionEpoch,
+      };
+    }, [handle.store]);
   const lowerTurn = useMemo(
     () => ({
       activeTurnStatus: composerActiveTurnStatus,
@@ -3327,6 +3337,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
@@ -3337,6 +3348,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       chatActions.stopTurn,
     ],

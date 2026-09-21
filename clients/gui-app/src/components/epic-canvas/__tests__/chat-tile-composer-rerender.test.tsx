@@ -150,6 +150,12 @@ const ACCESS: ChatLowerAccessState = {
   canAct: true,
   readOnlyNotice: null,
 };
+// Unused by this suite - it covers composer re-render identity, not Stop.
+const STOP_CONFIRMATION_TARGET_STUB = () => ({
+  turnId: null,
+  revision: 0,
+  connectionEpoch: 0,
+});
 const TURN_IDLE: ChatLowerTurnState = {
   activeTurnStatus: null,
   stopDisabled: true,
@@ -159,6 +165,7 @@ const TURN_IDLE: ChatLowerTurnState = {
   autoPermissionModeProtocolSupported: null,
   getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
+  getStopConfirmationTarget: STOP_CONFIRMATION_TARGET_STUB,
 };
 const TURN_RUNNING: ChatLowerTurnState = {
   activeTurnStatus: "running",
@@ -169,6 +176,7 @@ const TURN_RUNNING: ChatLowerTurnState = {
   autoPermissionModeProtocolSupported: null,
   getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
+  getStopConfirmationTarget: STOP_CONFIRMATION_TARGET_STUB,
 };
 const INTERVIEW: ChatLowerInterviewState = {
   pending: null,

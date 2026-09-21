@@ -1,29 +1,9 @@
 /**
- * The two facts `submitReport` needs in order to describe a bug report's
- * delivery honestly, neither of which the per-event `afterSendEvent` hook can
- * see on its own.
- *
- * 1. **Is a DSN rate limit in force right now?** After one 429 the SDK's
- *    transport drops later envelopes CLIENT-SIDE and returns `{}` - an
- *    undefined `statusCode` with no headers, indistinguishable at the hook
- *    from a network failure. The rate-limit state that caused it is closure-
- *    private to the transport (`@sentry/core` `transports/base.js`), and the
- *    per-event hook filters on `event_id`, so a 429 earned by a DIFFERENT
- *    event - a crash report on the same client, which is exactly the RCA's
- *    "host error storm plus a feedback report sharing one DSN quota" - is
- *    invisible to it and the report is silently dropped. So the window is
- *    held here instead, by a CLIENT-WIDE observer that reads every response,
- *    using core's own public rate-limit helpers rather than a second parser.
- *
- * 2. **Did the offline transport keep the envelope?** When the send fails at
- *    the network level the offline transport queues the envelope and returns
- *    `{}` - the same undefined status - and it WILL be delivered later. That
- *    deserves "queued", not "we could not confirm". But the store's `push`
- *    resolves `void` whether the envelope was kept or dropped at the
- *    30-envelope cap, so the answer has to come from the queue itself.
- *
- * Both are deliberately free of `electron` imports: the queue path is passed
- * in, so every rule here is exercisable without an app instance.
+ * Delivery evidence beyond afterSendEvent's HTTP status: whether the feedback
+ * item survived transport filtering, how long a known limit remains, and
+ * whether the offline store retained the exact event. The rate-limit mirror
+ * supplies retry hints only; the base transport's filter decides inclusion.
+ * Electron-free so these rules can be exercised with core's real transport.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -34,9 +14,82 @@ import {
   disabledUntil,
   isRateLimited,
   updateRateLimits,
+  type BaseTransportOptions,
   type RateLimits,
+  type Transport,
   type TransportMakeRequestResponse,
 } from "@sentry/core";
+
+interface FeedbackInclusion {
+  readonly eventId: string;
+  readonly included: boolean;
+}
+
+const feedbackInclusions = new WeakMap<
+  TransportMakeRequestResponse,
+  FeedbackInclusion
+>();
+
+/** The feedback item's actual filter verdict, attributed to this response. */
+export function sentryFeedbackInclusion(
+  response: TransportMakeRequestResponse,
+  eventId: string,
+): boolean | null {
+  const inclusion = feedbackInclusions.get(response);
+  return inclusion?.eventId === eventId ? inclusion.included : null;
+}
+
+/**
+ * Decorates the base transport INSIDE the offline wrapper. Core filters items
+ * synchronously in send, reporting each rejected category before it starts
+ * the request. Observing that callback uses the transport's actual decision,
+ * including limits earned by non-event envelopes and expiry during async
+ * event preparation. A capture-time or after-response snapshot cannot do so.
+ *
+ * Keep the original response object: Electron's offline wrapper passes it to
+ * afterSendEvent unchanged. Weak keys retain no completed-report history.
+ */
+export function observeSentryTransportFeedback(
+  options: BaseTransportOptions,
+  makeTransport: (options: BaseTransportOptions) => Transport,
+): Transport {
+  let onFeedbackDropped: (() => void) | null = null;
+  const transport = makeTransport({
+    ...options,
+    recordDroppedEvent: (reason, category, count) => {
+      if (reason === "ratelimit_backoff" && category === "feedback") {
+        onFeedbackDropped?.();
+      }
+      options.recordDroppedEvent(reason, category, count);
+    },
+  });
+  return {
+    flush: (timeout) => transport.flush(timeout),
+    send: (envelope) => {
+      const eventId = envelope[0].event_id;
+      const hasFeedback = envelope[1].some(
+        ([header]) => header.type === "feedback",
+      );
+      if (typeof eventId !== "string" || !hasFeedback) {
+        return transport.send(envelope);
+      }
+      let included = true;
+      const previousObserver = onFeedbackDropped;
+      onFeedbackDropped = () => {
+        included = false;
+      };
+      try {
+        return transport.send(envelope).then((response) => {
+          feedbackInclusions.set(response, { eventId, included });
+          return response;
+        });
+      } finally {
+        // No asynchronous request can retain another report's filter context.
+        onFeedbackDropped = previousObserver;
+      }
+    },
+  };
+}
 
 /**
  * The data category a user-submitted report rides as.
