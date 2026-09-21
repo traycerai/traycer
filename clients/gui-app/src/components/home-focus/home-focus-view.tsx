@@ -18,9 +18,10 @@
  *
  * Live updates arrive as new model values on the same mounted tree: rows carry
  * stable keys (a prompt's feed id, a task's epic id, a background job's key),
- * so a store change repaints rows instead of remounting them, and the relative
- * timestamps subscribe to the app's shared 60s clock inside their own leaves
- * rather than holding a timer here.
+ * so a store change repaints rows instead of remounting them, and every ticking
+ * label - a prompt's age on the app's shared 60s clock, a running job's
+ * elapsed on its own 1s tick - subscribes inside its own leaf rather than
+ * holding a timer here.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -339,9 +340,9 @@ function liveSliceKeys(sections: HomeSections): ReadonlySet<string> {
  * epic id (they are optional on the wire), an epic with a pending prompt and no
  * running agent, warm chat or open page to make a group out of, and the host
  * split, which files a prompt under the machine it was RAISED on and drops it
- * from the slices of machines that did not raise it. Home's tab badge counts
- * prompts, so a prompt the page cannot show is a badge reading `1` over a page
- * showing nothing. Listing what no slice took - computed FROM the slices rather
+ * from the slices of machines that did not raise it. The header bell counts
+ * these same prompts, so a prompt the page cannot show is a bell reading `1`
+ * over a page showing nothing. Listing what no slice took - computed FROM the slices rather
  * than from a second guess at the same rule - is what makes that impossible
  * instead of merely unlikely.
  */

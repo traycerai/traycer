@@ -64,7 +64,9 @@ import {
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
+  checkpointEventTurnKey,
   isNoOpCheckpointEntry,
+  latestCheckpointPerTurn,
   overlappingCheckpointIds,
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
@@ -172,6 +174,12 @@ export interface RenderedMessagesInput {
    */
   readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  /**
+   * Prompt ids the host still has in the queue. An optimistic row with one of
+   * these ids is bookkeeping for a send that already has a queue row, so the
+   * transcript does not draw it. Absent means this caller has no queue.
+   */
+  readonly queuedPromptMessageIds?: ReadonlySet<string>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingApprovals?: ReadonlyArray<ChatApprovalState>;
@@ -544,6 +552,7 @@ const NO_DEDUPLICATED_IMAGE_TARGETS: ReadonlyMap<
   AssistantMarkdownImageTarget
 > = new Map();
 const NO_STEERED_IDS: ReadonlySet<string> = new Set();
+const NO_QUEUED_PROMPT_IDS: ReadonlySet<string> = new Set();
 const NO_PENDING_APPROVALS: ReadonlyArray<ChatApprovalState> = [];
 const NO_PENDING_FILE_EDIT_APPROVALS: ReadonlyArray<ChatFileEditApprovalState> =
   [];
@@ -1141,6 +1150,8 @@ export function useRenderedMessages(
   const pendingFileEditApprovals =
     input.pendingFileEditApprovals ?? NO_PENDING_FILE_EDIT_APPROVALS;
   const pendingInterviews = input.pendingInterviews ?? NO_PENDING_INTERVIEWS;
+  const queuedPromptMessageIds =
+    input.queuedPromptMessageIds ?? NO_QUEUED_PROMPT_IDS;
   const turnPauseAccounting = useMemo(
     () =>
       buildTurnPauseAccounting({
@@ -1486,18 +1497,21 @@ export function useRenderedMessages(
           rendered: [...persisted, ...activeTurn, ...pending, ...live],
         });
 
-    // Drop a pending optimistic echo whose `messageId` is already persisted.
-    // The optimistic "pending" user row and its persisted counterpart share an
-    // `id` (the messageId). Setup-gating's long accepted-but-not-running window
-    // lets the persisted message arrive (via snapshot) while the pending slot is
-    // already orphaned, so without this guard BOTH render (the "double message"
-    // bug). The invariant is "pending = not yet persisted" - once a message is
-    // persisted, its pending echo is stale and must drop.
+    // A prompt is drawn in one place.
+    //
+    // The optimistic row covers the instant after send, before the host has
+    // queued or persisted it. Once the host has that prompt in the queue, the
+    // queue row is the copy that survives a reload and a paused setup, so the
+    // optimistic row stays in the store (a queued send is not a lost send) and
+    // is not drawn. Once the host has persisted the message, that transcript
+    // row is the copy; the optimistic row shares its id and drops.
     const persistedIds = new Set(
       [...persisted, ...activeTurn].map((message) => message.id),
     );
     const dedupedPending = pending.filter(
-      (message) => !persistedIds.has(message.id),
+      (message) =>
+        !persistedIds.has(message.id) &&
+        !queuedPromptMessageIds.has(message.id),
     );
 
     // `baseRows` = everything that sorts by `createdAt`. Assembled before the
@@ -1597,6 +1611,7 @@ export function useRenderedMessages(
     autoJudgeUnattendedDenialMessages,
     setupCardRows,
     setupCardEntries,
+    queuedPromptMessageIds,
     activeRunState,
     activeTurnId,
     activeTurnStartedAt,
@@ -4196,12 +4211,24 @@ interface CheckpointManifestView {
  * Reading `=== true` rather than a truthy check is the row-context contract:
  * an ABSENT field is the projection declining to speak, not an assertion of
  * `false`, so absence falls through to the derivation below.
+ *
+ * Each turn's view is its LAST checkpoint, and only those are weighed against
+ * each other - through the same `latestCheckpointPerTurn` the projection uses,
+ * so a turn whose checkpoint was rewritten is not flagged by its own rewrite on
+ * either line.
  */
 function checkpointManifestViewsFromEvents(
   events: ReadonlyArray<ChatEvent>,
   contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
 ): ReadonlyMap<string, CheckpointManifestView> {
-  const checkpoints = events.flatMap((event) => {
+  // Select from the RAW events, then parse what survived - see
+  // `latestCheckpointPerTurn`. Parsing first drops an unreadable rewrite
+  // before it can supersede anything, which would render this turn from the
+  // manifest that rewrite replaced.
+  const checkpoints = latestCheckpointPerTurn(
+    events.filter((event) => event.type === "checkpoint.captured"),
+    checkpointEventTurnKey,
+  ).flatMap((event) => {
     const checkpoint = checkpointManifestFromEvent(event);
     return isParsedCheckpointManifest(checkpoint) ? [checkpoint] : [];
   });

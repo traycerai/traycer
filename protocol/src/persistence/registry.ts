@@ -6,11 +6,10 @@ import {
   type RecordValue,
 } from "@traycer/protocol/framework/index";
 import {
-  chatHeadRecordSchema,
-  chatShardRecordSchema,
-} from "@traycer/protocol/persistence/_internal/chat-sync-schemas";
+  chatHeadRecordV150,
+  chatShardRecordV150,
+} from "@traycer/protocol/persistence/chat-sync-registry";
 import { draftHeadRecordSchema } from "@traycer/protocol/persistence/_internal/draft-schemas";
-import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
 import {
   epicSchema,
@@ -101,23 +100,10 @@ export const roomMetadataRecordV100 = defineRecordContract({
   schema: roomMetadataSchema,
 });
 
-// Both bind the SAME `CHAT_SYNC_SCHEMA_VERSION` object the payload schemas are
-// pinned to - identity, not a repeated literal. `defineRecordContract` returns
-// its input and never compares the contract's version against the one its
-// schema embeds, so a copied `{ major: 1, minor: 0 }` here would let a future
-// bump register 1.1 while the payload schema and the writers stayed on 1.0.
-
-export const chatHeadRecordV150 = defineRecordContract({
-  name: "chat-head",
-  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
-  schema: chatHeadRecordSchema,
-});
-
-export const chatShardRecordV150 = defineRecordContract({
-  name: "chat-shard",
-  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
-  schema: chatShardRecordSchema,
-});
+// The chat-sync contracts are owned by `chat-sync-registry.ts`, which registers
+// them on their own for consumers that encode nothing else; re-exported here so
+// this registry keeps offering every contract it registers.
+export { chatHeadRecordV150, chatShardRecordV150 };
 
 export const draftHeadRecordV100 = defineRecordContract({
   name: "draft-head",

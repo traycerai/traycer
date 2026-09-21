@@ -7,3 +7,4 @@ export * from "./activity";
 export * from "./profiles";
 export * from "./gui";
 export * from "./tui";
+export * from "./message-peer";

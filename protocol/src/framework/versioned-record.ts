@@ -52,6 +52,13 @@ export type {
  *    validate dynamic registries with `validateVersionedRecordRegistry()`.
  * 4. Use traversal helpers only with validated registries.
  *
+ * Construction and full validation are two different entry points, as in
+ * `versioned-rpc.ts`: `defineVersionedRecordRegistry()` runs only the
+ * structural pass, which never reads a schema, so importing a registry module
+ * builds no JSON Schema. The schema-compatibility pass belongs to
+ * `validateVersionedRecordRegistry()`, which every static registry is held to
+ * at build time and in CI (`protocol/scripts/compat/static-registries.ts`).
+ *
  * The shape mirrors `versioned-rpc.ts`, but every contract carries a single
  * `schema` instead of a request/response pair - persistence records live on
  * disk on their own, not as two halves of a call.
@@ -95,14 +102,17 @@ export function defineVersionedRecordRegistry<
 export function defineVersionedRecordRegistry(
   registry: UncheckedVersionedRecordRegistry,
 ): VersionedRecordRegistry {
-  validateVersionedRecordRegistry(registry);
+  // Structural only; see the module comment. A static registry gets the
+  // schema-compatibility pass from the build-time and CI check.
+  assertVersionedRecordRegistryStructure(registry);
   return registry as VersionedRecordRegistry;
 }
 
 /**
- * Promotes a raw registry to the validated brand after checking every
- * invariant the framework cares about in a single pass. Mirrors
- * `validateVersionedRpcRegistry()`:
+ * The full validation entry point: promotes a raw registry to the validated
+ * brand after checking every invariant the framework cares about. Mirrors
+ * `validateVersionedRpcRegistry()`, and like it always runs both passes;
+ * there is no structural-only mode.
  *
  * 1. Structural: `latestMinor` points at the highest installed minor; contracts
  *    match their slots; non-initial versions define an upgrade from the
@@ -116,6 +126,24 @@ export function validateVersionedRecordRegistry<
 >(
   registry: Registry,
 ): asserts registry is Registry & VersionedRecordRegistry<Registry> {
+  assertVersionedRecordRegistryStructure(registry);
+  assertSchemaCompatibility(registry);
+}
+
+/**
+ * The structural pass alone: registry keys, contract names, schema versions
+ * and bridge endpoints, never a schema. Private so that construction is its
+ * only caller. Being private does not keep a registry from reaching the brand
+ * with only this pass run: `defineVersionedRecordRegistry` is public and does
+ * exactly that, and only the type-level validator stands in the way of a
+ * widened registry (it needs a visible `@ts-expect-error`). What keeps an
+ * unvalidated registry out of a build is the tripwire
+ * (`scripts/compat/__tests__/static-registries-tripwire`), which fails on any
+ * factory call site `STATIC_REGISTRIES` does not name.
+ */
+function assertVersionedRecordRegistryStructure(
+  registry: UncheckedVersionedRecordRegistry,
+): void {
   for (const name in registry) {
     const recordRegistry = registry[name];
     const majorKeys = getSortedNumberKeys(recordRegistry);
@@ -239,8 +267,6 @@ export function validateVersionedRecordRegistry<
       }
     }
   }
-
-  assertSchemaCompatibility(registry);
 }
 
 function assertSchemaCompatibility(

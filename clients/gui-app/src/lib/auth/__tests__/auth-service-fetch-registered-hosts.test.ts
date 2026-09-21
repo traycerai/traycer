@@ -12,7 +12,9 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+// The identity route `validateAuthTokenIdentity*` calls FIRST (see
+// `auth-validation.ts`); every fixture in this file answers this one.
+const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 const HOSTS_URL = "http://localhost:5005/api/v3/hosts";
 
 type FetchHandler = (
@@ -79,7 +81,13 @@ function okWithProfile(): Promise<Response> {
         teamSubscriptions: [],
         payAsYouGoUsage: { allowPayAsYouGo: false },
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "x-traycer-user-record-version": "2.0",
+        },
+      },
     ),
   );
 }

@@ -34,7 +34,10 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
         >
           {props.control}
         </span>
-        <div className="relative flex min-w-0 flex-1" data-split-member="left">
+        <div
+          className="relative flex min-w-0 flex-1 [container-type:inline-size]"
+          data-split-member="left"
+        >
           {props.left}
         </div>
         {props.selectedSide === null ? (
@@ -44,7 +47,10 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
             className="relative z-20 my-2 w-px shrink-0 self-stretch bg-border/70"
           />
         ) : null}
-        <div className="relative flex min-w-0 flex-1" data-split-member="right">
+        <div
+          className="relative flex min-w-0 flex-1 [container-type:inline-size]"
+          data-split-member="right"
+        >
           {props.right}
         </div>
       </div>

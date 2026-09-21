@@ -82,31 +82,36 @@ import {
   canonicalTerminalSessionInfoWithCurrentCwdSchema,
   terminalSessionInfoSchema,
 } from "@traycer/protocol/host/terminal/unary-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
 const sessionReferenceFields = {
-  sessionId: z.string(),
+  sessionId: lazySchema(() => z.string()),
 } as const;
 
 const ownerActionFrameFields = {
   ...textFrameFields,
   ...sessionReferenceFields,
-  clientActionId: z.string(),
+  clientActionId: lazySchema(() => z.string()),
 } as const;
 
-export const terminalSubscribeOpenRequestSchema = z.object({
-  sessionId: z.string(),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-});
+export const terminalSubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({
+    sessionId: z.string(),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+  }),
+);
 export type TerminalSubscribeOpenRequest = z.infer<
   typeof terminalSubscribeOpenRequestSchema
 >;
 
-export const terminalSubscribeViewerSchema = z.enum(["presentation", "cache"]);
+export const terminalSubscribeViewerSchema = lazySchema(() =>
+  z.enum(["presentation", "cache"]),
+);
 export type TerminalSubscribeViewer = z.infer<
   typeof terminalSubscribeViewerSchema
 >;
@@ -115,24 +120,29 @@ export type TerminalSubscribeViewer = z.infer<
  * `terminal.subscribe@1.6` open request. `viewer` defaults to `presentation`
  * so a 1.6 parse of a 1.5-shaped open is byte-identical to today's attach.
  */
-export const terminalSubscribeOpenRequestSchemaV16 =
+export const terminalSubscribeOpenRequestSchemaV16 = lazySchema(() =>
   terminalSubscribeOpenRequestSchema.extend({
     viewer: terminalSubscribeViewerSchema.default("presentation"),
-  });
+  }),
+);
 export type TerminalSubscribeOpenRequestV16 = z.infer<
   typeof terminalSubscribeOpenRequestSchemaV16
 >;
 
-export const terminalActionSchema = z.enum(["write", "resize"]);
+export const terminalActionSchema = lazySchema(() =>
+  z.enum(["write", "resize"]),
+);
 export type TerminalAction = z.infer<typeof terminalActionSchema>;
 
-export const terminalActionAckStatusSchema = z.enum(["accepted", "rejected"]);
+export const terminalActionAckStatusSchema = lazySchema(() =>
+  z.enum(["accepted", "rejected"]),
+);
 export type TerminalActionAckStatus = z.infer<
   typeof terminalActionAckStatusSchema
 >;
 
 const binaryFrameFields = {
-  hasBinaryPayload: z.literal(true),
+  hasBinaryPayload: lazySchema(() => z.literal(true)),
 } as const;
 
 // Generous upper bound on one coalesced `ack` batch. A conforming client's
@@ -146,122 +156,130 @@ const MAX_ACK_BYTES = 8 * 1024 * 1024;
 // ─── Frozen `terminal.subscribe@1.1` server-frame shape (as shipped before
 // binary framing) - shared by the `1.0` and `1.1` contracts below, neither of
 // which ever sees `binaryData`/`binarySnapshot`. ──────────────────────────
-const terminalSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    session: terminalSessionInfoSchema,
-    // Rolling scrollback bytes the renderer feeds straight into xterm via
-    // `term.write(scrollback)`. The `session.cols`/`rows` already reflect the
-    // post-`min()` effective size after this client attached.
-    scrollback: z.string(),
-    // Ack-credit capability sentinel (`@1.1`) - see the file-level doc
-    // comment. Optional (not just absent on `1.0`) for the same
-    // rolling-update robustness reason as `chat.subscribe@1.1`'s
-    // `backgroundItems`: the renderer must treat a missing value as "not
-    // supported", never as "assume supported".
-    ackCreditSupported: z.boolean().optional(),
-  }),
-  z.object({
-    kind: z.literal("data"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    chunk: z.string(),
-  }),
-  z.object({
-    kind: z.literal("resized"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    cols: z.number().int().positive(),
-    rows: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("exit"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    exitCode: z.number().int(),
-    // NB: the exit *reason* lives on the session info (snapshot), not here.
-    // A reap only fires with zero attached viewers, so a `reaped` exit is
-    // never delivered as a live exit frame - it is observed on reattach via
-    // `snapshot.session.exitReason`. Keeping the reason off the frozen
-    // stream frame avoids retroactively widening an already-shipped minor.
-  }),
-  z.object({
-    kind: z.literal("actionAck"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    clientActionId: z.string(),
-    action: terminalActionSchema,
-    status: terminalActionAckStatusSchema,
-    reason: z.string().nullable(),
-    code: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    ...textFrameFields,
-  }),
-]);
+const terminalSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: terminalSessionInfoSchema,
+      // Rolling scrollback bytes the renderer feeds straight into xterm via
+      // `term.write(scrollback)`. The `session.cols`/`rows` already reflect the
+      // post-`min()` effective size after this client attached.
+      scrollback: z.string(),
+      // Ack-credit capability sentinel (`@1.1`) - see the file-level doc
+      // comment. Optional (not just absent on `1.0`) for the same
+      // rolling-update robustness reason as `chat.subscribe@1.1`'s
+      // `backgroundItems`: the renderer must treat a missing value as "not
+      // supported", never as "assume supported".
+      ackCreditSupported: z.boolean().optional(),
+    }),
+    z.object({
+      kind: z.literal("data"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      chunk: z.string(),
+    }),
+    z.object({
+      kind: z.literal("resized"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    z.object({
+      kind: z.literal("exit"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      exitCode: z.number().int(),
+      // NB: the exit *reason* lives on the session info (snapshot), not here.
+      // A reap only fires with zero attached viewers, so a `reaped` exit is
+      // never delivered as a live exit frame - it is observed on reattach via
+      // `snapshot.session.exitReason`. Keeping the reason off the frozen
+      // stream frame avoids retroactively widening an already-shipped minor.
+    }),
+    z.object({
+      kind: z.literal("actionAck"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      clientActionId: z.string(),
+      action: terminalActionSchema,
+      status: terminalActionAckStatusSchema,
+      reason: z.string().nullable(),
+      code: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]),
+);
 
-const terminalSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
-  ...terminalSubscribeServerFrameSchemaV11.def.options,
-  z.object({
-    kind: z.literal("binarySnapshot"),
-    ...binaryFrameFields,
-    ...sessionReferenceFields,
-    session: terminalSessionInfoSchema,
-    // No `scrollback` field - the bytes arrive as the paired binary WS frame.
-  }),
-  z.object({
-    kind: z.literal("binaryData"),
-    ...binaryFrameFields,
-    ...sessionReferenceFields,
-    // No `chunk` field - the bytes arrive as the paired binary WS frame.
-  }),
-]);
+const terminalSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...terminalSubscribeServerFrameSchemaV11.def.options,
+    z.object({
+      kind: z.literal("binarySnapshot"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+      session: terminalSessionInfoSchema,
+      // No `scrollback` field - the bytes arrive as the paired binary WS frame.
+    }),
+    z.object({
+      kind: z.literal("binaryData"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+      // No `chunk` field - the bytes arrive as the paired binary WS frame.
+    }),
+  ]),
+);
 
 // `terminal.subscribe@1.3` (current major-1 latest) - extends V12 with
 // `sessionUpdated`.
-export const terminalSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
-  ...terminalSubscribeServerFrameSchemaV12.def.options,
-  z.object({
-    kind: z.literal("sessionUpdated"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    session: terminalSessionInfoSchema,
-  }),
-]);
+export const terminalSubscribeServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...terminalSubscribeServerFrameSchemaV12.def.options,
+    z.object({
+      kind: z.literal("sessionUpdated"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: terminalSessionInfoSchema,
+    }),
+  ]),
+);
 export type TerminalSubscribeServerFrame = z.infer<
   typeof terminalSubscribeServerFrameSchema
 >;
 
-export const terminalSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("write"),
-    ...ownerActionFrameFields,
-    data: z.string(),
-  }),
-  z.object({
-    kind: z.literal("resize"),
-    ...ownerActionFrameFields,
-    cols: z.number().int().positive(),
-    rows: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("ping"),
-    ...textFrameFields,
-  }),
-  z.object({
-    kind: z.literal("ack"),
-    ...textFrameFields,
-    ...sessionReferenceFields,
-    // Bytes the client's terminal engine has actually parsed since its last
-    // `ack` (coalesced client-side, not one frame per chunk). No
-    // `clientActionId` - unlike `write`/`resize` this is a fire-and-forget
-    // credit signal, not a tracked user action.
-    bytes: z.number().int().nonnegative().max(MAX_ACK_BYTES),
-  }),
-]);
+export const terminalSubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("write"),
+      ...ownerActionFrameFields,
+      data: z.string(),
+    }),
+    z.object({
+      kind: z.literal("resize"),
+      ...ownerActionFrameFields,
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    z.object({
+      kind: z.literal("ping"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("ack"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      // Bytes the client's terminal engine has actually parsed since its last
+      // `ack` (coalesced client-side, not one frame per chunk). No
+      // `clientActionId` - unlike `write`/`resize` this is a fire-and-forget
+      // credit signal, not a tracked user action.
+      bytes: z.number().int().nonnegative().max(MAX_ACK_BYTES),
+    }),
+  ]),
+);
 export type TerminalSubscribeClientFrame = z.infer<
   typeof terminalSubscribeClientFrameSchema
 >;
@@ -274,9 +292,8 @@ export type TerminalSubscribeClientFrame = z.infer<
 // versioned-stream checker does not recurse into nested object schemas, so it
 // cannot enforce this exception. Do not use this as a general minor-bump
 // precedent.
-export const terminalSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
-  "kind",
-  [
+export const terminalSubscribeServerFrameSchemaV14 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
@@ -335,7 +352,7 @@ export const terminalSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
       ...sessionReferenceFields,
       session: canonicalTerminalSessionInfoSchema,
     }),
-  ],
+  ]),
 );
 export type TerminalSubscribeServerFrameV14 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV14
@@ -345,9 +362,8 @@ export type TerminalSubscribeServerFrameV14 = z.infer<
 // addition is required `currentCwd` inside the three variants that carry a
 // session. V1.4 remains frozen above; the host explicitly projects session
 // info for each negotiated minor.
-export const terminalSubscribeServerFrameSchemaV15 = z.discriminatedUnion(
-  "kind",
-  [
+export const terminalSubscribeServerFrameSchemaV15 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
@@ -406,7 +422,7 @@ export const terminalSubscribeServerFrameSchemaV15 = z.discriminatedUnion(
       ...sessionReferenceFields,
       session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
     }),
-  ],
+  ]),
 );
 export type TerminalSubscribeServerFrameV15 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV15
@@ -462,23 +478,25 @@ export const terminalSubscribeV11 = defineStreamRpcContract({
 
 // ─── Frozen `terminal.subscribe@1.0` shape (as shipped before ack-credit) ──
 
-const terminalSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("write"),
-    ...ownerActionFrameFields,
-    data: z.string(),
-  }),
-  z.object({
-    kind: z.literal("resize"),
-    ...ownerActionFrameFields,
-    cols: z.number().int().positive(),
-    rows: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("ping"),
-    ...textFrameFields,
-  }),
-]);
+const terminalSubscribeClientFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("write"),
+      ...ownerActionFrameFields,
+      data: z.string(),
+    }),
+    z.object({
+      kind: z.literal("resize"),
+      ...ownerActionFrameFields,
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    z.object({
+      kind: z.literal("ping"),
+      ...textFrameFields,
+    }),
+  ]),
+);
 
 export const terminalSubscribeV10 = defineStreamRpcContract({
   method: "terminal.subscribe",

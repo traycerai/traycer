@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import {
   ditherRows,
   ditherRowsPerChannel,
@@ -8,6 +8,11 @@ import {
 } from "@/lib/appearance/appearance-image-processing";
 import { type StartPageWallpaper } from "@/stores/settings/settings-store";
 import { useThemeRevision } from "@/providers/use-theme-revision";
+import {
+  retainWallpaperFrame,
+  restoreWallpaperFrame,
+  type WallpaperFrameSlot,
+} from "@/components/home/appearance-wallpaper-frame";
 import "./appearance-wallpaper.css";
 
 /** One dither cell, in CSS px: the canvas is the element at 1/CELL scale. */
@@ -30,19 +35,48 @@ const RESIZE_DEBOUNCE_MS = 100;
 let colorProbeCanvas: HTMLCanvasElement | null = null;
 
 /**
- * The personal start-page wallpaper. `photo` and `grain` are the image itself
- * under CSS; `dither` repaints it onto a low-resolution canvas upscaled with
- * `image-rendering: pixelated`, so the treatment is a render-time property of
- * the surface rather than a second set of bytes to store and invalidate.
+ * Where the wallpaper is being painted, which decides how much of the
+ * treatment applies.
+ *
+ * `page` is the start page: the effect's texture plus everything that settles
+ * the image into the page - the neutral veil that clears the composer, the
+ * fade into `--background` below, and the sub-1 opacity that lets the page
+ * colour through.
+ *
+ * `preview` is a curated tile in Settings: the texture alone, at full opacity.
+ * The page integration is sized for a full-height surface - at tile size the
+ * veil's ellipse covers the whole tile and the fade takes its lower half, so
+ * every wallpaper reads as grey fog and the three effects become
+ * indistinguishable. What a tile has to answer is "what do the dots / the
+ * grain look like on this picture at this strength", nothing more.
+ */
+export type WallpaperSurface = "page" | "preview";
+
+/**
+ * The personal start-page wallpaper, and - fed a catalog thumbnail as a
+ * `preview` surface - what each curated tile in Settings shows under the
+ * current effect, so the two can never drift apart. `photo` and `grain` are
+ * the image itself under CSS; `dither` repaints it onto a low-resolution
+ * canvas upscaled with `image-rendering: pixelated`, so the treatment is a
+ * render-time property of the surface rather than a second set of bytes to
+ * store and invalidate.
  */
 export function AppearanceWallpaper(props: {
   readonly wallpaper: StartPageWallpaper | null;
   readonly url: string | null;
   /** Dither tint. `null` reads the theme accent (`--primary`) instead. */
   readonly tint: string | null;
+  readonly surface: WallpaperSurface;
+  /**
+   * Which retained dither this page-sized surface owns. The landing page
+   * and the sidebar both use `surface="page"` and rasterize at different
+   * sizes, so they cannot share a frame. Previews never retain one.
+   */
+  readonly frameSlot?: WallpaperFrameSlot;
 }) {
-  const { wallpaper, url, tint } = props;
+  const { wallpaper, url, tint, surface, frameSlot } = props;
   if (wallpaper === null || url === null) return null;
+  const onPage = surface === "page";
   // Subtle leaves a 20% veil at the centre, strong reaches 65%. The same knob
   // scales the texture for dot pattern and film grain; for photo it is the
   // only thing the slider does.
@@ -61,20 +95,25 @@ export function AppearanceWallpaper(props: {
           intensity={wallpaper.intensity}
           tint={tint}
           tintWithAccent={wallpaper.tintWithAccent}
+          frameSlot={surface === "page" ? (frameSlot ?? "page") : null}
         />
       ) : (
         <img
           className="size-full object-cover"
           src={url}
           alt=""
+          // The start page's own wallpaper is a blob URL, where a referrer is
+          // moot; a curated tile in Settings loads its thumbnail from the
+          // assets CDN, and no catalog request sends one.
+          referrerPolicy="no-referrer"
           draggable={false}
           style={
             wallpaper.style === "grain"
               ? {
-                  opacity: 0.9 - wallpaper.intensity * 0.4,
+                  opacity: imageOpacity(wallpaper, onPage),
                   filter: "saturate(0.8) contrast(1.05)",
                 }
-              : { opacity: 0.85 }
+              : { opacity: imageOpacity(wallpaper, onPage) }
           }
         />
       )}
@@ -84,9 +123,38 @@ export function AppearanceWallpaper(props: {
           style={{ opacity: 0.15 + wallpaper.intensity * 0.5 }}
         />
       ) : null}
-      <div className="appearance-wallpaper-mask absolute inset-0" />
+      {onPage ? (
+        <div className="appearance-wallpaper-mask absolute inset-0" />
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The `<img>` opacity of `photo` and `grain`. Grain's desaturation is texture
+ * and applies on every surface; the sub-1 opacity is page integration - it
+ * lets the page colour through - and applies on the page only.
+ */
+function imageOpacity(wallpaper: StartPageWallpaper, onPage: boolean): number {
+  if (!onPage) return 1;
+  if (wallpaper.style === "grain") return 0.9 - wallpaper.intensity * 0.4;
+  return 0.85;
+}
+
+function wallpaperFrameStyle(args: {
+  readonly url: string;
+  readonly intensity: number;
+  readonly tint: string | null;
+  readonly tintWithAccent: boolean;
+  readonly tintThemeRevision: number;
+}): string {
+  return [
+    args.url,
+    args.intensity,
+    args.tint ?? "",
+    args.tintWithAccent ? "1" : "0",
+    args.tintThemeRevision,
+  ].join("\u001f");
 }
 
 function DitheredWallpaper(props: {
@@ -94,8 +162,9 @@ function DitheredWallpaper(props: {
   readonly intensity: number;
   readonly tint: string | null;
   readonly tintWithAccent: boolean;
+  readonly frameSlot: WallpaperFrameSlot | null;
 }) {
-  const { url, intensity, tint, tintWithAccent } = props;
+  const { url, intensity, tint, tintWithAccent, frameSlot } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // The theme is not readable as a value here - it lives in CSS custom
   // properties - so the revision is subscribed to purely as a repaint trigger
@@ -103,6 +172,37 @@ function DitheredWallpaper(props: {
   // the cascade, and covers the OS flip under `theme: "system"` as well.
   const themeRevision = useThemeRevision();
   const tintThemeRevision = tintWithAccent ? themeRevision : 0;
+  const frameStyle = wallpaperFrameStyle({
+    url,
+    intensity,
+    tint,
+    tintWithAccent,
+    tintThemeRevision,
+  });
+  // Set by the layout effect, read by the paint effect in the same commit.
+  // A restored frame is already the picture; the effect must not start a
+  // pass that would clear the canvas on its way to drawing the same thing.
+  const restoredStyleRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    if (frameSlot === null) {
+      restoredStyleRef.current = null;
+      return;
+    }
+    restoredStyleRef.current = restoreWallpaperFrame(
+      frameSlot,
+      frameStyle,
+      canvas,
+      {
+        width: Math.round(canvas.clientWidth / CELL),
+        height: Math.round(canvas.clientHeight / CELL),
+      },
+    )
+      ? frameStyle
+      : null;
+  }, [frameSlot, frameStyle]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -110,7 +210,11 @@ function DitheredWallpaper(props: {
     let controller: AbortController | null = null;
     const image = new Image();
     let timer: number | null = null;
-    let painted = false;
+    let painted =
+      restoredStyleRef.current === frameStyle &&
+      canvas.width === Math.round(canvas.clientWidth / CELL) &&
+      canvas.height === Math.round(canvas.clientHeight / CELL) &&
+      canvas.width > 0;
     const paint = (): void => {
       controller?.abort();
       if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
@@ -134,7 +238,12 @@ function DitheredWallpaper(props: {
         pass.signal,
       )
         .then((complete) => {
-          if (complete && !pass.signal.aborted) painted = true;
+          if (complete && !pass.signal.aborted) {
+            painted = true;
+            if (frameSlot !== null) {
+              retainWallpaperFrame(frameSlot, frameStyle, canvas);
+            }
+          }
         })
         // Aborts (unmount, a newer pass) and a canvas-less environment are the
         // only failures here, and both mean "leave the last frame up".
@@ -154,6 +263,17 @@ function DitheredWallpaper(props: {
     // Same "leave the last frame up" outcome as an aborted render - there is
     // no broken-image placeholder to paint onto a dither canvas.
     image.onerror = () => undefined;
+    image.referrerPolicy = "no-referrer";
+    // A cross-origin image drawn without CORS taints the canvas, and the
+    // dither pass then dies in `getImageData` - silently, into the catch
+    // below - leaving the plain image upscaled `pixelated`: it LOOKS dithered
+    // and reacts to nothing. The catalog thumbnails come from the assets CDN
+    // (which serves `Access-Control-Allow-Origin: *`); the start page's own
+    // blob URL is same-origin and unaffected either way.
+    image.crossOrigin = "anonymous";
+    // Always load, including after a restore. A later resize repaints from
+    // this image; the restored frame only means the first paint is a no-op
+    // while the raster size still matches.
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
@@ -164,7 +284,7 @@ function DitheredWallpaper(props: {
       image.onload = null;
       image.onerror = null;
     };
-  }, [url, intensity, tint, tintWithAccent, tintThemeRevision]);
+  }, [frameSlot, frameStyle, intensity, tint, tintWithAccent, url]);
 
   return (
     <canvas ref={canvasRef} className="appearance-wallpaper-canvas size-full" />

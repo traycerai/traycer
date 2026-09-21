@@ -2,9 +2,13 @@
  * End-to-end §6 legacy→file migration tests, driving the real
  * `FileTokenStore.migrateLegacyCredentials` against a real temp-dir credentials
  * file (real lock/WAL, real access-only probe + refresh helpers). `fetch` is the
- * only faked boundary: `/api/v3/user` answers the identity probe and
+ * only faked boundary: `/api/v3/user/negotiated` (the route the identity probe
+ * now calls first, see `auth-validation.ts`) answers the identity probe and
  * `/api/v3/auth/refresh` answers the spend, keyed on the request's bearer /
- * refresh token so a single handler drives every branch.
+ * refresh token so a single handler drives every branch. The frozen route
+ * (`/api/v3/user`) is left unanswered on purpose: nothing in this file drives
+ * the 404/unlabelled-response recovery onto it, so an accidental fallback here
+ * would surface as the handler's 500 default rather than a passing assertion.
  *
  * Spec: credentials-file token-store tech plan §6.
  */
@@ -22,7 +26,7 @@ import {
 
 const AUTHN_BASE_URL = "http://authn.credentials-migration.test";
 const ENVIRONMENT = "development";
-const USER_URL = `${AUTHN_BASE_URL}/api/v3/user`;
+const NEGOTIATED_USER_URL = `${AUTHN_BASE_URL}/api/v3/user/negotiated`;
 const REFRESH_URL = `${AUTHN_BASE_URL}/api/v3/auth/refresh`;
 
 vi.mock("electron", () => ({
@@ -91,8 +95,10 @@ function refreshTokenOf(init: FetchInit | undefined): string {
   return "";
 }
 
-// A valid `/api/v3/user` body for `userId` (the shape the auth record schema
-// parses into an `AuthenticatedUser`).
+// A valid `/api/v3/user/negotiated` body for `userId` (the shape the auth
+// record schema parses into an `AuthenticatedUser`), labelled major 1 - this
+// file's fixtures predate Apple and stay pre-Apple, so the frozen route's
+// shape and the negotiated route's answer are the same body either way.
 function userResponse(userId: string): Response {
   return new Response(
     JSON.stringify({
@@ -129,7 +135,13 @@ function userResponse(userId: string): Response {
       teamSubscriptions: [],
       payAsYouGoUsage: { allowPayAsYouGo: false },
     }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "1.0",
+      },
+    },
   );
 }
 
@@ -145,7 +157,7 @@ function installMigrationFetch(cfg: {
 }): () => void {
   return installFetch((input, init) => {
     const url = typeof input === "string" ? input : String(input);
-    if (url === USER_URL) {
+    if (url === NEGOTIATED_USER_URL) {
       const verdict = cfg.users[bearer(init)];
       if (verdict === undefined || verdict === "reject") {
         return Promise.resolve(new Response(null, { status: 401 }));

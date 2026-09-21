@@ -43,7 +43,7 @@ import {
   RowItemName,
   RowMetaLine,
   RowStatus,
-  RowStatusDuration,
+  RowStatusElapsed,
 } from "@/components/home-focus/home-focus-row-parts";
 import {
   focusAgentState,
@@ -528,7 +528,7 @@ function TaskGroupJobRow(props: {
           state={focusJobState(job)}
           detail={
             job.startedAtMs === null ? null : (
-              <RowStatusDuration startedAtMs={job.startedAtMs} />
+              <RowStatusElapsed startedAtMs={job.startedAtMs} />
             )
           }
         />

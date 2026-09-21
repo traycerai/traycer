@@ -1546,6 +1546,19 @@ export const epicSchemaSurfaceBaseline = {
                                       "primaryWorkspace"
                                     ]
                                   },
+                                  "grokPromptIndex": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "createdAt": {
                                     "type": "number"
                                   },
@@ -10197,6 +10210,19 @@ export const epicSchemaSurfaceBaseline = {
                                     ],
                                     "additionalProperties": false
                                   },
+                                  "grokPromptIndex": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "createdAt": {
                                     "type": "number"
                                   },
@@ -10261,6 +10287,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "hostId",
                                   "sessionId",
                                   "sessionWorkspaceSnapshot",
+                                  "grokPromptIndex",
                                   "createdAt",
                                   "coveredUntilMessageId",
                                   "profileId",

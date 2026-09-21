@@ -5,6 +5,7 @@ import {
   HOST_NOTIFICATION_STOPPED_REASONS,
   type HostNotificationStoppedReason,
 } from "./notifications/payloads";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const FALLBACK_RUNG_KINDS = [
   "profile",
@@ -12,7 +13,9 @@ export const FALLBACK_RUNG_KINDS = [
   "wait",
   "notify",
 ] as const;
-export const fallbackRungKindSchema = z.enum(FALLBACK_RUNG_KINDS);
+export const fallbackRungKindSchema = lazySchema(() =>
+  z.enum(FALLBACK_RUNG_KINDS),
+);
 export type FallbackRungKind = z.infer<typeof fallbackRungKindSchema>;
 
 // A nonzero cancellation window is required even for headless chats. The wait
@@ -24,25 +27,31 @@ export const FALLBACK_POLICY_LIMITS = {
   maxWaitMinutes: 10_080,
 } as const;
 
-export const fallbackLadderSchema = z
-  .array(fallbackRungKindSchema)
-  .max(FALLBACK_RUNG_KINDS.length)
-  .refine((rungs) => new Set(rungs).size === rungs.length, {
-    message: "Fallback rungs must be unique",
-  });
+export const fallbackLadderSchema = lazySchema(() =>
+  z
+    .array(fallbackRungKindSchema)
+    .max(FALLBACK_RUNG_KINDS.length)
+    .refine((rungs) => new Set(rungs).size === rungs.length, {
+      message: "Fallback rungs must be unique",
+    }),
+);
 
-export const tierCandidateSchema = z.object({
-  harnessId: harnessIdSchema,
-  // Store family intent; resolution against the live catalog is host-owned.
-  modelFamily: z.string().trim().min(1),
-  reasoningEffort: z.string().trim().min(1).nullable(),
-});
+export const tierCandidateSchema = lazySchema(() =>
+  z.object({
+    harnessId: harnessIdSchema,
+    // Store family intent; resolution against the live catalog is host-owned.
+    modelFamily: z.string().trim().min(1),
+    reasoningEffort: z.string().trim().min(1).nullable(),
+  }),
+);
 export type TierCandidate = z.infer<typeof tierCandidateSchema>;
 
-export const tierGroupSchema = z.object({
-  id: z.string().trim().min(1),
-  candidates: z.array(tierCandidateSchema),
-});
+export const tierGroupSchema = lazySchema(() =>
+  z.object({
+    id: z.string().trim().min(1),
+    candidates: z.array(tierCandidateSchema),
+  }),
+);
 export type TierGroup = z.infer<typeof tierGroupSchema>;
 
 /**
@@ -290,60 +299,66 @@ export const TIER_RUNG_SKIP_REASONS = [
   "tuple-unusable",
   "already-tried",
 ] as const;
-export const tierRungSkipReasonSchema = z.enum(TIER_RUNG_SKIP_REASONS);
+export const tierRungSkipReasonSchema = lazySchema(() =>
+  z.enum(TIER_RUNG_SKIP_REASONS),
+);
 export type TierRungSkipReason = z.infer<typeof tierRungSkipReasonSchema>;
 
-export const fallbackPolicySchema = z
-  .object({
-    enabled: z.boolean(),
-    // Empty is valid: exhaustion always notifies, even without an explicit rung.
-    ladder: fallbackLadderSchema,
-    reasonOverrides: z
-      .partialRecord(
-        z.enum(HOST_NOTIFICATION_STOPPED_REASONS),
-        z.union([fallbackLadderSchema, z.literal("off")]),
-      )
-      .optional(),
-    graceWindowSeconds: z
-      .number()
-      .int()
-      .min(FALLBACK_POLICY_LIMITS.minGraceWindowSeconds)
-      .max(FALLBACK_POLICY_LIMITS.maxGraceWindowSeconds),
-    maxWaitMinutes: z
-      .number()
-      .int()
-      .min(FALLBACK_POLICY_LIMITS.minWaitMinutes)
-      .max(FALLBACK_POLICY_LIMITS.maxWaitMinutes),
-    returnToPreferred: z.enum(["prompt", "auto", "stay"]),
-    tierGroups: z
-      .array(tierGroupSchema)
-      .refine(
-        (groups) =>
-          new Set(groups.map((group) => group.id)).size === groups.length,
-        { message: "Tier group IDs must be unique" },
-      ),
-    /**
-     * The group the "equivalent model" step uses for a model that is in NO
-     * group, by id, or `null` for none - see {@link routeTierGroupForFailedTuple}.
-     *
-     * `.default(null)` rather than required, for the reason the since-removed
-     * exclusion list carried one: a policy stored by a build that predates the
-     * field must still parse, and a required field would turn every such row
-     * into `storedPolicyUnreadable` on upgrade. The refinement below is at the
-     * OBJECT level because it relates two fields: the id has to name one of the
-     * groups beside it.
-     */
-    defaultTierGroupId: z.string().trim().min(1).nullable().default(null),
-  })
-  .refine(
-    (policy) =>
-      policy.defaultTierGroupId === null ||
-      policy.tierGroups.some((group) => group.id === policy.defaultTierGroupId),
-    {
-      message: "The default tier group must name an existing group",
-      path: ["defaultTierGroupId"],
-    },
-  );
+export const fallbackPolicySchema = lazySchema(() =>
+  z
+    .object({
+      enabled: z.boolean(),
+      // Empty is valid: exhaustion always notifies, even without an explicit rung.
+      ladder: fallbackLadderSchema,
+      reasonOverrides: z
+        .partialRecord(
+          z.enum(HOST_NOTIFICATION_STOPPED_REASONS),
+          z.union([fallbackLadderSchema, z.literal("off")]),
+        )
+        .optional(),
+      graceWindowSeconds: z
+        .number()
+        .int()
+        .min(FALLBACK_POLICY_LIMITS.minGraceWindowSeconds)
+        .max(FALLBACK_POLICY_LIMITS.maxGraceWindowSeconds),
+      maxWaitMinutes: z
+        .number()
+        .int()
+        .min(FALLBACK_POLICY_LIMITS.minWaitMinutes)
+        .max(FALLBACK_POLICY_LIMITS.maxWaitMinutes),
+      returnToPreferred: z.enum(["prompt", "auto", "stay"]),
+      tierGroups: z
+        .array(tierGroupSchema)
+        .refine(
+          (groups) =>
+            new Set(groups.map((group) => group.id)).size === groups.length,
+          { message: "Tier group IDs must be unique" },
+        ),
+      /**
+       * The group the "equivalent model" step uses for a model that is in NO
+       * group, by id, or `null` for none - see {@link routeTierGroupForFailedTuple}.
+       *
+       * `.default(null)` rather than required, for the reason the since-removed
+       * exclusion list carried one: a policy stored by a build that predates the
+       * field must still parse, and a required field would turn every such row
+       * into `storedPolicyUnreadable` on upgrade. The refinement below is at the
+       * OBJECT level because it relates two fields: the id has to name one of the
+       * groups beside it.
+       */
+      defaultTierGroupId: z.string().trim().min(1).nullable().default(null),
+    })
+    .refine(
+      (policy) =>
+        policy.defaultTierGroupId === null ||
+        policy.tierGroups.some(
+          (group) => group.id === policy.defaultTierGroupId,
+        ),
+      {
+        message: "The default tier group must name an existing group",
+        path: ["defaultTierGroupId"],
+      },
+    ),
+);
 export type FallbackPolicy = z.infer<typeof fallbackPolicySchema>;
 
 /** Fresh data on every read; no caller can mutate another user's defaults. */
@@ -363,32 +378,40 @@ export function createDefaultFallbackPolicy(): FallbackPolicy {
   };
 }
 
-export const providersFallbackPolicyGetRequestSchema = z.object({});
+export const providersFallbackPolicyGetRequestSchema = lazySchema(() =>
+  z.object({}),
+);
 export type ProvidersFallbackPolicyGetRequest = z.infer<
   typeof providersFallbackPolicyGetRequestSchema
 >;
 
-export const providersFallbackPolicyGetResponseSchema = z.object({
-  policy: fallbackPolicySchema,
-  // Settings can render and offer an explicit repair when stored data is bad.
-  storedPolicyUnreadable: z.boolean(),
-  // Derived from active traversals, never part of the persisted policy.
-  inFlightCount: z.number().int().nonnegative(),
-});
+export const providersFallbackPolicyGetResponseSchema = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchema,
+    // Settings can render and offer an explicit repair when stored data is bad.
+    storedPolicyUnreadable: z.boolean(),
+    // Derived from active traversals, never part of the persisted policy.
+    inFlightCount: z.number().int().nonnegative(),
+  }),
+);
 export type ProvidersFallbackPolicyGetResponse = z.infer<
   typeof providersFallbackPolicyGetResponseSchema
 >;
 
-export const providersFallbackPolicySetRequestSchema = z.object({
-  policy: fallbackPolicySchema,
-});
+export const providersFallbackPolicySetRequestSchema = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchema,
+  }),
+);
 export type ProvidersFallbackPolicySetRequest = z.infer<
   typeof providersFallbackPolicySetRequestSchema
 >;
 
-export const providersFallbackPolicySetResponseSchema = z.object({
-  policy: fallbackPolicySchema,
-});
+export const providersFallbackPolicySetResponseSchema = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchema,
+  }),
+);
 export type ProvidersFallbackPolicySetResponse = z.infer<
   typeof providersFallbackPolicySetResponseSchema
 >;
@@ -570,16 +593,19 @@ export const providersFallbackPolicySetV10 = defineRpcContract({
  * rather than a client-side convenience: only the host can build a seed that
  * matches what a first read would have produced for this user.
  */
-export const providersFallbackPolicyRestoreTierGroupsRequestSchema = z.object(
-  {},
+export const providersFallbackPolicyRestoreTierGroupsRequestSchema = lazySchema(
+  () => z.object({}),
 );
 export type ProvidersFallbackPolicyRestoreTierGroupsRequest = z.infer<
   typeof providersFallbackPolicyRestoreTierGroupsRequestSchema
 >;
 
-export const providersFallbackPolicyRestoreTierGroupsResponseSchema = z.object({
-  policy: fallbackPolicySchema,
-});
+export const providersFallbackPolicyRestoreTierGroupsResponseSchema =
+  lazySchema(() =>
+    z.object({
+      policy: fallbackPolicySchema,
+    }),
+  );
 export type ProvidersFallbackPolicyRestoreTierGroupsResponse = z.infer<
   typeof providersFallbackPolicyRestoreTierGroupsResponseSchema
 >;
@@ -592,14 +618,18 @@ export type ProvidersFallbackPolicyRestoreTierGroupsResponse = z.infer<
  * seed marker is cleared host-side, so the next read seeds this user exactly as
  * it seeds a new one; that is the store's decision, not a flag on the wire.
  */
-export const providersFallbackPolicyResetRequestSchema = z.object({});
+export const providersFallbackPolicyResetRequestSchema = lazySchema(() =>
+  z.object({}),
+);
 export type ProvidersFallbackPolicyResetRequest = z.infer<
   typeof providersFallbackPolicyResetRequestSchema
 >;
 
-export const providersFallbackPolicyResetResponseSchema = z.object({
-  policy: fallbackPolicySchema,
-});
+export const providersFallbackPolicyResetResponseSchema = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchema,
+  }),
+);
 export type ProvidersFallbackPolicyResetResponse = z.infer<
   typeof providersFallbackPolicyResetResponseSchema
 >;
@@ -625,20 +655,22 @@ export type ProvidersFallbackPolicyResetResponse = z.infer<
  * newly added reason, blanking a preview that was otherwise fine. Parse it with
  * that schema to branch; render `skipLabel` when it does not match.
  */
-export const tierCandidatePreviewSchema = z.object({
-  groupId: z.string(),
-  candidateIndex: z.number().int().nonnegative(),
-  harnessId: harnessIdSchema,
-  modelFamily: z.string(),
-  reasoningEffort: z.string().nullable(),
-  /** The slug the family resolved to, or `null` when it resolved to nothing. */
-  resolvedModel: z.string().nullable(),
-  profileId: z.string().nullable(),
-  skipReason: z.string().nullable(),
-  /** Host-rendered; the only thing to show for a reason the client cannot parse. */
-  skipLabel: z.string().nullable(),
-  warnings: z.array(z.string()),
-});
+export const tierCandidatePreviewSchema = lazySchema(() =>
+  z.object({
+    groupId: z.string(),
+    candidateIndex: z.number().int().nonnegative(),
+    harnessId: harnessIdSchema,
+    modelFamily: z.string(),
+    reasoningEffort: z.string().nullable(),
+    /** The slug the family resolved to, or `null` when it resolved to nothing. */
+    resolvedModel: z.string().nullable(),
+    profileId: z.string().nullable(),
+    skipReason: z.string().nullable(),
+    /** Host-rendered; the only thing to show for a reason the client cannot parse. */
+    skipLabel: z.string().nullable(),
+    warnings: z.array(z.string()),
+  }),
+);
 export type TierCandidatePreview = z.infer<typeof tierCandidatePreviewSchema>;
 
 /**
@@ -652,9 +684,12 @@ export type TierCandidatePreview = z.infer<typeof tierCandidatePreviewSchema>;
  * here would produce a policy that can be saved and then not previewed, which is
  * a worse failure than a slow preview.
  */
-export const providersFallbackPolicyPreviewTierGroupsRequestSchema = z.object({
-  groups: z.array(tierGroupSchema),
-});
+export const providersFallbackPolicyPreviewTierGroupsRequestSchema = lazySchema(
+  () =>
+    z.object({
+      groups: z.array(tierGroupSchema),
+    }),
+);
 export type ProvidersFallbackPolicyPreviewTierGroupsRequest = z.infer<
   typeof providersFallbackPolicyPreviewTierGroupsRequestSchema
 >;
@@ -668,9 +703,12 @@ export type ProvidersFallbackPolicyPreviewTierGroupsRequest = z.infer<
  * which is step 1 routing a FAILED TUPLE, and this surface passes none. A field
  * that is structurally always `null` is one a reader has to disprove.
  */
-export const providersFallbackPolicyPreviewTierGroupsResponseSchema = z.object({
-  candidates: z.array(tierCandidatePreviewSchema),
-});
+export const providersFallbackPolicyPreviewTierGroupsResponseSchema =
+  lazySchema(() =>
+    z.object({
+      candidates: z.array(tierCandidatePreviewSchema),
+    }),
+  );
 export type ProvidersFallbackPolicyPreviewTierGroupsResponse = z.infer<
   typeof providersFallbackPolicyPreviewTierGroupsResponseSchema
 >;

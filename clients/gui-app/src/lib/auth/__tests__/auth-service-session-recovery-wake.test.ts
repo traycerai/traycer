@@ -31,7 +31,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * per-attempt retry backoff, never a `vi.waitFor` poll on a spy count).
  */
 
-const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+// The identity route `validateAuthTokenIdentity*` calls FIRST (see
+// `auth-validation.ts`); every fixture in this file answers this one.
+const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
 
 type FetchHandler = (
@@ -310,7 +312,13 @@ describe("AuthService terminal verdicts and the recovery loop", () => {
           teamSubscriptions: [],
           payAsYouGoUsage: { allowPayAsYouGo: false },
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "x-traycer-user-record-version": "2.0",
+          },
+        },
       ),
     );
   }
