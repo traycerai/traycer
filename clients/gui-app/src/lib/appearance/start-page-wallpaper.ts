@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
   useSettingsStore,
@@ -231,30 +231,152 @@ const NO_WALLPAPER: StartPageWallpaperImage = { url: null, name: null };
 let retainedImage: StartPageWallpaperImage = NO_WALLPAPER;
 let retainedName: string | null = null;
 let retainedVersion = 0;
+let retainedContentKey: string | null = null;
+
+const imageListeners = new Set<() => void>();
+
+function subscribeImage(listener: () => void): () => void {
+  imageListeners.add(listener);
+  return () => {
+    imageListeners.delete(listener);
+  };
+}
+
+function emitImage(): void {
+  for (const listener of imageListeners) listener();
+}
 
 function retainedImageMatches(name: string | null, version: number): boolean {
   return retainedName === name && retainedVersion === version;
+}
+
+function revokeObjectUrlAfterPaint(url: string): void {
+  const retire = () => {
+    if (retainedImage.url === url) return;
+    URL.revokeObjectURL(url);
+  };
+  if (typeof requestAnimationFrame !== "function") {
+    setTimeout(retire, 0);
+    return;
+  }
+  requestAnimationFrame(() => {
+    requestAnimationFrame(retire);
+  });
 }
 
 function publishRetainedStartPageWallpaperImage(
   next: StartPageWallpaperImage,
   name: string | null,
   version: number,
+  contentKey: string | null,
 ): void {
   const previous = retainedImage.url;
+  const changed =
+    previous !== next.url ||
+    retainedName !== name ||
+    retainedVersion !== version ||
+    retainedContentKey !== contentKey;
   retainedImage = next;
   retainedName = name;
   retainedVersion = version;
-  if (previous !== null && previous !== next.url) URL.revokeObjectURL(previous);
+  retainedContentKey = contentKey;
+  if (previous !== null && previous !== next.url) {
+    revokeObjectUrlAfterPaint(previous);
+  }
+  if (changed) emitImage();
 }
 
 function clearRetainedStartPageWallpaperImage(): void {
-  publishRetainedStartPageWallpaperImage(NO_WALLPAPER, null, 0);
+  publishRetainedStartPageWallpaperImage(NO_WALLPAPER, null, 0, null);
+}
+
+/**
+ * One read at a time for a name and revision. A second mounted reader joins
+ * it instead of minting another object URL; publishing that second URL used
+ * to revoke the one the first reader was still showing.
+ *
+ * Bumped when a different identity starts, so a slow read cannot publish
+ * over the wallpaper that superseded it.
+ */
+let readSerial = 0;
+let inflightKey: string | null = null;
+
+function wallpaperIdentityKey(name: string | null, version: number): string {
+  return `${version}\0${name ?? ""}`;
+}
+
+async function blobContentKey(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let hash = 2166136261;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${blob.type}:${blob.size}:${hash >>> 0}`;
+}
+
+/**
+ * Reads the stored bytes for this identity.
+ *
+ * A retained hit still re-reads. The revision counter is per window, so
+ * another window can replace wallpaper.png without bumping it. The current
+ * frame keeps the retained URL; a different blob publishes a new one.
+ */
+function ensureStartPageWallpaperRead(
+  name: string | null,
+  version: number,
+): void {
+  const key = wallpaperIdentityKey(name, version);
+  if (inflightKey === key) return;
+  const serial = ++readSerial;
+  inflightKey = key;
+  void readAppearanceBlob(START_PAGE_WALLPAPER_KEY)
+    .catch(() => null)
+    .then(async (blob) => {
+      if (serial !== readSerial) return;
+      if (blob === null) {
+        publishRetainedStartPageWallpaperImage(
+          NO_WALLPAPER,
+          name,
+          version,
+          null,
+        );
+        return;
+      }
+      const contentKey = await blobContentKey(blob);
+      if (serial !== readSerial) return;
+      if (
+        retainedImageMatches(name, version) &&
+        retainedImage.url !== null &&
+        retainedContentKey === contentKey
+      ) {
+        return;
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      publishRetainedStartPageWallpaperImage(
+        { url: objectUrl, name },
+        name,
+        version,
+        contentKey,
+      );
+    })
+    .finally(() => {
+      if (serial === readSerial) inflightKey = null;
+    });
 }
 
 /** Drops the retained object URL. Tests only — a live session keeps it. */
 export function resetRetainedStartPageWallpaperImageForTests(): void {
+  readSerial += 1;
+  inflightKey = null;
   clearRetainedStartPageWallpaperImage();
+}
+
+function wallpaperSnapshot(
+  name: string | null,
+  version: number,
+): StartPageWallpaperImage {
+  return retainedImageMatches(name, version) ? retainedImage : NO_WALLPAPER;
 }
 
 export function useStartPageWallpaperImage(): StartPageWallpaperImage {
@@ -265,33 +387,13 @@ export function useStartPageWallpaperImage(): StartPageWallpaperImage {
   // Reuse the retained image only when it is the wallpaper this mount is
   // reading. A different name or revision starts empty; painting the previous
   // picture there is the wrong image, not the host-switch flash.
-  const [image, setImage] = useState<StartPageWallpaperImage>(() =>
-    retainedImageMatches(name, version) ? retainedImage : NO_WALLPAPER,
+  const image = useSyncExternalStore(
+    subscribeImage,
+    () => wallpaperSnapshot(name, version),
+    () => wallpaperSnapshot(name, version),
   );
   useEffect(() => {
-    // The bytes for this identity are already on screen. Reading them again
-    // would mint a second object URL and revoke the one the page is showing.
-    if (retainedImageMatches(name, version) && retainedImage.url !== null) {
-      return;
-    }
-    let cancelled = false;
-    void readAppearanceBlob(START_PAGE_WALLPAPER_KEY)
-      .catch(() => null)
-      .then((blob) => {
-        if (cancelled) return;
-        if (blob === null) {
-          publishRetainedStartPageWallpaperImage(NO_WALLPAPER, name, version);
-          setImage(NO_WALLPAPER);
-          return;
-        }
-        const objectUrl = URL.createObjectURL(blob);
-        const next = { url: objectUrl, name };
-        publishRetainedStartPageWallpaperImage(next, name, version);
-        setImage(next);
-      });
-    return () => {
-      cancelled = true;
-    };
+    ensureStartPageWallpaperRead(name, version);
   }, [version, name]);
   return image;
 }
