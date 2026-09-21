@@ -89,6 +89,7 @@ import {
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
+import { agentResolveMessagePeerV10 } from "@traycer/protocol/host/agent/message-peer";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -6651,6 +6652,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         7: agentListDowngradeV9ToV7,
         8: agentListDowngradeV9ToV8,
       },
+    },
+  },
+  "agent.resolveMessagePeer": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentResolveMessagePeerV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "agent.sendMessage": {
