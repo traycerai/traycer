@@ -10,7 +10,7 @@ export function SidebarArtwork() {
       className="sidebar-artwork pointer-events-none absolute inset-0 -z-10"
       aria-hidden="true"
     >
-      <LandingAppearanceWallpaper />
+      <LandingAppearanceWallpaper frameSlot="sidebar" />
     </div>
   );
 }
