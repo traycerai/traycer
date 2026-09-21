@@ -4,7 +4,6 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
-import { isWindows } from "@/lib/keybindings/platform";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // ---------------------------------------------------------------------------
@@ -276,7 +275,7 @@ describe("useVoiceDictation lifecycle", () => {
     });
     await flushAsync();
     expect(lastGetUserMediaConstraints).toEqual({
-      audio: dictationCaptureConstraints(isWindows()),
+      audio: dictationCaptureConstraints(),
     });
   });
 

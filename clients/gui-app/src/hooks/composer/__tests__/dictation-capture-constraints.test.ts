@@ -2,16 +2,12 @@ import { describe, expect, it } from "vitest";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 
 describe("dictationCaptureConstraints", () => {
-  it("does not request echo cancellation on Windows", () => {
-    expect(dictationCaptureConstraints(true)).toEqual({
+  it("keeps echo cancellation, noise suppression, and auto gain", () => {
+    expect(dictationCaptureConstraints()).toEqual({
       channelCount: 1,
-      echoCancellation: false,
+      echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
     });
-  });
-
-  it("keeps echo cancellation off Windows", () => {
-    expect(dictationCaptureConstraints(false).echoCancellation).toBe(true);
   });
 });

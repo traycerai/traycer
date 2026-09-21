@@ -9,7 +9,6 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
-import { isWindows } from "@/lib/keybindings/platform";
 import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -379,12 +378,10 @@ export function useVoiceDictation(
       }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          // Noise suppression silences ambient hiss so the waveform reads flat
-          // at rest and the recognizer gets a clean signal, and AGC normalizes
-          // level. Echo cancellation is platform-dependent: on Windows it
-          // selects the communications device (see
-          // `dictationCaptureConstraints`). Parakeet handles processed audio.
-          audio: dictationCaptureConstraints(isWindows()),
+          // Mono, echo cancellation, noise suppression, and auto gain. Echo
+          // cancellation stays on under Windows too: it does not select the
+          // communications category (see `dictationCaptureConstraints`).
+          audio: dictationCaptureConstraints(),
         });
         // The session may have been stopped/cancelled while the prompt was open.
         if (generation !== startGenerationRef.current) {

@@ -1,24 +1,21 @@
 /**
  * Constraints for one explicit dictation capture.
  *
- * `echoCancellation: true` is what Chromium maps to the Windows communications
- * capture category. Windows then treats the process as a call: other audio is
- * muted, and the system plays its listening earcon when the person speaks and
- * again after a few seconds of silence. Dictation is one-way, so Windows must
- * not be asked for that stream. Noise suppression and auto-gain stay; they
- * are applied in the capture graph and are what keeps the waveform flat at
- * rest. Other platforms keep echo cancellation; it does not select that
- * category there.
+ * Echo cancellation stays on, including on Windows. Chromium's WASAPI input
+ * sets `AudioCategory_Communications` whenever the microphone supports raw
+ * processing. `echoCancellation` only selects processed capture
+ * (`AUDCLNT_STREAMOPTIONS_NONE`) versus raw capture, so turning it off drops
+ * echo suppression and does not leave communications policy.
  */
-export function dictationCaptureConstraints(windows: boolean): {
+export function dictationCaptureConstraints(): {
   readonly channelCount: 1;
-  readonly echoCancellation: boolean;
+  readonly echoCancellation: true;
   readonly noiseSuppression: true;
   readonly autoGainControl: true;
 } {
   return {
     channelCount: 1,
-    echoCancellation: !windows,
+    echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
   };
