@@ -140,14 +140,25 @@ describe("this project is actually called by CI", () => {
     );
     expect(project.name).toBe("scripts");
 
+    // An ANCHORED accepted invocation, never a substring. `toContain("vitest
+    // run")` was the `echo '<command>'` workflow decoy reproduced one level
+    // down, in the very assertion added to be stronger than a string match:
+    // `echo vitest run --config scripts/vitest.config.ts` contains it, names a
+    // config that exists, keeps the project name and file-location checks
+    // satisfied - and runs nothing. Anchoring both ends is also what rejects a
+    // trailing `|| true` or `&& echo`, for the same reason the workflow `run`
+    // comparison is an equality rather than a search.
     const command = project.targets.test.options.command;
-    expect(command).toContain("vitest run");
+    const accepted =
+      /^(?:bunx\s+|npx\s+)?vitest\s+run\s+--config\s+(\S+)$/u.exec(command);
+    expect(
+      accepted,
+      `the test target's command is not an accepted vitest invocation: ${command}`,
+    ).not.toBeNull();
 
     // Resolve the config the command names and require it on disk, so a
     // rename cannot leave this pointing at a file nobody has.
-    const configArg = /--config\s+(\S+)/.exec(command);
-    expect(configArg).not.toBeNull();
-    expect(existsSync(path.join(REPO_ROOT, configArg[1]))).toBe(true);
+    expect(existsSync(path.join(REPO_ROOT, accepted[1]))).toBe(true);
 
     // And this very file must be inside the project the row selects - the
     // cheapest possible proof that the selected target has something to run.
