@@ -67,6 +67,11 @@ export function queuedPromptMessageIds(
  * listed, and drawing both shows the prompt twice at the handoff. The
  * transcript row is the copy from then on.
  *
+ * A paused row is not that handoff. A start can persist the user message,
+ * fail before the provider turn exists, and put the same id back on a paused
+ * queue. That row is Resume and Cancel. Dropping it because the id is already
+ * in the transcript hides those controls while the host queue stays paused.
+ *
  * Display only. Setup, pause, and cancel keep reading the session queue.
  */
 export function queueWithoutPersistedPrompts(
@@ -82,9 +87,11 @@ export function queueWithoutPersistedPrompts(
     if (message.role === "user") persistedUserMessageIds.add(message.messageId);
   }
   if (persistedUserMessageIds.size === 0) return queue;
+  const queueIsPaused = queue.status === "paused";
   const items = queue.items.filter((item) => {
     if (item.kind !== "prompt") return true;
-    return !persistedUserMessageIds.has(item.messageId);
+    if (!persistedUserMessageIds.has(item.messageId)) return true;
+    return queueIsPaused || item.status === "paused";
   });
   if (items.length === queue.items.length) return queue;
   return { status: queue.status, items };

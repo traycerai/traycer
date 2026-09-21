@@ -123,4 +123,35 @@ describe("queueWithoutPersistedPrompts", () => {
 
     expect(visible.items).toEqual([command]);
   });
+
+  it("keeps a paused prompt whose message is already in the transcript", () => {
+    const failedStart = {
+      ...promptItem("message-persisted"),
+      status: "paused" as const,
+    };
+    const input: ChatQueueState = {
+      status: "paused",
+      items: [failedStart],
+    };
+
+    const visible = queueWithoutPersistedPrompts(input, [
+      { role: "user", messageId: "message-persisted" },
+    ]);
+
+    expect(visible).toBe(input);
+  });
+
+  it("keeps a paused prompt beside a running queue and still hides the handoff", () => {
+    const held = { ...promptItem("message-held"), status: "paused" as const };
+    const handoff = promptItem("message-accepted");
+    const input = queue([held, handoff]);
+
+    const visible = queueWithoutPersistedPrompts(input, [
+      { role: "user", messageId: "message-held" },
+      { role: "user", messageId: "message-accepted" },
+    ]);
+
+    expect(visible.items).toEqual([held]);
+    expect(visible.status).toBe("running");
+  });
 });
