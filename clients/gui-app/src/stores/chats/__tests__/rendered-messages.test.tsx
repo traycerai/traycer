@@ -4242,6 +4242,30 @@ describe("useRenderedMessages setup card integration", () => {
     expect(m1Rows[0].statusLabel).toBeNull();
   });
 
+  it("drops a pending user echo whose messageId is already queued", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m0")],
+      pendingUserMessages: [
+        {
+          clientActionId: "action-1",
+          messageId: "echo-msg",
+          content: CONTENT,
+          attachments: [],
+          sender: { type: "user", userId: "owner-1" },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
+          timestamp: 1010,
+          restore: { content: CONTENT, browserAnnotations: [] },
+          restoreWorktreeIntent: null,
+        },
+      ],
+      queuedPromptMessageIds: new Set(["echo-msg"]),
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m0"]);
+  });
+
   it("suppresses the pre-turn Working indicator while setup gates", () => {
     const { result } = renderRenderedMessages({
       events: [
