@@ -221,24 +221,35 @@ export interface StartPageWallpaperImage {
 const NO_WALLPAPER: StartPageWallpaperImage = { url: null, name: null };
 
 /**
- * The last image a mounted reader resolved. Switching hosts remounts the
- * start page; the hook's own state would otherwise begin at "no image" and
- * the wallpaper would blank until IndexedDB answered again. One retained URL
- * is enough — there is only one start-page image — and the next successful
- * read replaces it.
+ * The last image a mounted reader resolved, tagged with the settings name
+ * and blob revision it was read for. Switching hosts remounts the start
+ * page; the hook's own state would otherwise begin at "no image" and the
+ * wallpaper would blank until IndexedDB answered again. The tag is what
+ * makes that reuse safe: a remount whose name or revision differs must not
+ * paint the previous picture while the new bytes are still loading.
  */
 let retainedImage: StartPageWallpaperImage = NO_WALLPAPER;
+let retainedName: string | null = null;
+let retainedVersion = 0;
+
+function retainedImageMatches(name: string | null, version: number): boolean {
+  return retainedName === name && retainedVersion === version;
+}
 
 function publishRetainedStartPageWallpaperImage(
   next: StartPageWallpaperImage,
+  name: string | null,
+  version: number,
 ): void {
   const previous = retainedImage.url;
   retainedImage = next;
+  retainedName = name;
+  retainedVersion = version;
   if (previous !== null && previous !== next.url) URL.revokeObjectURL(previous);
 }
 
 function clearRetainedStartPageWallpaperImage(): void {
-  publishRetainedStartPageWallpaperImage(NO_WALLPAPER);
+  publishRetainedStartPageWallpaperImage(NO_WALLPAPER, null, 0);
 }
 
 /** Drops the retained object URL. Tests only — a live session keeps it. */
@@ -251,25 +262,31 @@ export function useStartPageWallpaperImage(): StartPageWallpaperImage {
   const name = useSettingsStore(
     (state) => state.startPageWallpaper?.name ?? null,
   );
-  // The retained image is the first paint. A fresh mount must not flash empty
-  // while this effect reads the same bytes back.
-  const [image, setImage] = useState<StartPageWallpaperImage>(
-    () => retainedImage,
+  // Reuse the retained image only when it is the wallpaper this mount is
+  // reading. A different name or revision starts empty; painting the previous
+  // picture there is the wrong image, not the host-switch flash.
+  const [image, setImage] = useState<StartPageWallpaperImage>(() =>
+    retainedImageMatches(name, version) ? retainedImage : NO_WALLPAPER,
   );
   useEffect(() => {
+    // The bytes for this identity are already on screen. Reading them again
+    // would mint a second object URL and revoke the one the page is showing.
+    if (retainedImageMatches(name, version) && retainedImage.url !== null) {
+      return;
+    }
     let cancelled = false;
     void readAppearanceBlob(START_PAGE_WALLPAPER_KEY)
       .catch(() => null)
       .then((blob) => {
         if (cancelled) return;
         if (blob === null) {
-          clearRetainedStartPageWallpaperImage();
+          publishRetainedStartPageWallpaperImage(NO_WALLPAPER, name, version);
           setImage(NO_WALLPAPER);
           return;
         }
         const objectUrl = URL.createObjectURL(blob);
         const next = { url: objectUrl, name };
-        publishRetainedStartPageWallpaperImage(next);
+        publishRetainedStartPageWallpaperImage(next, name, version);
         setImage(next);
       });
     return () => {

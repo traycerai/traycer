@@ -12,7 +12,11 @@ vi.mock("@/lib/appearance/appearance-image-processing", () => ({
 }));
 
 import { AppearanceWallpaper } from "@/components/home/appearance-wallpaper";
-import { resetRetainedWallpaperFramesForTests } from "@/components/home/appearance-wallpaper-frame";
+import {
+  resetRetainedWallpaperFramesForTests,
+  restoreWallpaperFrame,
+  retainWallpaperFrame,
+} from "@/components/home/appearance-wallpaper-frame";
 
 interface TestImage {
   onload: (() => void) | null;
@@ -197,6 +201,28 @@ describe("AppearanceWallpaper", () => {
       />,
     );
     expect(second.container.querySelector("canvas")?.width).toBe(50);
+  });
+
+  it("keeps only the latest wallpaper raster", () => {
+    resetRetainedWallpaperFramesForTests();
+    const context: Partial<CanvasRenderingContext2D> = {
+      drawImage: () => undefined,
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context as CanvasRenderingContext2D,
+    );
+    const small = document.createElement("canvas");
+    small.width = 10;
+    small.height = 8;
+    retainWallpaperFrame("dither", small);
+    const large = document.createElement("canvas");
+    large.width = 40;
+    large.height = 20;
+    retainWallpaperFrame("dither", large);
+
+    const restored = document.createElement("canvas");
+    expect(restoreWallpaperFrame("dither", restored, 10, 8)).toBe(false);
+    expect(restoreWallpaperFrame("dither", restored, 40, 20)).toBe(true);
   });
 
   describe("live canvas stability while dithering", () => {

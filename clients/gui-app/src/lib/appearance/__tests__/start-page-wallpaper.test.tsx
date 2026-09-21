@@ -130,6 +130,77 @@ describe("useStartPageWallpaperImage", () => {
       name: "horse.png",
     });
   });
+
+  it("does not paint a retained image when the wallpaper name changed", async () => {
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["bytes"], { type: "image/png" }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:wallpaper"),
+    );
+    first.unmount();
+
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "dunes.webp",
+        curatedId: "dunes",
+      },
+    });
+    cacheMocks.read.mockReturnValue(new Promise<Blob>(() => undefined));
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current).toEqual({ url: null, name: null });
+  });
+
+  it("does not paint a retained image when the same name was replaced", async () => {
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["bytes"], { type: "image/png" }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:wallpaper"),
+    );
+    first.unmount();
+
+    // Remove bumps the blob revision. Putting the same file name back without
+    // a new read must not reuse the previous object URL.
+    await act(async () => {
+      await removeStartPageWallpaper();
+    });
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    cacheMocks.read.mockReturnValue(new Promise<Blob>(() => undefined));
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current).toEqual({ url: null, name: null });
+  });
 });
 
 function curatedEntry(overrides: Partial<CuratedWallpaper>): CuratedWallpaper {

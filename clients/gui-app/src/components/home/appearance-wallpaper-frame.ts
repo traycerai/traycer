@@ -1,8 +1,12 @@
 /**
- * Last completed dither, per style and raster size. A host switch remounts
- * the start page, and a new canvas is transparent until its effect finishes.
- * That empty frame is the full-screen flash. The layout effect copies the
- * retained bitmap on before the browser paints, so the picture never leaves.
+ * The last completed dither. A host switch remounts the start page, and a
+ * new canvas is transparent until its effect finishes. That empty frame is
+ * the full-screen flash. The layout effect copies this bitmap on before the
+ * browser paints, so the picture never leaves.
+ *
+ * One frame is enough: the start page has one visible raster, and a resize
+ * replaces it. Keeping every size would retain a full bitmap per step of a
+ * window drag.
  *
  * Kept beside the component so the component file only exports components.
  * A non-component export there breaks fast refresh.
@@ -17,20 +21,31 @@ function wallpaperFrameId(
   return `${style}\u001f${width}x${height}`;
 }
 
+function releaseWallpaperFrame(canvas: HTMLCanvasElement): void {
+  // Zeroing the bitmap lets the browser drop the pixel buffer. Removing the
+  // map entry alone keeps that buffer alive for as long as the element is.
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
 export function retainWallpaperFrame(
   style: string,
   source: HTMLCanvasElement,
 ): void {
   if (source.width === 0 || source.height === 0) return;
-  for (const key of retainedWallpaperFrames.keys()) {
-    if (!key.startsWith(`${style}\u001f`)) retainedWallpaperFrames.delete(key);
-  }
   const id = wallpaperFrameId(style, source.width, source.height);
   const copy =
     retainedWallpaperFrames.get(id) ?? document.createElement("canvas");
   copy.width = source.width;
   copy.height = source.height;
-  copy.getContext("2d")?.drawImage(source, 0, 0);
+  const context = copy.getContext("2d");
+  if (context === null) return;
+  context.drawImage(source, 0, 0);
+  for (const [key, canvas] of retainedWallpaperFrames) {
+    if (key === id) continue;
+    releaseWallpaperFrame(canvas);
+    retainedWallpaperFrames.delete(key);
+  }
   retainedWallpaperFrames.set(id, copy);
 }
 
