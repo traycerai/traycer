@@ -1426,3 +1426,45 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().showGreeting).toBe(false);
   });
 });
+
+describe("useSettingsStore task tab layout", () => {
+  beforeEach(() => {
+    resetSettingsStore();
+    useSettingsStore.setState({ taskTabLayout: "scroll" });
+  });
+  afterEach(() => {
+    resetSettingsStore();
+    useSettingsStore.setState({ taskTabLayout: "scroll" });
+  });
+
+  it("defaults to scroll", () => {
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
+  });
+
+  it("persists a chosen layout and rehydrates it", async () => {
+    useSettingsStore.getState().setTaskTabLayout("shrink");
+    const raw = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(raw).not.toBeNull();
+    const parsed: unknown = JSON.parse(raw ?? "{}");
+    expect(parsed).toMatchObject({ state: { taskTabLayout: "shrink" } });
+    // setState persists too, so restore the saved bytes before rehydrating.
+    useSettingsStore.setState({ taskTabLayout: "scroll" });
+    window.localStorage.setItem("traycer-gui-app:settings", raw ?? "");
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().taskTabLayout).toBe("shrink");
+  });
+
+  it.each([
+    { name: "an unknown string", value: "wrap" },
+    { name: "a non-string", value: 3 },
+    { name: "null", value: null },
+  ])("falls back to scroll for $name", async ({ value }) => {
+    await rehydrateFrom({ taskTabLayout: value });
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
+  });
+
+  it("uses scroll when a legacy payload has no taskTabLayout", async () => {
+    await rehydrateFrom({ homeTabEnabled: true });
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
+  });
+});
