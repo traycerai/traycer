@@ -173,7 +173,7 @@ export interface ChatLowerTurnState {
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /** Own live stream's draft-blob bridge capability. */
   readonly getDraftBlobBridgeSupported: () => boolean;
-  /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
+  /** Reads the live turn for steering drift and Stop confirmation checks. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
   readonly onStopTurn: () => string | null;
@@ -327,8 +327,10 @@ export function ChatLowerInteractionSurfaces(
   const activeAgents = stopControls.descendants;
   const tabHostClient = useTabHostClient();
   const agentStop = useAgentStop(tabHostClient);
-  const [stopChildrenOpen, setStopChildrenOpen] = useState(false);
-  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [stopConfirmation, setStopConfirmation] = useState<{
+    readonly kind: "turn" | "children";
+    readonly turnId: string | null;
+  } | null>(null);
   // The SAME signal that puts Stop beside Send (`composer-send-button`), so
   // the confirmation exists exactly where the mis-tap does and desktop is
   // untouched by construction rather than by a second rule agreeing with the
@@ -347,12 +349,21 @@ export function ChatLowerInteractionSurfaces(
     props.turn.getDraftBlobBridgeSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
+  // Read the store at confirmation time: a queued turn can start before React
+  // renders again. Neither dialog may redirect the original Stop to that turn.
+  const isConfirmedTurnCurrent = (): boolean =>
+    stopConfirmation !== null &&
+    (turnGetActiveTurnForSteer()?.turnId ?? null) === stopConfirmation.turnId;
+
   // Intercept the composer Stop button: when this chat has active
   // sub-agents, raise the cascade prompt instead of stopping only its turn.
   // The button ignores the return value, so `null` here is just "handled".
   const requestStopTurn = useCallback((): string | null => {
     if (activeAgents.length > 0) {
-      setStopChildrenOpen(true);
+      setStopConfirmation({
+        kind: "children",
+        turnId: turnGetActiveTurnForSteer()?.turnId ?? null,
+      });
       return null;
     }
     // In the phone layout Stop sits beside Send at 32px, so a tap meant for
@@ -361,11 +372,19 @@ export function ChatLowerInteractionSurfaces(
     // The cascade branch above needs nothing: that dialog IS the confirmation,
     // and it already asks the harder question.
     if (phoneLayout) {
-      setStopConfirmOpen(true);
+      const turnId = turnGetActiveTurnForSteer()?.turnId;
+      if (turnId !== undefined) {
+        setStopConfirmation({ kind: "turn", turnId });
+      }
       return null;
     }
     return turnOnStopTurn();
-  }, [activeAgents.length, phoneLayout, turnOnStopTurn]);
+  }, [
+    activeAgents.length,
+    phoneLayout,
+    turnGetActiveTurnForSteer,
+    turnOnStopTurn,
+  ]);
 
   const turnWithCascade = useMemo(
     () => ({
@@ -586,25 +605,31 @@ export function ChatLowerInteractionSurfaces(
         />
         <ChatComposerRegion model={composerModel} layout={composerLayout} />
         <StopChildrenDialog
-          open={stopChildrenOpen}
-          onOpenChange={setStopChildrenOpen}
+          open={stopConfirmation?.kind === "children"}
+          onOpenChange={(open) => {
+            if (!open) setStopConfirmation(null);
+          }}
           agents={activeAgents}
           onStopAll={() => {
+            setStopConfirmation(null);
+            if (!isConfirmedTurnCurrent()) return;
             agentStop.mutate({
               epicId: props.epicId,
               agentId: props.chatId,
               cascade: true,
             });
-            setStopChildrenOpen(false);
           }}
           onStopOnlyThis={() => {
-            props.turn.onStopTurn();
-            setStopChildrenOpen(false);
+            setStopConfirmation(null);
+            if (!isConfirmedTurnCurrent()) return;
+            turnOnStopTurn();
           }}
         />
         <ConfirmDestructiveDialog
-          open={stopConfirmOpen}
-          onOpenChange={setStopConfirmOpen}
+          open={stopConfirmation?.kind === "turn"}
+          onOpenChange={(open) => {
+            if (!open) setStopConfirmation(null);
+          }}
           title="Stop this turn?"
           description="The agent will stop working on its current response."
           cascadeSummary={null}
@@ -612,11 +637,12 @@ export function ChatLowerInteractionSurfaces(
           blockedReason={null}
           isPending={false}
           onConfirm={() => {
-            setStopConfirmOpen(false);
+            setStopConfirmation(null);
+            if (stopConfirmation === null || !isConfirmedTurnCurrent()) return;
             // A sub-agent can start while this dialog is open. Go back through
-            // the same gate Stop uses, so the cascade prompt is never skipped.
+            // the same gate, retaining the turn this confirmation belongs to.
             if (activeAgents.length > 0) {
-              setStopChildrenOpen(true);
+              setStopConfirmation({ ...stopConfirmation, kind: "children" });
               return;
             }
             turnOnStopTurn();
