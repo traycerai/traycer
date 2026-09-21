@@ -300,6 +300,7 @@ function clearRetainedStartPageWallpaperImage(): void {
  */
 let readSerial = 0;
 let inflightKey: string | null = null;
+let mountedReaders = 0;
 
 function wallpaperIdentityKey(name: string | null, version: number): string {
   return `${version}\0${name ?? ""}`;
@@ -321,6 +322,11 @@ async function blobContentKey(blob: Blob): Promise<string> {
  * A retained hit still re-reads. The revision counter is per window, so
  * another window can replace wallpaper.png without bumping it. The current
  * frame keeps the retained URL; a different blob publishes a new one.
+ *
+ * A second reader mounted at the same time joins the read already in
+ * flight. A read left behind by the last unmount does not: the bytes may
+ * have been replaced while nobody was mounted, and joining that read would
+ * publish the old blob and then never look again.
  */
 function ensureStartPageWallpaperRead(
   name: string | null,
@@ -365,10 +371,22 @@ function ensureStartPageWallpaperRead(
     });
 }
 
+function mountWallpaperReader(): () => void {
+  mountedReaders += 1;
+  return () => {
+    mountedReaders -= 1;
+    if (mountedReaders > 0) return;
+    mountedReaders = 0;
+    readSerial += 1;
+    inflightKey = null;
+  };
+}
+
 /** Drops the retained object URL. Tests only — a live session keeps it. */
 export function resetRetainedStartPageWallpaperImageForTests(): void {
   readSerial += 1;
   inflightKey = null;
+  mountedReaders = 0;
   clearRetainedStartPageWallpaperImage();
 }
 
@@ -393,7 +411,9 @@ export function useStartPageWallpaperImage(): StartPageWallpaperImage {
     () => wallpaperSnapshot(name, version),
   );
   useEffect(() => {
+    const release = mountWallpaperReader();
     ensureStartPageWallpaperRead(name, version);
+    return release;
   }, [version, name]);
   return image;
 }

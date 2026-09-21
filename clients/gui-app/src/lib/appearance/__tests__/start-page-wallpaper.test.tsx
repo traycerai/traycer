@@ -279,6 +279,88 @@ describe("useStartPageWallpaperImage", () => {
     );
     expect(revoked.has("blob:replace-2")).toBe(false);
   });
+
+  it("keeps an in-flight read while another reader is still mounted", async () => {
+    let created = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created += 1;
+      return `blob:live-${created}`;
+    });
+    let resolveRead: (blob: Blob) => void = () => undefined;
+    cacheMocks.read.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveRead = resolve;
+      }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "shared.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    const second = renderHook(() => useStartPageWallpaperImage());
+    first.unmount();
+
+    act(() => {
+      resolveRead(new Blob(["still-live"], { type: "image/png" }));
+    });
+
+    await waitFor(() => expect(second.result.current.url).toBe("blob:live-1"));
+    expect(cacheMocks.read).toHaveBeenCalledTimes(1);
+  });
+
+  it("rereads after a remount inherits a read the previous mount left running", async () => {
+    const urls = new Map<string, Blob>();
+    let created = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      created += 1;
+      const url = `blob:orphan-${created}`;
+      urls.set(url, blob as Blob);
+      return url;
+    });
+    const original = new Blob(["original"], { type: "image/png" });
+    const replacement = new Blob(["replacement"], { type: "image/png" });
+    let releaseBytes: (buffer: ArrayBuffer) => void = () => undefined;
+    const gated = new Promise<ArrayBuffer>((resolve) => {
+      releaseBytes = resolve;
+    });
+    const originalBytes = await original.arrayBuffer();
+    vi.spyOn(original, "arrayBuffer").mockReturnValue(gated);
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "wallpaper.png",
+        curatedId: null,
+      },
+    });
+    cacheMocks.read.mockResolvedValueOnce(original);
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() => expect(cacheMocks.read).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    first.unmount();
+
+    cacheMocks.read.mockResolvedValue(replacement);
+    const second = renderHook(() => useStartPageWallpaperImage());
+    await act(async () => {
+      releaseBytes(originalBytes.slice(0));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const url = second.result.current.url;
+      expect(url).not.toBeNull();
+      expect(urls.get(url ?? "")).toBe(replacement);
+    });
+    expect(cacheMocks.read).toHaveBeenCalledTimes(2);
+  });
 });
 
 function curatedEntry(overrides: Partial<CuratedWallpaper>): CuratedWallpaper {
