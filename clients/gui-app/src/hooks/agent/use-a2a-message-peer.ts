@@ -46,12 +46,16 @@ export function useA2AMessagePeer(
       epicId,
       agentId: local.id,
       hostId: local.hostId ?? hostId,
-      title: local.title.length > 0 ? local.title : null,
+      title: local.title.trim().length > 0 ? local.title : null,
       surface: "harnessId" in local ? "tui" : "gui",
     };
   }
   if (peer === null) return null;
-  return { ...peer, title: live?.title ?? peer.title };
+  const liveTitle = live?.title;
+  return {
+    ...peer,
+    title: liveTitle?.trim() ? liveTitle : peer.title,
+  };
 }
 
 /** One shared lookup per conversation peer, then a message-specific fork fallback. */

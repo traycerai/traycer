@@ -190,6 +190,51 @@ describe("useA2AMessagePeer", () => {
     expect(result.current).toEqual({ ...REMOTE, title: "Renamed Live" });
   });
 
+  it("keeps the resolved title when the live title is empty or whitespace", () => {
+    mocks.primary = { peer: REMOTE };
+    for (const blank of ["", "   \n\t"]) {
+      mocks.live = { title: blank };
+
+      const { result } = renderHook(() =>
+        useA2AMessagePeer("agent-rem", SENT_ORIGIN),
+      );
+
+      expect(result.current).toEqual(REMOTE);
+    }
+  });
+
+  it("stays null-titled when both the live and the resolved titles are blank, so the card's own fallback applies", () => {
+    mocks.primary = { peer: { ...REMOTE, title: null } };
+    for (const blank of ["", "  "]) {
+      mocks.live = { title: blank };
+
+      const { result } = renderHook(() =>
+        useA2AMessagePeer("agent-rem", SENT_ORIGIN),
+      );
+
+      expect(result.current).toEqual({ ...REMOTE, title: null });
+    }
+  });
+
+  it("maps an empty or whitespace-only exact local title to null", () => {
+    for (const blank of ["", "   \n"]) {
+      mocks.local = {
+        id: "agent-local-1",
+        title: blank,
+        hostId: "host-local",
+      };
+
+      const { result } = renderHook(() =>
+        useA2AMessagePeer("agent-local-1", null),
+      );
+
+      expect(result.current).toMatchObject({
+        agentId: "agent-local-1",
+        title: null,
+      });
+    }
+  });
+
   describe("forked chats (inherited cards)", () => {
     it("does not run the origin query while the primary is pending or resolved", () => {
       renderHook(() => useA2AMessagePeer("agent-rem", SENT_ORIGIN));
