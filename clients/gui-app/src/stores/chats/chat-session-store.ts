@@ -3744,10 +3744,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
           turnInProgress: frame.snapshot.turnInProgress,
-          turnLifecycleRevision: nextTurnLifecycleRevision(
-            state,
-            frame.snapshot,
-          ),
+          turnLifecycleRevision: nextTurnLifecycleRevision(state, {
+            activeTurn: frame.snapshot.activeTurn,
+            turnInProgress: frame.snapshot.turnInProgress,
+            runStatus: frame.snapshot.runStatus,
+          }),
           pendingApprovals: frame.snapshot.pendingApprovals,
           pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
           pendingInterviews: frame.snapshot.pendingInterviews,
