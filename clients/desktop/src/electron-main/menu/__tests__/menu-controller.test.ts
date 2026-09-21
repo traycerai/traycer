@@ -27,11 +27,39 @@ interface CapturedMenuItem {
   readonly click?: (menuItem: unknown, browserWindow: unknown) => void;
 }
 
-const electronState = vi.hoisted(() => ({
-  setApplicationMenu: vi.fn(),
-  getAllWindows: vi.fn(),
-  lastTemplate: null as readonly CapturedMenuItem[] | null,
-}));
+const electronState = vi.hoisted(() => {
+  const getAllWindows = vi.fn();
+  const getFocusedWindow = vi.fn();
+  // A real class so `instanceof BrowserWindow` narrowing in the controller
+  // works against the fake app windows below.
+  class MockBrowserWindow {
+    static getAllWindows(): unknown {
+      return getAllWindows();
+    }
+    static getFocusedWindow(): unknown {
+      return getFocusedWindow();
+    }
+  }
+  return {
+    setApplicationMenu: vi.fn(),
+    getAllWindows,
+    getFocusedWindow,
+    MockBrowserWindow,
+    lastTemplate: null as readonly CapturedMenuItem[] | null,
+  };
+});
+
+const configState = vi.hoisted(() => ({ canOpenDevTools: true }));
+
+vi.mock("../../../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../config")>();
+  return {
+    ...actual,
+    get canOpenDevTools(): boolean {
+      return configState.canOpenDevTools;
+    },
+  };
+});
 
 vi.mock("electron", () => ({
   Menu: {
@@ -41,9 +69,7 @@ vi.mock("electron", () => ({
     },
     setApplicationMenu: electronState.setApplicationMenu,
   },
-  BrowserWindow: {
-    getAllWindows: electronState.getAllWindows,
-  },
+  BrowserWindow: electronState.MockBrowserWindow,
   app: {
     isPackaged: false,
     quit: vi.fn(),
@@ -359,6 +385,91 @@ class MultiWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   }
 }
 
+class FakeAppContents {
+  destroyed = false;
+  readonly toggleDevTools = vi.fn<() => void>();
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+}
+
+/** A registered (or inspector) `BrowserWindow` with an observable app webContents. */
+class FakeAppWindow
+  extends electronState.MockBrowserWindow
+  implements MenuManagedWindow
+{
+  focused = false;
+  destroyed = false;
+  parent: FakeAppWindow | null = null;
+  readonly webContents = new FakeAppContents();
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  isFocused(): boolean {
+    return this.focused;
+  }
+  getParentWindow(): FakeAppWindow | null {
+    return this.parent;
+  }
+  setMenu(_menu: Electron.Menu): void {}
+  setMenuBarVisibility(_visible: boolean): void {}
+}
+
+class AppWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  private readonly entries: ReadonlyArray<{
+    readonly windowId: string;
+    readonly window: FakeAppWindow;
+  }>;
+  private readonly mruId: string | null;
+
+  constructor(
+    entries: ReadonlyArray<{
+      readonly windowId: string;
+      readonly window: FakeAppWindow;
+    }>,
+    mruId: string | null,
+  ) {
+    super();
+    this.entries = entries;
+    this.mruId = mruId;
+  }
+
+  async create(_options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    return "window-created";
+  }
+  closeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+  minimizeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+  zoomById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+  focusById(_windowId: string): boolean {
+    return false;
+  }
+  list(): readonly WindowSummary[] {
+    return this.entries.map((entry) => ({
+      windowId: entry.windowId,
+      title: entry.windowId,
+      isFocused: entry.window.isFocused(),
+      isVisible: true,
+    }));
+  }
+  records(): readonly MenuWindowRecord[] {
+    return this.entries;
+  }
+  mostRecentlyFocusedId(): string | null {
+    return this.mruId;
+  }
+}
+
 function createController(options: {
   readonly registry: MenuWindowRegistry;
   readonly host: FakeHost;
@@ -425,6 +536,9 @@ describe("MenuController", () => {
     electronState.setApplicationMenu.mockClear();
     electronState.getAllWindows.mockClear();
     electronState.getAllWindows.mockReturnValue([]);
+    electronState.getFocusedWindow.mockReset();
+    electronState.getFocusedWindow.mockReturnValue(null);
+    configState.canOpenDevTools = true;
     electronState.lastTemplate = null;
   });
 
@@ -985,5 +1099,195 @@ describe("MenuController", () => {
     expect(registry.closeRequests).toEqual(["window-b"]);
     expect(dispatchRendererCommand).not.toHaveBeenCalled();
     controller.dispose();
+  });
+
+  describe("Toggle Developer Tools", () => {
+    function installWithWindows(
+      windows: ReadonlyArray<{
+        readonly windowId: string;
+        readonly window: FakeAppWindow;
+      }>,
+      mruId: string | null,
+    ): MenuController {
+      const controller = createController({
+        registry: new AppWindowRegistry(windows, mruId),
+        host: new FakeHost(),
+        authSession: new DesktopAuthSession(),
+        perWindowState: new PerWindowState(null),
+        dispatchRendererCommand: vi.fn(() => true),
+      });
+      controller.install();
+      return controller;
+    }
+
+    function toggleDevTools(window: unknown): void {
+      menuItemInTopLevel("Help", "Toggle Developer Tools").click?.(
+        null,
+        window,
+      );
+    }
+
+    it("toggles only the sender window's app webContents, whichever window is focused", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      a.focused = true;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-a",
+      );
+
+      toggleDevTools(b);
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+
+      toggleDevTools(a);
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      controller.dispose();
+    });
+
+    it("targets the parent app window when a custom inspector window sends the command", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      a.focused = true;
+      const inspector = new FakeAppWindow();
+      inspector.parent = b;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-a",
+      );
+
+      toggleDevTools(inspector);
+
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      expect(inspector.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("falls back to the focused registered window for a parentless, unregistered inspector sender", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      b.focused = true;
+      const inspector = new FakeAppWindow();
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-a",
+      );
+
+      toggleDevTools(inspector);
+
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      expect(inspector.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("uses the focused BrowserWindow when the callback window is missing", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      const inspector = new FakeAppWindow();
+      inspector.parent = a;
+      electronState.getFocusedWindow.mockReturnValue(inspector);
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-b",
+      );
+
+      toggleDevTools(undefined);
+
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(b.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("built-in detached app DevTools (null callback window, no focused BrowserWindow) targets the MRU app window", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-b",
+      );
+
+      toggleDevTools(undefined);
+
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("does nothing when no app window can be resolved", () => {
+      const controller = installWithWindows([], null);
+
+      expect(() => toggleDevTools(undefined)).not.toThrow();
+      controller.dispose();
+    });
+
+    it("does nothing when the resolved app window or its webContents is destroyed", () => {
+      const destroyedWindow = new FakeAppWindow();
+      destroyedWindow.destroyed = true;
+      const destroyedContents = new FakeAppWindow();
+      destroyedContents.webContents.destroyed = true;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: destroyedWindow },
+          { windowId: "window-b", window: destroyedContents },
+        ],
+        "window-a",
+      );
+
+      expect(() => toggleDevTools(destroyedWindow)).not.toThrow();
+      expect(() => toggleDevTools(destroyedContents)).not.toThrow();
+      expect(() => toggleDevTools(undefined)).not.toThrow();
+
+      expect(destroyedWindow.webContents.toggleDevTools).not.toHaveBeenCalled();
+      expect(
+        destroyedContents.webContents.toggleDevTools,
+      ).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("ignores a stale captured callback once the policy disables DevTools", () => {
+      const a = new FakeAppWindow();
+      const controller = installWithWindows(
+        [{ windowId: "window-a", window: a }],
+        "window-a",
+      );
+      const item = menuItemInTopLevel("Help", "Toggle Developer Tools");
+
+      configState.canOpenDevTools = false;
+      item.click?.(null, a);
+
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("does not install the command when the production policy disables DevTools", () => {
+      configState.canOpenDevTools = false;
+      const controller = installWithWindows(
+        [{ windowId: "window-a", window: new FakeAppWindow() }],
+        "window-a",
+      );
+
+      expect(() =>
+        menuItemInTopLevel("Help", "Toggle Developer Tools"),
+      ).toThrow("missing");
+      controller.dispose();
+    });
   });
 });
