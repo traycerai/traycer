@@ -430,7 +430,10 @@ describe("composer cascade-stop dialog host routing", () => {
  */
 describe("stop confirmation on a phone layout", () => {
   beforeEach(() => {
-    agentStopControlsMock = { self: agentRow(CHAT_ID, "This chat"), descendants: [] };
+    agentStopControlsMock = {
+      self: agentRow(CHAT_ID, "This chat"),
+      descendants: [],
+    };
   });
 
   function renderTile(onStopTurn: () => string | null): void {

@@ -117,8 +117,14 @@ interface SendButtonProps {
 }
 
 function SendButton(props: SendButtonProps) {
-  const { canSubmit, attachmentPending, onSubmit, disabledHint, queueing, touchSlop } =
-    props;
+  const {
+    canSubmit,
+    attachmentPending,
+    onSubmit,
+    disabledHint,
+    queueing,
+    touchSlop,
+  } = props;
   // Hint mode (e.g. no workspace) marks the button `aria-disabled` rather than
   // using the `disabled` attribute, so it stays focusable and the styled
   // TooltipWrapper's hint is reachable by hover and keyboard focus (a native
