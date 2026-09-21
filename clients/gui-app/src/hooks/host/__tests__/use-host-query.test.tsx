@@ -26,6 +26,12 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  buildUsageSummaryRequest,
+  useUsageSummaryForClient,
+} from "@/hooks/usage-analytics/use-usage-summary-query";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 import {
   useHostMutation,
   useHostQuery,
@@ -87,6 +93,84 @@ describe("useHostQuery auth readiness", () => {
       expect(rendered.result.current.data?.ready).toBe(true);
     });
     expect(fixture.requestCount.value).toBe(1);
+  });
+
+  it("gives usage summary its extended budget and TanStack cancellation signal", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const requestWithOptions = vi.spyOn(
+      fixture.client,
+      "requestForWithOptions",
+    );
+    const rendered = renderHook(
+      () =>
+        useUsageSummaryForClient(
+          client,
+          buildUsageSummaryRequest({
+            windowDays: 30,
+            epicId: null,
+            plane: null,
+          }),
+          true,
+          false,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(fixture.messenger.calls).toHaveLength(1);
+      expect(requestWithOptions).toHaveBeenCalledTimes(1);
+    });
+    const options = requestWithOptions.mock.calls[0]?.[3];
+    expect(options).toMatchObject({
+      responseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+      idempotencyKey: null,
+      requiredHostMethodVersion: null,
+    });
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+
+    rendered.unmount();
+    await waitFor(() => {
+      expect(options.signal?.aborted).toBe(true);
+    });
+  });
+
+  it("keeps an ordinary host query on requestWithSignal without a response budget", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const { requester: client, calls } = recordingRequester(
+      fixture.client.createRequester(mockLocalHostEntry),
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostQueryWithResponseMap({
+          cacheKeyIdentity: undefined,
+          client,
+          method: "host.status",
+          params: {},
+          options: null,
+          mapResponse: (mapArgs) => mapArgs.response,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.data?.ready).toBe(true);
+    });
+    expect(calls.requestWithSignal).toHaveLength(1);
+    expect(calls.requestWithOptions).toHaveLength(0);
   });
 
   it("does not refetch active host queries when auth context is removed", async () => {
@@ -881,6 +965,7 @@ function isRefetchInterval(
 
 function createHostQueryFixture(): {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly requestCount: { value: number };
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
@@ -894,42 +979,45 @@ function createHostQueryFixture(): {
     },
   });
   const requestCount = { value: 0 };
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "host.usage.summary": () => new Promise<never>(() => undefined),
+      "host.status": () => {
+        requestCount.value += 1;
+        return {
+          ready: true,
+          hostVersion: "1.2.3",
+          protocolVersion: { major: 1, minor: 0 },
+          busy: false,
+          busySessionCount: 0,
+          updateProgress: null,
+          busyBreakdown: null,
+          // `null` = this fixture's host did not report the durable attempt,
+          // which is exactly what host.status@1.2-and-older peers send.
+          updateOperation: null,
+          updateTransaction: null,
+          storeFormats: null,
+          install: null,
+        };
+      },
+    },
+  });
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {
-        "host.status": () => {
-          requestCount.value += 1;
-          return {
-            ready: true,
-            hostVersion: "1.2.3",
-            protocolVersion: { major: 1, minor: 0 },
-            busy: false,
-            busySessionCount: 0,
-            updateProgress: null,
-            busyBreakdown: null,
-            // `null` = this fixture's host did not report the durable attempt,
-            // which is exactly what host.status@1.2-and-older peers send.
-            updateOperation: null,
-            updateTransaction: null,
-            storeFormats: null,
-            install: null,
-          };
-        },
-      },
-    }),
+    messenger,
   });
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
     </QueryClientProvider>
   );
-  return { client, requestCount, Wrapper };
+  return { client, messenger, requestCount, Wrapper };
 }
 
 function createEndpointGatedHostQueryFixture(): {
@@ -1207,12 +1295,14 @@ function recordingRequester(real: HostRequester<HostRpcRegistry>): {
   readonly calls: {
     request: unknown[][];
     requestWithOptions: unknown[][];
+    requestWithSignal: unknown[][];
     requestWithSignalRequiringHostMethodVersion: unknown[][];
   };
 } {
   const calls = {
     request: [] as unknown[][],
     requestWithOptions: [] as unknown[][],
+    requestWithSignal: [] as unknown[][],
     requestWithSignalRequiringHostMethodVersion: [] as unknown[][],
   };
   const requester: HostRequester<HostRpcRegistry> = {
@@ -1232,8 +1322,10 @@ function recordingRequester(real: HostRequester<HostRpcRegistry>): {
       calls.requestWithOptions.push([method, params, options]);
       return real.requestWithOptions(method, params, options);
     },
-    requestWithSignal: (method, params, signal) =>
-      real.requestWithSignal(method, params, signal),
+    requestWithSignal: (method, params, signal) => {
+      calls.requestWithSignal.push([method, params, signal]);
+      return real.requestWithSignal(method, params, signal);
+    },
     requestWithSignalRequiringHostMethodVersion: (
       method,
       params,
