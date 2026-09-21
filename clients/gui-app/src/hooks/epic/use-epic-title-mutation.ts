@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface UpdateTitleMutationContext {
@@ -38,7 +38,7 @@ export function useEpicUpdateTitle() {
           delta !== null &&
           delta.title !== undefined
         ) {
-          updateEpicTitleInCloudTaskCaches(
+          reconcileAuthoritativeEpicTitleInCloudTaskCaches(
             queryClient,
             { hostId: ctx.hostId, userId: ctx.userId },
             delta.id,

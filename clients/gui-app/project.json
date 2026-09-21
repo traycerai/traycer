@@ -6,10 +6,10 @@
   },
   "targets": {
     "build": {
-      "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
+      "inputs": ["{projectRoot}/**/*", "^production", "sharedGlobals"]
     },
     "compile": {
-      "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
+      "inputs": ["{projectRoot}/**/*", "^production", "sharedGlobals"]
     },
     "lint": {
       "inputs": [

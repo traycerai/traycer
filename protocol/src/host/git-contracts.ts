@@ -28,6 +28,7 @@ import {
   gitSubscribeStatusEventSchemaV12,
   gitSubscribeStatusEventSchemaV13,
 } from "./git-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * `git.listChangedFiles@1.0` - unary RPC to list files with current changes.
@@ -137,9 +138,11 @@ export const gitGetCapabilitiesV10 = defineRpcContract({
  * Zod requires at least one variant, so we create a never-matching variant
  * with a dummy literal that will never actually be sent from the client.
  */
-const noClientFramesSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("__never_sent__" as never) }),
-]);
+const noClientFramesSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("__never_sent__" as never) }),
+  ]),
+);
 
 /**
  * `git.subscribeStatus@1.0` - streaming RPC for subscriptions to git status

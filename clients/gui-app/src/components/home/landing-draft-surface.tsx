@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useRouterState } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { HomeHero } from "@/components/home/home-hero";
@@ -6,7 +7,7 @@ import { LandingComposer } from "@/components/home/composer/landing-composer";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
-import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import { CurrentTasksSection } from "@/components/home/current-tasks-section";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
 import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
@@ -49,7 +50,7 @@ export function LandingDraftSurface() {
       return overlay.settingsOverlay || overlay.historyOverlay;
     },
   });
-  // Phones drop the embedded list entirely: the hamburger drawer already
+  // Phones omit the Current tasks section: the hamburger drawer already
   // carries "Recent tasks" + "View all" off the same `useHistoryQuery`, so an
   // inline copy is pure duplication at this width.
   const isMobile = useIsMobileViewport();
@@ -151,7 +152,7 @@ export function LandingDraftSurface() {
           layout.rows,
         )}
       >
-        {activity.visible ? <LandingAppearanceWallpaper /> : null}
+        <LandingAppearanceWallpaper />
         <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
         </div>
@@ -188,10 +189,12 @@ export function LandingDraftSurface() {
             </SurfaceActivityProvider>
           </div>
 
-          {/* Drafts another host owns are not a section of their own: the
-              ingest mount puts them in the landing store and the History
-              drafts list below shows them beside this host's, with no owner
-              bucket. Opening one forks it underneath on the first edit. */}
+          <FirstTaskLandingGuide
+            enabled={surfaceEffectivelyFocused}
+            rootRef={surfaceRef}
+            workspaceFolders={workspaceFolders}
+          />
+
           {showRecentHistory && isMobile ? (
             /* Recent tasks live in the hamburger drawer at this width, which is
                not discoverable from a landing page that is otherwise empty
@@ -210,17 +213,9 @@ export function LandingDraftSurface() {
             </button>
           ) : null}
           {showRecentHistory && !isMobile ? (
-            <div className="mt-3 flex min-h-0 flex-1 flex-col pb-6">
+            <div className="flex min-h-0 flex-1 flex-col pb-6">
               {!systemModalOpen && activity.visible ? (
-                <EpicsListPanel
-                  variant="embedded"
-                  className={undefined}
-                  onSelectEpic={null}
-                  onOpenItem={null}
-                  routeSearch={null}
-                  historyNowMs={null}
-                  autoFocusSearch={false}
-                />
+                <CurrentTasksSection />
               ) : null}
             </div>
           ) : null}

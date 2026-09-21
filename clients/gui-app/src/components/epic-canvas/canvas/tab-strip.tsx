@@ -1,3 +1,6 @@
+import { useBrowserAttention } from "@/hooks/notifications/use-browser-attention";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { NOTIFICATION_STATUS_TONES } from "@/components/notifications/notification-indicator-tones";
 import {
   useCallback,
   useContext,
@@ -1318,10 +1321,10 @@ export function TabIcon(props: {
   });
   if (props.tab.type === "browser-session") {
     return (
-      <BrowserFavicon
-        faviconUrl={props.browserPresentation?.faviconUrl ?? null}
-        isolated={props.browserPresentation?.isolated ?? false}
-        className="size-3.5"
+      <BrowserTabAttentionIcon
+        epicId={props.epicId}
+        tab={props.tab}
+        presentation={props.browserPresentation}
       />
     );
   }
@@ -1366,6 +1369,43 @@ export function TabIcon(props: {
       variant="live"
       className="size-3.5 shrink-0"
       defaultIcon={defaultIcon}
+    />
+  );
+}
+
+function BrowserTabAttentionIcon(props: {
+  readonly epicId: string;
+  readonly tab: Extract<EpicCanvasTileRef, { type: "browser-session" }>;
+  readonly presentation: BrowserTabPresentation | null;
+}): ReactNode {
+  const attention = useBrowserAttention({
+    epicId: props.epicId,
+    hostId: props.tab.hostId,
+    sessionId: props.tab.sessionId,
+    tabId: props.tab.tabId,
+  });
+  if (attention) {
+    const tone = NOTIFICATION_STATUS_TONES.browser;
+    return (
+      <TooltipWrapper
+        label={tone.title}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <tone.Icon
+          className={cn("size-3.5", tone.className)}
+          aria-label={tone.title}
+          data-testid="browser-tab-attention"
+        />
+      </TooltipWrapper>
+    );
+  }
+  return (
+    <BrowserFavicon
+      faviconUrl={props.presentation?.faviconUrl ?? null}
+      isolated={props.presentation?.isolated ?? false}
+      className="size-3.5"
     />
   );
 }

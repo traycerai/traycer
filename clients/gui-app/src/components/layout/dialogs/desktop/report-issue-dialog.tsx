@@ -114,10 +114,12 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/app-diagnostics": "Settings - App diagnostics",
   "/settings/app-notifications": "Settings - Sounds",
   "/settings/appearance": "Settings - Appearance",
+  "/settings/browser": "Settings - Browser",
   "/settings/delete-account": "Settings - Delete account",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
-  "/settings/fallback": "Settings - Fallback",
+  "/settings/fallback": "Settings - Model routing",
+  "/settings/getting-started": "Getting started",
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",
   "/settings/keybindings": "Settings - Keybindings",
@@ -233,6 +235,11 @@ function privateOutcomeFor(
   if (deliveryResult === null) return "none";
   if (deliveryResult.status === "delivered") return "delivered";
   if (deliveryResult.status === "unconfirmed") return "unconfirmed";
+  // A queued report exists on the Sentry side of nothing yet, but it WILL:
+  // the public draft can honestly reference it as filed-but-not-confirmed,
+  // which is what `unconfirmed` says. Widening `DesktopPrivateOutcome` for
+  // a distinction the draft copy does not draw would buy nothing.
+  if (deliveryResult.status === "queued") return "unconfirmed";
   return "none";
 }
 
@@ -241,6 +248,11 @@ function privateOutcomeFor(
 // `unavailable`/never-attempted. `ConfirmationScreen` requires this be
 // non-null so the false "sent privately" state is unrepresentable: it is
 // simply never rendered when this returns null (KB1).
+//
+// `queued` carries a reportId too and is still excluded, deliberately: the
+// envelope has not left this machine, so a screen headed by that id would
+// be claiming a send that has not happened. It lands on the honest banner
+// instead, which says exactly what is true (saved here, will send itself).
 function confirmedReportId(
   deliveryResult: DesktopSubmitReportResult | null,
 ): string | null {
@@ -1480,7 +1492,13 @@ function EvidenceStrip({
   }
 
   return (
-    <div className="grid max-h-64 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
+    // `grid-cols-1`, here and on the `<dl>` below: a bare `grid` column is
+    // `auto`, which grows to the widest unbreakable line inside it - and a
+    // stack frame's bundle URL is one. That widened the track past this box,
+    // and since `overflow-y-auto` also enables horizontal scrolling, the panel
+    // grew a horizontal scrollbar instead of letting the `<pre>` scroll itself.
+    // `minmax(0, 1fr)` pins the track to the box.
+    <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
       <div className="flex items-center justify-between">
         <span className="font-medium text-success-foreground">✓ Captured</span>
         <button
@@ -1542,7 +1560,7 @@ function EvidenceReviewDetails({
 }): ReactNode {
   const messageFirstLine = cause?.message.split("\n")[0] ?? null;
   return (
-    <dl className="grid gap-1.5">
+    <dl className="grid grid-cols-1 gap-1.5">
       {cause !== null ? (
         <div className="flex flex-col gap-1">
           <dt className="text-muted-foreground">Error</dt>
@@ -2119,6 +2137,49 @@ function PublishPreviewScreen({
   );
 }
 
+/**
+ * One footer action.
+ *
+ * Extracted because the same two decisions - "is this action's own mutation
+ * pending" and "is anything else blocking it" - were written out inline five
+ * times, and that repetition, not the delivery-outcome logic, is where
+ * `ReportIssueFooterActions`' cyclomatic complexity lived: ten of its
+ * seventeen branches were this one pattern. Module-level rather than defined
+ * inside a render body, so it is a stable component type across renders.
+ *
+ * `pending` drives the spinner AND the disable, so those two can never
+ * disagree for an action; `blocked` is everything else that should grey it
+ * out. The label is a plain prop and never changes while pending - swapping a
+ * label for "Submitting..." is exactly what the repo's pending-UX rule
+ * forbids.
+ */
+function FooterActionButton({
+  label,
+  variant,
+  pending,
+  blocked,
+  onClick,
+}: {
+  readonly label: string;
+  readonly variant: "default" | "outline";
+  readonly pending: boolean;
+  readonly blocked: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
+  return (
+    <Button variant={variant} onClick={onClick} disabled={pending || blocked}>
+      {pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {label}
+    </Button>
+  );
+}
+
 function ReportIssueFooterActions({
   deliveryResult,
   isSubmitPending,
@@ -2145,86 +2206,76 @@ function ReportIssueFooterActions({
   if (deliveryResult?.status === "unavailable") {
     return (
       <>
-        <Button
+        <FooterActionButton
+          label="Save diagnostic bundle"
           variant="outline"
+          pending={isSaveBundlePending}
+          blocked={isIngesting}
           onClick={onSaveDiagnosticBundle}
-          disabled={isSaveBundlePending || isIngesting}
-        >
-          {isSaveBundlePending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Save diagnostic bundle
-        </Button>
-        <Button
+        />
+        <FooterActionButton
+          label="Open a GitHub issue"
+          variant="default"
+          pending={isBuildingDraft}
+          blocked={isIngesting}
           onClick={onOpenGithubIssue}
-          disabled={isBuildingDraft || isIngesting}
-        >
-          {isBuildingDraft ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Open a GitHub issue
-        </Button>
+        />
       </>
     );
   }
   if (deliveryResult !== null && deliveryResult.status !== "delivered") {
+    // A queued report is already going to be sent; the only honest extra
+    // action is filing publicly as well. Offering "Try again" would invite a
+    // resend that collapses at ingest against the replay (same `event_id`)
+    // and could only replace a stored report with a dropped one.
+    const offersResend = deliveryResult.status !== "queued";
     return (
       <>
-        <Button
+        <FooterActionButton
+          label="Report on GitHub instead"
           variant="outline"
+          pending={isBuildingDraft}
+          blocked={isIngesting}
           onClick={onReportOnGithub}
-          disabled={isBuildingDraft || isIngesting}
-        >
-          {isBuildingDraft ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Report on GitHub instead
-        </Button>
-        <Button onClick={onSubmit} disabled={isSubmitPending || isIngesting}>
-          {isSubmitPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Try again
-        </Button>
+        />
+        {offersResend ? (
+          <FooterActionButton
+            label="Try again"
+            variant="default"
+            pending={isSubmitPending}
+            blocked={isIngesting}
+            onClick={onSubmit}
+          />
+        ) : null}
       </>
     );
   }
   return (
-    <Button
+    <FooterActionButton
+      label="Send report"
+      variant="default"
+      pending={isSubmitPending}
+      blocked={!canSubmit || isIngesting}
       onClick={onSubmit}
-      disabled={isSubmitPending || !canSubmit || isIngesting}
-    >
-      {isSubmitPending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
-      Send report
-    </Button>
+    />
   );
 }
 
 function deliveryOutcomeMessage(
   result: DesktopSubmitReportResult | null,
 ): string {
+  // Stored, not lost, and not resendable: the app will send it by itself
+  // when the connection comes back, and no action from here would help.
+  if (result?.status === "queued") {
+    return "You're offline, so your report is saved on this machine - it will be sent automatically when the connection returns. There's nothing else to do.";
+  }
+  // The one failure with a remedy. The draft stays exactly as typed, so
+  // "try again" means retry the send, not retype the report.
+  if (result?.status === "failed" && result.reason === "rate-limited") {
+    return result.retryAfterSeconds === null
+      ? "Reporting is rate-limited right now. Your report is still here - try again in a few minutes."
+      : `Reporting is rate-limited right now. Your report is still here - try again in ${rateLimitWaitLabel(result.retryAfterSeconds)}.`;
+  }
   if (result?.status === "unconfirmed") {
     return "We could not confirm your report was uploaded - it may have arrived. Trying again is safe; it reuses the same report ID.";
   }
@@ -2232,6 +2283,21 @@ function deliveryOutcomeMessage(
     return "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead.";
   }
   return "Your report could not be sent. Nothing was lost - it is still here.";
+}
+
+// Rounded up to a whole minute past a minute: `retry-after` is a server hint
+// with seconds of slack in it either way, and "in 3 minutes" is a wait a
+// person can act on where "in 154 seconds" reads as false precision.
+function rateLimitWaitLabel(retryAfterSeconds: number): string {
+  if (retryAfterSeconds < 60) {
+    // 1 is the smallest value that reaches here: `retryAfterSecondsFromHeader`
+    // rounds a positive delay up with `Math.ceil` and answers `null` below it.
+    return retryAfterSeconds === 1
+      ? "a second"
+      : `${String(retryAfterSeconds)} seconds`;
+  }
+  const minutes = Math.ceil(retryAfterSeconds / 60);
+  return minutes === 1 ? "a minute" : `${String(minutes)} minutes`;
 }
 
 function Field({

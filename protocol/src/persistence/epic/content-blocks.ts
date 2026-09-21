@@ -12,6 +12,7 @@ import {
   imageSha256HexSchema,
   supportedImageMediaTypeSchema,
 } from "@traycer/protocol/persistence/epic/images";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Discriminated union of content blocks rendered inside an assistant
@@ -20,14 +21,14 @@ import {
  */
 
 const baseBlockFields = {
-  blockId: z.string(),
-  status: z.enum(["streaming", "completed", "errored"]),
-  timestamp: z.number(),
+  blockId: lazySchema(() => z.string()),
+  status: lazySchema(() => z.enum(["streaming", "completed", "errored"])),
+  timestamp: lazySchema(() => z.number()),
   // Owner block id for nested rendering. When set, this block is a CHILD of
   // the referenced block (a subagent's own tool_call / file_change activity
   // nests under its `subagent` block). Absent/null for top-level activity.
   // Additive + nullable so blocks persisted before this field stay valid.
-  parentBlockId: z.string().nullish(),
+  parentBlockId: lazySchema(() => z.string().nullish()),
 } as const;
 
 // ACTION blocks (tool_call / command / file_change / subagent) can be
@@ -39,13 +40,9 @@ const baseBlockFields = {
 // approval/interview never carry these (the accumulator never assigns them), so
 // the schema models exactly what the system produces. Additive: blocks persisted
 // before these values only ever used the base three, so old data still parses.
-const actionBlockStatus = z.enum([
-  "streaming",
-  "completed",
-  "errored",
-  "interrupted",
-  "superseded",
-]);
+const actionBlockStatus = lazySchema(() =>
+  z.enum(["streaming", "completed", "errored", "interrupted", "superseded"]),
+);
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -64,27 +61,29 @@ const harnessIdSchema = getRecordSchema(
 // `contentBlockSchemaPreReasonix`). Derived with `.extract()` off the live enum
 // rather than re-spelled, so adding a vendor to the canonical list without
 // deciding its freeze story is a compile error here. Do NOT add new harnesses.
-const harnessIdSchemaPreReasonix = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-]);
+const harnessIdSchemaPreReasonix = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+  ]),
+);
 
 // Canonical artifact-kind vocabulary (spec / ticket / story / review), shared
 // with the artifact metadata + tombstone schemas and the GUI node registries.
@@ -137,17 +136,19 @@ const artifactKindSchema = getRecordSchema(
 // cause. A settle with an empty queue therefore left the chat with nothing but
 // an `info` terminal, and a client had no rendered account of a traversal that
 // had walked its whole ladder.
-export const providerNoticeKindSchema = z.enum([
-  "model_rerouted",
-  "model_verification",
-  "safety_buffering",
-  "harness_message",
-  "fallback_applied",
-  "fallback_returned",
-  "fallback_return_blocked",
-  "fallback_wait_resumed",
-  "fallback_settled",
-]);
+export const providerNoticeKindSchema = lazySchema(() =>
+  z.enum([
+    "model_rerouted",
+    "model_verification",
+    "safety_buffering",
+    "harness_message",
+    "fallback_applied",
+    "fallback_returned",
+    "fallback_return_blocked",
+    "fallback_wait_resumed",
+    "fallback_settled",
+  ]),
+);
 export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
 
 /**
@@ -179,11 +180,16 @@ export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
  * Exported for `host/agent/gui/agent-runtime.ts`, whose frozen
  * `provider_notice.upsert` event carries the same enum on the same lines.
  */
-export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
+// The literal list is the enum's source, and what module-scope consumers read:
+// reading `.options` at module scope would build the schema at import.
+export const PROVIDER_NOTICE_KINDS_PRE_HARNESS_MESSAGE = [
   "model_rerouted",
   "model_verification",
   "safety_buffering",
-]);
+] as const;
+export const providerNoticeKindSchemaPreHarnessMessage = lazySchema(() =>
+  z.enum(PROVIDER_NOTICE_KINDS_PRE_HARNESS_MESSAGE),
+);
 
 /**
  * The notice kinds `chat.subscribe@1.7`, `@1.8` and `@1.9` ship - everything
@@ -208,29 +214,33 @@ export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
  * split apart.
  * Do NOT add new kinds.
  */
-export const providerNoticeKindSchemaPreFallback =
+export const providerNoticeKindSchemaPreFallback = lazySchema(() =>
   providerNoticeKindSchema.extract([
     "model_rerouted",
     "model_verification",
     "safety_buffering",
     "harness_message",
-  ]);
+  ]),
+);
 
-export const providerNoticeToneSchema = z.enum(["info", "warning"]);
+export const providerNoticeToneSchema = lazySchema(() =>
+  z.enum(["info", "warning"]),
+);
 export type ProviderNoticeTone = z.infer<typeof providerNoticeToneSchema>;
 
-export const providerNoticeDetailSchema = z.object({
-  label: z.string(),
-  value: z.string(),
-});
+export const providerNoticeDetailSchema = lazySchema(() =>
+  z.object({
+    label: z.string(),
+    value: z.string(),
+  }),
+);
 export type ProviderNoticeDetail = z.infer<typeof providerNoticeDetailSchema>;
 
 // Narrow, JSON-serializable per-notice-kind facts - normalized from the raw
 // provider payload at conversion time. Never carries the raw payload or user
 // code; only the specific fields each notice kind needs to render/search.
-export const providerNoticeNormalizedMetadataSchema = z.discriminatedUnion(
-  "type",
-  [
+export const providerNoticeNormalizedMetadataSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
     z.object({
       type: z.literal("model_rerouted"),
       fromModel: z.string(),
@@ -249,73 +259,108 @@ export const providerNoticeNormalizedMetadataSchema = z.discriminatedUnion(
       reasons: z.array(z.string()),
       terminalReason: z.string().nullable(),
     }),
-  ],
+  ]),
 );
 export type ProviderNoticeNormalizedMetadata = z.infer<
   typeof providerNoticeNormalizedMetadataSchema
 >;
 
-export const providerNoticeMetadataSchema = z
-  .object({
-    harnessId: harnessIdSchema,
-    noticeKind: providerNoticeKindSchema,
-    tone: providerNoticeToneSchema,
-    title: z.string(),
-    message: z.string().nullable(),
-    details: z.array(providerNoticeDetailSchema),
-    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
-  })
-  .superRefine((notice, ctx) => {
-    if (
-      notice.metadata !== null &&
-      notice.noticeKind !== notice.metadata.type
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "noticeKind must match metadata.type",
-        path: ["metadata", "type"],
-      });
-    }
-  });
+export const providerNoticeMetadataSchema = lazySchema(() =>
+  z
+    .object({
+      harnessId: harnessIdSchema,
+      noticeKind: providerNoticeKindSchema,
+      tone: providerNoticeToneSchema,
+      title: z.string(),
+      message: z.string().nullable(),
+      details: z.array(providerNoticeDetailSchema),
+      metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+    })
+    .superRefine((notice, ctx) => {
+      if (
+        notice.metadata !== null &&
+        notice.noticeKind !== notice.metadata.type
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "noticeKind must match metadata.type",
+          path: ["metadata", "type"],
+        });
+      }
+    }),
+);
 export type ProviderNoticeMetadata = z.infer<
   typeof providerNoticeMetadataSchema
 >;
 
-export const textBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("text"),
-  text: z.string(),
-  // Additive enrichment: when set, this text block is a durable provider
-  // notice (Codex model reroute / safety verification / buffering) and a
-  // `chat.subscribe@1.3`+ reader projects it to a compact provider-notice
-  // segment. `text` always carries a concise fallback rendering, so a reader
-  // that strips or predates this key still renders plain assistant text -
-  // this is NOT a new persisted `ContentBlock.type`. Nullable + defaulted so
-  // blocks persisted before this field parse cleanly, and so pre-1.3 stream
-  // subscribers can be projected down to the fallback text (see
-  // `chat-frame-projection.ts`).
-  providerNotice: providerNoticeMetadataSchema.nullable().default(null),
-});
+export const browserSessionReferenceSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    sessionId: z.string(),
+    tabId: z.string(),
+    profile: z.enum(["primary", "isolated"]),
+    title: z.string().optional(),
+  }),
+);
+export type BrowserSessionReference = z.infer<
+  typeof browserSessionReferenceSchema
+>;
+
+export const textBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("text"),
+    text: z.string(),
+    // Additive enrichment: when set, this text block is a durable provider
+    // notice (Codex model reroute / safety verification / buffering) and a
+    // `chat.subscribe@1.3`+ reader projects it to a compact provider-notice
+    // segment. `text` always carries a concise fallback rendering, so a reader
+    // that strips or predates this key still renders plain assistant text -
+    // this is NOT a new persisted `ContentBlock.type`. Nullable + defaulted so
+    // blocks persisted before this field parse cleanly, and so pre-1.3 stream
+    // subscribers can be projected down to the fallback text (see
+    // `chat-frame-projection.ts`).
+    providerNotice: providerNoticeMetadataSchema.nullable().default(null),
+    // First browser use in a chat. Older readers retain the text fallback.
+    browserSession: browserSessionReferenceSchema.optional(),
+  }),
+);
 export type TextBlock = z.infer<typeof textBlockSchema>;
 
-export const reasoningBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("reasoning"),
-  content: z.string(),
-  // Wall-clock start of the reasoning stream (first delta). Immutable across
-  // deltas and finalize - unlike `timestamp`, which tracks the latest update and
-  // becomes the completion time on finalize - so the GUI can render a stable
-  // "Thought for Xs" duration. Nullable for blocks persisted before this field.
-  startedAt: z.number().nullable().default(null),
-});
+// Wire-freeze copy from before browser-session references. Released chat
+// snapshots must retain the text fallback without absorbing this live-only
+// enrichment through a shared text-block schema.
+const textBlockSchemaPreBrowser = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("text"),
+    text: z.string(),
+    providerNotice: providerNoticeMetadataSchema.nullable().default(null),
+  }),
+);
+
+export const reasoningBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("reasoning"),
+    content: z.string(),
+    // Wall-clock start of the reasoning stream (first delta). Immutable across
+    // deltas and finalize - unlike `timestamp`, which tracks the latest update and
+    // becomes the completion time on finalize - so the GUI can render a stable
+    // "Thought for Xs" duration. Nullable for blocks persisted before this field.
+    startedAt: z.number().nullable().default(null),
+  }),
+);
 export type ReasoningBlock = z.infer<typeof reasoningBlockSchema>;
 
-export const agentMessageSendSchema = z.object({
-  receiverAgentId: z.string(),
-  message: z.string(),
-  responseId: z.string().nullable(),
-  expectReply: z.boolean(),
-});
+export const agentMessageSendSchema = lazySchema(() =>
+  z.object({
+    receiverAgentId: z.string(),
+    message: z.string(),
+    responseId: z.string().nullable(),
+    expectReply: z.boolean(),
+  }),
+);
 export type AgentMessageSend = z.infer<typeof agentMessageSendSchema>;
 
 // Where a `traycer_send_message` call LANDED: the receiver's own transcript
@@ -328,10 +373,12 @@ export type AgentMessageSend = z.infer<typeof agentMessageSendSchema>;
 // what lets the sender's "Sent message" card jump to the exact row in the
 // receiver's scrollback. Null for a TUI receiver (its receipt is an inbox event,
 // not a transcript row) and for every block persisted before this field.
-export const agentMessageReceiptSchema = z.object({
-  receiverAgentId: z.string(),
-  messageId: z.string(),
-});
+export const agentMessageReceiptSchema = lazySchema(() =>
+  z.object({
+    receiverAgentId: z.string(),
+    messageId: z.string(),
+  }),
+);
 export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
 // Structured rendering of a tool call's input - the collapsed summary line
@@ -341,19 +388,23 @@ export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 // kept in full; the never-displayed bulk carriers (`old_string`/`new_string`/
 // `content`/patch) are dropped. The derivation lives in
 // `host/agent/gui/tool-input-detail.ts`.
-export const toolInputDetailEntrySchema = z.object({
-  key: z.string(),
-  label: z.string(),
-  value: z.string(),
-});
-
-export const toolInputDetailSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("command"), command: z.string() }),
+export const toolInputDetailEntrySchema = lazySchema(() =>
   z.object({
-    kind: z.literal("fields"),
-    entries: z.array(toolInputDetailEntrySchema),
+    key: z.string(),
+    label: z.string(),
+    value: z.string(),
   }),
-]);
+);
+
+export const toolInputDetailSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("command"), command: z.string() }),
+    z.object({
+      kind: z.literal("fields"),
+      entries: z.array(toolInputDetailEntrySchema),
+    }),
+  ]),
+);
 export type ToolInputDetail = z.infer<typeof toolInputDetailSchema>;
 
 // A single task-todo tool call (TaskCreate / TaskUpdate / …) parsed into its
@@ -362,35 +413,31 @@ export type ToolInputDetail = z.infer<typeof toolInputDetailSchema>;
 // status/action vocabularies mirror `RuntimeTodoStatus` / `TaskTodoAction` in
 // the host layer; re-declared here because persistence cannot import that
 // layer (the dependency runs host -> persistence).
-const taskTodoItemStatusSchema = z.enum([
-  "pending",
-  "in_progress",
-  "completed",
-  "cancelled",
-]);
-const taskTodoItemActionSchema = z.enum([
-  "create",
-  "update",
-  "start",
-  "complete",
-  "cancel",
-  "list",
-]);
-export const parsedTaskTodoSchema = z.object({
-  id: z.string().nullable(),
-  text: z.string().nullable(),
-  status: taskTodoItemStatusSchema.nullable(),
-  priority: z.string().nullable(),
-  activeForm: z.string().nullable(),
-  action: taskTodoItemActionSchema,
-});
+const taskTodoItemStatusSchema = lazySchema(() =>
+  z.enum(["pending", "in_progress", "completed", "cancelled"]),
+);
+const taskTodoItemActionSchema = lazySchema(() =>
+  z.enum(["create", "update", "start", "complete", "cancel", "list"]),
+);
+export const parsedTaskTodoSchema = lazySchema(() =>
+  z.object({
+    id: z.string().nullable(),
+    text: z.string().nullable(),
+    status: taskTodoItemStatusSchema.nullable(),
+    priority: z.string().nullable(),
+    activeForm: z.string().nullable(),
+    action: taskTodoItemActionSchema,
+  }),
+);
 export type ParsedTaskTodoPersisted = z.infer<typeof parsedTaskTodoSchema>;
 
-export const backgroundTaskOutputSchema = z.object({
-  stdout: z.string(),
-  stderr: z.string(),
-  truncated: z.boolean(),
-});
+export const backgroundTaskOutputSchema = lazySchema(() =>
+  z.object({
+    stdout: z.string(),
+    stderr: z.string(),
+    truncated: z.boolean(),
+  }),
+);
 export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
 
 // One generated/edited image produced by a tool call (Codex `image_generation`
@@ -399,16 +446,18 @@ export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
 // (SHA-256 content address into the epic attachment map); `filePath` is
 // display-only metadata, never the render source. Array from day one - a
 // single tool call can produce more than one image.
-export const imageGenerationResultSchema = z.object({
-  attachmentHash: imageSha256HexSchema,
-  mediaType: supportedImageMediaTypeSchema,
-  byteLength: imageByteLengthSchema,
-  width: imageDimensionSchema.default(null),
-  height: imageDimensionSchema.default(null),
-  alt: z.string().nullable().default(null),
-  revisedPrompt: z.string().nullable().default(null),
-  filePath: z.string().nullable().default(null),
-});
+export const imageGenerationResultSchema = lazySchema(() =>
+  z.object({
+    attachmentHash: imageSha256HexSchema,
+    mediaType: supportedImageMediaTypeSchema,
+    byteLength: imageByteLengthSchema,
+    width: imageDimensionSchema.default(null),
+    height: imageDimensionSchema.default(null),
+    alt: z.string().nullable().default(null),
+    revisedPrompt: z.string().nullable().default(null),
+    filePath: z.string().nullable().default(null),
+  }),
+);
 export type ImageGenerationResult = z.infer<typeof imageGenerationResultSchema>;
 
 /**
@@ -419,9 +468,9 @@ export type ImageGenerationResult = z.infer<typeof imageGenerationResultSchema>;
  * anonymous row.
  */
 const toolCallManagedCommandIdentityFields = {
-  commandId: z.string(),
-  description: z.string(),
-  monitoring: z.boolean(),
+  commandId: lazySchema(() => z.string()),
+  description: lazySchema(() => z.string()),
+  monitoring: lazySchema(() => z.boolean()),
 };
 
 /**
@@ -445,11 +494,13 @@ const toolCallManagedCommandIdentityFields = {
  * later restart can move. The start card describes the call it is the record
  * of. Null on blocks stamped before it existed.
  */
-export const toolCallManagedCommandStartedSchema = z.object({
-  event: z.literal("started").default("started"),
-  ...toolCallManagedCommandIdentityFields,
-  cwd: z.string().nullable().default(null),
-});
+export const toolCallManagedCommandStartedSchema = lazySchema(() =>
+  z.object({
+    event: z.literal("started").default("started"),
+    ...toolCallManagedCommandIdentityFields,
+    cwd: z.string().nullable().default(null),
+  }),
+);
 export type ToolCallManagedCommandStarted = z.infer<
   typeof toolCallManagedCommandStartedSchema
 >;
@@ -474,15 +525,17 @@ export type ToolCallManagedCommandStarted = z.infer<
  * on every one of them would mutate them all to the same present. The
  * correlated start card stays the shell's one live card.
  */
-export const toolCallManagedCommandRestartedSchema = z.object({
-  event: z.literal("restarted"),
-  ...toolCallManagedCommandIdentityFields,
-  effectiveCommand: z.string(),
-  effectiveCwd: z.string(),
-  commandChanged: z.boolean(),
-  cwdChanged: z.boolean(),
-  outcome: managedCommandStatusSchema,
-});
+export const toolCallManagedCommandRestartedSchema = lazySchema(() =>
+  z.object({
+    event: z.literal("restarted"),
+    ...toolCallManagedCommandIdentityFields,
+    effectiveCommand: z.string(),
+    effectiveCwd: z.string(),
+    commandChanged: z.boolean(),
+    cwdChanged: z.boolean(),
+    outcome: managedCommandStatusSchema,
+  }),
+);
 export type ToolCallManagedCommandRestarted = z.infer<
   typeof toolCallManagedCommandRestartedSchema
 >;
@@ -498,88 +551,92 @@ export type ToolCallManagedCommandRestarted = z.infer<
  * discriminator), and the restarted member goes first because its literal is
  * required - a legacy shape falls through to `started`.
  */
-export const toolCallManagedCommandSchema = z.union([
-  toolCallManagedCommandRestartedSchema,
-  toolCallManagedCommandStartedSchema,
-]);
+export const toolCallManagedCommandSchema = lazySchema(() =>
+  z.union([
+    toolCallManagedCommandRestartedSchema,
+    toolCallManagedCommandStartedSchema,
+  ]),
+);
 export type ToolCallManagedCommand = z.infer<
   typeof toolCallManagedCommandSchema
 >;
 
-export const toolCallBlockSchema = z.object({
-  ...baseBlockFields,
-  status: actionBlockStatus,
-  type: z.literal("tool_call"),
-  toolName: z.string(),
-  // Precomputed display data for the call's input - the ≤80-char header line and
-  // the optional expand body, each displayed field kept in full. The raw harness
-  // input is NOT persisted: for Edit/Write/apply_patch it IS the full file body
-  // (old_string/new_string), the dominant chat-doc bloat, and those tool calls
-  // are GUI-suppressed in favour of the file_change card, so their content is
-  // dropped outright. Tool OUTPUT and command stdout are likewise not persisted.
-  // Computed once on the host (agent-runtime-accumulator) so the live broadcast
-  // and the persisted row carry the same structured fields.
-  // Nullable + defaulted so blocks persisted before this refactor parse cleanly.
-  inputSummary: z.string().nullable().default(null),
-  inputDetail: toolInputDetailSchema.nullable().default(null),
-  // Task-todo tools (TaskCreate / TaskUpdate / …) carry their todo item(s) in
-  // the call input; parsed here so the pinned-todo stack reads structured items.
-  // Null for every non-task-todo tool. Defaulted for pre-refactor blocks.
-  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
-  error: z.string().nullable(),
-  agentMessageSend: agentMessageSendSchema.nullable().default(null),
-  // Where that send landed in the receiver's transcript - see
-  // `agentMessageReceiptSchema`. Null for every other tool call and for blocks
-  // persisted before this field. Deliberately NOT on the hand-frozen
-  // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
-  // never observe it.
-  agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
-  // The shell a `traycer_run_shell` call created - see
-  // `toolCallManagedCommandSchema`. Null for every other tool call.
-  managedCommand: toolCallManagedCommandSchema.nullable().default(null),
-  // Latest intermediate progress line for an in-flight call (replace-latest,
-  // never an append-log). Shown by the GUI only while `status === "streaming"`.
-  // Nullable + defaulted so blocks persisted before this field parse cleanly.
-  progress: z.string().nullable().default(null),
-  // Capped terminal output for a backgrounded command/monitor, populated from
-  // the SDK's terminal task notification when available. Completion-only by
-  // design: this is not a persisted streaming stdout log.
-  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
-  // Wall-clock start of the call. Immutable across progress/completion - unlike
-  // `timestamp`, which becomes the completion time once the block finalizes - so
-  // background command/Monitor cards can preserve their final elapsed duration.
-  // Nullable for blocks persisted before this field existed.
-  startedAt: z.number().nullable().default(null),
-  // Wall-clock end of the call once a real terminal event arrives. Kept
-  // separate from `timestamp` so background command/Monitor duration is always
-  // derived from explicit task timing, not from whichever lifecycle event last
-  // touched the block. Nullable/defaulted for persisted blocks from older
-  // protocol versions.
-  endedAt: z.number().nullable().default(null),
-  // Persistent marker: true once this tool_call is identified as a backgrounded
-  // command/Monitor (stamped at started time from `run_in_background` / the
-  // Monitor tool, and reinforced by the terminal task notification). Unlike the
-  // transient host `backgroundItems` list (removed at completion) or
-  // `backgroundOutput` (only set on some terminal paths), this survives EVERY
-  // terminal path and reload - so the GUI keeps rendering it as a standalone
-  // background card after it completes/stops/errors instead of collapsing into
-  // the generic activity group. `null` means "not yet known" (the classifier
-  // hasn't seen enough of the streamed input to tell) - distinct from a
-  // confirmed `false`, so a brief mid-stream gap is never misrendered as a
-  // definitive "not background." Defaulted to `false` (not `null`) for blocks
-  // persisted before this field existed, since backgrounding didn't exist as a
-  // concept then.
-  backgroundTask: z.boolean().nullable().default(false),
-  // Set alongside `status: "errored"` when the terminal outcome was an
-  // explicit stop (deadline-killed Monitor, user-stopped command) rather than
-  // a genuine failure. `status` itself is unchanged - this only adds the
-  // finer distinction. Defaulted so pre-existing blocks parse cleanly.
-  stopped: z.boolean().default(false),
-  // Images this call produced (`chat.subscribe@1.6`). Defaulted so blocks
-  // persisted before this field existed parse cleanly. See
-  // `imageGenerationResultSchema`.
-  imageResults: z.array(imageGenerationResultSchema).default([]),
-});
+export const toolCallBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    // Precomputed display data for the call's input - the ≤80-char header line and
+    // the optional expand body, each displayed field kept in full. The raw harness
+    // input is NOT persisted: for Edit/Write/apply_patch it IS the full file body
+    // (old_string/new_string), the dominant chat-doc bloat, and those tool calls
+    // are GUI-suppressed in favour of the file_change card, so their content is
+    // dropped outright. Tool OUTPUT and command stdout are likewise not persisted.
+    // Computed once on the host (agent-runtime-accumulator) so the live broadcast
+    // and the persisted row carry the same structured fields.
+    // Nullable + defaulted so blocks persisted before this refactor parse cleanly.
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    // Task-todo tools (TaskCreate / TaskUpdate / …) carry their todo item(s) in
+    // the call input; parsed here so the pinned-todo stack reads structured items.
+    // Null for every non-task-todo tool. Defaulted for pre-refactor blocks.
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    // Where that send landed in the receiver's transcript - see
+    // `agentMessageReceiptSchema`. Null for every other tool call and for blocks
+    // persisted before this field. Deliberately NOT on the hand-frozen
+    // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
+    // never observe it.
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    // The shell a `traycer_run_shell` call created - see
+    // `toolCallManagedCommandSchema`. Null for every other tool call.
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    // Latest intermediate progress line for an in-flight call (replace-latest,
+    // never an append-log). Shown by the GUI only while `status === "streaming"`.
+    // Nullable + defaulted so blocks persisted before this field parse cleanly.
+    progress: z.string().nullable().default(null),
+    // Capped terminal output for a backgrounded command/monitor, populated from
+    // the SDK's terminal task notification when available. Completion-only by
+    // design: this is not a persisted streaming stdout log.
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    // Wall-clock start of the call. Immutable across progress/completion - unlike
+    // `timestamp`, which becomes the completion time once the block finalizes - so
+    // background command/Monitor cards can preserve their final elapsed duration.
+    // Nullable for blocks persisted before this field existed.
+    startedAt: z.number().nullable().default(null),
+    // Wall-clock end of the call once a real terminal event arrives. Kept
+    // separate from `timestamp` so background command/Monitor duration is always
+    // derived from explicit task timing, not from whichever lifecycle event last
+    // touched the block. Nullable/defaulted for persisted blocks from older
+    // protocol versions.
+    endedAt: z.number().nullable().default(null),
+    // Persistent marker: true once this tool_call is identified as a backgrounded
+    // command/Monitor (stamped at started time from `run_in_background` / the
+    // Monitor tool, and reinforced by the terminal task notification). Unlike the
+    // transient host `backgroundItems` list (removed at completion) or
+    // `backgroundOutput` (only set on some terminal paths), this survives EVERY
+    // terminal path and reload - so the GUI keeps rendering it as a standalone
+    // background card after it completes/stops/errors instead of collapsing into
+    // the generic activity group. `null` means "not yet known" (the classifier
+    // hasn't seen enough of the streamed input to tell) - distinct from a
+    // confirmed `false`, so a brief mid-stream gap is never misrendered as a
+    // definitive "not background." Defaulted to `false` (not `null`) for blocks
+    // persisted before this field existed, since backgrounding didn't exist as a
+    // concept then.
+    backgroundTask: z.boolean().nullable().default(false),
+    // Set alongside `status: "errored"` when the terminal outcome was an
+    // explicit stop (deadline-killed Monitor, user-stopped command) rather than
+    // a genuine failure. `status` itself is unchanged - this only adds the
+    // finer distinction. Defaulted so pre-existing blocks parse cleanly.
+    stopped: z.boolean().default(false),
+    // Images this call produced (`chat.subscribe@1.6`). Defaulted so blocks
+    // persisted before this field existed parse cleanly. See
+    // `imageGenerationResultSchema`.
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+  }),
+);
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.6` shipped it
@@ -587,25 +644,27 @@ export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 // to `@1.6` via `contentBlockSchemaPreSettlement`, so that released line never
 // observes a receipt. Hand-frozen, NOT derived from the live shape via
 // `.omit()`, for the same reason as `toolCallBlockSchemaPreImage` below.
-export const toolCallBlockSchemaPreReceipt = z.object({
-  ...baseBlockFields,
-  status: actionBlockStatus,
-  type: z.literal("tool_call"),
-  toolName: z.string(),
-  inputSummary: z.string().nullable().default(null),
-  inputDetail: toolInputDetailSchema.nullable().default(null),
-  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
-  error: z.string().nullable(),
-  agentMessageSend: agentMessageSendSchema.nullable().default(null),
-  managedCommand: toolCallManagedCommandSchema.nullable().default(null),
-  progress: z.string().nullable().default(null),
-  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
-  startedAt: z.number().nullable().default(null),
-  endedAt: z.number().nullable().default(null),
-  backgroundTask: z.boolean().nullable().default(false),
-  stopped: z.boolean().default(false),
-  imageResults: z.array(imageGenerationResultSchema).default([]),
-});
+export const toolCallBlockSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+  }),
+);
 
 // Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
 // existed (`chat.subscribe@1.0-1.5`). Bound (via the frozen content-block
@@ -613,103 +672,111 @@ export const toolCallBlockSchemaPreReceipt = z.object({
 // never observe image data - see `contentBlockSchemaPreReasonix`. Hand-frozen,
 // NOT derived from the live shape via `.omit()`, so a future field added to
 // the live block cannot silently leak onto a released wire line.
-export const toolCallBlockSchemaPreImage = z.object({
-  ...baseBlockFields,
-  status: actionBlockStatus,
-  type: z.literal("tool_call"),
-  toolName: z.string(),
-  inputSummary: z.string().nullable().default(null),
-  inputDetail: toolInputDetailSchema.nullable().default(null),
-  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
-  error: z.string().nullable(),
-  agentMessageSend: agentMessageSendSchema.nullable().default(null),
-  progress: z.string().nullable().default(null),
-  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
-  startedAt: z.number().nullable().default(null),
-  endedAt: z.number().nullable().default(null),
-  backgroundTask: z.boolean().nullable().default(false),
-  stopped: z.boolean().default(false),
-});
+export const toolCallBlockSchemaPreImage = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+  }),
+);
 
 // `diffSource: "snapshot"` ⇒ `reason: "snapshot"` and contents non-null
 // (or single-null for create/delete). Any other reason ⇒ `"none"` and
 // null contents - `reason` carries the actionable explanation.
-export const diffSourceSchema = z.enum(["snapshot", "none"]);
+export const diffSourceSchema = lazySchema(() => z.enum(["snapshot", "none"]));
 export type DiffSource = z.infer<typeof diffSourceSchema>;
 
-export const fileEditReasonSchema = z.enum([
-  "snapshot",
-  "binary",
-  "too_large",
-  "blob_missing",
-  "capture_failed",
-  "not_intercepted",
-  // The user denied the edit at the approval prompt - the file was never
-  // changed. Distinct from "capture_failed" (an actual error) so the renderer
-  // can show a "Denied" status instead of a failure.
-  "denied",
-]);
+export const fileEditReasonSchema = lazySchema(() =>
+  z.enum([
+    "snapshot",
+    "binary",
+    "too_large",
+    "blob_missing",
+    "capture_failed",
+    "not_intercepted",
+    // The user denied the edit at the approval prompt - the file was never
+    // changed. Distinct from "capture_failed" (an actual error) so the renderer
+    // can show a "Denied" status instead of a failure.
+    "denied",
+  ]),
+);
 export type FileEditReason = z.infer<typeof fileEditReasonSchema>;
 
-export const fileChangeBlockSchema = z.object({
-  ...baseBlockFields,
-  status: actionBlockStatus,
-  type: z.literal("file_change"),
-  filePath: z.string(),
-  operation: z.string(),
-  diffSource: diffSourceSchema,
-  // Content-addressed snapshot refs into the on-disk SnapshotStore
-  // (`~/.traycer/snapshots/<userId>/blobs/<sha>`). The before/after file
-  // contents are NOT inlined here (they were the dominant chat-doc bloat);
-  // the GUI lazy-fetches them by hash on expand via `snapshots.readSnapshotDiff`.
-  // Null on the side that doesn't exist (create ⇒ no before, delete ⇒ no after)
-  // or when `diffSource === "none"` (see `reason`). Defaulted so file_change
-  // blocks persisted before these fields existed parse cleanly (they degrade to
-  // "no diff" rather than throwing) - matching the convention of every other
-  // additive field in this file.
-  beforeHash: z.string().nullable().default(null),
-  afterHash: z.string().nullable().default(null),
-  // +N/−M line counts computed at capture time (same `structuredPatch`
-  // algorithm the GUI renders with) so the collapsed header shows the counts
-  // without fetching any content. Both 0 when there is no renderable diff.
-  // Defaulted so pre-existing blocks parse cleanly.
-  additions: z.number().default(0),
-  deletions: z.number().default(0),
-  reason: fileEditReasonSchema,
-});
+export const fileChangeBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("file_change"),
+    filePath: z.string(),
+    operation: z.string(),
+    diffSource: diffSourceSchema,
+    // Content-addressed snapshot refs into the on-disk SnapshotStore
+    // (`~/.traycer/snapshots/<userId>/blobs/<sha>`). The before/after file
+    // contents are NOT inlined here (they were the dominant chat-doc bloat);
+    // the GUI lazy-fetches them by hash on expand via `snapshots.readSnapshotDiff`.
+    // Null on the side that doesn't exist (create ⇒ no before, delete ⇒ no after)
+    // or when `diffSource === "none"` (see `reason`). Defaulted so file_change
+    // blocks persisted before these fields existed parse cleanly (they degrade to
+    // "no diff" rather than throwing) - matching the convention of every other
+    // additive field in this file.
+    beforeHash: z.string().nullable().default(null),
+    afterHash: z.string().nullable().default(null),
+    // +N/−M line counts computed at capture time (same `structuredPatch`
+    // algorithm the GUI renders with) so the collapsed header shows the counts
+    // without fetching any content. Both 0 when there is no renderable diff.
+    // Defaulted so pre-existing blocks parse cleanly.
+    additions: z.number().default(0),
+    deletions: z.number().default(0),
+    reason: fileEditReasonSchema,
+  }),
+);
 export type FileChangeBlock = z.infer<typeof fileChangeBlockSchema>;
 
-export const commandBlockSchema = z.object({
-  ...baseBlockFields,
-  status: actionBlockStatus,
-  type: z.literal("command"),
-  command: z.string(),
-  cwd: z.string().nullable(),
-  exitCode: z.number().nullable(),
-  // Command stdout/stderr are intentionally NOT persisted: they can be huge
-  // (e.g. grep over a large tree) and there is no durable store to lazy-fetch
-  // them from. The card shows command + cwd + exit code + status, which is the
-  // load-bearing signal.
-  // Persistent marker with the same three-state meaning as
-  // `toolCallBlockSchema.backgroundTask`: true once this command has been
-  // promoted to a backgrounded one (Codex yields a long-running exec to the
-  // background and keeps it alive past the turn that started it). The marker
-  // survives EVERY terminal path and reload, so the GUI keeps rendering it as a
-  // standalone background card once it settles instead of collapsing back into
-  // the generic activity group. `null` means "not yet known" - the promotion is
-  // only decided at the parent turn's end, so a command that is still running
-  // has no confirmed answer yet. Defaulted to `false` (not `null`) for blocks
-  // persisted before this field existed, since backgrounding didn't exist as a
-  // concept then.
-  backgroundTask: z.boolean().nullable().default(false),
-  // Set when the terminal outcome was an explicit stop - the host asked the
-  // provider to terminate a backgrounded command, or a teardown killed it -
-  // rather than the command failing on its own. The provider reports its own
-  // kill with a synthetic exit code, and rendering that as a failure would
-  // blame the command for something we did. Mirrors
-  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse.
-  stopped: z.boolean().default(false),
-});
+export const commandBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("command"),
+    command: z.string(),
+    cwd: z.string().nullable(),
+    exitCode: z.number().nullable(),
+    // Command stdout/stderr are intentionally NOT persisted: they can be huge
+    // (e.g. grep over a large tree) and there is no durable store to lazy-fetch
+    // them from. The card shows command + cwd + exit code + status, which is the
+    // load-bearing signal.
+    // Persistent marker with the same three-state meaning as
+    // `toolCallBlockSchema.backgroundTask`: true once this command has been
+    // promoted to a backgrounded one (Codex yields a long-running exec to the
+    // background and keeps it alive past the turn that started it). The marker
+    // survives EVERY terminal path and reload, so the GUI keeps rendering it as a
+    // standalone background card once it settles instead of collapsing back into
+    // the generic activity group. `null` means "not yet known" - the promotion is
+    // only decided at the parent turn's end, so a command that is still running
+    // has no confirmed answer yet. Defaulted to `false` (not `null`) for blocks
+    // persisted before this field existed, since backgrounding didn't exist as a
+    // concept then.
+    backgroundTask: z.boolean().nullable().default(false),
+    // Set when the terminal outcome was an explicit stop - the host asked the
+    // provider to terminate a backgrounded command, or a teardown killed it -
+    // rather than the command failing on its own. The provider reports its own
+    // kill with a synthetic exit code, and rendering that as a failure would
+    // blame the command for something we did. Mirrors
+    // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse.
+    stopped: z.boolean().default(false),
+  }),
+);
 export type CommandBlock = z.infer<typeof commandBlockSchema>;
 
 // One milestone in a workflow run's activity timeline: a phase transition
@@ -717,10 +784,12 @@ export type CommandBlock = z.infer<typeof commandBlockSchema>;
 // parsed from the workflow task's rotating `task_progress` line. Order in
 // `WorkflowMeta.activity` is chronological; consecutive duplicate labels are
 // not re-appended (see the accumulator).
-export const workflowActivityEntrySchema = z.object({
-  kind: z.enum(["phase", "label"]),
-  text: z.string(),
-});
+export const workflowActivityEntrySchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["phase", "label"]),
+    text: z.string(),
+  }),
+);
 export type WorkflowActivityEntry = z.infer<typeof workflowActivityEntrySchema>;
 
 // Rich workflow data riding a `subagent` block (see `subAgentBlockSchema.
@@ -728,148 +797,172 @@ export type WorkflowActivityEntry = z.infer<typeof workflowActivityEntrySchema>;
 // released host/GUI can still read a chat containing a workflow run (the base
 // `subagent` fields are the faithful degradation; this is the enrichment an
 // old reader silently strips).
-export const workflowMetaSchema = z.object({
-  name: z.string(),
-  // The workflow script's `meta.description`, extracted best-effort at spawn
-  // time. `null` on extraction failure - never the raw script source.
-  intent: z.string().nullable(),
-  activity: z.array(workflowActivityEntrySchema),
-  agentsStarted: z.number().int().nullable(),
-  agentsFinished: z.number().int().nullable(),
-  totalTokens: z.number().int().nullable(),
-});
+export const workflowMetaSchema = lazySchema(() =>
+  z.object({
+    name: z.string(),
+    // The workflow script's `meta.description`, extracted best-effort at spawn
+    // time. `null` on extraction failure - never the raw script source.
+    intent: z.string().nullable(),
+    activity: z.array(workflowActivityEntrySchema),
+    agentsStarted: z.number().int().nullable(),
+    agentsFinished: z.number().int().nullable(),
+    totalTokens: z.number().int().nullable(),
+  }),
+);
 export type WorkflowMeta = z.infer<typeof workflowMetaSchema>;
 
-export const subAgentBlockSchema = z.object({
-  ...baseBlockFields,
-  status: actionBlockStatus,
-  type: z.literal("subagent"),
-  name: z.string().nullable(),
-  // Agent role/type (e.g. "explorer"); null for harnesses without a role.
-  // Defaulted so blocks persisted before this field parse cleanly.
-  agentType: z.string().nullable().default(null),
-  task: z.string().nullable(),
-  progressUpdates: z.array(z.string()),
-  result: z.string().nullable(),
-  // Immutable wall-clock start (the first `subagent.*` event). Unlike
-  // `timestamp` - which advances with each progress update and on completion -
-  // this stays the spawn time, so the card can render a stable elapsed
-  // heartbeat / total duration. Nullable for blocks persisted before this field.
-  startedAt: z.number().nullable().default(null),
-  // The spawning tool_call block id, when the harness surfaces the spawn as a
-  // standalone tool call (Claude's `Task`/`Agent` tool). The GUI suppresses that
-  // duplicate tool row in favor of this card - the same policy that hides a
-  // file-edit tool call behind its `file_change`. Null for harnesses that model
-  // the spawn as the sub-agent itself (Codex `collabAgentToolCall`, OpenCode
-  // `task` part) and therefore emit no separate tool call. Defaulted so blocks
-  // persisted before this field parse cleanly.
-  spawnToolCallId: z.string().nullable().default(null),
-  // Set alongside `status: "errored"` when the subagent's terminal outcome
-  // was an explicit stop rather than a genuine failure - mirrors
-  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse
-  // cleanly.
-  stopped: z.boolean().default(false),
-  // Present iff this card is a workflow run's dual-written card (see
-  // `workflow.*` runtime events) - the rich data an old reader can't render.
-  // `null` ⇒ an ordinary subagent block. Additive + defaulted so blocks
-  // persisted before workflow support existed - and a workflow block read by
-  // an old host/GUI that strips this key - both parse cleanly.
-  workflowMeta: workflowMetaSchema.nullable().default(null),
-});
+export const subAgentBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("subagent"),
+    name: z.string().nullable(),
+    // Agent role/type (e.g. "explorer"); null for harnesses without a role.
+    // Defaulted so blocks persisted before this field parse cleanly.
+    agentType: z.string().nullable().default(null),
+    task: z.string().nullable(),
+    progressUpdates: z.array(z.string()),
+    result: z.string().nullable(),
+    // Immutable wall-clock start (the first `subagent.*` event). Unlike
+    // `timestamp` - which advances with each progress update and on completion -
+    // this stays the spawn time, so the card can render a stable elapsed
+    // heartbeat / total duration. Nullable for blocks persisted before this field.
+    startedAt: z.number().nullable().default(null),
+    // The spawning tool_call block id, when the harness surfaces the spawn as a
+    // standalone tool call (Claude's `Task`/`Agent` tool). The GUI suppresses that
+    // duplicate tool row in favor of this card - the same policy that hides a
+    // file-edit tool call behind its `file_change`. Null for harnesses that model
+    // the spawn as the sub-agent itself (Codex `collabAgentToolCall`, OpenCode
+    // `task` part) and therefore emit no separate tool call. Defaulted so blocks
+    // persisted before this field parse cleanly.
+    spawnToolCallId: z.string().nullable().default(null),
+    // Set alongside `status: "errored"` when the subagent's terminal outcome
+    // was an explicit stop rather than a genuine failure - mirrors
+    // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse
+    // cleanly.
+    stopped: z.boolean().default(false),
+    // Present iff this card is a workflow run's dual-written card (see
+    // `workflow.*` runtime events) - the rich data an old reader can't render.
+    // `null` ⇒ an ordinary subagent block. Additive + defaulted so blocks
+    // persisted before workflow support existed - and a workflow block read by
+    // an old host/GUI that strips this key - both parse cleanly.
+    workflowMeta: workflowMetaSchema.nullable().default(null),
+  }),
+);
 export type SubAgentBlock = z.infer<typeof subAgentBlockSchema>;
 
-export const approvalDecisionSchema = z.object({
-  approved: z.boolean(),
-  reason: z.string().nullable(),
-});
+export const approvalDecisionSchema = lazySchema(() =>
+  z.object({
+    approved: z.boolean(),
+    reason: z.string().nullable(),
+  }),
+);
 export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
 
-export const approvalBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("approval"),
-  toolName: z.string().nullable(),
-  description: z.string().nullable(),
-  // Precomputed display data for the pending tool's input (same shape as a
-  // tool_call block); the raw input is not persisted. See toolCallBlockSchema.
-  inputSummary: z.string().nullable().default(null),
-  inputDetail: toolInputDetailSchema.nullable().default(null),
-  decision: approvalDecisionSchema.nullable(),
-});
+export const approvalBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("approval"),
+    toolName: z.string().nullable(),
+    description: z.string().nullable(),
+    // Precomputed display data for the pending tool's input (same shape as a
+    // tool_call block); the raw input is not persisted. See toolCallBlockSchema.
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    decision: approvalDecisionSchema.nullable(),
+  }),
+);
 export type ApprovalBlock = z.infer<typeof approvalBlockSchema>;
 
-export const todoItemSchema = z.object({
-  id: z.string().nullable(),
-  text: z.string(),
-  status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
-  priority: z.string().nullable(),
-  activeForm: z.string().nullable(),
-});
+export const todoItemSchema = lazySchema(() =>
+  z.object({
+    id: z.string().nullable(),
+    text: z.string(),
+    status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
+    priority: z.string().nullable(),
+    activeForm: z.string().nullable(),
+  }),
+);
 export type TodoItem = z.infer<typeof todoItemSchema>;
 
-export const todoBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("todo"),
-  items: z.array(todoItemSchema),
-});
+export const todoBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("todo"),
+    items: z.array(todoItemSchema),
+  }),
+);
 export type TodoBlock = z.infer<typeof todoBlockSchema>;
 
-export const planStatusSchema = z.enum([
-  "drafting",
-  "ready",
-  "awaiting_approval",
-  "approved",
-  "rejected",
-  "superseded",
-]);
+export const planStatusSchema = lazySchema(() =>
+  z.enum([
+    "drafting",
+    "ready",
+    "awaiting_approval",
+    "approved",
+    "rejected",
+    "superseded",
+  ]),
+);
 export type PlanStatus = z.infer<typeof planStatusSchema>;
 
-export const planSourceSchema = z.object({
-  harnessId: harnessIdSchema,
-  sessionId: z.string().nullable().default(null),
-  turnId: z.string().nullable().default(null),
-  kind: z.string(),
-});
+export const planSourceSchema = lazySchema(() =>
+  z.object({
+    harnessId: harnessIdSchema,
+    sessionId: z.string().nullable().default(null),
+    turnId: z.string().nullable().default(null),
+    kind: z.string(),
+  }),
+);
 export type PlanSource = z.infer<typeof planSourceSchema>;
 
-export const planStepSchema = z.object({
-  id: z.string().nullable().default(null),
-  text: z.string(),
-  status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
-  activeForm: z.string().nullable().default(null),
-});
+export const planStepSchema = lazySchema(() =>
+  z.object({
+    id: z.string().nullable().default(null),
+    text: z.string(),
+    status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
+    activeForm: z.string().nullable().default(null),
+  }),
+);
 export type PlanStep = z.infer<typeof planStepSchema>;
 
-export const planActionSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  decision: z.enum(["approve", "reject", "dismiss"]),
-  variant: z.enum(["primary", "secondary", "danger"]),
-});
+export const planActionSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    label: z.string(),
+    decision: z.enum(["approve", "reject", "dismiss"]),
+    variant: z.enum(["primary", "secondary", "danger"]),
+  }),
+);
 export type PlanAction = z.infer<typeof planActionSchema>;
 
-export const planContentRefSchema = z.object({
-  kind: z.literal("plan_content"),
-  hash: z.string(),
-});
+export const planContentRefSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("plan_content"),
+    hash: z.string(),
+  }),
+);
 export type PlanContentRef = z.infer<typeof planContentRefSchema>;
 
-export const planBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("plan"),
-  planStatus: planStatusSchema,
-  planId: z.string(),
-  harnessId: harnessIdSchema,
-  source: planSourceSchema,
-  title: z.string().nullable().default(null),
-  summary: z.string().nullable().default(null),
-  markdownPreview: z.string().default(""),
-  fullContentRef: planContentRefSchema.nullable().default(null),
-  steps: z.array(planStepSchema).default([]),
-  actions: z.array(planActionSchema).default([]),
-  approvalId: z.string().nullable().default(null),
-  supersededByPlanId: z.string().nullable().default(null),
-  metadata: z.record(z.string(), z.unknown()).nullable().default(null),
-});
+export const planBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("plan"),
+    planStatus: planStatusSchema,
+    planId: z.string(),
+    harnessId: harnessIdSchema,
+    source: planSourceSchema,
+    title: z.string().nullable().default(null),
+    summary: z.string().nullable().default(null),
+    markdownPreview: z.string().default(""),
+    fullContentRef: planContentRefSchema.nullable().default(null),
+    steps: z.array(planStepSchema).default([]),
+    actions: z.array(planActionSchema).default([]),
+    approvalId: z.string().nullable().default(null),
+    supersededByPlanId: z.string().nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).nullable().default(null),
+  }),
+);
 export type PlanBlock = z.infer<typeof planBlockSchema>;
 
 /**
@@ -916,7 +1009,9 @@ export const AGENT_FAILURE_REASONS = [
   // emission gate the rule asks for.
   "session_budget",
 ] as const;
-export const agentFailureReasonSchema = z.enum(AGENT_FAILURE_REASONS);
+export const agentFailureReasonSchema = lazySchema(() =>
+  z.enum(AGENT_FAILURE_REASONS),
+);
 export type AgentFailureReason = z.infer<typeof agentFailureReasonSchema>;
 
 /**
@@ -943,76 +1038,80 @@ export type AgentFailureReason = z.infer<typeof agentFailureReasonSchema>;
  *   - `providerDetail` is bounded, charset-safe host-built text
  *     (`describeErrorBody` discipline), never a raw provider body.
  */
-export const agentFailureSchema = z
-  .object({
-    reason: agentFailureReasonSchema,
-    resetsAt: z.number().optional(),
-    resetsAtSource: z.enum(["provider", "probe"]).optional(),
-    scope: z.string().optional(),
-    providerDetail: z.string().optional(),
-  })
-  .superRefine((failure, ctx) => {
-    // The pair is what makes the `resetsAt` bullet above true for a CONSUMER,
-    // and a consumer is already spending it: the error card reads
-    // `attempt.failure.resetsAt` straight into a clock time
-    // (`fallback-manual-rungs.tsx`) and never looks at `resetsAtSource`. That
-    // is correct only while the source is what certifies the boundary - a
-    // `resetsAt` arriving alone renders as a verified time with nothing behind
-    // it, which is exactly the gauge estimate this payload exists to keep off
-    // the wire.
-    //
-    // Refused in both directions, not only the dangerous one: a
-    // `resetsAtSource` with no boundary names who verified a time that is not
-    // there, which no reader can act on either.
-    //
-    // Deliberately NOT extended to `scope`. It is documented as free text
-    // labelling the window, not as part of the boundary's proof, and the
-    // vocabulary is per provider - binding it here would hold emitters to a
-    // rule this contract has never stated.
-    //
-    // Narrowing a PERSISTED schema is normally breaking (see
-    // `src/persistence/COMPATIBILITY.md`); it is free here because nothing has
-    // shipped. `failure` joined the error block for `chat.subscribe@1.10`, and
-    // every released `1.0`-`1.9` line binds `errorBlockSchemaPreFallback` /
-    // `errorEventSchemaPreFallback` instead, so no shipped peer reaches this
-    // schema and no released host has ever written the key to disk. The frozen
-    // JSON-Schema surfaces do not move either - a Zod refinement has no
-    // JSON-Schema form, which is why `providerNoticeMetadataSchema`'s own
-    // `superRefine` leaves no trace in `epic-schema-surface.ts`. After a
-    // release pins the record, the same edit needs a new major.
-    if (
-      (failure.resetsAt === undefined) ===
-      (failure.resetsAtSource === undefined)
-    ) {
-      return;
-    }
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "resetsAt and resetsAtSource must be present together",
-      path: [failure.resetsAt === undefined ? "resetsAt" : "resetsAtSource"],
-    });
-  });
+export const agentFailureSchema = lazySchema(() =>
+  z
+    .object({
+      reason: agentFailureReasonSchema,
+      resetsAt: z.number().optional(),
+      resetsAtSource: z.enum(["provider", "probe"]).optional(),
+      scope: z.string().optional(),
+      providerDetail: z.string().optional(),
+    })
+    .superRefine((failure, ctx) => {
+      // The pair is what makes the `resetsAt` bullet above true for a CONSUMER,
+      // and a consumer is already spending it: the error card reads
+      // `attempt.failure.resetsAt` straight into a clock time
+      // (`fallback-manual-rungs.tsx`) and never looks at `resetsAtSource`. That
+      // is correct only while the source is what certifies the boundary - a
+      // `resetsAt` arriving alone renders as a verified time with nothing behind
+      // it, which is exactly the gauge estimate this payload exists to keep off
+      // the wire.
+      //
+      // Refused in both directions, not only the dangerous one: a
+      // `resetsAtSource` with no boundary names who verified a time that is not
+      // there, which no reader can act on either.
+      //
+      // Deliberately NOT extended to `scope`. It is documented as free text
+      // labelling the window, not as part of the boundary's proof, and the
+      // vocabulary is per provider - binding it here would hold emitters to a
+      // rule this contract has never stated.
+      //
+      // Narrowing a PERSISTED schema is normally breaking (see
+      // `src/persistence/COMPATIBILITY.md`); it is free here because nothing has
+      // shipped. `failure` joined the error block for `chat.subscribe@1.10`, and
+      // every released `1.0`-`1.9` line binds `errorBlockSchemaPreFallback` /
+      // `errorEventSchemaPreFallback` instead, so no shipped peer reaches this
+      // schema and no released host has ever written the key to disk. The frozen
+      // JSON-Schema surfaces do not move either - a Zod refinement has no
+      // JSON-Schema form, which is why `providerNoticeMetadataSchema`'s own
+      // `superRefine` leaves no trace in `epic-schema-surface.ts`. After a
+      // release pins the record, the same edit needs a new major.
+      if (
+        (failure.resetsAt === undefined) ===
+        (failure.resetsAtSource === undefined)
+      ) {
+        return;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "resetsAt and resetsAtSource must be present together",
+        path: [failure.resetsAt === undefined ? "resetsAt" : "resetsAtSource"],
+      });
+    }),
+);
 export type AgentFailure = z.infer<typeof agentFailureSchema>;
 
-export const errorBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("error"),
-  message: z.string(),
-  recoverable: z.boolean(),
-  code: z.string().nullable(),
-  // Additive typed description of the failure - see `agentFailureSchema`.
-  // Nullable + defaulted (not `.optional()`) for the same reason
-  // `providerNotice` above is: blocks persisted before this field must parse
-  // cleanly, and every consumer then reads one shape without null-checking the
-  // key's presence as well as its value.
-  //
-  // Tolerance on the PERSISTED side is not permission on the WIRE side: every
-  // `chat.subscribe` minor below `1.10` ships this block inside a snapshot, and
-  // a key the released baseline never carried is a breaking addition on a
-  // host→client slot regardless of how forgiving the decoder is. The frozen
-  // copy below is what those lines bind.
-  failure: agentFailureSchema.nullable().default(null),
-});
+export const errorBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("error"),
+    message: z.string(),
+    recoverable: z.boolean(),
+    code: z.string().nullable(),
+    // Additive typed description of the failure - see `agentFailureSchema`.
+    // Nullable + defaulted (not `.optional()`) for the same reason
+    // `providerNotice` above is: blocks persisted before this field must parse
+    // cleanly, and every consumer then reads one shape without null-checking the
+    // key's presence as well as its value.
+    //
+    // Tolerance on the PERSISTED side is not permission on the WIRE side: every
+    // `chat.subscribe` minor below `1.10` ships this block inside a snapshot, and
+    // a key the released baseline never carried is a breaking addition on a
+    // host→client slot regardless of how forgiving the decoder is. The frozen
+    // copy below is what those lines bind.
+    failure: agentFailureSchema.nullable().default(null),
+  }),
+);
 export type ErrorBlock = z.infer<typeof errorBlockSchema>;
 
 /**
@@ -1028,30 +1127,36 @@ export type ErrorBlock = z.infer<typeof errorBlockSchema>;
  * Written out rather than derived, for the reason every pre-image here is: a
  * copy that tracks the live schema is not a freeze.
  */
-export const errorBlockSchemaPreFallback = z.object({
-  ...baseBlockFields,
-  type: z.literal("error"),
-  message: z.string(),
-  recoverable: z.boolean(),
-  code: z.string().nullable(),
-});
+export const errorBlockSchemaPreFallback = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("error"),
+    message: z.string(),
+    recoverable: z.boolean(),
+    code: z.string().nullable(),
+  }),
+);
 
-export const compactionBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("compaction"),
-  trigger: z.enum(["auto", "manual"]).nullable(),
-  preTokens: z.number().nullable(),
-  postTokens: z.number().nullable(),
-  durationMs: z.number().nullable(),
-  summary: z.string().nullable(),
-  error: z.string().nullable(),
-});
+export const compactionBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("compaction"),
+    trigger: z.enum(["auto", "manual"]).nullable(),
+    preTokens: z.number().nullable(),
+    postTokens: z.number().nullable(),
+    durationMs: z.number().nullable(),
+    summary: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+);
 export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
 
-export const autonomousResumeOutputFileSchema = z.object({
-  workspacePath: z.string(),
-  filePath: z.string(),
-});
+export const autonomousResumeOutputFileSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    filePath: z.string(),
+  }),
+);
 export type AutonomousResumeOutputFile = z.infer<
   typeof autonomousResumeOutputFileSchema
 >;
@@ -1071,62 +1176,64 @@ export type AutonomousResumeOutputFile = z.infer<
 // see `autonomousResumeWakeTriggerSchema` and the block-level codec below. The
 // enum keeps the value only to accept chats already written with it inline
 // (pre-fix internal builds); the next full-block rewrite re-encodes them.
-export const autonomousResumeTriggerSchema = z.object({
-  kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
-  title: z.string(),
-  status: z.enum(["completed", "failed", "stopped"]),
-  summary: z.string(),
-  blockId: z.string().default(""),
-  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
-  // Structured identity of an auto-backgrounded MCP tool call (CLI 2.1.212+).
-  // Deliberately NOT a new `kind` enum value: `kind` stays `"command"` for
-  // these triggers because an unknown enum value fails the WHOLE chat's
-  // `safeParse` on an older host, while an unknown defaulted key is silently
-  // stripped (the same constraint that forced `wakeTriggers` out of `triggers`
-  // above). Renderers prefer this identity when present and fall back to the
-  // command presentation when absent/stripped.
-  mcp: z
-    .object({ serverName: z.string(), toolName: z.string() })
-    .nullable()
-    .default(null),
-  // The producer was STILL RUNNING when this digest was rendered - a monitor
-  // that keeps watching, or a backgrounded shell streaming mid-run output. It
-  // is a separate defaulted key rather than a `status` value for the same
-  // reason `mcp` and `wakeTriggers` are: `status` is a persisted enum, and an
-  // unknown enum value fails the WHOLE chat's `safeParse` on an older host,
-  // whereas an unknown defaulted key is silently stripped. `status` therefore
-  // still carries the command's terminal outcome; renderers that understand
-  // `live` must prefer it, because a running command has no terminal outcome
-  // and `status` is reporting the least-wrong of three wrong answers.
-  live: z.boolean().default(false),
-  // Structured identity of the shell whose delivery woke this turn. Exactly the
-  // `mcp` pattern above and for the same reason: `kind` is a PERSISTED enum,
-  // and an unknown value in it fails the WHOLE chat's `safeParse` on an older
-  // host, whereas an unknown defaulted key is silently stripped. So `kind`
-  // stays `"monitor"` for every shell, and the id the divider needs to open the
-  // output window on click rides here.
-  //
-  // `monitoring` is defaulted rather than required because this key is READ BACK
-  // from chats written before it existed (and from ones written while it was
-  // still `kind`, whose value strips on parse): a trigger that cannot say
-  // whether its shell was watching renders as a plain shell rather than failing
-  // the whole chat.
-  //
-  // `hostId` is the host the shell RUNS on, for a shell created on another
-  // host than the chat's: its log is there, so the door opens the output
-  // window on that host. `null` - and absence, the same way - means the
-  // chat's own host, which is what every shell before cross-host creation
-  // was. Added on `chat.subscribe@1.11`; every line through `1.10` binds
-  // `autonomousResumeTriggerSchemaPreShellHost` below.
-  managedCommand: z
-    .object({
-      commandId: z.string(),
-      monitoring: z.boolean().default(false),
-      hostId: z.string().nullable().default(null),
-    })
-    .nullable()
-    .default(null),
-});
+export const autonomousResumeTriggerSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
+    title: z.string(),
+    status: z.enum(["completed", "failed", "stopped"]),
+    summary: z.string(),
+    blockId: z.string().default(""),
+    outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+    // Structured identity of an auto-backgrounded MCP tool call (CLI 2.1.212+).
+    // Deliberately NOT a new `kind` enum value: `kind` stays `"command"` for
+    // these triggers because an unknown enum value fails the WHOLE chat's
+    // `safeParse` on an older host, while an unknown defaulted key is silently
+    // stripped (the same constraint that forced `wakeTriggers` out of `triggers`
+    // above). Renderers prefer this identity when present and fall back to the
+    // command presentation when absent/stripped.
+    mcp: z
+      .object({ serverName: z.string(), toolName: z.string() })
+      .nullable()
+      .default(null),
+    // The producer was STILL RUNNING when this digest was rendered - a monitor
+    // that keeps watching, or a backgrounded shell streaming mid-run output. It
+    // is a separate defaulted key rather than a `status` value for the same
+    // reason `mcp` and `wakeTriggers` are: `status` is a persisted enum, and an
+    // unknown enum value fails the WHOLE chat's `safeParse` on an older host,
+    // whereas an unknown defaulted key is silently stripped. `status` therefore
+    // still carries the command's terminal outcome; renderers that understand
+    // `live` must prefer it, because a running command has no terminal outcome
+    // and `status` is reporting the least-wrong of three wrong answers.
+    live: z.boolean().default(false),
+    // Structured identity of the shell whose delivery woke this turn. Exactly the
+    // `mcp` pattern above and for the same reason: `kind` is a PERSISTED enum,
+    // and an unknown value in it fails the WHOLE chat's `safeParse` on an older
+    // host, whereas an unknown defaulted key is silently stripped. So `kind`
+    // stays `"monitor"` for every shell, and the id the divider needs to open the
+    // output window on click rides here.
+    //
+    // `monitoring` is defaulted rather than required because this key is READ BACK
+    // from chats written before it existed (and from ones written while it was
+    // still `kind`, whose value strips on parse): a trigger that cannot say
+    // whether its shell was watching renders as a plain shell rather than failing
+    // the whole chat.
+    //
+    // `hostId` is the host the shell RUNS on, for a shell created on another
+    // host than the chat's: its log is there, so the door opens the output
+    // window on that host. `null` - and absence, the same way - means the
+    // chat's own host, which is what every shell before cross-host creation
+    // was. Added on `chat.subscribe@1.11`; every line through `1.10` binds
+    // `autonomousResumeTriggerSchemaPreShellHost` below.
+    managedCommand: z
+      .object({
+        commandId: z.string(),
+        monitoring: z.boolean().default(false),
+        hostId: z.string().nullable().default(null),
+      })
+      .nullable()
+      .default(null),
+  }),
+);
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
 >;
@@ -1138,26 +1245,28 @@ export type AutonomousResumeTrigger = z.infer<
 // key cannot reach a peer whose decoder has never declared it. Hand-frozen
 // field-for-field, NOT `.omit()` off the live shape, for the reason every
 // freeze in this file is: a copy that tracks the live schema is not a freeze.
-export const autonomousResumeTriggerSchemaPreShellHost = z.object({
-  kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
-  title: z.string(),
-  status: z.enum(["completed", "failed", "stopped"]),
-  summary: z.string(),
-  blockId: z.string().default(""),
-  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
-  mcp: z
-    .object({ serverName: z.string(), toolName: z.string() })
-    .nullable()
-    .default(null),
-  live: z.boolean().default(false),
-  managedCommand: z
-    .object({
-      commandId: z.string(),
-      monitoring: z.boolean().default(false),
-    })
-    .nullable()
-    .default(null),
-});
+export const autonomousResumeTriggerSchemaPreShellHost = lazySchema(() =>
+  z.object({
+    kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
+    title: z.string(),
+    status: z.enum(["completed", "failed", "stopped"]),
+    summary: z.string(),
+    blockId: z.string().default(""),
+    outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+    mcp: z
+      .object({ serverName: z.string(), toolName: z.string() })
+      .nullable()
+      .default(null),
+    live: z.boolean().default(false),
+    managedCommand: z
+      .object({
+        commandId: z.string(),
+        monitoring: z.boolean().default(false),
+      })
+      .nullable()
+      .default(null),
+  }),
+);
 export type AutonomousResumeTriggerPreShellHost = z.infer<
   typeof autonomousResumeTriggerSchemaPreShellHost
 >;
@@ -1169,13 +1278,15 @@ export type AutonomousResumeTriggerPreShellHost = z.infer<
 // fail the WHOLE chat's `chatSchema.safeParse` (see `readChatSnapshot` in
 // `chat-session-manager.ts`). Same fields as a trigger minus `kind` - the
 // field itself is the kind. Always empty for every OTHER block/trigger kind.
-export const autonomousResumeWakeTriggerSchema = z.object({
-  title: z.string(),
-  status: z.enum(["completed", "failed", "stopped"]),
-  summary: z.string(),
-  blockId: z.string().default(""),
-  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
-});
+export const autonomousResumeWakeTriggerSchema = lazySchema(() =>
+  z.object({
+    title: z.string(),
+    status: z.enum(["completed", "failed", "stopped"]),
+    summary: z.string(),
+    blockId: z.string().default(""),
+    outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+  }),
+);
 export type AutonomousResumeWakeTrigger = z.infer<
   typeof autonomousResumeWakeTriggerSchema
 >;
@@ -1202,10 +1313,9 @@ export type AutonomousResumeWakeTrigger = z.infer<
  * the harness acknowledged/consumed a steer. `null` is historical/unknown;
  * readers may infer placement from the original turn's preceding blocks.
  */
-export const autonomousResumeDeliveryPlacementSchema = z
-  .enum(["turn_start", "in_turn"])
-  .nullable()
-  .default(null);
+export const autonomousResumeDeliveryPlacementSchema = lazySchema(() =>
+  z.enum(["turn_start", "in_turn"]).nullable().default(null),
+);
 export type AutonomousResumeDeliveryPlacement = z.infer<
   typeof autonomousResumeDeliveryPlacementSchema
 >;
@@ -1218,18 +1328,21 @@ export type AutonomousResumeDeliveryPlacement = z.infer<
 // `1.10` reaches this block's triggers either here or through the placed
 // `PreShellHost` codec below, and `1.11` is where a trigger first names the
 // host its shell runs on.
-const domainAutonomousResumeBlockSchemaV18 = z.object({
-  blockId: z.string(),
-  status: z.enum(["streaming", "completed", "errored"]),
-  timestamp: z.number(),
-  parentBlockId: z.string().nullish(),
-  type: z.literal("autonomous_resume"),
-  triggers: z.array(autonomousResumeTriggerSchemaPreShellHost),
-});
-const persistedAutonomousResumeBlockSchemaV18 =
+const domainAutonomousResumeBlockSchemaV18 = lazySchema(() =>
+  z.object({
+    blockId: z.string(),
+    status: z.enum(["streaming", "completed", "errored"]),
+    timestamp: z.number(),
+    parentBlockId: z.string().nullish(),
+    type: z.literal("autonomous_resume"),
+    triggers: z.array(autonomousResumeTriggerSchemaPreShellHost),
+  }),
+);
+const persistedAutonomousResumeBlockSchemaV18 = lazySchema(() =>
   domainAutonomousResumeBlockSchemaV18.extend({
     wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
-  });
+  }),
+);
 type AutonomousResumeBlockV18 = z.infer<
   typeof domainAutonomousResumeBlockSchemaV18
 >;
@@ -1247,19 +1360,21 @@ type RawStoredAutonomousResumeBlockV18 = Omit<
 // placement, still on the pre-shell-host trigger. Reinsert the trigger fields
 // after placement to retain the existing JSON Schema property/required order
 // as well as its meaning.
-const persistedAutonomousResumeBlockSchemaPreShellHost =
+const persistedAutonomousResumeBlockSchemaPreShellHost = lazySchema(() =>
   persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
     .extend({
       deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
       triggers: persistedAutonomousResumeBlockSchemaV18.shape.triggers,
       wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
-    });
-const domainAutonomousResumeBlockSchemaPreShellHost =
+    }),
+);
+const domainAutonomousResumeBlockSchemaPreShellHost = lazySchema(() =>
   domainAutonomousResumeBlockSchemaV18.omit({ triggers: true }).extend({
     deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
     triggers: domainAutonomousResumeBlockSchemaV18.shape.triggers,
-  });
+  }),
+);
 type AutonomousResumeBlockPreShellHost = z.infer<
   typeof domainAutonomousResumeBlockSchemaPreShellHost
 >;
@@ -1277,24 +1392,25 @@ type RawStoredAutonomousResumeBlockPreShellHost = Omit<
 // The live shape: the 1.9/1.10 checkpoint with `triggers` swapped for the
 // live trigger, whose `managedCommand` names the shell's host. Same key
 // order as the checkpoint for the same reason.
-const persistedAutonomousResumeBlockSchema =
+const persistedAutonomousResumeBlockSchema = lazySchema(() =>
   persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
     .extend({
       deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
       triggers: z.array(autonomousResumeTriggerSchema),
       wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
-    });
+    }),
+);
 export type PersistedAutonomousResumeBlock = z.infer<
   typeof persistedAutonomousResumeBlockSchema
 >;
 
-const domainAutonomousResumeBlockSchema = domainAutonomousResumeBlockSchemaV18
-  .omit({ triggers: true })
-  .extend({
+const domainAutonomousResumeBlockSchema = lazySchema(() =>
+  domainAutonomousResumeBlockSchemaV18.omit({ triggers: true }).extend({
     deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
     triggers: z.array(autonomousResumeTriggerSchema),
-  });
+  }),
+);
 export type AutonomousResumeBlock = z.infer<
   typeof domainAutonomousResumeBlockSchema
 >;
@@ -1438,128 +1554,140 @@ function encodeAutonomousResumeBlockPreShellHost(
   return { ...domain, ...splitWakeTriggers(domain.triggers) };
 }
 
-export const autonomousResumeBlockSchema = z.codec(
-  persistedAutonomousResumeBlockSchema,
-  domainAutonomousResumeBlockSchema,
-  {
-    decode: decodeAutonomousResumeBlock,
-    // `z.codec`'s `encode` callback receives the domain schema's INPUT shape
-    // (nested trigger defaults not yet applied) and must return the persisted
-    // schema's OUTPUT shape. Re-parsing through `domainAutonomousResumeBlockSchema`
-    // applies those defaults so `encodeAutonomousResumeBlock` itself can stay
-    // typed against the concrete, fully-defaulted `AutonomousResumeBlock` - the
-    // shape every real caller (e.g. the host storage write funnel) has.
-    encode: (domain) =>
-      encodeAutonomousResumeBlock(
-        domainAutonomousResumeBlockSchema.parse(domain),
-      ),
-  },
+export const autonomousResumeBlockSchema = lazySchema(() =>
+  z.codec(
+    persistedAutonomousResumeBlockSchema,
+    domainAutonomousResumeBlockSchema,
+    {
+      decode: decodeAutonomousResumeBlock,
+      // `z.codec`'s `encode` callback receives the domain schema's INPUT shape
+      // (nested trigger defaults not yet applied) and must return the persisted
+      // schema's OUTPUT shape. Re-parsing through `domainAutonomousResumeBlockSchema`
+      // applies those defaults so `encodeAutonomousResumeBlock` itself can stay
+      // typed against the concrete, fully-defaulted `AutonomousResumeBlock` - the
+      // shape every real caller (e.g. the host storage write funnel) has.
+      encode: (domain) =>
+        encodeAutonomousResumeBlock(
+          domainAutonomousResumeBlockSchema.parse(domain),
+        ),
+    },
+  ),
 );
 
 // Frozen wire shape for chat.subscribe through 1.8. Keep the field absent
 // on both JSON-schema surfaces; normalization belongs to the live decoder.
-export const autonomousResumeBlockSchemaV18 = z.codec(
-  persistedAutonomousResumeBlockSchemaV18,
-  domainAutonomousResumeBlockSchemaV18,
-  {
-    decode: decodeAutonomousResumeBlockV18,
-    encode: (domain) =>
-      encodeAutonomousResumeBlockV18(
-        domainAutonomousResumeBlockSchemaV18.parse(domain),
-      ),
-  },
+export const autonomousResumeBlockSchemaV18 = lazySchema(() =>
+  z.codec(
+    persistedAutonomousResumeBlockSchemaV18,
+    domainAutonomousResumeBlockSchemaV18,
+    {
+      decode: decodeAutonomousResumeBlockV18,
+      encode: (domain) =>
+        encodeAutonomousResumeBlockV18(
+          domainAutonomousResumeBlockSchemaV18.parse(domain),
+        ),
+    },
+  ),
 );
 
 // Frozen wire shape for chat.subscribe 1.9 and 1.10: delivery placement, no
 // shell host on the triggers. Bound through `contentBlockSchemaPreFallback`
 // (1.9) and `contentBlockSchemaPreShellHost` (1.10).
-export const autonomousResumeBlockSchemaPreShellHost = z.codec(
-  persistedAutonomousResumeBlockSchemaPreShellHost,
-  domainAutonomousResumeBlockSchemaPreShellHost,
-  {
-    decode: decodeAutonomousResumeBlockPreShellHost,
-    encode: (domain) =>
-      encodeAutonomousResumeBlockPreShellHost(
-        domainAutonomousResumeBlockSchemaPreShellHost.parse(domain),
-      ),
-  },
+export const autonomousResumeBlockSchemaPreShellHost = lazySchema(() =>
+  z.codec(
+    persistedAutonomousResumeBlockSchemaPreShellHost,
+    domainAutonomousResumeBlockSchemaPreShellHost,
+    {
+      decode: decodeAutonomousResumeBlockPreShellHost,
+      encode: (domain) =>
+        encodeAutonomousResumeBlockPreShellHost(
+          domainAutonomousResumeBlockSchemaPreShellHost.parse(domain),
+        ),
+    },
+  ),
 );
 
-export const steerBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("steer"),
-  queueItemId: z.string(),
-  messageId: z.string(),
-  content: jsonContentSchema,
-  mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
-  // Who authored the steered message. Duplicated from the steered USER row
-  // (`messageId`) on purpose: the two records have asymmetric durability - this
-  // block is execution-owned and rewritten on every persistence checkpoint,
-  // while the user row is written once into `chat.messages`. When a renderer
-  // sees the block but not the row, it falls back to rendering the block's own
-  // content, and without this field an agent-to-agent message would render as a
-  // plain user-authored bubble - an agent impersonating the user. Carrying the
-  // sender here means the fallback can never lose provenance.
-  // Additive + nullable: blocks persisted before this field parse to `null`,
-  // which the renderer treats exactly as it did before (a "you" row).
-  sender: userMessageSenderSchema.nullable().default(null),
-});
+export const steerBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("steer"),
+    queueItemId: z.string(),
+    messageId: z.string(),
+    content: jsonContentSchema,
+    mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
+    // Who authored the steered message. Duplicated from the steered USER row
+    // (`messageId`) on purpose: the two records have asymmetric durability - this
+    // block is execution-owned and rewritten on every persistence checkpoint,
+    // while the user row is written once into `chat.messages`. When a renderer
+    // sees the block but not the row, it falls back to rendering the block's own
+    // content, and without this field an agent-to-agent message would render as a
+    // plain user-authored bubble - an agent impersonating the user. Carrying the
+    // sender here means the fallback can never lose provenance.
+    // Additive + nullable: blocks persisted before this field parse to `null`,
+    // which the renderer treats exactly as it did before (a "you" row).
+    sender: userMessageSenderSchema.nullable().default(null),
+  }),
+);
 export type SteerBlock = z.infer<typeof steerBlockSchema>;
 
-export const interviewQuestionOptionSchema = z.object({
-  label: z.string(),
-  description: z.string().nullable(),
-  preview: z.string().nullable(),
-});
+export const interviewQuestionOptionSchema = lazySchema(() =>
+  z.object({
+    label: z.string(),
+    description: z.string().nullable(),
+    preview: z.string().nullable(),
+  }),
+);
 export type InterviewQuestionOption = z.infer<
   typeof interviewQuestionOptionSchema
 >;
 
-export const interviewQuestionSchema = z.object({
-  questionId: z.string().nullable(),
-  question: z.string(),
-  header: z.string().nullable(),
-  options: z.array(interviewQuestionOptionSchema),
-  multiSelect: z.boolean(),
-  /**
-   * Whether this question can be answered with free text ("Other"), as opposed
-   * to a listed option only.
-   *
-   * Set by whoever raised the interview, because it is a property of the
-   * ANSWER CHANNEL rather than of the question's wording. An interview that
-   * rides an ACP `session/request_permission` is the case that needs it: that
-   * request's answer carries an option id and nothing else, so free text has
-   * nowhere to travel. Offering "Other" there produces a question the user can
-   * type into and whose answer cannot be delivered - the text is silently
-   * dropped on the way back to the agent.
-   *
-   * Additive + nullable, like `sender` above: questions persisted before this
-   * field parse to `null`, and `null` means "unstated", which every renderer
-   * treats exactly as it did before - free text offered. Only an explicit
-   * `false` withdraws it, so no existing transcript changes shape and a host
-   * that never sets the field keeps today's behaviour.
-   *
-   * INVARIANT for the raiser: do not combine `false` with an empty `options`.
-   * Options are then the only surviving answer channel and there are none, so
-   * the question cannot be answered at all - the renderer offers no input for
-   * that pair, leaving Skip as the only exit.
-   *
-   * It is an invariant for the RAISER, and deliberately not a `.refine()`
-   * here. This schema is both the persistence schema for stored epic content
-   * and the wire schema released streamchat lines project
-   * (`runtimeInterviewQuestionSchema` aliases it), so rejecting the pair would
-   * not withdraw one bad question - it would fail the parse of the whole
-   * content block, and drop a live interview frame from a peer host entitled
-   * to send it. A skippable question is a smaller harm than an unreadable
-   * transcript. The pair is refused where it can actually be decided instead:
-   * every per-harness bridge makes it unreachable by construction, the generic
-   * tool-call normalizer downgrades it to `null` (it reads whatever JSON a
-   * tool emitted, so it is the one producer that can be handed the
-   * contradiction), and the renderer's no-input branch is the fail-safe for
-   * anything that still gets through.
-   */
-  allowsCustomAnswer: z.boolean().nullable().default(null),
-});
+export const interviewQuestionSchema = lazySchema(() =>
+  z.object({
+    questionId: z.string().nullable(),
+    question: z.string(),
+    header: z.string().nullable(),
+    options: z.array(interviewQuestionOptionSchema),
+    multiSelect: z.boolean(),
+    /**
+     * Whether this question can be answered with free text ("Other"), as opposed
+     * to a listed option only.
+     *
+     * Set by whoever raised the interview, because it is a property of the
+     * ANSWER CHANNEL rather than of the question's wording. An interview that
+     * rides an ACP `session/request_permission` is the case that needs it: that
+     * request's answer carries an option id and nothing else, so free text has
+     * nowhere to travel. Offering "Other" there produces a question the user can
+     * type into and whose answer cannot be delivered - the text is silently
+     * dropped on the way back to the agent.
+     *
+     * Additive + nullable, like `sender` above: questions persisted before this
+     * field parse to `null`, and `null` means "unstated", which every renderer
+     * treats exactly as it did before - free text offered. Only an explicit
+     * `false` withdraws it, so no existing transcript changes shape and a host
+     * that never sets the field keeps today's behaviour.
+     *
+     * INVARIANT for the raiser: do not combine `false` with an empty `options`.
+     * Options are then the only surviving answer channel and there are none, so
+     * the question cannot be answered at all - the renderer offers no input for
+     * that pair, leaving Skip as the only exit.
+     *
+     * It is an invariant for the RAISER, and deliberately not a `.refine()`
+     * here. This schema is both the persistence schema for stored epic content
+     * and the wire schema released streamchat lines project
+     * (`runtimeInterviewQuestionSchema` aliases it), so rejecting the pair would
+     * not withdraw one bad question - it would fail the parse of the whole
+     * content block, and drop a live interview frame from a peer host entitled
+     * to send it. A skippable question is a smaller harm than an unreadable
+     * transcript. The pair is refused where it can actually be decided instead:
+     * every per-harness bridge makes it unreachable by construction, the generic
+     * tool-call normalizer downgrades it to `null` (it reads whatever JSON a
+     * tool emitted, so it is the one producer that can be handed the
+     * contradiction), and the renderer's no-input branch is the fail-safe for
+     * anything that still gets through.
+     */
+    allowsCustomAnswer: z.boolean().nullable().default(null),
+  }),
+);
 export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
 
 // Wire-freeze copy of `interviewQuestionSchema` from before
@@ -1579,13 +1707,15 @@ export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
 // `@1.7`/`@1.8` deliberately do NOT take this: they follow the live interview
 // shape, which is the same thing they already do for `settlement`, `delivery`
 // and every other additive block field. The freeze boundary is `@1.6`.
-export const interviewQuestionSchemaPreCustomAnswer = z.object({
-  questionId: z.string().nullable(),
-  question: z.string(),
-  header: z.string().nullable(),
-  options: z.array(interviewQuestionOptionSchema),
-  multiSelect: z.boolean(),
-});
+export const interviewQuestionSchemaPreCustomAnswer = lazySchema(() =>
+  z.object({
+    questionId: z.string().nullable(),
+    question: z.string(),
+    header: z.string().nullable(),
+    options: z.array(interviewQuestionOptionSchema),
+    multiSelect: z.boolean(),
+  }),
+);
 
 /**
  * Where a selected option actually came from, recorded at submission time.
@@ -1605,41 +1735,45 @@ export const interviewQuestionSchemaPreCustomAnswer = z.object({
  * ("Other") value when the user typed one, and never stands in for a
  * selection.
  */
-export const interviewSelectionEvidenceSchema = z.object({
-  questionIndex: z.number().int().nonnegative(),
-  optionIndices: z.array(z.number().int().nonnegative()),
-  optionLabels: z.array(z.string()),
-  customText: z.string().nullable(),
-});
+export const interviewSelectionEvidenceSchema = lazySchema(() =>
+  z.object({
+    questionIndex: z.number().int().nonnegative(),
+    optionIndices: z.array(z.number().int().nonnegative()),
+    optionLabels: z.array(z.string()),
+    customText: z.string().nullable(),
+  }),
+);
 export type InterviewSelectionEvidence = z.infer<
   typeof interviewSelectionEvidenceSchema
 >;
 
-export const interviewAnswerSchema = z.object({
-  questionId: z.string().nullable(),
-  question: z.string().nullable(),
-  values: z.array(z.string()),
-  notes: z.string().nullable(),
-  // Structured provenance for a GUI-submitted answer. `values` stays canonical
-  // - it is the ONLY form that reaches harness/provider formatting - and this
-  // rides alongside it so history can be exact without changing any provider
-  // payload contract. Null for every provider-originated answer (an adapter
-  // opts in only when it has genuine native structured identity) and for every
-  // row persisted before this field existed, which is why it is defaulted.
-  //
-  // `.catch(null)` on top of the default, and this is the load-bearing part:
-  // corrupt evidence must downgrade THIS FIELD to neutral, never reject the
-  // answer around it. Without it a single malformed `selection` fails the
-  // answer, which fails the interview block, which fails the assistant
-  // message, which fails the whole snapshot - so one bad provenance record
-  // would cost the user their entire chat history rather than one card's
-  // "exact" badge. `values` is the answer that actually matters and it stays
-  // readable either way.
-  selection: interviewSelectionEvidenceSchema
-    .nullable()
-    .default(null)
-    .catch(null),
-});
+export const interviewAnswerSchema = lazySchema(() =>
+  z.object({
+    questionId: z.string().nullable(),
+    question: z.string().nullable(),
+    values: z.array(z.string()),
+    notes: z.string().nullable(),
+    // Structured provenance for a GUI-submitted answer. `values` stays canonical
+    // - it is the ONLY form that reaches harness/provider formatting - and this
+    // rides alongside it so history can be exact without changing any provider
+    // payload contract. Null for every provider-originated answer (an adapter
+    // opts in only when it has genuine native structured identity) and for every
+    // row persisted before this field existed, which is why it is defaulted.
+    //
+    // `.catch(null)` on top of the default, and this is the load-bearing part:
+    // corrupt evidence must downgrade THIS FIELD to neutral, never reject the
+    // answer around it. Without it a single malformed `selection` fails the
+    // answer, which fails the interview block, which fails the assistant
+    // message, which fails the whole snapshot - so one bad provenance record
+    // would cost the user their entire chat history rather than one card's
+    // "exact" badge. `values` is the answer that actually matters and it stays
+    // readable either way.
+    selection: interviewSelectionEvidenceSchema
+      .nullable()
+      .default(null)
+      .catch(null),
+  }),
+);
 export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
 
 // Wire/persistence freeze of `interviewAnswerSchema` from before selection
@@ -1647,12 +1781,14 @@ export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
 // trees and the frozen runtime-event unions - to every `chat.subscribe` line
 // through `@1.6`, so none of them can observe `selection`. Hand-frozen
 // field-for-field; NOT derived from the live shape.
-export const interviewAnswerSchemaPreSettlement = z.object({
-  questionId: z.string().nullable(),
-  question: z.string().nullable(),
-  values: z.array(z.string()),
-  notes: z.string().nullable(),
-});
+export const interviewAnswerSchemaPreSettlement = lazySchema(() =>
+  z.object({
+    questionId: z.string().nullable(),
+    question: z.string().nullable(),
+    values: z.array(z.string()),
+    notes: z.string().nullable(),
+  }),
+);
 
 /**
  * The canonical fact about how an interview ended, independent of the legacy
@@ -1666,7 +1802,9 @@ export const interviewAnswerSchemaPreSettlement = z.object({
  * row, or a block whose only terminal evidence is the legacy `status`. That is
  * WEAK authority - it blocks reopening but never manufactures an outcome.
  */
-export const interviewOutcomeSchema = z.enum(["answered", "skipped", "failed"]);
+export const interviewOutcomeSchema = lazySchema(() =>
+  z.enum(["answered", "skipped", "failed"]),
+);
 export type InterviewOutcome = z.infer<typeof interviewOutcomeSchema>;
 
 /**
@@ -1678,10 +1816,12 @@ export type InterviewOutcome = z.infer<typeof interviewOutcomeSchema>;
  * no-op, and `source` is what the reducer weighs when a later runtime cleanup
  * event contradicts an accepted GUI settlement.
  */
-export const interviewSettlementAuthoritySchema = z.object({
-  settlementId: z.string(),
-  source: z.enum(["gui", "runtime"]),
-});
+export const interviewSettlementAuthoritySchema = lazySchema(() =>
+  z.object({
+    settlementId: z.string(),
+    source: z.enum(["gui", "runtime"]),
+  }),
+);
 export type InterviewSettlementAuthority = z.infer<
   typeof interviewSettlementAuthoritySchema
 >;
@@ -1696,11 +1836,13 @@ export type InterviewSettlementAuthority = z.infer<
  * adapter noise. Diagnostics are separately deduplicated by `diagnosticId`, so
  * replay cannot multiply them.
  */
-export const interviewSettlementDiagnosticSchema = z.object({
-  diagnosticId: z.string(),
-  code: z.string(),
-  source: z.enum(["runtime", "delivery", "reconcile"]),
-});
+export const interviewSettlementDiagnosticSchema = lazySchema(() =>
+  z.object({
+    diagnosticId: z.string(),
+    code: z.string(),
+    source: z.enum(["runtime", "delivery", "reconcile"]),
+  }),
+);
 export type InterviewSettlementDiagnostic = z.infer<
   typeof interviewSettlementDiagnosticSchema
 >;
@@ -1714,117 +1856,124 @@ export type InterviewSettlementDiagnostic = z.infer<
  * settlement, legacy rows, and every pre-`1.7` peer - so "no delivery
  * projection" never reads as "delivery failed".
  */
-export const interviewDeliveryProjectionSchema = z.object({
-  deliveryId: z.string(),
-  status: z.enum(["pending", "delivering", "delivered", "failed"]),
-  retryable: z.boolean(),
-  /**
-   * Monotonic attempt/revision counter for THIS `deliveryId`, incremented by
-   * the outbox each time it requeues the item.
-   *
-   * Status rank alone cannot order these updates. A retry legitimately moves
-   * `failed → pending`, which is backwards by rank, so a merge that allowed it
-   * on rank alone would also accept a STALE `pending` replayed after a later
-   * failure - the two are indistinguishable without a generation. With it the
-   * rule is exact: a requeue is valid only at a strictly newer generation, and
-   * a stale or equal-generation `pending` cannot resurrect a settled attempt.
-   *
-   * Defaulted to `0` so a projection written before this field existed merges
-   * as the oldest generation, which is the conservative reading for the
-   * ordering rules: it can be advanced past by a newer generation.
-   *
-   * With ONE exception, and it is deliberate: `delivered` is absorbing across
-   * generations, so a `delivered` projection at generation `0` still beats a
-   * stored non-delivered one at any higher generation. Delivery is terminal -
-   * the provider has the answer - and an attempt counter cannot make that
-   * untrue. So "never displaces a newer one" holds for every status except
-   * `delivered`; see `mergeDelivery` for the full order.
-   */
-  generation: z.number().int().nonnegative().default(0).catch(0),
-});
+export const interviewDeliveryProjectionSchema = lazySchema(() =>
+  z.object({
+    deliveryId: z.string(),
+    status: z.enum(["pending", "delivering", "delivered", "failed"]),
+    retryable: z.boolean(),
+    /**
+     * Monotonic attempt/revision counter for THIS `deliveryId`, incremented by
+     * the outbox each time it requeues the item.
+     *
+     * Status rank alone cannot order these updates. A retry legitimately moves
+     * `failed → pending`, which is backwards by rank, so a merge that allowed it
+     * on rank alone would also accept a STALE `pending` replayed after a later
+     * failure - the two are indistinguishable without a generation. With it the
+     * rule is exact: a requeue is valid only at a strictly newer generation, and
+     * a stale or equal-generation `pending` cannot resurrect a settled attempt.
+     *
+     * Defaulted to `0` so a projection written before this field existed merges
+     * as the oldest generation, which is the conservative reading for the
+     * ordering rules: it can be advanced past by a newer generation.
+     *
+     * With ONE exception, and it is deliberate: `delivered` is absorbing across
+     * generations, so a `delivered` projection at generation `0` still beats a
+     * stored non-delivered one at any higher generation. Delivery is terminal -
+     * the provider has the answer - and an attempt counter cannot make that
+     * untrue. So "never displaces a newer one" holds for every status except
+     * `delivered`; see `mergeDelivery` for the full order.
+     */
+    generation: z.number().int().nonnegative().default(0).catch(0),
+  }),
+);
 export type InterviewDeliveryProjection = z.infer<
   typeof interviewDeliveryProjectionSchema
 >;
 
-export const interviewBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("interview"),
-  toolName: z.string().nullable(),
-  title: z.string().nullable(),
-  description: z.string().nullable(),
-  questions: z.array(interviewQuestionSchema),
-  answers: z.array(interviewAnswerSchema),
-  // Raw tool input/output are NOT persisted: the card renders only the
-  // questions/answers/title/description above. Interview detection consumes the
-  // raw event input pre-persist (interview-detection.ts), never the stored block.
-  error: z.string().nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-  // ─── Canonical settlement facts (additive; every field defaulted so an old
-  // persisted row parses with no migration) ───────────────────────────────
-  //
-  // `status`/`answers`/`error` above remain a PROJECTION of these, regenerated
-  // by the settlement reducer rather than mutated independently - see
-  // `applyInterviewSettlement`.
-  //
-  // Every one of them also carries `.catch(...)`, for two reasons that point
-  // the same way. First, the failure rule: malformed enhanced data downgrades
-  // to neutral and must never invalidate the legacy projection an old renderer
-  // still reads. Second, forward compatibility: these are CLOSED enums on a
-  // record that is persisted AND published, so a newer writer adding an
-  // `outcome`, a settlement `source` or a `delivery.status` value would
-  // otherwise make every older reader reject the block outright. Degrading to
-  // the "cannot establish a canonical fact" value is exactly the ambiguous
-  // reading this contract already defines for a legacy row, so the fallback is
-  // an honest state rather than an invented one.
-  outcome: interviewOutcomeSchema.nullable().default(null).catch(null),
-  // Saved-but-unsent values from an explicit Skip. These are history only:
-  // they must never reach a harness/provider result, which is why they live in
-  // their own field instead of being folded into `answers`.
-  //
-  // The catch is array-level, so one corrupt draft discards the whole draft
-  // set rather than just itself - coarser than the per-answer `selection`
-  // downgrade above. Accepted deliberately: drafts are history that was never
-  // sent anywhere, so losing them degrades a "you had typed this" note, while
-  // rejecting the block would lose the settled outcome itself.
-  draftAnswers: z.array(interviewAnswerSchema).default([]).catch([]),
-  settlement: interviewSettlementAuthoritySchema
-    .nullable()
-    .default(null)
-    .catch(null),
-  diagnostics: z
-    .array(interviewSettlementDiagnosticSchema)
-    .default([])
-    .catch([]),
-  delivery: interviewDeliveryProjectionSchema
-    .nullable()
-    .default(null)
-    .catch(null),
-  /**
-   * The settlement-owned envelope for terminal facts a LATER minor adds.
-   *
-   * This exists to make one guarantee enforceable that otherwise cannot be:
-   * `clearInterviewSettlement` - the single owner of "forget this interview
-   * was ever settled", used by the `pending` fork disposition - can only clear
-   * fields it knows about. A future minor that adds a terminal settlement fact
-   * as a NEW TOP-LEVEL block key would be invisible to it, so a reopened fork
-   * would carry a terminal fact into a fresh question. Nothing in a flat shape
-   * prevents that, and no amount of documentation makes an older build clear a
-   * key it has never heard of.
-   *
-   * So future settlement facts go in HERE. The clearer replaces the whole
-   * envelope with `{}` rather than enumerating its contents, which means it
-   * clears facts written by builds that postdate it. Unknown keys OUTSIDE the
-   * envelope are framing/provider data and deliberately survive a clear - that
-   * is the raw-overlay guarantee (`overlayInterviewSettlementPatch`) and it is
-   * why this is a narrow envelope and not a catch-all.
-   *
-   * The current settlement fields stay top-level: they are named in the
-   * contract, the reducer enumerates them, and a guard test asserts that
-   * enumeration stays exhaustive against this schema. This envelope covers the
-   * one case that guard cannot - a field that does not exist yet.
-   */
-  settlementExtensions: z.record(z.string(), z.unknown()).default({}).catch({}),
-});
+export const interviewBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("interview"),
+    toolName: z.string().nullable(),
+    title: z.string().nullable(),
+    description: z.string().nullable(),
+    questions: z.array(interviewQuestionSchema),
+    answers: z.array(interviewAnswerSchema),
+    // Raw tool input/output are NOT persisted: the card renders only the
+    // questions/answers/title/description above. Interview detection consumes the
+    // raw event input pre-persist (interview-detection.ts), never the stored block.
+    error: z.string().nullable(),
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+    // ─── Canonical settlement facts (additive; every field defaulted so an old
+    // persisted row parses with no migration) ───────────────────────────────
+    //
+    // `status`/`answers`/`error` above remain a PROJECTION of these, regenerated
+    // by the settlement reducer rather than mutated independently - see
+    // `applyInterviewSettlement`.
+    //
+    // Every one of them also carries `.catch(...)`, for two reasons that point
+    // the same way. First, the failure rule: malformed enhanced data downgrades
+    // to neutral and must never invalidate the legacy projection an old renderer
+    // still reads. Second, forward compatibility: these are CLOSED enums on a
+    // record that is persisted AND published, so a newer writer adding an
+    // `outcome`, a settlement `source` or a `delivery.status` value would
+    // otherwise make every older reader reject the block outright. Degrading to
+    // the "cannot establish a canonical fact" value is exactly the ambiguous
+    // reading this contract already defines for a legacy row, so the fallback is
+    // an honest state rather than an invented one.
+    outcome: interviewOutcomeSchema.nullable().default(null).catch(null),
+    // Saved-but-unsent values from an explicit Skip. These are history only:
+    // they must never reach a harness/provider result, which is why they live in
+    // their own field instead of being folded into `answers`.
+    //
+    // The catch is array-level, so one corrupt draft discards the whole draft
+    // set rather than just itself - coarser than the per-answer `selection`
+    // downgrade above. Accepted deliberately: drafts are history that was never
+    // sent anywhere, so losing them degrades a "you had typed this" note, while
+    // rejecting the block would lose the settled outcome itself.
+    draftAnswers: z.array(interviewAnswerSchema).default([]).catch([]),
+    settlement: interviewSettlementAuthoritySchema
+      .nullable()
+      .default(null)
+      .catch(null),
+    diagnostics: z
+      .array(interviewSettlementDiagnosticSchema)
+      .default([])
+      .catch([]),
+    delivery: interviewDeliveryProjectionSchema
+      .nullable()
+      .default(null)
+      .catch(null),
+    /**
+     * The settlement-owned envelope for terminal facts a LATER minor adds.
+     *
+     * This exists to make one guarantee enforceable that otherwise cannot be:
+     * `clearInterviewSettlement` - the single owner of "forget this interview
+     * was ever settled", used by the `pending` fork disposition - can only clear
+     * fields it knows about. A future minor that adds a terminal settlement fact
+     * as a NEW TOP-LEVEL block key would be invisible to it, so a reopened fork
+     * would carry a terminal fact into a fresh question. Nothing in a flat shape
+     * prevents that, and no amount of documentation makes an older build clear a
+     * key it has never heard of.
+     *
+     * So future settlement facts go in HERE. The clearer replaces the whole
+     * envelope with `{}` rather than enumerating its contents, which means it
+     * clears facts written by builds that postdate it. Unknown keys OUTSIDE the
+     * envelope are framing/provider data and deliberately survive a clear - that
+     * is the raw-overlay guarantee (`overlayInterviewSettlementPatch`) and it is
+     * why this is a narrow envelope and not a catch-all.
+     *
+     * The current settlement fields stay top-level: they are named in the
+     * contract, the reducer enumerates them, and a guard test asserts that
+     * enumeration stays exhaustive against this schema. This envelope covers the
+     * one case that guard cannot - a field that does not exist yet.
+     */
+    settlementExtensions: z
+      .record(z.string(), z.unknown())
+      .default({})
+      .catch({}),
+  }),
+);
 export type InterviewBlock = z.infer<typeof interviewBlockSchema>;
 
 // Wire-freeze copy of `interviewBlockSchema` from before canonical settlement
@@ -1836,28 +1985,28 @@ export type InterviewBlock = z.infer<typeof interviewBlockSchema>;
 // `questions` takes the frozen QUESTION schema for the same reason: freezing
 // this object's own keys left the leaf delegated to the live shape, so a field
 // added to a question still reached these lines.
-export const interviewBlockSchemaPreSettlement = z.object({
-  ...baseBlockFields,
-  type: z.literal("interview"),
-  toolName: z.string().nullable(),
-  title: z.string().nullable(),
-  description: z.string().nullable(),
-  questions: z.array(interviewQuestionSchemaPreCustomAnswer),
-  answers: z.array(interviewAnswerSchemaPreSettlement),
-  error: z.string().nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-});
+export const interviewBlockSchemaPreSettlement = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("interview"),
+    toolName: z.string().nullable(),
+    title: z.string().nullable(),
+    description: z.string().nullable(),
+    questions: z.array(interviewQuestionSchemaPreCustomAnswer),
+    answers: z.array(interviewAnswerSchemaPreSettlement),
+    error: z.string().nullable(),
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 
 // The semantic operation an agent performed on an artifact during a turn,
 // inferred from its filesystem actions (Write/Edit ⇒ create|update, bash
 // rm/mv ⇒ delete|update). Distinct from the `file_change` block: an
 // `artifact_operation` REPLACES the raw file-edit/bash noise for artifact-root
 // paths with one semantic card.
-export const artifactOperationActionSchema = z.enum([
-  "create",
-  "update",
-  "delete",
-]);
+export const artifactOperationActionSchema = lazySchema(() =>
+  z.enum(["create", "update", "delete"]),
+);
 export type ArtifactOperationAction = z.infer<
   typeof artifactOperationActionSchema
 >;
@@ -1887,119 +2036,133 @@ export function artifactOperationBlockId(
 // reflects without rewriting persisted history. The fallback is for the short
 // delete window before the tombstone projects. `blockId` follows
 // {@link artifactOperationBlockId}.
-export const artifactOperationBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("artifact_operation"),
-  operation: artifactOperationActionSchema,
-  kind: artifactKindSchema,
-  artifactId: z.string(),
-  title: z.string().nullable().default(null),
-  // Content-addressed snapshot refs for the artifact's merged change this turn
-  // (first edit's pre-state → last edit's post-state), so the card can render
-  // its diff the moment the edit completes - no wait for turn-end checkpoint
-  // capture. Mirrors `fileChangeBlockSchema`. Null when uncaptured (e.g. a bash
-  // delete with no pre-image, or a post-hoc edit). The GUI lazy-fetches the
-  // before/after by hash via `snapshots.readSnapshotDiff` on expand. Defaulted
-  // so blocks persisted before these fields existed parse cleanly.
-  beforeHash: z.string().nullable().default(null),
-  afterHash: z.string().nullable().default(null),
-});
+export const artifactOperationBlockSchema = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("artifact_operation"),
+    operation: artifactOperationActionSchema,
+    kind: artifactKindSchema,
+    artifactId: z.string(),
+    title: z.string().nullable().default(null),
+    // Content-addressed snapshot refs for the artifact's merged change this turn
+    // (first edit's pre-state → last edit's post-state), so the card can render
+    // its diff the moment the edit completes - no wait for turn-end checkpoint
+    // capture. Mirrors `fileChangeBlockSchema`. Null when uncaptured (e.g. a bash
+    // delete with no pre-image, or a post-hoc edit). The GUI lazy-fetches the
+    // before/after by hash via `snapshots.readSnapshotDiff` on expand. Defaulted
+    // so blocks persisted before these fields existed parse cleanly.
+    beforeHash: z.string().nullable().default(null),
+    afterHash: z.string().nullable().default(null),
+  }),
+);
 export type ArtifactOperationBlock = z.infer<
   typeof artifactOperationBlockSchema
 >;
 
-export const contentBlockSchema = z.discriminatedUnion("type", [
-  textBlockSchema,
-  reasoningBlockSchema,
-  toolCallBlockSchema,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchema,
-  errorBlockSchema,
-  compactionBlockSchema,
-  autonomousResumeBlockSchema,
-  steerBlockSchema,
-  interviewBlockSchema,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
 
 // ── Wire-freeze variants (pre-Reasonix) ─────────────────────────────────────
 // These three block members carry harness ids through persisted assistant
 // messages. Released `chat.subscribe@1.0–1.6` peers must never observe the
 // Reasonix enum value, while keeping every other field they originally shipped.
-const planSourceSchemaPreReasonix = z.object({
-  harnessId: harnessIdSchemaPreReasonix,
-  sessionId: z.string().nullable().default(null),
-  turnId: z.string().nullable().default(null),
-  kind: z.string(),
-});
+const planSourceSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    harnessId: harnessIdSchemaPreReasonix,
+    sessionId: z.string().nullable().default(null),
+    turnId: z.string().nullable().default(null),
+    kind: z.string(),
+  }),
+);
 
-const planBlockSchemaPreReasonix = z.object({
-  ...baseBlockFields,
-  type: z.literal("plan"),
-  planStatus: planStatusSchema,
-  planId: z.string(),
-  harnessId: harnessIdSchemaPreReasonix,
-  source: planSourceSchemaPreReasonix,
-  title: z.string().nullable().default(null),
-  summary: z.string().nullable().default(null),
-  markdownPreview: z.string().default(""),
-  fullContentRef: planContentRefSchema.nullable().default(null),
-  steps: z.array(planStepSchema).default([]),
-  actions: z.array(planActionSchema).default([]),
-  approvalId: z.string().nullable().default(null),
-  supersededByPlanId: z.string().nullable().default(null),
-  metadata: z.record(z.string(), z.unknown()).nullable().default(null),
-});
+const planBlockSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("plan"),
+    planStatus: planStatusSchema,
+    planId: z.string(),
+    harnessId: harnessIdSchemaPreReasonix,
+    source: planSourceSchemaPreReasonix,
+    title: z.string().nullable().default(null),
+    summary: z.string().nullable().default(null),
+    markdownPreview: z.string().default(""),
+    fullContentRef: planContentRefSchema.nullable().default(null),
+    steps: z.array(planStepSchema).default([]),
+    actions: z.array(planActionSchema).default([]),
+    approvalId: z.string().nullable().default(null),
+    supersededByPlanId: z.string().nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).nullable().default(null),
+  }),
+);
 
 // Carries a SECOND freeze the name does not record: `noticeKind` is pinned to
 // the three kinds these lines shipped, so `harness_message` never reaches a
 // released decoder. See `providerNoticeKindSchemaPreHarnessMessage`.
-export const providerNoticeMetadataSchemaPreReasonix = z
-  .object({
-    harnessId: harnessIdSchemaPreReasonix,
-    noticeKind: providerNoticeKindSchemaPreHarnessMessage,
-    tone: providerNoticeToneSchema,
-    title: z.string(),
-    message: z.string().nullable(),
-    details: z.array(providerNoticeDetailSchema),
-    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
-  })
-  .superRefine((notice, ctx) => {
-    if (
-      notice.metadata !== null &&
-      notice.noticeKind !== notice.metadata.type
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["metadata", "type"],
-        message: "providerNotice.metadata.type must match noticeKind.",
-      });
-    }
-  });
+export const providerNoticeMetadataSchemaPreReasonix = lazySchema(() =>
+  z
+    .object({
+      harnessId: harnessIdSchemaPreReasonix,
+      noticeKind: providerNoticeKindSchemaPreHarnessMessage,
+      tone: providerNoticeToneSchema,
+      title: z.string(),
+      message: z.string().nullable(),
+      details: z.array(providerNoticeDetailSchema),
+      metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+    })
+    .superRefine((notice, ctx) => {
+      if (
+        notice.metadata !== null &&
+        notice.noticeKind !== notice.metadata.type
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["metadata", "type"],
+          message: "providerNotice.metadata.type must match noticeKind.",
+        });
+      }
+    }),
+);
 
-const textBlockSchemaPreReasonix = z.object({
-  ...baseBlockFields,
-  type: z.literal("text"),
-  text: z.string(),
-  providerNotice: providerNoticeMetadataSchemaPreReasonix
-    .nullable()
-    .default(null),
-});
+const textBlockSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("text"),
+    text: z.string(),
+    providerNotice: providerNoticeMetadataSchemaPreReasonix
+      .nullable()
+      .default(null),
+  }),
+);
 
-const steerBlockSchemaPreReasonix = z.object({
-  ...baseBlockFields,
-  type: z.literal("steer"),
-  queueItemId: z.string(),
-  messageId: z.string(),
-  content: jsonContentSchema,
-  mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
-  sender: userMessageSenderSchemaPreReasonix.nullable().default(null),
-});
+const steerBlockSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("steer"),
+    queueItemId: z.string(),
+    messageId: z.string(),
+    content: jsonContentSchema,
+    mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
+    sender: userMessageSenderSchemaPreReasonix.nullable().default(null),
+  }),
+);
 
 /**
  * Persistence freeze for the Epic 2.0 contract: the complete live block
@@ -2007,23 +2170,25 @@ const steerBlockSchemaPreReasonix = z.object({
  * Unlike the wire freezes below, this retains the live interview and image
  * shapes because those were already part of Epic 2.0 when Reasonix arrived.
  */
-export const contentBlockSchemaPreReasonix = z.discriminatedUnion("type", [
-  textBlockSchemaPreReasonix,
-  reasoningBlockSchema,
-  toolCallBlockSchema,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchemaPreReasonix,
-  errorBlockSchemaPreFallback,
-  compactionBlockSchema,
-  autonomousResumeBlockSchema,
-  steerBlockSchemaPreReasonix,
-  interviewBlockSchema,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchemaPreReasonix = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreReasonix,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchemaPreReasonix,
+    errorBlockSchemaPreFallback,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchemaPreReasonix,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 
 // Wire-freeze copy of `contentBlockSchema` carrying THREE independent freezes,
 // bound (via the frozen message/chat schemas) to every released
@@ -2036,23 +2201,25 @@ export const contentBlockSchemaPreReasonix = z.discriminatedUnion("type", [
 // freeze only - see the stacked comments on each swapped member. Every other
 // member reuses the live sub-schema (same convention as
 // `messageSchemaPreInReplyTo`).
-export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
-  textBlockSchemaPreReasonix,
-  reasoningBlockSchema,
-  toolCallBlockSchemaPreImage,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchemaPreReasonix,
-  errorBlockSchemaPreFallback,
-  compactionBlockSchema,
-  autonomousResumeBlockSchemaV18,
-  steerBlockSchemaPreReasonix,
-  interviewBlockSchemaPreSettlement,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchemaPreImage = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreReasonix,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreImage,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchemaPreReasonix,
+    errorBlockSchemaPreFallback,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaV18,
+    steerBlockSchemaPreReasonix,
+    interviewBlockSchemaPreSettlement,
+    artifactOperationBlockSchema,
+  ]),
+);
 
 // Wire-freeze copy of `contentBlockSchema` as `chat.subscribe@1.6` shipped it
 // in `host-v1.2.0-rc.1`: `tool_call` swapped for its pre-receipt freeze (that
@@ -2064,23 +2231,25 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
 // it cannot observe a Reasonix id either. Bound to `@1.6` via
 // `messageSchemaPreSettlement` / `chatSchemaV16`. Every other member reuses
 // the live sub-schema.
-export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
-  textBlockSchemaPreReasonix,
-  reasoningBlockSchema,
-  toolCallBlockSchemaPreReceipt,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchemaPreReasonix,
-  errorBlockSchemaPreFallback,
-  compactionBlockSchema,
-  autonomousResumeBlockSchemaV18,
-  steerBlockSchemaPreReasonix,
-  interviewBlockSchemaPreSettlement,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchemaPreSettlement = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreReasonix,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreReceipt,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchemaPreReasonix,
+    errorBlockSchemaPreFallback,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaV18,
+    steerBlockSchemaPreReasonix,
+    interviewBlockSchemaPreSettlement,
+    artifactOperationBlockSchema,
+  ]),
+);
 
 // ── Wire-freeze variants (pre-fallback, `chat.subscribe@1.7`-`@1.9`) ────────
 //
@@ -2096,55 +2265,61 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
 // `.extend()` off the live shape, for the reason every freeze in this file
 // is: a future field must not silently leak onto a line that has shipped
 // peers.
-export const providerNoticeMetadataSchemaPreFallback = z
-  .object({
-    harnessId: harnessIdSchema,
-    noticeKind: providerNoticeKindSchemaPreFallback,
-    tone: providerNoticeToneSchema,
-    title: z.string(),
-    message: z.string().nullable(),
-    details: z.array(providerNoticeDetailSchema),
-    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
-  })
-  .superRefine((notice, ctx) => {
-    if (
-      notice.metadata !== null &&
-      notice.noticeKind !== notice.metadata.type
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "noticeKind must match metadata.type",
-        path: ["metadata", "type"],
-      });
-    }
-  });
+export const providerNoticeMetadataSchemaPreFallback = lazySchema(() =>
+  z
+    .object({
+      harnessId: harnessIdSchema,
+      noticeKind: providerNoticeKindSchemaPreFallback,
+      tone: providerNoticeToneSchema,
+      title: z.string(),
+      message: z.string().nullable(),
+      details: z.array(providerNoticeDetailSchema),
+      metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+    })
+    .superRefine((notice, ctx) => {
+      if (
+        notice.metadata !== null &&
+        notice.noticeKind !== notice.metadata.type
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "noticeKind must match metadata.type",
+          path: ["metadata", "type"],
+        });
+      }
+    }),
+);
 
-const textBlockSchemaPreFallback = z.object({
-  ...baseBlockFields,
-  type: z.literal("text"),
-  text: z.string(),
-  providerNotice: providerNoticeMetadataSchemaPreFallback
-    .nullable()
-    .default(null),
-});
+const textBlockSchemaPreFallback = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("text"),
+    text: z.string(),
+    providerNotice: providerNoticeMetadataSchemaPreFallback
+      .nullable()
+      .default(null),
+  }),
+);
 
-export const contentBlockSchemaPreFallback = z.discriminatedUnion("type", [
-  textBlockSchemaPreFallback,
-  reasoningBlockSchema,
-  toolCallBlockSchema,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchema,
-  errorBlockSchemaPreFallback,
-  compactionBlockSchema,
-  autonomousResumeBlockSchemaPreShellHost,
-  steerBlockSchema,
-  interviewBlockSchema,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchemaPreFallback = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreFallback,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchemaPreFallback,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaPreShellHost,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 
 // ── Wire-freeze variant (pre-shell-host, `chat.subscribe@1.10`) ─────────────
 //
@@ -2154,23 +2329,49 @@ export const contentBlockSchemaPreFallback = z.discriminatedUnion("type", [
 // through `autonomousResumeBlockSchemaPreShellHost`). Every other member binds
 // its live schema, so a field added to one of them later reaches this line
 // too: freeze the member here before adding it.
-export const contentBlockSchemaPreShellHost = z.discriminatedUnion("type", [
-  textBlockSchema,
-  reasoningBlockSchema,
-  toolCallBlockSchema,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchema,
-  errorBlockSchema,
-  compactionBlockSchema,
-  autonomousResumeBlockSchemaPreShellHost,
-  steerBlockSchema,
-  interviewBlockSchema,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchemaPreShellHost = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreBrowser,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaPreShellHost,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
+// Wire-freeze copy for `chat.subscribe@1.11`/`@1.12`: those lines include the
+// shell-host fields in the live block vocabulary but predate the browser
+// session enrichment. Keep this option list explicit so a future block field
+// cannot silently widen either released line.
+export const contentBlockSchemaPreBrowser = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreBrowser,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 
 // The on-disk/wire shape - identical to `ContentBlock` except
 // `autonomous_resume`, whose persisted member carries `wakeTriggers` instead
@@ -2196,20 +2397,22 @@ export type PersistedContentBlock =
  * other member still binds its live schema: a field added to one of them
  * later reaches this line too, so freeze the member here before adding it.
  */
-export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
-  textBlockSchemaPreFallback,
-  reasoningBlockSchema,
-  toolCallBlockSchema,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchema,
-  errorBlockSchemaPreFallback,
-  compactionBlockSchema,
-  autonomousResumeBlockSchemaV18,
-  steerBlockSchema,
-  interviewBlockSchema,
-  artifactOperationBlockSchema,
-]);
+export const contentBlockSchemaV18 = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreFallback,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchemaPreFallback,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaV18,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);

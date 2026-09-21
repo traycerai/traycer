@@ -157,7 +157,14 @@ vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
     holder.activateCalls.push({ id: ref.id, ref });
   },
 }));
-vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => null,
+  // `useSwitcherRename` now resolves its terminal-rename client through
+  // `useEpicRecordMutationClient`, which reads this - a whole-module mock
+  // with only `useHostClient` left it `undefined` here, crashing every row
+  // menu that mounts `useSwitcherRename`.
+  useHostBinding: () => null,
+}));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-A",
 }));

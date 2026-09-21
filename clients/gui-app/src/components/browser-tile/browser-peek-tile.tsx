@@ -10,6 +10,7 @@ import {
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "./browser-start-page";
+import { useBrowserAddressShortcut } from "@/lib/browser-view/tiles/browser-address-shortcut";
 import type { BrowserTileNode } from "./browser-tile-placement";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
@@ -244,6 +245,11 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   // The start page is a launcher - pure navigation, which a viewer cannot do.
   const showStartPage =
     !readOnly && chrome.controller.url === DEFAULT_BROWSER_TILE_URL;
+  useBrowserAddressShortcut({
+    enabled: visible && !readOnly && !chrome.controller.disabled,
+    tileRef,
+    focusAddress: chrome.controller.focusAddress,
+  });
 
   return (
     <div

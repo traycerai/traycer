@@ -43,7 +43,7 @@ import {
   RowItemName,
   RowMetaLine,
   RowStatus,
-  RowStatusDuration,
+  RowStatusElapsed,
 } from "@/components/home-focus/home-focus-row-parts";
 import {
   focusAgentState,
@@ -408,7 +408,7 @@ function TaskGroupChatRow(props: {
       <div className={ROW_CLASS} data-testid="home-focus-task-group-agent">
         <button
           type="button"
-          onClick={() => actions.openAgent(epicId, agent.agentId)}
+          onClick={() => actions.openAgent(epicId, agent.agentId, agent.hostId)}
           className={ROW_BODY_CLASS}
           data-testid="home-focus-task-group-agent-body"
         >
@@ -528,7 +528,7 @@ function TaskGroupJobRow(props: {
           state={focusJobState(job)}
           detail={
             job.startedAtMs === null ? null : (
-              <RowStatusDuration startedAtMs={job.startedAtMs} />
+              <RowStatusElapsed startedAtMs={job.startedAtMs} />
             )
           }
         />

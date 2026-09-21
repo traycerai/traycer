@@ -104,7 +104,7 @@ vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
   };
 });
 
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
@@ -211,12 +211,14 @@ async function openHiddenTabOnceReady(
   epicId: string,
   firstEditorLabel: string,
 ): Promise<void> {
+  // `<TestEpicSessionTab>` already opened this tab (real name, so it is a
+  // member with no metadata hold to spend) in its own layout effect, before
+  // this function ever runs - the session-owning controller needs that
+  // membership plus the mounted surface just to build a session at all, so
+  // there is nothing left here to open. Only the parking-visibility signal
+  // (a separate axis from canvas membership) still needs driving.
   await waitFor(() => {
     expect(screen.queryByLabelText(firstEditorLabel)).not.toBeNull();
-  });
-  act(() => {
-    useEpicCanvasStore.getState().openEpicTabWithId(epicId, epicId, epicId);
-    __syncEpicParkingOpenTabsForTests();
   });
   act(() => {
     setEpicSurfaceVisibility(epicId, epicId, false);
@@ -224,8 +226,9 @@ async function openHiddenTabOnceReady(
 }
 
 /**
- * Real `<EpicSessionProvider>` + real `<EpicSessionGate>`, with up to two
- * real `<CommentComposer>`s toggled on/off by `showA`/`showB` - toggling off
+ * Real `<TestEpicSessionTab>` (a real `<EpicSessionProvider>` over a tab this
+ * suite has open) + real `<EpicSessionGate>`, with up to two real
+ * `<CommentComposer>`s toggled on/off by `showA`/`showB` - toggling off
  * unmounts the composer (arms 4 and 5), while the provider itself stays
  * mounted across `rerender()` calls (arms 1-3 need the session to survive).
  */
@@ -240,7 +243,7 @@ function Harness(props: {
   const { epicId, showA, showB, refA, refB, queryClient } = props;
   return (
     <QueryClientProvider client={queryClient}>
-      <EpicSessionProvider epicId={epicId} tabId={epicId}>
+      <TestEpicSessionTab epicId={epicId} tabId={epicId}>
         <EpicSessionGate fallback={null}>
           {showA ? (
             <CommentComposer
@@ -271,7 +274,7 @@ function Harness(props: {
             />
           ) : null}
         </EpicSessionGate>
-      </EpicSessionProvider>
+      </TestEpicSessionTab>
     </QueryClientProvider>
   );
 }
@@ -630,7 +633,7 @@ function EditHarness(props: {
   const { epicId, initialContent, refA, queryClient } = props;
   return (
     <QueryClientProvider client={queryClient}>
-      <EpicSessionProvider epicId={epicId} tabId={epicId}>
+      <TestEpicSessionTab epicId={epicId} tabId={epicId}>
         <EpicSessionGate fallback={null}>
           <CommentComposer
             epicId={epicId}
@@ -645,7 +648,7 @@ function EditHarness(props: {
             ref={refA}
           />
         </EpicSessionGate>
-      </EpicSessionProvider>
+      </TestEpicSessionTab>
     </QueryClientProvider>
   );
 }

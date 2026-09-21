@@ -19,6 +19,10 @@
  *  - Home never consumes a `data-tab-index` digit slot: two ordinary strip
  *    tabs still read `data-tab-index` 0 and 1 with Home enabled, because the
  *    Alt-digit chords index `useHeaderTabs()`, which does not include Home.
+ *  - Home carries no count: with an unread, unresolved prompt on the merged
+ *    notification feed, the real strip still draws no badge inside the Home
+ *    tab and names it plainly "Home". The header bell is the one attention
+ *    counter; Home lists the prompts it points at.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -40,6 +44,11 @@ import type { TabRef } from "@/stores/tabs/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import {
+  makeApprovalPayload,
+  makeMergedNotificationRow,
+} from "@/lib/home-focus/__tests__/fixtures";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
@@ -50,6 +59,37 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     refetch: () => Promise.resolve(),
   }),
 }));
+
+/**
+ * One prompt waiting on the user, exactly as the "Needs you" section and the
+ * bell would count it: a pending-prompt kind, unresolved, unread. A stable
+ * module-level array so the strip sees the same rows on every render.
+ */
+const PENDING_PROMPT_ROWS: ReadonlyArray<MergedNotificationRow> = [
+  makeMergedNotificationRow({
+    feedId: "host:approval-1",
+    hostKind: "approval.requested",
+    severity: "needs_action",
+    payload: makeApprovalPayload("e-a", "chat-1"),
+  }),
+];
+
+// Partial: only the merged-rows read is replaced, so the id/attention
+// projections and everything else the strip's notification providers import
+// from this module stay real.
+vi.mock(
+  "@/stores/notifications/merged-notifications",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/stores/notifications/merged-notifications")
+      >();
+    return {
+      ...actual,
+      useMergedNotificationRows: () => PENDING_PROMPT_ROWS,
+    };
+  },
+);
 
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map<string, boolean>(),
@@ -301,6 +341,25 @@ describe("<TabStrip /> - Home placement", () => {
     expect(
       Object.keys(useTabsStore.getState().customizations ?? {}),
     ).not.toContain("home");
+  });
+
+  it("draws no badge and keeps the plain accessible name with a prompt waiting on the feed", async () => {
+    useSettingsStore.setState({ homeTabEnabled: true });
+    openEpicFixture("e-a", "Alpha");
+    const refEpic: TabRef = { kind: "epic", id: "e-a" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(refEpic), ref: refEpic }],
+      activeItemId: tabItemId(refEpic),
+      stripOrder: [refEpic],
+      systemTabs: { history: null, settings: null },
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const homeTab = await screen.findByTestId("tab-home");
+    expect(within(homeTab).queryByTestId("tab-home-badge")).toBeNull();
+    expect(homeTab.getAttribute("aria-label")).toBe("Home");
   });
 
   it("draws no appearance of its own while every other tab carries one", async () => {

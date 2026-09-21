@@ -1,0 +1,43 @@
+/*
+ * Where a toast's close button sits.
+ *
+ * Sonner's own default puts it at the toast's top-LEFT corner and pulls it
+ * outside with `translate(-35%, -35%)`, so a little over a third of the control
+ * hangs off the card. On a fine pointer that is invisible - the button is
+ * hidden until the toast is hovered (`sonner.tsx`) - but on a coarse one sonner
+ * keeps it permanently visible, and it renders as a circle half off the corner
+ * of every toast, over whatever is behind it.
+ *
+ * Fixed through sonner's own three custom properties rather than with classes,
+ * for a reason worth keeping: sonner injects its stylesheet at runtime and
+ * UNLAYERED, so it outranks every Tailwind utility regardless of specificity -
+ * the utilities live in `@layer utilities`, which loses to any unlayered rule.
+ * The properties are declared on `:where([data-sonner-toaster])` (specificity
+ * zero), so one plain attribute selector here wins without `!important` and
+ * without depending on which stylesheet the browser saw first.
+ *
+ * Scoped to `(pointer: coarse)`: the placement is only wrong where the button
+ * is always on screen, and a pointer toast's corner button is a deliberate,
+ * long-standing affordance that reveals on hover.
+ *
+ * The 44pt hit area is the button's own (`TOAST_CLOSE_BUTTON_CLASS_NAME`), a
+ * pseudo-element centred on the 20px glyph. Inset 0.5rem from both edges, that
+ * area reaches 4px past the card - inside the 16px gap sonner leaves between
+ * stacked toasts, so it never overlaps a neighbour's.
+ */
+
+@media (pointer: coarse) {
+  [data-sonner-toaster] {
+    --toast-close-button-start: unset;
+    --toast-close-button-end: 0.5rem;
+    /* `top` is sonner's and is always 0, so the vertical inset has to ride the
+       transform it also owns. */
+    --toast-close-button-transform: translateY(0.5rem);
+  }
+
+  /* The content stops where the button starts. Without this the title runs
+     under a control that is now inside the card instead of beside it. */
+  [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+    padding-inline-end: 2.5rem;
+  }
+}

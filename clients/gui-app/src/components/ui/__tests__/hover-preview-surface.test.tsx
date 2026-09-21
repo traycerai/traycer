@@ -62,6 +62,38 @@ describe("hover-preview surface", () => {
     expect(screen.getAllByTestId("hover-action")).toHaveLength(1);
   });
 
+  it("renders the appearance='tooltip' HoverCard variant on the inverted chip surface, tagged for CSS opt-out, still without a duplicate accessible clone", () => {
+    render(
+      <HoverCard open>
+        <HoverCardTrigger asChild>
+          <button type="button">Trigger</button>
+        </HoverCardTrigger>
+        <HoverCardContent side="bottom" appearance="tooltip">
+          <button type="button" data-testid="hover-action">
+            Copy
+          </button>
+        </HoverCardContent>
+      </HoverCard>,
+    );
+    const content = document.querySelector<HTMLElement>(
+      '[data-slot="hover-card-content"]',
+    );
+    if (content === null) throw new Error("Hover card content did not render");
+    // `data-appearance` is what lets a path disclosure's content opt out of
+    // `theme-surfaces.css`'s generic popover fill - classes alone are
+    // overridden by it, so the attribute itself is the contract, not just a
+    // debugging label.
+    expect(content.getAttribute("data-appearance")).toBe("tooltip");
+    const tokens = content.className.split(/\s+/);
+    expect(tokens).toContain("bg-foreground");
+    expect(tokens).toContain("text-background");
+    expect(tokens).not.toContain("bg-popover");
+    // A path disclosure still needs its copy-path action reachable exactly
+    // once, the same guarantee the default (`appearance="preview"`) surface
+    // gives above - only the theme changed here, not the mount count.
+    expect(screen.getAllByTestId("hover-action")).toHaveLength(1);
+  });
+
   it("keeps label tooltips on the bounded inverted chip surface", () => {
     render(
       <TooltipProvider delayDuration={0}>

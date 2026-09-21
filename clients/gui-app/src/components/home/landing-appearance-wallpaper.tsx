@@ -6,6 +6,11 @@ export function LandingAppearanceWallpaper() {
   const wallpaper = useSettingsStore((state) => state.startPageWallpaper);
   const image = useStartPageWallpaperImage();
   return (
-    <AppearanceWallpaper wallpaper={wallpaper} url={image.url} tint={null} />
+    <AppearanceWallpaper
+      wallpaper={wallpaper}
+      url={image.url}
+      tint={null}
+      surface="page"
+    />
   );
 }

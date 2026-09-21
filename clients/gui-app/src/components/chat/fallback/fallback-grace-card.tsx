@@ -1,5 +1,5 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   FallbackImpendingAction,
@@ -30,13 +30,20 @@ import {
 import {
   fallbackResolvedIdentitySentence,
   fallbackTupleIdentity,
+  pendingFallbackHarnessSubjects,
   pendingFallbackResumesFailedTuple,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
+import { FallbackGraceRungActions } from "./fallback-manual-rungs";
 import type { FallbackActionOutcome } from "@traycer/protocol/host/chat-fallback";
 import { useFallbackCancel } from "./use-fallback-actions";
+import {
+  routingCardActionKey,
+  useDismissRoutingCard,
+} from "./use-dismissed-routing-cards";
 
 /**
  * The moment-of-failure card: what is about to happen, and how to stop it.
@@ -83,6 +90,22 @@ export function FallbackGraceCard({
   readonly menu: ReactNode | null;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
+  // Every tuple this card can NAME, which is three and not two. The account
+  // that failed, where it has been moved (`targetTuple`), and where it is
+  // still only PLANNED to move (`impendingAction.target`).
+  //
+  // That third one is the whole cancellation window. The protocol writes
+  // `targetTuple` only once a destination is committed, so throughout the
+  // grace hold - exactly while the user is deciding - the destination comes
+  // from `impendingAction.target` alone. Listing only the first two left that
+  // harness's catalogue unsubscribed, so the card named the planned model by
+  // its raw slug for the entire window it was asking the user to approve,
+  // even with a warm cache for that provider.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    pendingFallbackHarnessSubjects(pending),
+    true,
+  );
   // The sign-in navigation, armed by the click and run by the host's answer -
   // or `null` when the cancel in flight is a plain "Don't switch".
   //
@@ -103,8 +126,25 @@ export function FallbackGraceCard({
   const cancel = useFallbackCancel(client, chatId, onCancelOutcome);
   const openFallbackSettings = useOpenFallbackSettings(hostId);
   const { openSettings } = useSystemTabModalActions();
+  const dismissCard = useDismissRoutingCard();
+  const onDismiss = useCallback(() => {
+    dismissCard(
+      chatId,
+      pending.traversalId,
+      "countdown",
+      routingCardActionKey(pending),
+    );
+    // `pending` whole, not `pending.traversalId`. The action key is derived
+    // from this frame, and a re-plan keeps the traversal id while changing the
+    // plan - so a narrower dependency would capture the OLD plan and write the
+    // dismissal under a key the gate is no longer reading, leaving the × inert.
+  }, [chatId, dismissCard, pending]);
 
-  const failed = fallbackTupleIdentity(pending.failedTuple, labelFor);
+  const failed = fallbackTupleIdentity(
+    pending.failedTuple,
+    labelFor,
+    modelLabelFor,
+  );
   // The whole destination, not just its account. "Switching to Terminal
   // account" named the one field that is identical on both sides of a
   // cross-provider hop and omitted the provider, the model and the effort -
@@ -114,6 +154,7 @@ export function FallbackGraceCard({
   const targetLabel = fallbackResolvedIdentitySentence(
     { kind: "fallback", pending },
     labelFor,
+    modelLabelFor,
   );
   // Whether that destination is the tuple that failed: the wait rung's resume,
   // which has no "to" at all - see {@link pendingFallbackResumesFailedTuple}.
@@ -251,14 +292,37 @@ export function FallbackGraceCard({
             </span>
           ) : null}
         </div>
-        <Button
-          size="xs"
-          variant="muted"
-          className="h-auto"
-          onClick={openFallbackSettings}
-        >
-          {FALLBACK_SETTINGS_LABEL}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="xs"
+            variant="muted"
+            className="h-auto"
+            onClick={openFallbackSettings}
+          >
+            {FALLBACK_SETTINGS_LABEL}
+          </Button>
+          {/*
+           * ALWAYS, and never disabled - not gated on `canAct`, `busy`, or the
+           * traversal's state. This is the one control on the card that acts on
+           * the CARD rather than on the chat, so the standing the other buttons
+           * need does not apply: a viewer with no right to steer this chat, or
+           * an owner mid-reconnect, may still put a banner away. Gating it on
+           * `busy` would also strand the card open for the whole of an
+           * in-flight cancel, which is exactly when a user wants it gone.
+           *
+           * It does NOT cancel. "Don't switch" is beside it and is the answer;
+           * this only stops the card occupying the composer while the switch
+           * goes ahead as planned.
+           */}
+          <Button
+            size="icon-xs"
+            variant="muted"
+            aria-label="Dismiss"
+            onClick={onDismiss}
+          >
+            <X aria-hidden />
+          </Button>
+        </div>
       </div>
 
       <FallbackGraceHeadline
@@ -304,6 +368,30 @@ export function FallbackGraceCard({
         ) : null}
         {menu}
       </div>
+
+      {/*
+       * "I already fixed it" - the answer the card could not express.
+       *
+       * Below the button row rather than inside it, and that placement is the
+       * point: this band is host-offered and can be empty, so folding it into
+       * the row above would make the row's own layout depend on whether the
+       * host happened to admit a rung this frame. The component brings its own
+       * top margin and renders nothing when there is nothing to offer.
+       *
+       * `hold` only. `choosing` and `switching` also render this card, and the
+       * host withholds the attempt for both - but gating here as well keeps the
+       * card's intent legible rather than resting on a predicate two repos
+       * away, and a countdown that has already been spent must not grow a
+       * Retry button as it commits.
+       */}
+      {pending.state === "hold" ? (
+        <FallbackGraceRungActions
+          epicId={epicId}
+          chatId={chatId}
+          hostId={hostId}
+          client={client}
+        />
+      ) : null}
 
       <div className="text-ui-xs text-muted-foreground/80">
         {signedOut

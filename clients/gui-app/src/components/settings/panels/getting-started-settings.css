@@ -1,0 +1,48 @@
+/*
+ * The thin meter along a started card's bottom edge.
+ *
+ * A native <progress> rather than two nested spans: the fill is COMPUTED from
+ * value/max, so a guide of any length draws correctly and no table of Tailwind
+ * fraction classes has to be kept in step with the step counts.
+ *
+ * Every browser draws the element through pseudo-elements Tailwind cannot
+ * reach, so the treatment lives here. The track is an alpha of the foreground,
+ * never var(--muted): the card is a raised surface, and --muted collapses into
+ * it on most preset themes.
+ */
+
+.settings-setup-meter {
+  appearance: none;
+  border: 0;
+  background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+/* WebKit and Blink split it in two: the bar is the track, the value the fill. */
+.settings-setup-meter::-webkit-progress-bar {
+  background-color: transparent;
+}
+
+.settings-setup-meter::-webkit-progress-value {
+  background-color: var(--primary);
+}
+
+.settings-setup-meter::-moz-progress-bar {
+  background-color: var(--primary);
+}
+
+/*
+ * Scroll padding for the cards.
+ *
+ * Anything that brings a card into view - the settings search's anchor reveal,
+ * a focus ring following a Tab - scrolls the panel's pane, and on a phone the
+ * pane's top edge sits directly under the 40pt app header row with the section
+ * crumb in it. A card scrolled flush to that edge lands with its status line
+ * tucked under the chrome. `scroll-margin-top` is the whole fix: it moves only
+ * where a scroll STOPS, so nothing about the resting layout changes and the
+ * desktop pane (which has no header over it) is unaffected either way.
+ */
+@media (max-width: 767px) {
+  .settings-setup-card {
+    scroll-margin-top: 3.5rem;
+  }
+}

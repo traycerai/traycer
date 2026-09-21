@@ -1,3 +1,7 @@
+import {
+  isBrowserSearchEngine,
+  type BrowserSearchEngine,
+} from "@/lib/browser-view/browser-search";
 import { create } from "zustand";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { persist } from "zustand/middleware";
@@ -323,6 +327,7 @@ export interface SettingsState {
   quoteReplyEnabled: boolean;
   /** Where app-rendered http(s) links open: default plus per-kind overrides. */
   linkOpen: LinkOpenSettings;
+  browserSearchEngine: BrowserSearchEngine;
   /** Origins designated from terminal URL output for the host classifier. */
   browserDevOrigins: ReadonlyArray<string>;
   /** Where a tile lands on the canvas: default plus per-category overrides. */
@@ -431,6 +436,7 @@ export interface SettingsState {
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
   setLinkOpen: (patch: Partial<LinkOpenSettings>) => void;
+  setBrowserSearchEngine: (engine: BrowserSearchEngine) => void;
   addBrowserDevOrigin: (origin: string) => void;
   removeBrowserDevOrigin: (origin: string) => void;
   setTilePlacement: (patch: Partial<TilePlacementSettings>) => void;
@@ -493,6 +499,7 @@ type PersistedSettingsState = Pick<
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
   | "linkOpen"
+  | "browserSearchEngine"
   | "browserDevOrigins"
   | "tilePlacement"
   | "agentTabSurfacing"
@@ -575,6 +582,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
     linkOpen: state.linkOpen,
+    browserSearchEngine: state.browserSearchEngine,
     browserDevOrigins: state.browserDevOrigins,
     tilePlacement: state.tilePlacement,
     agentTabSurfacing: state.agentTabSurfacing,
@@ -628,6 +636,7 @@ export const useSettingsStore = create<SettingsState>()(
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
       linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
+      browserSearchEngine: "google",
       browserDevOrigins: [],
       tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
       agentTabSurfacing: DEFAULT_AGENT_TAB_SURFACING,
@@ -740,6 +749,8 @@ export const useSettingsStore = create<SettingsState>()(
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
+      setBrowserSearchEngine: (browserSearchEngine) =>
+        set({ browserSearchEngine }),
       setLinkOpen: (patch) => {
         set((s) => ({ linkOpen: { ...s.linkOpen, ...patch } }));
       },
@@ -884,6 +895,11 @@ export const useSettingsStore = create<SettingsState>()(
             ),
           agentTabSurfacing: resolvePersistedAgentTabSurfacing(persisted),
           linkOpen: resolvePersistedLinkOpen(persisted),
+          browserSearchEngine: isBrowserSearchEngine(
+            persisted.browserSearchEngine,
+          )
+            ? persisted.browserSearchEngine
+            : "google",
           tilePlacement: resolvePersistedTilePlacement(persisted),
           browserDevOrigins: Array.isArray(merged.browserDevOrigins)
             ? merged.browserDevOrigins.filter(

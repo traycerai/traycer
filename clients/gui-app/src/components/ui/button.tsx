@@ -68,6 +68,11 @@ const buttonVariants = cva(
         // to a visible 1.087. The `dark:*-input/*` fills stay: `--input`
         // never collapses.
         outline: `border-border bg-background hover:bg-foreground/5 hover:text-foreground active:press-scrim dark:border-input dark:bg-input/30 dark:hover:bg-input/50 ${ON_STATE}`,
+        // `outline`'s border with a translucent fill: a clickable ROW sitting
+        // over other rows scrolling underneath it (session import's
+        // already-imported task), where `outline`'s opaque `bg-background`
+        // would occlude them.
+        "card-row": `border-border bg-background/60 hover:bg-foreground/5 hover:text-foreground active:press-scrim dark:border-input dark:bg-input/30 dark:hover:bg-input/50 ${ON_STATE}`,
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:press-scrim aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         // Same two weights as `outline` above, and for the same reason: the
@@ -110,6 +115,9 @@ const buttonVariants = cva(
           "text-info-foreground hover:bg-info/15 active:press-scrim",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 active:press-scrim focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+        // Clickable overline heading; the focus/hover affordance stays a button.
+        "section-label":
+          "text-overline font-semibold tracking-wide text-muted-foreground uppercase hover:bg-foreground/5 hover:text-foreground active:press-scrim",
         // The one variant with no scrim: a link has no box to tint, so a
         // rectangle blooming behind the text reads as a rendering fault rather
         // than a press. The underline it already uses for hover is the feedback.
@@ -135,6 +143,14 @@ const buttonVariants = cva(
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
+        "section-label":
+          "h-8 min-w-0 max-w-full shrink justify-start gap-1.5 px-1",
+        // A full-width clickable ROW instead of a centered control: content
+        // left-aligns and the box grows to fit it rather than clipping to a
+        // fixed height. Session import's already-imported task row is the
+        // one call site.
+        "card-row":
+          "h-auto min-w-0 justify-start gap-3 rounded-xl px-4 py-3 text-left",
       },
     },
     defaultVariants: {

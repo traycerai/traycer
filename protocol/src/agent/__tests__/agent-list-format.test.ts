@@ -55,6 +55,38 @@ function agentLine(output: string, linePrefix: string): string {
   return output.split("\n").find((line) => line.startsWith(linePrefix)) ?? "";
 }
 
+describe("formatAgentListResponse heading", () => {
+  it("names the task the rows were read from when the listing carries it", () => {
+    // Every row is a bare agent id, so a listing forwarded to another agent is
+    // only actionable if the text says which task those ids belong to - and an
+    // agent can now hold listings from more than one.
+    const enriched = {
+      ...response([agent({ id: "caller", isSelf: true })], "caller"),
+      epicId: "epic-42",
+    };
+
+    expect(formatAgentListResponse(enriched).split("\n")[0]).toBe(
+      "Agents in task 'epic-42' (relative to you):",
+    );
+  });
+
+  it("keeps the older wording for a listing that has been through the wire schema", () => {
+    // `epicId` is host-side enrichment, exactly like `archived` on the rows:
+    // the released response schema has no such key and strips it, and the CLI
+    // parses through that schema. Naming a task it cannot know would be worse
+    // than not naming one.
+    const stripped = listAgentsResponseSchema.parse({
+      ...response([agent({ id: "caller", isSelf: true })], "caller"),
+      epicId: "epic-42",
+    });
+
+    expect("epicId" in stripped).toBe(false);
+    expect(formatAgentListResponse(stripped).split("\n")[0]).toBe(
+      "Agents in epic (relative to you):",
+    );
+  });
+});
+
 describe("formatAgentListResponse categorization", () => {
   it("groups agents by relationship to the caller", () => {
     const agents = [

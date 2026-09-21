@@ -28,6 +28,7 @@ import {
   DRAFT_HEAD_SCHEMA_VERSION,
 } from "@traycer/protocol/persistence/draft/version";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The one key the sync layer reads inside a draft head document.
@@ -268,7 +269,9 @@ function corruptDocument(
   };
 }
 
-const draftHeadPartsEnvelopeSchema = z.array(chatHeadAddressPartSchema);
+const draftHeadPartsEnvelopeSchema = lazySchema(() =>
+  z.array(chatHeadAddressPartSchema),
+);
 
 function withoutPartsEnvelope(document: JsonObject): JsonObject {
   const payload: JsonObject = Object.create(null);

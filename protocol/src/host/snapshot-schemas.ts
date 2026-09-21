@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { fileEditReasonSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const snapshotsGetLocalStorageSizeRequestSchema = z.object({});
-export const snapshotsGetLocalStorageSizeResponseSchema = z.object({
+
+export const snapshotsGetLocalStorageSizeRequestSchema = lazySchema(() => z.object({}));
+export const snapshotsGetLocalStorageSizeResponseSchema = lazySchema(() => z.object({
   bytes: z.number().int().nonnegative(),
-});
+}));
 export type SnapshotsGetLocalStorageSizeRequest = z.infer<
   typeof snapshotsGetLocalStorageSizeRequestSchema
 >;
@@ -12,10 +14,10 @@ export type SnapshotsGetLocalStorageSizeResponse = z.infer<
   typeof snapshotsGetLocalStorageSizeResponseSchema
 >;
 
-export const snapshotsClearLocalSnapshotsRequestSchema = z.object({});
-export const snapshotsClearLocalSnapshotsResponseSchema = z.object({
+export const snapshotsClearLocalSnapshotsRequestSchema = lazySchema(() => z.object({}));
+export const snapshotsClearLocalSnapshotsResponseSchema = lazySchema(() => z.object({
   clearedBytes: z.number().int().nonnegative(),
-});
+}));
 export type SnapshotsClearLocalSnapshotsRequest = z.infer<
   typeof snapshotsClearLocalSnapshotsRequestSchema
 >;
@@ -32,15 +34,15 @@ export type SnapshotsClearLocalSnapshotsResponse = z.infer<
  * same `fileEditReason` codes as the block when content can't be served
  * (`blob_missing`/`too_large`/`binary`); `snapshot` when contents are present.
  */
-export const snapshotsReadSnapshotDiffRequestSchema = z.object({
+export const snapshotsReadSnapshotDiffRequestSchema = lazySchema(() => z.object({
   beforeHash: z.string().nullable(),
   afterHash: z.string().nullable(),
-});
-export const snapshotsReadSnapshotDiffResponseSchema = z.object({
+}));
+export const snapshotsReadSnapshotDiffResponseSchema = lazySchema(() => z.object({
   beforeContent: z.string().nullable(),
   afterContent: z.string().nullable(),
   reason: fileEditReasonSchema,
-});
+}));
 export type SnapshotsReadSnapshotDiffRequest = z.infer<
   typeof snapshotsReadSnapshotDiffRequestSchema
 >;

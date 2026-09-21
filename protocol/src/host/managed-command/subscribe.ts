@@ -57,6 +57,7 @@ import {
   managedCommandSchema,
   managedCommandSchemaPreRelaunch,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Ceiling on one `loadOlder` window. The viewer pages in screenfuls, so this is
@@ -66,7 +67,7 @@ import {
 export const MANAGED_COMMAND_MAX_WINDOW_LINES = 2_000;
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
 // ─── `managedCommand.subscribeOutput@1.0` ───────────────────────────────────
@@ -78,10 +79,12 @@ const textFrameFields = {
  * active segment, which is what makes it safe to hold across a long-open
  * window.
  */
-export const managedCommandLogPositionSchema = z.object({
-  segmentId: z.string(),
-  byteOffset: z.number().int().nonnegative(),
-});
+export const managedCommandLogPositionSchema = lazySchema(() =>
+  z.object({
+    segmentId: z.string(),
+    byteOffset: z.number().int().nonnegative(),
+  }),
+);
 export type ManagedCommandLogPosition = z.infer<
   typeof managedCommandLogPositionSchema
 >;
@@ -95,19 +98,23 @@ export type ManagedCommandLogPosition = z.infer<
  * `atMs` is null only for a line the host could not read a timestamp from - a
  * partial record left behind by a crash. Everything else is stamped.
  */
-export const managedCommandLogLineSchema = z.object({
-  channel: z.enum(["stdout", "stderr", "lifecycle"]),
-  text: z.string(),
-  atMs: z.number().nullable(),
-});
+export const managedCommandLogLineSchema = lazySchema(() =>
+  z.object({
+    channel: z.enum(["stdout", "stderr", "lifecycle"]),
+    text: z.string(),
+    atMs: z.number().nullable(),
+  }),
+);
 export type ManagedCommandLogLine = z.infer<typeof managedCommandLogLineSchema>;
 
-export const managedCommandSubscribeOutputOpenRequestSchema = z.object({
-  // Named so the host can scope exactly as the id-addressed controls do: a
-  // command in another epic is refused as one that never existed.
-  epicId: z.string(),
-  commandId: z.string(),
-});
+export const managedCommandSubscribeOutputOpenRequestSchema = lazySchema(() =>
+  z.object({
+    // Named so the host can scope exactly as the id-addressed controls do: a
+    // command in another epic is refused as one that never existed.
+    epicId: z.string(),
+    commandId: z.string(),
+  }),
+);
 export type ManagedCommandSubscribeOutputOpenRequest = z.infer<
   typeof managedCommandSubscribeOutputOpenRequestSchema
 >;
@@ -178,20 +185,23 @@ function managedCommandSubscribeOutputServerFrames<
 }
 
 /** The live (`@1.1`) frames: headers carry `relaunchOnHostRestart`. */
-export const managedCommandSubscribeOutputServerFrameSchema =
-  managedCommandSubscribeOutputServerFrames(managedCommandSchema);
+export const managedCommandSubscribeOutputServerFrameSchema = lazySchema(() =>
+  managedCommandSubscribeOutputServerFrames(managedCommandSchema),
+);
 export type ManagedCommandSubscribeOutputServerFrame = z.infer<
   typeof managedCommandSubscribeOutputServerFrameSchema
 >;
 
 /** The shipped (`@1.0`) frames: headers carry the pre-relaunch command. */
-export const managedCommandSubscribeOutputServerFrameSchemaV10 =
-  managedCommandSubscribeOutputServerFrames(managedCommandSchemaPreRelaunch);
+export const managedCommandSubscribeOutputServerFrameSchemaV10 = lazySchema(
+  () =>
+    managedCommandSubscribeOutputServerFrames(managedCommandSchemaPreRelaunch),
+);
 export type ManagedCommandSubscribeOutputServerFrameV10 = z.infer<
   typeof managedCommandSubscribeOutputServerFrameSchemaV10
 >;
 
-export const managedCommandSubscribeOutputClientFrameSchema =
+export const managedCommandSubscribeOutputClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("loadOlder"),
@@ -216,7 +226,8 @@ export const managedCommandSubscribeOutputClientFrameSchema =
       kind: z.literal("ping"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type ManagedCommandSubscribeOutputClientFrame = z.infer<
   typeof managedCommandSubscribeOutputClientFrameSchema
 >;

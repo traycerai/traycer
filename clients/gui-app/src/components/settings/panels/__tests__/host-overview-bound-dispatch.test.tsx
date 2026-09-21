@@ -29,11 +29,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope: () => hostScopeFixture(scopeOverrides.current) };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this suite's restart
+// confirms) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment the confirm
+// dialog opens, so every fixture below needs one even though this suite
+// never reads its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -148,6 +165,23 @@ function scopeFrom(
     hostId,
     status: "ready",
     client: fixture.client,
+  };
+}
+
+/**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
   };
 }
 
@@ -357,7 +391,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -469,7 +503,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -522,7 +556,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -578,7 +612,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -651,7 +685,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = {
       ...scopeFrom("host-a", fixture),
       status: "unreachable",
@@ -713,7 +747,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     // A real `gcTime`, unlike every other pin's `newQueryClient()`: this test
     // needs the `host.status` / `host.getInstallationInfo` queries to SURVIVE
@@ -866,7 +900,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
       "host.service.register",
       "host.service.deregister",
     ]);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -966,7 +1000,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1041,7 +1075,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1071,7 +1105,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
       installation: managedInstallation(installRecord("1.2.1"), null),
     });
     record("host-a", METHODS_WITHOUT_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1144,7 +1178,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
       },
     });
     record("host-a", METHODS_WITHOUT_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1185,7 +1219,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
       },
     });
     record("host-a", METHODS_WITHOUT_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1245,7 +1279,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1369,7 +1403,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         },
       });
       record("host-a", METHODS_WITH_BOUND);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
 
@@ -1542,7 +1576,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         },
       });
       record("host-a", METHODS_WITH_BOUND);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
 
@@ -1646,7 +1680,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
     // whose confirm the stale-open rule closes in the commit it opens.
     const fixture = parkedActivationFixture({});
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1694,7 +1728,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
     // gate (pin (k) covers that route) and prove nothing about the region.
     const fixture = parkedActivationFixture({});
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1733,7 +1767,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
     // and the assertion below reddens.
     const fixture = parkedActivationFixture({});
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1794,7 +1828,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: activateFixture.client };
+    hostBindingMock.current = bindingWith(activateFixture.client);
     scopeOverrides.current = scopeFrom("host-a", activateFixture);
     renderPanel();
 
@@ -1845,7 +1879,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: continueFixture.client };
+    hostBindingMock.current = bindingWith(continueFixture.client);
     scopeOverrides.current = scopeFrom("host-a", continueFixture);
     renderPanel();
 
@@ -1942,7 +1976,7 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
       },
     });
     record("host-a", METHODS_WITH_BOUND);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanel();
 
@@ -2043,7 +2077,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
         },
       });
       record("host-a", METHODS_WITHOUT_BOUND);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       const panel = renderPanel();
 
@@ -2126,7 +2160,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
         },
       });
       record("host-a", METHODS_WITH_BOUND);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       const panel = renderPanel();
 
@@ -2364,7 +2398,7 @@ describe("HostOverviewPanel — reason vocabularies are partitioned per wire fie
         },
       });
       record("host-a", METHODS_WITH_BOUND);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
 

@@ -173,5 +173,4 @@ export interface FocusModel {
      * caption that declares this limit. */
     readonly browsersAreMountedOnly: true;
   };
-  readonly badgeCount: number; // prompts.length
 }

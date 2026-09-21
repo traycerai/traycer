@@ -4,6 +4,7 @@ import {
   guiHarnessIdSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Message senders + per-harness chat-session anchors.
@@ -14,59 +15,62 @@ import { z } from "zod";
  * CLI thread from cloud-replicated history.
  */
 
-export const userSenderSchema = z.object({
-  type: z.literal("user"),
-  userId: z.string(),
-});
+export const userSenderSchema = lazySchema(() =>
+  z.object({
+    type: z.literal("user"),
+    userId: z.string(),
+  }),
+);
 export type UserSender = z.infer<typeof userSenderSchema>;
 
-export const agentSenderSchema = z.object({
-  type: z.literal("agent"),
-  harnessId: guiHarnessIdSchema,
-  agentId: z.string(),
-  displayName: z.string().nullable(),
-  /**
-   * Reply contract for agent-as-user senders. When the sending agent set
-   * `expectReply=true` on its `agent.sendMessage` call, this carries the
-   * broker-minted thread id the receiver must echo back. One-shot deliveries,
-   * final replies that close a thread, and assistant turns use
-   * `{ expectsReply: false }` — the field is only meaningful on user
-   * messages with `type: "agent"`. The receiving GUI surfaces reply-expected
-   * messages in the "how to reply" footer (`traycer agent send …
-   * --response-id <id>` closes the thread when replying with
-   * `expectReply=false`).
-   */
-  reply: z
-    .discriminatedUnion("expectsReply", [
-      z.object({
-        expectsReply: z.literal(true),
-        responseId: z.string(),
-      }),
-      z.object({
-        expectsReply: z.literal(false),
-      }),
-    ])
-    .default({ expectsReply: false }),
-  /**
-   * The broker thread id this message SETTLED: the message resumes a request
-   * the receiving chat itself opened (`expectReply=true` on its own earlier
-   * `agent.sendMessage`), either as the counterparty's reply or as the
-   * system inactivity notice closing out that thread. `null` for fresh
-   * requests, fire-and-forget sends, and rows persisted before this field
-   * existed. Distinct from `reply`, which is the NEW expectation this
-   * message carries. Consumers use it to tell a thread-resumed turn (it
-   * continues the chain that sent the request, keeping that chain's
-   * human/agent root) from a fresh agent-initiated request (which roots a
-   * new agent-driven chain).
-   */
-  inReplyTo: z.string().nullable().default(null),
-});
+export const agentSenderSchema = lazySchema(() =>
+  z.object({
+    type: z.literal("agent"),
+    harnessId: guiHarnessIdSchema,
+    agentId: z.string(),
+    displayName: z.string().nullable(),
+    /**
+     * Reply contract for agent-as-user senders. When the sending agent set
+     * `expectReply=true` on its `agent.sendMessage` call, this carries the
+     * broker-minted thread id the receiver must echo back. One-shot deliveries,
+     * final replies that close a thread, and assistant turns use
+     * `{ expectsReply: false }` — the field is only meaningful on user
+     * messages with `type: "agent"`. The receiving GUI surfaces reply-expected
+     * messages in the "how to reply" footer (`traycer agent send …
+     * --response-id <id>` closes the thread when replying with
+     * `expectReply=false`).
+     */
+    reply: z
+      .discriminatedUnion("expectsReply", [
+        z.object({
+          expectsReply: z.literal(true),
+          responseId: z.string(),
+        }),
+        z.object({
+          expectsReply: z.literal(false),
+        }),
+      ])
+      .default({ expectsReply: false }),
+    /**
+     * The broker thread id this message SETTLED: the message resumes a request
+     * the receiving chat itself opened (`expectReply=true` on its own earlier
+     * `agent.sendMessage`), either as the counterparty's reply or as the
+     * system inactivity notice closing out that thread. `null` for fresh
+     * requests, fire-and-forget sends, and rows persisted before this field
+     * existed. Distinct from `reply`, which is the NEW expectation this
+     * message carries. Consumers use it to tell a thread-resumed turn (it
+     * continues the chain that sent the request, keeping that chain's
+     * human/agent root) from a fresh agent-initiated request (which roots a
+     * new agent-driven chain).
+     */
+    inReplyTo: z.string().nullable().default(null),
+  }),
+);
 export type AgentSender = z.infer<typeof agentSenderSchema>;
 
-export const userMessageSenderSchema = z.discriminatedUnion("type", [
-  userSenderSchema,
-  agentSenderSchema,
-]);
+export const userMessageSenderSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [userSenderSchema, agentSenderSchema]),
+);
 export type UserMessageSender = z.infer<typeof userMessageSenderSchema>;
 export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
 
@@ -82,29 +86,33 @@ export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
  * frozen wire. Extend the live `agentSenderSchema` and freeze here explicitly.
  * The live line that carries `inReplyTo` is `chat.subscribe@1.4`.
  */
-export const agentSenderSchemaPreInReplyTo = z.object({
-  type: z.literal("agent"),
-  // Pre-Reasonix pin: this copy is bound only to released `1.0–1.3`, so it
-  // carries the enum freeze as well as the `inReplyTo` freeze.
-  harnessId: guiHarnessIdSchemaPreReasonix,
-  agentId: z.string(),
-  displayName: z.string().nullable(),
-  reply: z
-    .discriminatedUnion("expectsReply", [
-      z.object({
-        expectsReply: z.literal(true),
-        responseId: z.string(),
-      }),
-      z.object({
-        expectsReply: z.literal(false),
-      }),
-    ])
-    .default({ expectsReply: false }),
-});
+export const agentSenderSchemaPreInReplyTo = lazySchema(() =>
+  z.object({
+    type: z.literal("agent"),
+    // Pre-Reasonix pin: this copy is bound only to released `1.0–1.3`, so it
+    // carries the enum freeze as well as the `inReplyTo` freeze.
+    harnessId: guiHarnessIdSchemaPreReasonix,
+    agentId: z.string(),
+    displayName: z.string().nullable(),
+    reply: z
+      .discriminatedUnion("expectsReply", [
+        z.object({
+          expectsReply: z.literal(true),
+          responseId: z.string(),
+        }),
+        z.object({
+          expectsReply: z.literal(false),
+        }),
+      ])
+      .default({ expectsReply: false }),
+  }),
+);
 
-export const userMessageSenderSchemaPreInReplyTo = z.discriminatedUnion(
-  "type",
-  [userSenderSchema, agentSenderSchemaPreInReplyTo],
+export const userMessageSenderSchemaPreInReplyTo = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    userSenderSchema,
+    agentSenderSchemaPreInReplyTo,
+  ]),
 );
 
 /**
@@ -119,51 +127,57 @@ export const userMessageSenderSchemaPreInReplyTo = z.discriminatedUnion(
  * message, every chat event actor, every queue-item sender and every steer
  * block. Field-for-field hand copy, NOT `.extend()` off the live shape.
  */
-export const agentSenderSchemaPreReasonix = z.object({
-  type: z.literal("agent"),
-  harnessId: guiHarnessIdSchemaPreReasonix,
-  agentId: z.string(),
-  displayName: z.string().nullable(),
-  reply: z
-    .discriminatedUnion("expectsReply", [
-      z.object({
-        expectsReply: z.literal(true),
-        responseId: z.string(),
-      }),
-      z.object({
-        expectsReply: z.literal(false),
-      }),
-    ])
-    .default({ expectsReply: false }),
-  inReplyTo: z.string().nullable().default(null),
-});
+export const agentSenderSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    type: z.literal("agent"),
+    harnessId: guiHarnessIdSchemaPreReasonix,
+    agentId: z.string(),
+    displayName: z.string().nullable(),
+    reply: z
+      .discriminatedUnion("expectsReply", [
+        z.object({
+          expectsReply: z.literal(true),
+          responseId: z.string(),
+        }),
+        z.object({
+          expectsReply: z.literal(false),
+        }),
+      ])
+      .default({ expectsReply: false }),
+    inReplyTo: z.string().nullable().default(null),
+  }),
+);
 
-export const userMessageSenderSchemaPreReasonix = z.discriminatedUnion("type", [
-  userSenderSchema,
-  agentSenderSchemaPreReasonix,
-]);
+export const userMessageSenderSchemaPreReasonix = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    userSenderSchema,
+    agentSenderSchemaPreReasonix,
+  ]),
+);
 
-export const activeSessionChainSchema = z.object({
-  harnessId: guiHarnessIdSchema,
-  sessionId: z.string(),
-  // Historical workspace state for resume/fork decisions. Runtime turns must
-  // use a fresh ProviderWorkspace derived from the current visible binding.
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  // The live session's fake-context seed (see the anchor-field comment below).
-  // The chain authorizes plain resumes, so it carries the seed those resumes
-  // re-ensure against; the per-message anchors remain the authority for forks,
-  // which outlive the chain (an edit-trim nulls it). Written on session
-  // created/resumed from the turn's routing value, so it never waits on the
-  // later user-message anchor event — closing the crash window where a fresh
-  // seeded session has a chain but no anchor yet.
-  coveredUntilMessageId: z.string().nullable().default(null),
-  // Which profile (subscription) owns the live session this chain resumes.
-  // `null` means ambient/host login - also the value old chains parse to. A
-  // resume is only authorized when this matches the chat's current settings;
-  // a profile switch (like a harness switch) must fall through to fresh
-  // session routing instead of silently continuing on the new profile's env.
-  profileId: z.string().nullable().default(null),
-});
+export const activeSessionChainSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    sessionId: z.string(),
+    // Historical workspace state for resume/fork decisions. Runtime turns must
+    // use a fresh ProviderWorkspace derived from the current visible binding.
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    // The live session's fake-context seed (see the anchor-field comment below).
+    // The chain authorizes plain resumes, so it carries the seed those resumes
+    // re-ensure against; the per-message anchors remain the authority for forks,
+    // which outlive the chain (an edit-trim nulls it). Written on session
+    // created/resumed from the turn's routing value, so it never waits on the
+    // later user-message anchor event — closing the crash window where a fresh
+    // seeded session has a chain but no anchor yet.
+    coveredUntilMessageId: z.string().nullable().default(null),
+    // Which profile (subscription) owns the live session this chain resumes.
+    // `null` means ambient/host login - also the value old chains parse to. A
+    // resume is only authorized when this matches the chat's current settings;
+    // a profile switch (like a harness switch) must fall through to fresh
+    // session routing instead of silently continuing on the new profile's env.
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
 
 /**
@@ -176,13 +190,15 @@ export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
  * the snapshot frame, which is the first thing a subscriber receives.
  * Field-for-field hand copy, NOT `.extend()` off the live shape.
  */
-export const activeSessionChainSchemaPreReasonix = z.object({
-  harnessId: guiHarnessIdSchemaPreReasonix,
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  coveredUntilMessageId: z.string().nullable().default(null),
-  profileId: z.string().nullable().default(null),
-});
+export const activeSessionChainSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreReasonix,
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    coveredUntilMessageId: z.string().nullable().default(null),
+    profileId: z.string().nullable().default(null),
+  }),
+);
 
 // `coveredUntilMessageId` (on every anchor below) records the last chat message
 // covered by the fake-context seed file written when this session's lineage root
@@ -207,111 +223,123 @@ export const activeSessionChainSchemaPreReasonix = z.object({
 // profiles with no assigned color. Spread into every per-harness variant
 // below instead of duplicated per schema.
 const profileSnapshotFields = {
-  profileId: z.string().nullable().default(null),
-  labelSnapshot: z.string().nullable().default(null),
-  accountUuid: z.string().nullable().default(null),
-  accentColor: z.string().nullable().default(null),
+  profileId: lazySchema(() => z.string().nullable().default(null)),
+  labelSnapshot: lazySchema(() => z.string().nullable().default(null)),
+  accountUuid: lazySchema(() => z.string().nullable().default(null)),
+  accentColor: lazySchema(() => z.string().nullable().default(null)),
 } as const;
 
-export const claudeChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("claude"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  claudeMessageUuid: z.string(),
-  // Last transcript row uuid of this message's turn slice, recorded live from
-  // the stream (monotone last-write-wins) rather than re-derived later from
-  // the transcript. `claudeMessageUuid` marks where the turn STARTS; this
-  // marks where it ENDS, which is what a rewind fork must slice at. It is a
-  // recorded fact where the fallback boundary scan is a best-effort
-  // classification of raw rows - the host prefers the FURTHEST endpoint the
-  // two can prove, so a tail that went stale (e.g. a crash after later rows
-  // were written) extends rather than truncates. The scan itself is
-  // compact-proof: it runs over raw transcript rows, which a `/compact`
-  // re-root orphans from the parent chain but never removes from the file
-  // (only the pre-fix chain-walk view lost them). For a message closed out
-  // by a mid-turn steer this is CLEARED, not frozen - steer acceptance is
-  // stdin-enqueue, so rows in the enqueue window still belong to the
-  // previous message and only the scan (which stops at the steer's
-  // queued_command attachment row) knows the true boundary. `null`: cleared
-  // by hand-off, anchors persisted before this field existed, or a turn that
-  // died before any row streamed - all resolve via the scan alone.
-  turnTailUuid: z.string().nullable().default(null),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const claudeChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("claude"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    claudeMessageUuid: z.string(),
+    // Last transcript row uuid of this message's turn slice, recorded live from
+    // the stream (monotone last-write-wins) rather than re-derived later from
+    // the transcript. `claudeMessageUuid` marks where the turn STARTS; this
+    // marks where it ENDS, which is what a rewind fork must slice at. It is a
+    // recorded fact where the fallback boundary scan is a best-effort
+    // classification of raw rows - the host prefers the FURTHEST endpoint the
+    // two can prove, so a tail that went stale (e.g. a crash after later rows
+    // were written) extends rather than truncates. The scan itself is
+    // compact-proof: it runs over raw transcript rows, which a `/compact`
+    // re-root orphans from the parent chain but never removes from the file
+    // (only the pre-fix chain-walk view lost them). For a message closed out
+    // by a mid-turn steer this is CLEARED, not frozen - steer acceptance is
+    // stdin-enqueue, so rows in the enqueue window still belong to the
+    // previous message and only the scan (which stops at the steer's
+    // queued_command attachment row) knows the true boundary. `null`: cleared
+    // by hand-off, anchors persisted before this field existed, or a turn that
+    // died before any row streamed - all resolve via the scan alone.
+    turnTailUuid: z.string().nullable().default(null),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type ClaudeChatSessionAnchor = z.infer<
   typeof claudeChatSessionAnchorSchema
 >;
 
-export const codexChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("codex"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  codexTurnId: z.string(),
-  codexUserMessageId: z.string().nullable(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const codexChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("codex"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    codexTurnId: z.string(),
+    codexUserMessageId: z.string().nullable(),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type CodexChatSessionAnchor = z.infer<
   typeof codexChatSessionAnchorSchema
 >;
 
-export const openCodeChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("opencode"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  opencodeUserMessageId: z.string(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const openCodeChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("opencode"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    opencodeUserMessageId: z.string(),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type OpenCodeChatSessionAnchor = z.infer<
   typeof openCodeChatSessionAnchorSchema
 >;
 
-export const cursorChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("cursor"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  cursorRunId: z.string().nullable(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const cursorChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("cursor"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    cursorRunId: z.string().nullable(),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type CursorChatSessionAnchor = z.infer<
   typeof cursorChatSessionAnchorSchema
 >;
 
-export const traycerChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("traycer"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  opencodeUserMessageId: z.string(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const traycerChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("traycer"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    opencodeUserMessageId: z.string(),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type TraycerChatSessionAnchor = z.infer<
   typeof traycerChatSessionAnchorSchema
 >;
 
-export const openRouterChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("openrouter"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  opencodeUserMessageId: z.string(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const openRouterChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("openrouter"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    opencodeUserMessageId: z.string(),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type OpenRouterChatSessionAnchor = z.infer<
   typeof openRouterChatSessionAnchorSchema
 >;
@@ -322,23 +350,25 @@ export type OpenRouterChatSessionAnchor = z.infer<
 // "conversation_only", force: true}` truncates the copy to the state before a
 // given prompt (live-verified on grok CLI 1.0.4 and 1.0.13). `sessionId` is the
 // ACP session id.
-export const grokChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("grok"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  // The grok `prompt_index` this message's turn consumed in `sessionId` — a
-  // session-lifetime monotonic counter of `session/prompt` calls that survives
-  // grok's in-place compaction, so it is the per-message truncation point a
-  // rewind-fork targets (`targetPromptIndex = grokPromptIndex + 1`). Null when
-  // the turn consumed no prompt (a native `_x.ai/compact_conversation` turn)
-  // or the anchor predates index recording; a lineage with no non-null index
-  // routes edits to the fake-context fresh path, exactly as before.
-  grokPromptIndex: z.number().int().nonnegative().nullable().default(null),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const grokChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("grok"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    // The grok `prompt_index` this message's turn consumed in `sessionId` — a
+    // session-lifetime monotonic counter of `session/prompt` calls that survives
+    // grok's in-place compaction, so it is the per-message truncation point a
+    // rewind-fork targets (`targetPromptIndex = grokPromptIndex + 1`). Null when
+    // the turn consumed no prompt (a native `_x.ai/compact_conversation` turn)
+    // or the anchor predates index recording; a lineage with no non-null index
+    // routes edits to the fake-context fresh path, exactly as before.
+    grokPromptIndex: z.number().int().nonnegative().nullable().default(null),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
 
 // Wire-freeze copy of the grok anchor as every RELEASED `chat.subscribe` line
@@ -347,51 +377,59 @@ export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
 // peer's `discriminatedUnion` keeps matching the shape it was cut with. A
 // field-for-field hand copy, NOT `.omit()` off the live shape — a future grok
 // anchor field must not silently leak onto the frozen wire.
-export const grokChatSessionAnchorSchemaPrePromptIndex = z.object({
-  harnessId: z.literal("grok"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const grokChatSessionAnchorSchemaPrePromptIndex = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("grok"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 
 // Qwen (ACP) resumes at session granularity only — `session/load` reloads the
 // whole ACP session, with no per-message truncation/fork point — so the anchor
 // carries just the ACP session id. `sessionId` is that ACP session id.
-export const qwenChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("qwen"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const qwenChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("qwen"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type QwenChatSessionAnchor = z.infer<typeof qwenChatSessionAnchorSchema>;
 // Kiro (ACP) resumes at session granularity only — `session/load` reloads the
 // whole ACP session, with no per-message truncation/fork point.
-export const kiroChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("kiro"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const kiroChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("kiro"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type KiroChatSessionAnchor = z.infer<typeof kiroChatSessionAnchorSchema>;
 
-export const droidChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("droid"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const droidChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("droid"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type DroidChatSessionAnchor = z.infer<
   typeof droidChatSessionAnchorSchema
 >;
@@ -399,42 +437,48 @@ export type DroidChatSessionAnchor = z.infer<
 // Kimi (ACP) resumes at session granularity only — `session/load` reloads the
 // whole ACP session, with no per-message truncation/fork point — so the anchor
 // carries just the ACP session id. `sessionId` is that ACP session id.
-export const kimiChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("kimi"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const kimiChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("kimi"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type KimiChatSessionAnchor = z.infer<typeof kimiChatSessionAnchorSchema>;
 
 // Copilot (ACP) resumes at session granularity only — `session/load` reloads
 // the whole ACP session, with no per-message truncation/fork point. `sessionId`
 // is the ACP session id.
-export const copilotChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("copilot"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const copilotChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("copilot"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type CopilotChatSessionAnchor = z.infer<
   typeof copilotChatSessionAnchorSchema
 >;
 
-export const kilocodeChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("kilocode"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const kilocodeChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("kilocode"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type KilocodeChatSessionAnchor = z.infer<
   typeof kilocodeChatSessionAnchorSchema
 >;
@@ -442,29 +486,33 @@ export type KilocodeChatSessionAnchor = z.infer<
 // Amp resumes at thread granularity only — `execute`'s `options.continue`
 // reloads the whole Amp thread, with no per-message truncation/fork point.
 // `sessionId` is the Amp thread id.
-export const ampChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("amp"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const ampChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("amp"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type AmpChatSessionAnchor = z.infer<typeof ampChatSessionAnchorSchema>;
 
 // Devin (ACP) resumes at session granularity only — `session/load` reloads the
 // whole ACP session, with no per-message truncation/fork point — so the anchor
 // carries just the ACP session id. `sessionId` is that ACP session id.
-export const devinChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("devin"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const devinChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("devin"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type DevinChatSessionAnchor = z.infer<
   typeof devinChatSessionAnchorSchema
 >;
@@ -472,29 +520,33 @@ export type DevinChatSessionAnchor = z.infer<
 // Pi resumes at session granularity only — no per-message truncation/fork
 // point — so the anchor carries just the session id. `sessionId` is the Pi
 // session id.
-export const piChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("pi"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const piChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("pi"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type PiChatSessionAnchor = z.infer<typeof piChatSessionAnchorSchema>;
 
 // Hermes (ACP) resumes at session granularity only — `session/load` reloads
 // the whole ACP session, with no per-message truncation/fork point — so the
 // anchor carries just the ACP session id. `sessionId` is that ACP session id.
-export const hermesChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("hermes"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const hermesChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("hermes"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type HermesChatSessionAnchor = z.infer<
   typeof hermesChatSessionAnchorSchema
 >;
@@ -503,31 +555,35 @@ export type HermesChatSessionAnchor = z.infer<
 // RPC surface reloads a whole session id with no per-message truncation/fork
 // point — so the anchor carries just the session id. `sessionId` is the omp
 // RPC session id.
-export const ompChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("omp"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const ompChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("omp"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type OmpChatSessionAnchor = z.infer<typeof ompChatSessionAnchorSchema>;
 
 // Hugging Face runs on the bundled OpenCode engine (a synthetic
 // OpenAI-compatible provider pointed at `router.huggingface.co`), so its anchor
 // is opencode-shaped: the OpenCode session id plus the OpenCode user-message id
 // that turn started at, which is the truncation/fork point on resume.
-export const huggingFaceChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("huggingface"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  opencodeUserMessageId: z.string(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const huggingFaceChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("huggingface"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    opencodeUserMessageId: z.string(),
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type HuggingFaceChatSessionAnchor = z.infer<
   typeof huggingFaceChatSessionAnchorSchema
 >;
@@ -536,15 +592,17 @@ export type HuggingFaceChatSessionAnchor = z.infer<
 // reloads the whole ACP session and there is no per-message truncation/fork
 // point (`session/fork` is genuinely absent: it answers `-32601`) — so the
 // anchor carries just the ACP session id. `sessionId` is that ACP session id.
-export const reasonixChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("reasonix"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const reasonixChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("reasonix"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type ReasonixChatSessionAnchor = z.infer<
   typeof reasonixChatSessionAnchorSchema
 >;
@@ -553,42 +611,46 @@ export type ReasonixChatSessionAnchor = z.infer<
 // `session/load` reloads the whole ACP session and there is no per-message
 // truncation/fork point — so the anchor carries just the ACP session id.
 // `sessionId` is that ACP session id.
-export const antigravityChatSessionAnchorSchema = z.object({
-  harnessId: z.literal("antigravity"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
+export const antigravityChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("antigravity"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
 export type AntigravityChatSessionAnchor = z.infer<
   typeof antigravityChatSessionAnchorSchema
 >;
 
-export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
-  claudeChatSessionAnchorSchema,
-  codexChatSessionAnchorSchema,
-  openCodeChatSessionAnchorSchema,
-  cursorChatSessionAnchorSchema,
-  traycerChatSessionAnchorSchema,
-  openRouterChatSessionAnchorSchema,
-  grokChatSessionAnchorSchema,
-  qwenChatSessionAnchorSchema,
-  kiroChatSessionAnchorSchema,
-  droidChatSessionAnchorSchema,
-  kimiChatSessionAnchorSchema,
-  copilotChatSessionAnchorSchema,
-  kilocodeChatSessionAnchorSchema,
-  ampChatSessionAnchorSchema,
-  devinChatSessionAnchorSchema,
-  piChatSessionAnchorSchema,
-  hermesChatSessionAnchorSchema,
-  ompChatSessionAnchorSchema,
-  huggingFaceChatSessionAnchorSchema,
-  reasonixChatSessionAnchorSchema,
-  antigravityChatSessionAnchorSchema,
-]);
+export const chatSessionAnchorSchema = lazySchema(() =>
+  z.discriminatedUnion("harnessId", [
+    claudeChatSessionAnchorSchema,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+    reasonixChatSessionAnchorSchema,
+    antigravityChatSessionAnchorSchema,
+  ]),
+);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 
 // Wire-freeze copy of the LIVE anchor union minus every variant added since the
@@ -602,9 +664,8 @@ export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 // "pre-turnTailUuid" copy used to serve `1.0–1.5` on the belief the field
 // postdated them; the released-line-narrowing test showed that transcription
 // was a retroactive narrowing of what actually shipped, and it was removed.
-export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
-  "harnessId",
-  [
+export const chatSessionAnchorSchemaPreReasonix = lazySchema(() =>
+  z.discriminatedUnion("harnessId", [
     claudeChatSessionAnchorSchema,
     codexChatSessionAnchorSchema,
     openCodeChatSessionAnchorSchema,
@@ -624,7 +685,7 @@ export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
     hermesChatSessionAnchorSchema,
     ompChatSessionAnchorSchema,
     huggingFaceChatSessionAnchorSchema,
-  ],
+  ]),
 );
 
 /**
@@ -645,12 +706,11 @@ export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
  * also means the grok arm is the pre-`grokPromptIndex` copy here too: `@1.8`
  * shipped without the field, and `@1.9` is where it rides.
  */
-export const chatSessionAnchorSchemaPreAntigravity = z.discriminatedUnion(
-  "harnessId",
-  [
+export const chatSessionAnchorSchemaPreAntigravity = lazySchema(() =>
+  z.discriminatedUnion("harnessId", [
     ...chatSessionAnchorSchemaPreReasonix.options,
     reasonixChatSessionAnchorSchema,
-  ],
+  ]),
 );
 export type ChatSessionAnchorPreAntigravity = z.infer<
   typeof chatSessionAnchorSchemaPreAntigravity

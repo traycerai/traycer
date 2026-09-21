@@ -56,7 +56,7 @@ interface ProviderRailProps {
   readonly pending: boolean;
   readonly onEntryChange: (providerId: ProviderId) => void;
   readonly onRetryPack: (providerId: ProviderId) => void;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
   readonly onRefresh: () => Promise<void>;
   readonly refreshDisabledReason: string | undefined;
 }
@@ -133,7 +133,7 @@ export function ProviderRail(props: ProviderRailProps) {
         <button
           type="button"
           aria-label="Provider CLI settings"
-          onClick={onOpenProviderSettings}
+          onClick={() => onOpenProviderSettings("usage")}
           className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <Settings className="size-4" />

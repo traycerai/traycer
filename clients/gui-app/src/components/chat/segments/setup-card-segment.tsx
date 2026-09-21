@@ -39,6 +39,7 @@ import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create
 import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
 import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
 
@@ -192,6 +193,43 @@ export function SetupCardSegment(props: {
     return livenessKnown ? "ended" : "live";
   };
 
+  /**
+   * Release the queue a PROVISION failure paused, once Retry has made the
+   * worktree.
+   *
+   * The pause on this arm is not the user's: a failed materialization pauses
+   * the queue from the host side and every item with it, and a paused queue is
+   * not runnable - so without this the message the user already sent would sit
+   * there after a successful Retry, needing a second gesture to run work they
+   * never withdrew.
+   *
+   * The queue carries no pause REASON on the wire (`status` is the whole of it),
+   * so this cannot distinguish a host-side provision pause from one the user
+   * asked for. It resumes whenever there is a paused queue to resume, which is
+   * the trade this arm accepts: a user who paused deliberately AND then hit
+   * Retry on a provision failure gets their queue running. The script-failure
+   * arm below touches nothing.
+   *
+   * Read live through the registry rather than threaded down as a prop: the
+   * card is a transcript segment several layers below the tile that owns the
+   * handle, and this runs on a click, where a live read is the correct one.
+   * `ownerKind` gates it because only a chat has a queue.
+   */
+  const resumeQueueAfterProvisionRetry = (): void => {
+    if (aggregate.ownerKind !== "chat") return;
+    const hostId = tabClient?.getActiveHostId() ?? null;
+    if (hostId === null) return;
+    const handle = getChatSessionRegistry().peek(
+      aggregate.epicId,
+      aggregate.ownerId,
+      hostId,
+    );
+    if (handle === null) return;
+    const state = handle.store.getState();
+    if (state.queue.status !== "paused") return;
+    state.resumeQueue();
+  };
+
   const handleRetry = (workspace: SetupCardWorkspace): void => {
     // A provision failure has no worktree to re-run setup inside -
     // `worktree.retrySetup` would reject it ("entry has no worktree"). Retry
@@ -216,17 +254,20 @@ export function SetupCardSegment(props: {
               (entry) =>
                 entry.workspacePath === workspace.workspacePath && !entry.ok,
             );
-            if (failed === undefined) return;
-            reportableErrorToast(
-              failed.errorMessage ?? "Couldn't create worktree.",
-              undefined,
-              createReportIssueContext({
-                title: "Worktree re-provision failed",
-                message: failed.errorMessage,
-                code: null,
-                source: "Setup",
-              }),
-            );
+            if (failed !== undefined) {
+              reportableErrorToast(
+                failed.errorMessage ?? "Couldn't create worktree.",
+                undefined,
+                createReportIssueContext({
+                  title: "Worktree re-provision failed",
+                  message: failed.errorMessage,
+                  code: null,
+                  source: "Setup",
+                }),
+              );
+              return;
+            }
+            resumeQueueAfterProvisionRetry();
           },
         },
       );

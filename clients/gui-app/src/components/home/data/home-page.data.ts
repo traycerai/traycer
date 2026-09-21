@@ -61,6 +61,8 @@ export interface HistoryItem {
   /** True only for a host-synthesized local-home task row. Missing legacy
    *  fixtures and callers are cloud-backed. */
   isLocalHome?: boolean;
+  /** Owning host for a local row read outside the surface's default host. */
+  hostId?: string;
   /**
    * True for a cloud-homed epic the host re-admitted to discovery because its
    * delete was refused to protect never-uploaded bytes

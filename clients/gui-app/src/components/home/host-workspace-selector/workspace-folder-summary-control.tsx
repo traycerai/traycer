@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { FolderPlus } from "lucide-react";
+import { FirstTaskWorkspaceSetup } from "@/components/onboarding/first-task-workspace-setup";
 import { Slot } from "radix-ui";
 import {
   Popover,
@@ -140,6 +141,7 @@ function useWorkspaceRefreshUi(
 }
 
 export function WorkspaceFolderSummaryControl(props: {
+  readonly onFirstTaskSetupComplete?: () => void;
   readonly items: ReadonlyArray<WorkspaceRunItem>;
   readonly readOnly: boolean;
   readonly bindingResolved: boolean;
@@ -230,6 +232,7 @@ export function WorkspaceFolderSummaryControl(props: {
   // overlay (stacked above) from the host dialog (an ancestor) - see
   // preserveWhenNestedOverlay.
   const contentRef = useRef<HTMLDivElement>(null);
+  const confirmingSetupRef = useRef(false);
   // Non-null only inside a modal dialog (the New Conversation modal) - see
   // `DialogOverlayBoundaryContext`. Containing this popover inside the
   // dialog's own DOM (instead of the default `document.body` portal) keeps it
@@ -280,11 +283,8 @@ export function WorkspaceFolderSummaryControl(props: {
     );
   }
 
-  if (
-    itemCount === 0 &&
-    props.bindingResolved &&
-    props.recentWorkspaceCount === 0
-  ) {
+  const emptyRecentTrigger = itemCount === 0 && props.bindingResolved;
+  if (emptyRecentTrigger && props.recentWorkspaceCount === 0) {
     return (
       <AddFolderButton
         onAddFolder={handleExternalAddFolder}
@@ -296,7 +296,6 @@ export function WorkspaceFolderSummaryControl(props: {
     );
   }
 
-  const emptyRecentTrigger = itemCount === 0 && props.bindingResolved;
   const emptyRecentDisabled = props.addFolderPending || props.addFolderDisabled;
   const trigger = emptyRecentTrigger ? (
     <button
@@ -355,6 +354,33 @@ export function WorkspaceFolderSummaryControl(props: {
     </HoverPreviewCard>
   );
 
+  const folderRows = (
+    <div
+      className="min-h-0 w-full overflow-y-auto overscroll-contain px-3 pt-3 pb-2"
+      data-testid="workspace-folder-scroll-region"
+    >
+      <WorkspaceFolderRows
+        items={props.items}
+        trailingSlot={null}
+        addFolderPending={props.addFolderPending}
+        addFolderDisabled={props.addFolderDisabled}
+        addFolderDisabledReason={props.addFolderDisabledReason}
+        onAddFolder={props.onAddFolder}
+        onUpdate={props.onUpdate === null ? null : handleUpdate}
+        updateEnabled={props.updateEnabled}
+        updatePending={props.updatePending}
+        onDiscardStaged={props.onDiscardStaged}
+        discardDisabled={props.discardDisabled}
+        draftPending={props.draftPending === true}
+        onEditEnvironment={props.onEditEnvironment}
+        readOnly={false}
+        bindingResolved={props.bindingResolved}
+        recentWorkspaces={props.recentWorkspaces}
+        moveToRecent={props.moveToRecent}
+      />
+    </div>
+  );
+
   const picker = (
     <Popover
       open={overlayState.workspacePopoverOpen}
@@ -395,6 +421,12 @@ export function WorkspaceFolderSummaryControl(props: {
         className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] overflow-hidden"
         data-testid={props.popoverTestId}
         onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => {
+          if (!confirmingSetupRef.current) return;
+          confirmingSetupRef.current = false;
+          event.preventDefault();
+          props.onFirstTaskSetupComplete?.();
+        }}
         onInteractOutside={(event) =>
           preserveWhenNestedOverlay(event, contentRef.current)
         }
@@ -403,30 +435,26 @@ export function WorkspaceFolderSummaryControl(props: {
             scroll, while the refresh row stays outside it. This keeps one
             consistent 12px horizontal inset and avoids sticky positioning
             interacting with the popover's padding at the bottom edge. */}
-        <div
-          className="min-h-0 w-full overflow-y-auto overscroll-contain px-3 pt-3 pb-2"
-          data-testid="workspace-folder-scroll-region"
-        >
-          <WorkspaceFolderRows
+        {folderRows}
+        {props.onFirstTaskSetupComplete !== undefined ? (
+          <FirstTaskWorkspaceSetup
             items={props.items}
-            trailingSlot={null}
-            addFolderPending={props.addFolderPending}
-            addFolderDisabled={props.addFolderDisabled}
-            addFolderDisabledReason={props.addFolderDisabledReason}
-            onAddFolder={props.onAddFolder}
-            onUpdate={props.onUpdate === null ? null : handleUpdate}
-            updateEnabled={props.updateEnabled}
-            updatePending={props.updatePending}
-            onDiscardStaged={props.onDiscardStaged}
-            discardDisabled={props.discardDisabled}
-            draftPending={props.draftPending === true}
-            onEditEnvironment={props.onEditEnvironment}
-            readOnly={false}
-            bindingResolved={props.bindingResolved}
-            recentWorkspaces={props.recentWorkspaces}
-            moveToRecent={props.moveToRecent}
+            rootRef={contentRef}
+            onContinue={() => {
+              confirmingSetupRef.current = true;
+              setOverlayState({
+                workspacePopoverOpen: false,
+                summaryHoverOpen: false,
+              });
+            }}
+            onClose={() =>
+              setOverlayState({
+                workspacePopoverOpen: false,
+                summaryHoverOpen: false,
+              })
+            }
           />
-        </div>
+        ) : null}
         {props.refresh === null ? null : (
           <WorkspaceRefreshFooter
             checkedAt={refreshUi.checkedAt}

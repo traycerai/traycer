@@ -120,15 +120,37 @@ export class PriorityScheduler {
   }
 
   /**
-   * Pauses draining WITHOUT dropping queued frames — used during a host blip
-   * (`host_detached`), where the same Noise session resumes on `host_attached`.
-   * Frames enqueued while paused are held (not lost to the relay, which has no
-   * host to deliver to) and flushed on `resume`.
+   * Stops draining WITHOUT dropping what is queued — its one production caller
+   * is `onHostDetached`, for the window where the relay leg is up but has no
+   * host behind it. Frames enqueued while paused are held rather than handed
+   * to a relay with nobody to deliver them to.
+   *
+   * WHAT ENDS THE PAUSE IS A TEARDOWN, NOT A RESUME, and the difference is the
+   * whole contract. `host_attached` does not resume this scheduler: it is PROOF
+   * the responder this session was built against is gone (the host discards all
+   * Noise state on any uplink close), so `onHostAttached` forces a full redial —
+   * `handleConnectionLost` → `dropConnection` → `teardownConnection`, which
+   * calls {@link stop}, closes the relay socket and wipes the Noise channel.
+   * Nothing here survives that: the queue is discarded, and the redial builds a
+   * fresh connection with a fresh scheduler.
+   *
+   * So the held frames are never flushed — they are dropped, and the higher
+   * layer re-drives those streams after the handshake (the openAck replay
+   * re-subscribes every stream), which is the same contract {@link stop}
+   * states. Holding them is still what the pause buys: it keeps the pump from
+   * spending pacing budget and credits on sends that cannot land, and keeps a
+   * half-sent chunk source from advancing into a channel about to be wiped.
+   *
+   * {@link resume} has NO production caller — `scheduler.test.ts` is the only
+   * one — precisely because no edge exists that ends a pause with the session
+   * intact. Treat it as the unit-test seam it is; a caller for it would need a
+   * reattach path that preserves the Noise session, and there is none.
    */
   pause(): void {
     this.paused = true;
   }
 
+  /** See {@link pause}: test-only today; no production edge resumes a pause. */
   resume(): void {
     if (!this.paused) {
       return;

@@ -29,6 +29,7 @@ import {
   type ToolCallBlock,
   type ToolCallManagedCommandRestarted,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { validateVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   chatSubscribeV18,
@@ -847,11 +848,15 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
 
   it("importing hostStreamRpcRegistry succeeds and both JSON-schema IO modes generate without throwing", () => {
     // Regression guard for the actual bug this codec fixes: a plain
-    // `.transform()` here would make `hostStreamRpcRegistry`'s module-load-time
-    // validation throw "Transforms cannot be represented in JSON Schema" the
-    // moment any `chat.subscribe` contract (which embeds `chatSchema`, which
-    // embeds this block) gets its fields JSON-schema-serialized.
+    // `.transform()` here would make full stream-registry validation throw
+    // "Transforms cannot be represented in JSON Schema" the moment any
+    // `chat.subscribe` contract (which embeds `chatSchema`, which embeds this
+    // block) gets its fields JSON-schema-serialized. Construction is
+    // structural-only, so the guard is the explicit full validator.
     expect(Object.keys(hostStreamRpcRegistry)).toContain("chat.subscribe");
+    expect(() =>
+      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+    ).not.toThrow();
     expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
     expect(() =>
       z.toJSONSchema(contentBlockSchema, { io: "input" }),

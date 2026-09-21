@@ -63,12 +63,13 @@ export interface SetupCardWindow {
   readonly closedAt: number | null;
   /**
    * Whether the window holds a `setup.creating` event. Its PRESENCE marks a
-   * live mid-conversation creation (trustworthy `createdAt`); its absence marks
-   * the back-filled genesis worktree, whose stamp can land after the first
-   * message and which therefore pins to the top of the transcript instead of
-   * sorting.
+   * live mid-conversation creation (trustworthy `createdAt`). Its absence can
+   * mean either a back-filled initial worktree or setup after a fork; use
+   * `isGenesisPin` to distinguish their placement.
    */
   readonly hasCreatingEvent: boolean;
+  /** Only an initial worktree preceding any fork belongs above inherited history. */
+  readonly isGenesisPin: boolean;
   /**
    * The id of the user message whose send carried this creation, when the
    * creating event named one. The row anchors DIRECTLY above that message by
@@ -142,8 +143,38 @@ export function partitionSetupCardWindows(
   // `current` is non-null only when the final window is still open, and it
   // always references the last-pushed window - so an identity check marks
   // exactly the one live lifecycle active.
-  return windows.map((windowEvents, index) =>
-    describeWindow(windowEvents, windowEvents === current, closedAt[index]),
+  return windows.map((windowEvents, index) => {
+    const window = describeWindow(
+      windowEvents,
+      windowEvents === current,
+      closedAt[index],
+    );
+    return {
+      ...window,
+      isGenesisPin: isGenesisSetupWindow({
+        windowIndex: index,
+        hasCreatingEvent: window.hasCreatingEvent,
+        createdAt: window.createdAt,
+        events,
+      }),
+    };
+  });
+}
+
+/** A fork's new worktree belongs to its continuation, not inherited history. */
+export function isGenesisSetupWindow(input: {
+  readonly windowIndex: number;
+  readonly hasCreatingEvent: boolean;
+  readonly createdAt: number;
+  readonly events: readonly ChatEvent[];
+}): boolean {
+  return (
+    input.windowIndex === 0 &&
+    !input.hasCreatingEvent &&
+    !input.events.some(
+      (event) =>
+        event.type === "chat.forked" && event.timestamp <= input.createdAt,
+    )
   );
 }
 
@@ -198,7 +229,7 @@ function describeWindow(
   windowEvents: readonly ChatEvent[],
   isActive: boolean,
   closedAt: number | null,
-): SetupCardWindow {
+): Omit<SetupCardWindow, "isGenesisPin"> {
   const createdAt = windowEvents.reduce(
     (earliest, event) => Math.min(earliest, event.timestamp),
     windowEvents[0].timestamp,

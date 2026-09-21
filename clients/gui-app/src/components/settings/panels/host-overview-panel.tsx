@@ -1,3 +1,4 @@
+import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -1752,6 +1753,9 @@ export function HostOverviewPanel(props: {
       <HostDangerZone scope={scope} />
 
       <RestartHostConfirmDialog
+        hostId={
+          restartConfirm === "bridge" ? forceRestartLocalHostId : scope.hostId
+        }
         open={restartConfirm !== null}
         onOpenChange={(open) => {
           if (!open) closeRestartConfirm();
@@ -1874,7 +1878,15 @@ export function HostOverviewPanel(props: {
           forceRestart.mutate();
         }}
         onDefer={() => setForceRestartOffer(null)}
-      />
+      >
+        {forceRestartOffer !== null ? (
+          <HostRestartSessions
+            hostId={forceRestartOffer.hostId}
+            disabled={forceRestartInFlight}
+            onNavigate={() => setForceRestartOffer(null)}
+          />
+        ) : null}
+      </HostBusyForceDeferDialog>
       {/* The staged-wait force's confirmation - the same busy/force/defer
           dialog, because the decision is the same shape: live work stands
           between the person and the update, and they choose whether to end

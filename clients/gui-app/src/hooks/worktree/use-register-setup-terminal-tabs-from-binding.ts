@@ -9,21 +9,18 @@ import {
   setupTerminalTitle,
 } from "@/lib/setup-terminal-tab-descriptor";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Registers each worktree SETUP terminal as a real (background) canvas tab the
- * first time setup starts running, so it survives a host/GUI restart exactly
- * like a user-opened terminal.
+ * first time setup starts running, so the saved tab can reattach after a GUI
+ * restart. The host owns the setup session: a missing session must be retried
+ * through the setup controls, never recreated by the terminal tile.
  *
- * The host keeps no terminal state across a restart - persistence comes only
- * from a saved canvas tab, which re-creates the shell on next open. The setup
- * PTY is spawned server-side (never through the renderer's `terminal.create`),
- * so without this it has no saved tab and vanishes on a host restart while
- * user terminals (always opened as tabs) come back. This registers it as a
- * BACKGROUND tab (no focus change, so the user is not yanked off the chat /
- * terminal agent), keyed on the SAME id the card's "Open terminal" uses - so
- * the two converge on one tab.
+ * Registration leaves the chat / terminal agent focused and uses the SAME
+ * id as the setup card's "Open terminal", so both converge on one tab.
  *
  * The tab is auto-opened EXACTLY ONCE PER VIEW. Two guards together give that:
  *  - the `running` gate, so a settled (succeeded / failed / cancelled) or
@@ -34,9 +31,9 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
  * Registration is VIEW-scoped: the same owner shown in two view tabs auto-opens
  * the terminal in each, while within one view it pops once and, once closed,
  * stays closed - never returning on binding churn, remount, or completion.
- * Restart survival is unaffected (it comes from the persisted canvas tab); a
- * finished setup terminal the user wants back is one click away on the setup
- * card's "Open terminal".
+ * The persisted tab can reattach while its session is live. A completed setup
+ * whose shell is still running remains reachable through "Open terminal";
+ * once that session is gone, the setup controls own starting another run.
  *
  * Live-stream (worktree binding) -> external-store (canvas tabs) sync, so it
  * legitimately lives in an effect. Bound to the tab host, matching the setup
@@ -50,8 +47,9 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 export function useRegisterSetupTerminalTabsFromBinding(options: {
   binding: WorktreeBinding | null;
   viewTabId: string;
+  owningTileInstanceId: string;
 }): void {
-  const { binding, viewTabId } = options;
+  const { binding, viewTabId, owningTileInstanceId } = options;
   const hostId = useTabHostId();
   const { openTile } = useEpicTileNavigation();
   const registerSetupTerminalOnce = useSetupTerminalRegistrationStore(
@@ -60,6 +58,12 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
 
   useEffect(() => {
     if (binding === null) return;
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    const pane = collectPanes(canvas?.root ?? null).find((candidate) =>
+      candidate.tabInstanceIds.includes(owningTileInstanceId),
+    );
+    // Never consume registration against an unrelated active pane.
+    if (pane === undefined) return;
     binding.entries.forEach((entry) => {
       // Only consider an actively-running setup, never a settled or historical
       // entry whose `setupTerminalSessionId` the binding still carries.
@@ -81,8 +85,8 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       // would alias handles when the same session opens in multiple views.
       // Dedup/convergence with the setup card's "Open terminal" is by
       // content `id`, not instance.
-      openTile(
-        tileIntent(
+      openTile({
+        ...tileIntent(
           {
             id: sessionId,
             instanceId: uuidv4(),
@@ -94,12 +98,19 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
             origin: "setup",
           },
           { tabId: viewTabId },
-          // The host pushed this at us; there was no gesture behind it, so it
-          // lands as a background tab and never steals focus (C4).
+          // Keep the owner visible while setup runs in its background tab.
           "host",
           "direct_ui",
         ),
-      );
+        placement: { kind: "tab", paneId: pane.id, index: null },
+      });
     });
-  }, [binding, viewTabId, hostId, openTile, registerSetupTerminalOnce]);
+  }, [
+    binding,
+    viewTabId,
+    owningTileInstanceId,
+    hostId,
+    openTile,
+    registerSetupTerminalOnce,
+  ]);
 }

@@ -41,6 +41,7 @@ import {
   imageSha256HexSchema,
   supportedImageMediaTypeSchema,
 } from "@traycer/protocol/persistence/epic/images";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const LatestEpicArtifactKindSchema = getRecordSchema(
   commonRecordRegistry,
@@ -67,66 +68,75 @@ export const LatestTicketStatusSchema = getRecordSchema(
 
 export type PermissionRole = z.infer<typeof LatestPermissionRoleSchema>;
 
-export const accessTypeSchema = z.enum(["direct", "link", "organization"]);
+export const accessTypeSchema = lazySchema(() =>
+  z.enum(["direct", "link", "organization"]),
+);
 export type AccessType = z.infer<typeof accessTypeSchema>;
 
-export const taskTypeSchema = z.enum(["epic", "phase"]);
+export const taskTypeSchema = lazySchema(() => z.enum(["epic", "phase"]));
 export type TaskType = z.infer<typeof taskTypeSchema>;
 
-export const taskRepoMatchModeSchema = z.enum(["any", "all"]);
+export const taskRepoMatchModeSchema = lazySchema(() => z.enum(["any", "all"]));
 export type TaskRepoMatchMode = z.infer<typeof taskRepoMatchModeSchema>;
 
-export const taskOwnershipScopeSchema = z.enum(["mine", "shared"]);
+export const taskOwnershipScopeSchema = lazySchema(() =>
+  z.enum(["mine", "shared"]),
+);
 export type TaskOwnershipScope = z.infer<typeof taskOwnershipScopeSchema>;
 
-export const listTasksSortSchemaV11 = z.enum([
-  "recent",
-  "oldest",
-  "title-asc",
-  "title-desc",
-  "relevance",
-]);
-export const listTasksSortSchema = z.enum([
-  ...listTasksSortSchemaV11.options,
-  "last-viewed",
-]);
+export const listTasksSortSchemaV11 = lazySchema(() =>
+  z.enum(["recent", "oldest", "title-asc", "title-desc", "relevance"]),
+);
+export const listTasksSortSchema = lazySchema(() =>
+  z.enum([...listTasksSortSchemaV11.options, "last-viewed"]),
+);
 export type ListTasksSort = z.infer<typeof listTasksSortSchema>;
 
 // ─── Common shapes ────────────────────────────────────────────────────────────
 
-export const tiptapCollabTokenSchema = z.object({
-  token: z.string(),
-  expiresAtMs: z.number(),
-});
+export const tiptapCollabTokenSchema = lazySchema(() =>
+  z.object({
+    token: z.string(),
+    expiresAtMs: z.number(),
+  }),
+);
 export type TiptapCollabToken = z.infer<typeof tiptapCollabTokenSchema>;
 
-export const tiptapRoomInfoSchema = z.object({
-  roomId: z.string(),
-  webSocketUrl: z.string(),
-  token: tiptapCollabTokenSchema.nullable(),
-});
+export const tiptapRoomInfoSchema = lazySchema(() =>
+  z.object({
+    roomId: z.string(),
+    webSocketUrl: z.string(),
+    token: tiptapCollabTokenSchema.nullable(),
+  }),
+);
 export type TiptapRoomInfo = z.infer<typeof tiptapRoomInfoSchema>;
 
-export const taskRefSchema = z.object({
-  taskId: z.string(),
-  taskType: taskTypeSchema,
-});
+export const taskRefSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string(),
+    taskType: taskTypeSchema,
+  }),
+);
 export type TaskRef = z.infer<typeof taskRefSchema>;
 
-export const permissionDtoSchema = z.object({
-  role: LatestPermissionRoleSchema,
-  accessType: accessTypeSchema,
-  userId: z.string().optional(),
-  organizationId: z.string().optional(),
-  grantedBy: z.string(),
-  grantedAt: z.number(),
-});
+export const permissionDtoSchema = lazySchema(() =>
+  z.object({
+    role: LatestPermissionRoleSchema,
+    accessType: accessTypeSchema,
+    userId: z.string().optional(),
+    organizationId: z.string().optional(),
+    grantedBy: z.string(),
+    grantedAt: z.number(),
+  }),
+);
 export type PermissionDto = z.infer<typeof permissionDtoSchema>;
 
-export const taskRepoIdentifierSchema = z.object({
-  owner: z.string(),
-  repo: z.string(),
-});
+export const taskRepoIdentifierSchema = lazySchema(() =>
+  z.object({
+    owner: z.string(),
+    repo: z.string(),
+  }),
+);
 export type TaskRepoIdentifier = z.infer<typeof taskRepoIdentifierSchema>;
 
 /** Canonical `owner/repo` string form. The wire shape is structured; this is for keys, labels, and IDs. */
@@ -134,35 +144,43 @@ export function formatRepoIdentifier(repo: TaskRepoIdentifier): string {
   return `${repo.owner}/${repo.repo}`;
 }
 
-export const taskWorkspaceIdentifierSchema = z.object({
-  hostId: z.string(),
-  workspacePath: z.string(),
-});
+export const taskWorkspaceIdentifierSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    workspacePath: z.string(),
+  }),
+);
 export type TaskWorkspaceIdentifier = z.infer<
   typeof taskWorkspaceIdentifierSchema
 >;
 
-export const createEpicWorkspaceIdentifierSchema = z.object({
-  workspacePath: z.string(),
-});
+export const createEpicWorkspaceIdentifierSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+  }),
+);
 export type CreateEpicWorkspaceIdentifier = z.infer<
   typeof createEpicWorkspaceIdentifierSchema
 >;
 
-export const taskRepoAssociationSchema = z.object({
-  task: taskRefSchema.nullable(),
-  repoIdentifier: taskRepoIdentifierSchema.nullable(),
-  createdAt: z.number(),
-  createdBy: z.string(),
-});
+export const taskRepoAssociationSchema = lazySchema(() =>
+  z.object({
+    task: taskRefSchema.nullable(),
+    repoIdentifier: taskRepoIdentifierSchema.nullable(),
+    createdAt: z.number(),
+    createdBy: z.string(),
+  }),
+);
 export type TaskRepoAssociation = z.infer<typeof taskRepoAssociationSchema>;
 
-export const userTaskWorkspaceSchema = z.object({
-  task: taskRefSchema.nullable(),
-  hostId: z.string(),
-  workspacePath: z.string(),
-  createdAt: z.number(),
-});
+export const userTaskWorkspaceSchema = lazySchema(() =>
+  z.object({
+    task: taskRefSchema.nullable(),
+    hostId: z.string(),
+    workspacePath: z.string(),
+    createdAt: z.number(),
+  }),
+);
 export type UserTaskWorkspace = z.infer<typeof userTaskWorkspaceSchema>;
 
 export interface TaskAssociations {
@@ -176,19 +194,21 @@ export interface TaskAssociations {
 // "drops". `hostId` here is the WORKSPACE-association
 // host (it pairs with `workspacePath`), NOT the chat-host filter added in
 // @1.3 - the two dimensions answer different questions and must stay distinct.
-export const taskFiltersSchemaPre13 = z.object({
-  query: z.string().optional(),
-  taskType: taskTypeSchema.optional(),
-  repoIdentifier: z.string().optional(),
-  repoIdentifiers: z.array(taskRepoIdentifierSchema).optional(),
-  repoMatchMode: taskRepoMatchModeSchema.optional(),
-  workspaceIdentifiers: z.array(taskWorkspaceIdentifierSchema).optional(),
-  workspaceMatchMode: taskRepoMatchModeSchema.optional(),
-  ownershipScopes: z.array(taskOwnershipScopeSchema).optional(),
-  workspacePath: z.string().optional(),
-  hostId: z.string().optional(),
-  organizationId: z.string().optional(),
-});
+export const taskFiltersSchemaPre13 = lazySchema(() =>
+  z.object({
+    query: z.string().optional(),
+    taskType: taskTypeSchema.optional(),
+    repoIdentifier: z.string().optional(),
+    repoIdentifiers: z.array(taskRepoIdentifierSchema).optional(),
+    repoMatchMode: taskRepoMatchModeSchema.optional(),
+    workspaceIdentifiers: z.array(taskWorkspaceIdentifierSchema).optional(),
+    workspaceMatchMode: taskRepoMatchModeSchema.optional(),
+    ownershipScopes: z.array(taskOwnershipScopeSchema).optional(),
+    workspacePath: z.string().optional(),
+    hostId: z.string().optional(),
+    organizationId: z.string().optional(),
+  }),
+);
 export type TaskFiltersPre13 = z.infer<typeof taskFiltersSchemaPre13>;
 
 /**
@@ -205,61 +225,71 @@ export type TaskFiltersPre13 = z.infer<typeof taskFiltersSchemaPre13>;
  * real readers resolve by an owner-precedence tiebreak that an aggregate
  * cannot reproduce.
  */
-export const taskFiltersSchema = taskFiltersSchemaPre13.extend({
-  chatHostIds: z.array(z.string()).optional(),
-  chatHostMatchMode: taskRepoMatchModeSchema.optional(),
-});
+export const taskFiltersSchema = lazySchema(() =>
+  taskFiltersSchemaPre13.extend({
+    chatHostIds: z.array(z.string()).optional(),
+    chatHostMatchMode: taskRepoMatchModeSchema.optional(),
+  }),
+);
 export type TaskFilters = z.infer<typeof taskFiltersSchema>;
 
 // ─── Epic / phase light (with permission) ─────────────────────────────────────
 
-export const epicLightSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  initialUserPrompt: z.string(),
-  ticketCount: z.number(),
-  specCount: z.number(),
-  storyCount: z.number(),
-  reviewCount: z.number(),
-  status: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  createdBy: z.string(),
-  version: z.string(),
-});
+export const epicLightSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    title: z.string(),
+    initialUserPrompt: z.string(),
+    ticketCount: z.number(),
+    specCount: z.number(),
+    storyCount: z.number(),
+    reviewCount: z.number(),
+    status: z.string(),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    createdBy: z.string(),
+    version: z.string(),
+  }),
+);
 export type EpicLight = z.infer<typeof epicLightSchema>;
 
-export const epicLightWithPermissionSchema = z.object({
-  light: epicLightSchema.nullable(),
-  permission: permissionDtoSchema.nullable(),
-  repos: z.array(taskRepoAssociationSchema),
-  workspaces: z.array(userTaskWorkspaceSchema),
-  roomInfo: tiptapRoomInfoSchema.nullable(),
-});
+export const epicLightWithPermissionSchema = lazySchema(() =>
+  z.object({
+    light: epicLightSchema.nullable(),
+    permission: permissionDtoSchema.nullable(),
+    repos: z.array(taskRepoAssociationSchema),
+    workspaces: z.array(userTaskWorkspaceSchema),
+    roomInfo: tiptapRoomInfoSchema.nullable(),
+  }),
+);
 export type EpicLightWithPermission = z.infer<
   typeof epicLightWithPermissionSchema
 >;
 
-export const phaseLightSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  userQuery: z.string(),
-  phaseLength: z.number(),
-  status: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  createdBy: z.string(),
-  version: z.string(),
-});
+export const phaseLightSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    title: z.string(),
+    userQuery: z.string(),
+    phaseLength: z.number(),
+    status: z.string(),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    createdBy: z.string(),
+    version: z.string(),
+  }),
+);
 export type PhaseLight = z.infer<typeof phaseLightSchema>;
 
-export const phaseLightWithPermissionSchema = z.object({
-  light: phaseLightSchema.nullable(),
-  permission: permissionDtoSchema.nullable(),
-  repos: z.array(taskRepoAssociationSchema),
-  workspaces: z.array(userTaskWorkspaceSchema),
-  roomInfo: tiptapRoomInfoSchema.nullable(),
-});
+export const phaseLightWithPermissionSchema = lazySchema(() =>
+  z.object({
+    light: phaseLightSchema.nullable(),
+    permission: permissionDtoSchema.nullable(),
+    repos: z.array(taskRepoAssociationSchema),
+    workspaces: z.array(userTaskWorkspaceSchema),
+    roomInfo: tiptapRoomInfoSchema.nullable(),
+  }),
+);
 export type PhaseLightWithPermission = z.infer<
   typeof phaseLightWithPermissionSchema
 >;
@@ -269,52 +299,64 @@ export type PhaseLightWithPermission = z.infer<
 // cloudDataRpcRegistry["epic.update"] resolve to the same zod instances
 // (enforced by epic-update-title-instance-identity.test.ts).
 
-export const epicLightDeltaSchema = z.object({
-  id: z.string(),
-  title: z.string().optional(),
-  ticketCount: z.number().optional(),
-  specCount: z.number().optional(),
-  storyCount: z.number().optional(),
-  reviewCount: z.number().optional(),
-  status: z.string().optional(),
-  updatedAt: z.number(),
-  initialUserPrompt: z.string().optional(),
-});
+export const epicLightDeltaSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    title: z.string().optional(),
+    ticketCount: z.number().optional(),
+    specCount: z.number().optional(),
+    storyCount: z.number().optional(),
+    reviewCount: z.number().optional(),
+    status: z.string().optional(),
+    updatedAt: z.number(),
+    initialUserPrompt: z.string().optional(),
+  }),
+);
 export type EpicLightDelta = z.infer<typeof epicLightDeltaSchema>;
 
-export const updateEpicRequestSchema = z.object({
-  epicDelta: epicLightDeltaSchema.nullable(),
-});
+export const updateEpicRequestSchema = lazySchema(() =>
+  z.object({
+    epicDelta: epicLightDeltaSchema.nullable(),
+  }),
+);
 export type UpdateEpicRequest = z.infer<typeof updateEpicRequestSchema>;
 
-export const updateEpicResponseSchema = z.object({ updated: z.boolean() });
+export const updateEpicResponseSchema = lazySchema(() =>
+  z.object({ updated: z.boolean() }),
+);
 export type UpdateEpicResponse = z.infer<typeof updateEpicResponseSchema>;
 
 // ─── Title generation (server-backed, no credit consumption) ────────────────
 
-export const generateTitleTargetSchema = z.enum(["epic", "chat", "tuiAgent"]);
+export const generateTitleTargetSchema = lazySchema(() =>
+  z.enum(["epic", "chat", "tuiAgent"]),
+);
 export type GenerateTitleTarget = z.infer<typeof generateTitleTargetSchema>;
 export const GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS = 4_000;
 
-export const generateTitleRequestSchema = z.discriminatedUnion("target", [
-  z.object({
-    target: z.literal("epic"),
-    sourceText: z.string().max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
-  }),
-  z.object({
-    target: z.literal("chat"),
-    sourceText: z.string().max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
-  }),
-  z.object({
-    target: z.literal("tuiAgent"),
-    sourceText: z.string().max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
-  }),
-]);
+export const generateTitleRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("target", [
+    z.object({
+      target: z.literal("epic"),
+      sourceText: z.string().max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
+    }),
+    z.object({
+      target: z.literal("chat"),
+      sourceText: z.string().max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
+    }),
+    z.object({
+      target: z.literal("tuiAgent"),
+      sourceText: z.string().max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
+    }),
+  ]),
+);
 export type GenerateTitleRequest = z.infer<typeof generateTitleRequestSchema>;
 
-export const generateTitleResponseSchema = z.object({
-  title: z.string(),
-});
+export const generateTitleResponseSchema = lazySchema(() =>
+  z.object({
+    title: z.string(),
+  }),
+);
 export type GenerateTitleResponse = z.infer<typeof generateTitleResponseSchema>;
 
 // ─── Epic delete (HTTP wire shape) ───────────────────────────────────────────
@@ -322,10 +364,14 @@ export type GenerateTitleResponse = z.infer<typeof generateTitleResponseSchema>;
 // the Fastify `DELETE /api/epics/:id` route. The host RPC layer routes
 // single-row deletions through `epic.batchDelete` instead.
 
-export const deleteEpicRequestSchema = z.object({ id: z.string() });
+export const deleteEpicRequestSchema = lazySchema(() =>
+  z.object({ id: z.string() }),
+);
 export type DeleteEpicRequest = z.infer<typeof deleteEpicRequestSchema>;
 
-export const deleteEpicResponseSchema = z.object({ success: z.boolean() });
+export const deleteEpicResponseSchema = lazySchema(() =>
+  z.object({ success: z.boolean() }),
+);
 export type DeleteEpicResponse = z.infer<typeof deleteEpicResponseSchema>;
 
 /**
@@ -346,25 +392,29 @@ export type DeleteEpicResponse = z.infer<typeof deleteEpicResponseSchema>;
  * module-load throw, not a type error. One vocabulary for one fact: do not
  * spell a second `z.enum(["local","cloud"])` anywhere in this file.
  */
-export const epicListHomeSchema = z.enum(["local", "cloud"]);
+export const epicListHomeSchema = lazySchema(() => z.enum(["local", "cloud"]));
 export type EpicListHome = z.infer<typeof epicListHomeSchema>;
 
 // ─── Batch delete (epic.batchDelete@1.0 wire shape) ──────────────────────────
 // Defined here so hostRpcRegistry["epic.batchDelete"] and
 // cloudDataClient.batchDelete resolve to the same zod instances.
 
-export const batchDeleteRequestSchema = z.object({
-  ids: z.array(z.string()),
-});
+export const batchDeleteRequestSchema = lazySchema(() =>
+  z.object({
+    ids: z.array(z.string()),
+  }),
+);
 export type BatchDeleteRequest = z.infer<typeof batchDeleteRequestSchema>;
 
 // `epic.batchDelete@1.0` row - FROZEN. Its own literal object; the live row
 // below extends it.
-export const batchDeleteItemResultSchemaPre11 = z.object({
-  taskId: z.string(),
-  success: z.boolean(),
-  errorMessage: z.string().optional(),
-});
+export const batchDeleteItemResultSchemaPre11 = lazySchema(() =>
+  z.object({
+    taskId: z.string(),
+    success: z.boolean(),
+    errorMessage: z.string().optional(),
+  }),
+);
 export type BatchDeleteItemResultPre11 = z.infer<
   typeof batchDeleteItemResultSchemaPre11
 >;
@@ -388,23 +438,28 @@ export type BatchDeleteItemResultPre11 = z.infer<
  * account-wide tombstone is the DESTRUCTIVE direction and an old host is
  * exactly the peer with no evidence to license it.
  */
-export const batchDeleteItemResultSchema =
+export const batchDeleteItemResultSchema = lazySchema(() =>
   batchDeleteItemResultSchemaPre11.extend({
     home: epicListHomeSchema.optional(),
-  });
+  }),
+);
 export type BatchDeleteItemResult = z.infer<typeof batchDeleteItemResultSchema>;
 
 // `epic.batchDelete@1.0` response - FROZEN over the frozen row above.
-export const batchDeleteResponseSchemaPre11 = z.object({
-  results: z.array(batchDeleteItemResultSchemaPre11),
-});
+export const batchDeleteResponseSchemaPre11 = lazySchema(() =>
+  z.object({
+    results: z.array(batchDeleteItemResultSchemaPre11),
+  }),
+);
 export type BatchDeleteResponsePre11 = z.infer<
   typeof batchDeleteResponseSchemaPre11
 >;
 
-export const batchDeleteResponseSchema = z.object({
-  results: z.array(batchDeleteItemResultSchema),
-});
+export const batchDeleteResponseSchema = lazySchema(() =>
+  z.object({
+    results: z.array(batchDeleteItemResultSchema),
+  }),
+);
 export type BatchDeleteResponse = z.infer<typeof batchDeleteResponseSchema>;
 
 // ─── Epic create (epic.create@1.0 wire shape) ────────────────────────────────
@@ -416,16 +471,18 @@ export type BatchDeleteResponse = z.infer<typeof batchDeleteResponseSchema>;
  * `messageId`/`clientActionId` are shared with any fallback `send` frame so the
  * host's idempotency gate dedupes.
  */
-export const createChatInitialMessageSchema = z.object({
-  messageId: z.string(),
-  clientActionId: z.string(),
-  content: getRecordSchema(commonRecordRegistry, "json-content", "latest"),
-  sender: userMessageSenderSchema,
-  settings: chatRunSettingsSchema,
-  // Billing/account context the initial turn runs under. Global app-wide
-  // selection (not per-chat), stamped at create time.
-  accountContext: accountContextSchema,
-});
+export const createChatInitialMessageSchema = lazySchema(() =>
+  z.object({
+    messageId: z.string(),
+    clientActionId: z.string(),
+    content: getRecordSchema(commonRecordRegistry, "json-content", "latest"),
+    sender: userMessageSenderSchema,
+    settings: chatRunSettingsSchema,
+    // Billing/account context the initial turn runs under. Global app-wide
+    // selection (not per-chat), stamped at create time.
+    accountContext: accountContextSchema,
+  }),
+);
 export type CreateChatInitialMessage = z.infer<
   typeof createChatInitialMessageSchema
 >;
@@ -436,29 +493,33 @@ export type CreateChatInitialMessage = z.infer<
  * racing `chat.subscribe` never opens the epic before the chat exists. Carries
  * everything `epic.createChat` would (minus `epicId`, which is `epic.id`).
  */
-export const createEpicChatSeedSchema = z.object({
-  chatId: z.string(),
-  parentId: z.string().nullable(),
-  hostId: z.string(),
-  title: z.string(),
-  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
-  worktreeIntent: worktreeIntentSchema.nullable(),
-  initialMessage: createChatInitialMessageSchema.nullable(),
-});
+export const createEpicChatSeedSchema = lazySchema(() =>
+  z.object({
+    chatId: z.string(),
+    parentId: z.string().nullable(),
+    hostId: z.string(),
+    title: z.string(),
+    workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+    worktreeIntent: worktreeIntentSchema.nullable(),
+    initialMessage: createChatInitialMessageSchema.nullable(),
+  }),
+);
 export type CreateEpicChatSeed = z.infer<typeof createEpicChatSeedSchema>;
 
-export const createEpicRequestSchema = z.object({
-  epic: epicLightSchema,
-  repoIdentifiers: z.array(taskRepoIdentifierSchema),
-  workspaces: z.array(createEpicWorkspaceIdentifierSchema),
-  // The first chat, folded into the epic create so it is seeded into the same
-  // in-memory Y.Doc atomically and the provider turn can be scheduled without an
-  // extra create-chat round trip. Absent / `null` for epic-only creates
-  // (terminal agents, migrations) and for cloud REST callers that share this
-  // request type (the cloud record is created from epic/repos/workspaces; the
-  // chat reaches the cloud via Yjs room sync).
-  chat: createEpicChatSeedSchema.nullable().optional(),
-});
+export const createEpicRequestSchema = lazySchema(() =>
+  z.object({
+    epic: epicLightSchema,
+    repoIdentifiers: z.array(taskRepoIdentifierSchema),
+    workspaces: z.array(createEpicWorkspaceIdentifierSchema),
+    // The first chat, folded into the epic create so it is seeded into the same
+    // in-memory Y.Doc atomically and the provider turn can be scheduled without an
+    // extra create-chat round trip. Absent / `null` for epic-only creates
+    // (terminal agents, migrations) and for cloud REST callers that share this
+    // request type (the cloud record is created from epic/repos/workspaces; the
+    // chat reaches the cloud via Yjs room sync).
+    chat: createEpicChatSeedSchema.nullable().optional(),
+  }),
+);
 export type CreateEpicRequest = z.infer<typeof createEpicRequestSchema>;
 
 /**
@@ -466,24 +527,26 @@ export type CreateEpicRequest = z.infer<typeof createEpicRequestSchema>;
  * not an alias over the live schema, which would make the freeze move every
  * time the live line grows.
  */
-export const createEpicResponseSchemaPre11 = z.object({
-  roomInfo: tiptapRoomInfoSchema.nullable(),
-  // Full list-shape `TaskLight` for the freshly-created epic so the GUI can
-  // ingest it into the cloud-tasks history cache without round-tripping
-  // through `epic.listTasks`. `null` when the cloud-side create step did not
-  // synthesize a list row (e.g. legacy/migration paths that pre-date this
-  // field - clients fall back to a manual refresh in that case).
-  task: z
-    .lazy(() => taskLightSchema)
-    .nullable()
-    .optional(),
-  // True when the host confirmed the provider turn started from the folded
-  // chat's `initialMessage`. The renderer uses this to skip the redundant
-  // `send` frame. Detached epic-create starts return `false` so the
-  // stream-driven fallback remains armed. Absent / `null` when no chat was
-  // folded.
-  initialTurnStarted: z.boolean().nullable().optional(),
-});
+export const createEpicResponseSchemaPre11 = lazySchema(() =>
+  z.object({
+    roomInfo: tiptapRoomInfoSchema.nullable(),
+    // Full list-shape `TaskLight` for the freshly-created epic so the GUI can
+    // ingest it into the cloud-tasks history cache without round-tripping
+    // through `epic.listTasks`. `null` when the cloud-side create step did not
+    // synthesize a list row (e.g. legacy/migration paths that pre-date this
+    // field - clients fall back to a manual refresh in that case).
+    task: z
+      .lazy(() => taskLightSchema)
+      .nullable()
+      .optional(),
+    // True when the host confirmed the provider turn started from the folded
+    // chat's `initialMessage`. The renderer uses this to skip the redundant
+    // `send` frame. Detached epic-create starts return `false` so the
+    // stream-driven fallback remains armed. Absent / `null` when no chat was
+    // folded.
+    initialTurnStarted: z.boolean().nullable().optional(),
+  }),
+);
 export type CreateEpicResponsePre11 = z.infer<
   typeof createEpicResponseSchemaPre11
 >;
@@ -524,8 +587,16 @@ export type CreateEpicResponsePre11 = z.infer<
  * If that becomes the wrong trade, the deliberate fix is to parse `kind` as a
  * bounded string and expose a `isKnownEpicCreateRefusalKind` guard so an
  * unrecognised kind degrades to text - a shape change, not a comment change.
+ *
+ * THAT MINOR HAS BEEN SPENT ONCE, and this instance did not move: `@1.2` has
+ * its own `epicCreateRefusalKindSchemaV12` with a second kind. This one stays a
+ * one-value enum forever, which is what keeps `@1.0`/`@1.1` peers - and the
+ * cloud line that pins `createEpicResponseSchema` by name - reading exactly
+ * what they were released against. The identity test pins the count.
  */
-export const epicCreateRefusalKindSchema = z.enum(["local-store-unavailable"]);
+export const epicCreateRefusalKindSchema = lazySchema(() =>
+  z.enum(["local-store-unavailable"]),
+);
 export type EpicCreateRefusalKind = z.infer<typeof epicCreateRefusalKindSchema>;
 
 /**
@@ -539,13 +610,15 @@ export type EpicCreateRefusalKind = z.infer<typeof epicCreateRefusalKindSchema>;
  * `host.rebindLocalStore` already answers with a `status: "refused"` arm
  * carrying `message` + `remedy`; this is that shape, one method over.
  */
-export const epicCreateRefusalSchema = z.object({
-  kind: epicCreateRefusalKindSchema,
-  /** Human-readable statement of what happened. Safe to show verbatim. */
-  message: z.string().min(1),
-  /** What the user can DO about it, e.g. stop the other host and rebind. */
-  remedy: z.string().min(1),
-});
+export const epicCreateRefusalSchema = lazySchema(() =>
+  z.object({
+    kind: epicCreateRefusalKindSchema,
+    /** Human-readable statement of what happened. Safe to show verbatim. */
+    message: z.string().min(1),
+    /** What the user can DO about it, e.g. stop the other host and rebind. */
+    remedy: z.string().min(1),
+  }),
+);
 export type EpicCreateRefusal = z.infer<typeof epicCreateRefusalSchema>;
 
 /**
@@ -569,105 +642,287 @@ export type EpicCreateRefusal = z.infer<typeof epicCreateRefusalSchema>;
  * ever emits; the two are mutually exclusive by construction at the emitter,
  * which is the cost of staying additive.
  */
-export const createEpicResponseSchema = createEpicResponseSchemaPre11.extend({
-  refusal: epicCreateRefusalSchema.optional(),
-});
+export const createEpicResponseSchema = lazySchema(() =>
+  createEpicResponseSchemaPre11.extend({
+    refusal: epicCreateRefusalSchema.optional(),
+  }),
+);
 export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
+
+// ─── Epic create / create-chat `@1.2` (images by reference, deferred
+//     worktree provisioning) ───────────────────────────────────────────────
+//
+// THE `@1.2` LINE IS A FORK DOWN TO THE LEAF, and every instance above keeps
+// its name AND its definition. That is not tidiness, it is the only shape that
+// leaves the released lines frozen:
+//
+//   - `createChatInitialMessageSchema` is embedded by `createEpicChatSeedSchema`
+//     -> `createEpicRequestSchema` (pinned to `epic.create` @1.0 AND @1.1) and
+//     by `createChatRequestSchema` / `createChatRequestSchemaV11`
+//     (`epic.createChat` @1.0 and @1.1). FOUR released request lines share that
+//     one object, so adding a key to it in place widens all four at versions
+//     released peers already speak - and it also makes the older-minor STRIP a
+//     no-op, because `prepareRequestPayload` strips by parsing against the older
+//     minor's own request schema (`ws-rpc-client.ts`). A field that survives the
+//     strip reaches a peer that never negotiated it.
+//   - `createEpicResponseSchema` is additionally pinned BY NAME as the cloud
+//     `epic.create@1.0` response in the internal repo's cloud-data registry, so
+//     re-pointing that name at a widened schema would move a cloud line with
+//     every test still green.
+//
+// So `@1.2` takes new `…V12` instances at every level it touches, and the
+// identity test pins the leaf by SHAPE (no `attachmentsByHash` key on the
+// released initial message, no `deferWorktreeProvisioning` on the released
+// seed, a one-value released refusal enum) rather than only by reference.
+
+/**
+ * `@1.2`'s initial message: the released leaf plus `attachmentsByHash`.
+ *
+ * WHAT DECIDES IT: the DISPATCHED DOCUMENT, not a caller's preference. Both
+ * create surfaces derive it - true iff `content` still carries hash-only
+ * `imageAttachment` nodes once the confirmed-upload set has been subtracted
+ * (`draftImageInliningNeeded`) - so it is a function of the bytes actually
+ * being sent, never a mode chosen apart from them.
+ *
+ * The wire meaning is unchanged by that, and is the only thing a host may read
+ * it as: THIS DOCUMENT CARRIES HASH-ONLY NODES THE HOST MUST RESOLVE. The host
+ * resolves those hashes from the REQUESTER's staging tier and installs them
+ * into the epic's attachment store before anything references them. Deriving
+ * rather than electing is what makes the flag and the content agree by
+ * construction; a surface that set it independently could send one without the
+ * other, and the mismatched direction is the refusal described next.
+ *
+ * ABSENT MEANS `false`, and `false` means today's behaviour exactly: the host
+ * does no resolution and hash-only nodes reach the dangling-hash guard, which
+ * refuses them. `.optional()` rather than `.default(false)` deliberately -
+ * a default would make the key REQUIRED in the inferred request type (zod
+ * infers the OUTPUT type), i.e. every existing caller of the latest contract
+ * would have to name a field it does not care about.
+ *
+ * THE FLAG AND THE MINOR TRAVEL TOGETHER, and only their conjunction licenses
+ * resolution. A client on a `@1.1` host has this key stripped on the request
+ * leg while the hash-only nodes survive (the message content is untyped
+ * `attrs` on the wire), so the host must never infer the intent from the
+ * content: without `(minor >= 1.2 AND flag)` a hash-only message keeps today's
+ * loud failure instead of silently persisting a dangling reference.
+ *
+ * That the SENDER derives the flag from the content is not the same rule with
+ * the sides swapped. The sender knows which hashes it just uploaded and which
+ * minor it negotiated, and below `@1.2` it inlines instead of deriving a flag
+ * that would be stripped anyway. The host knows neither, so the asymmetry is
+ * the point rather than something the client side has since broken.
+ */
+export const createChatInitialMessageSchemaV12 = lazySchema(() =>
+  createChatInitialMessageSchema.extend({
+    attachmentsByHash: z.boolean().optional(),
+  }),
+);
+export type CreateChatInitialMessageV12 = z.infer<
+  typeof createChatInitialMessageSchemaV12
+>;
+
+/**
+ * `@1.2`'s folded chat seed: the released seed over the `@1.2` initial message,
+ * plus `deferWorktreeProvisioning`.
+ *
+ * WHO MAY SET IT: a client that owns a RESEND and renders a setup card for the
+ * chat it is creating - i.e. one that can carry the user through a worktree
+ * that is created after the response instead of inside it. Everything else
+ * (fork/clone with no initial message, a host-agent caller, a `@1.1` GUI)
+ * leaves it absent and is provisioned synchronously, byte-identically to today.
+ *
+ * ABSENT MEANS `false`, same reading and same `.optional()` reasoning as the
+ * sibling above. The host additionally requires an initial message, a
+ * worktree-kind intent and a normalised hash-only message before it takes the
+ * deferred path at all, so this field is an OPT-IN, never an instruction.
+ */
+export const createEpicChatSeedSchemaV12 = lazySchema(() =>
+  createEpicChatSeedSchema.extend({
+    initialMessage: createChatInitialMessageSchemaV12.nullable(),
+    deferWorktreeProvisioning: z.boolean().optional(),
+  }),
+);
+export type CreateEpicChatSeedV12 = z.infer<typeof createEpicChatSeedSchemaV12>;
+
+export const createEpicRequestSchemaV12 = lazySchema(() =>
+  createEpicRequestSchema.extend({
+    chat: createEpicChatSeedSchemaV12.nullable().optional(),
+  }),
+);
+export type CreateEpicRequestV12 = z.infer<typeof createEpicRequestSchemaV12>;
+
+/**
+ * `@1.2`'s refusal kinds - a NEW enum instance, never a value added to
+ * `epicCreateRefusalKindSchema`.
+ *
+ * The released enum's own doc spells out why: a `z.enum` REFUSES a value it
+ * does not know, that failure propagates out of the enclosing `refusal` object,
+ * and a present-but-invalid `refusal` fails the whole response parse. So every
+ * client already on `@1.1` would turn a `missing-attachment-bytes` refusal into
+ * a parse error rather than a message it could render. Adding the kind costs
+ * its own minor, and the minor costs its own instance - the released one stays
+ * a one-value enum, which the instance-identity test pins.
+ *
+ * `missing-attachment-bytes`: the host could not find bytes for a hash the
+ * request's content referenced, in the epic store or in the requester's
+ * staging tier. Refused BEFORE the commit point, so nothing was seeded; the
+ * hashes this call installed are unlinked. The remedy is a re-upload and a
+ * retry under the same idempotency key, which the client owns - so unlike
+ * `local-store-unavailable` there is no repair action for a person to take.
+ *
+ * EMITTED ONLY AT NEGOTIATED MINOR >= 2 (`CREATE_ATTACHMENT_REFUSAL_MINOR` on
+ * the host). Below it the resolver throws, exactly as the released refusal gate
+ * does, because a stripped `refusal` key reads to an older peer as a SUCCESSFUL
+ * create with no room.
+ */
+export const epicCreateRefusalKindSchemaV12 = lazySchema(() =>
+  z.enum(["local-store-unavailable", "missing-attachment-bytes"]),
+);
+export type EpicCreateRefusalKindV12 = z.infer<
+  typeof epicCreateRefusalKindSchemaV12
+>;
+
+/** `epicCreateRefusalSchema` over the `@1.2` kind enum. Same three fields. */
+export const epicCreateRefusalSchemaV12 = lazySchema(() =>
+  z.object({
+    kind: epicCreateRefusalKindSchemaV12,
+    /** Human-readable statement of what happened. Safe to show verbatim. */
+    message: z.string().min(1),
+    /** What the user can DO about it, e.g. stop the other host and rebind. */
+    remedy: z.string().min(1),
+  }),
+);
+export type EpicCreateRefusalV12 = z.infer<typeof epicCreateRefusalSchemaV12>;
+
+/**
+ * `epic.create@1.2`'s response - the `@1.1` body with the refusal re-typed onto
+ * the `@1.2` kind enum. No other key moves.
+ */
+export const createEpicResponseSchemaV12 = lazySchema(() =>
+  createEpicResponseSchemaPre11.extend({
+    refusal: epicCreateRefusalSchemaV12.optional(),
+  }),
+);
+export type CreateEpicResponseV12 = z.infer<typeof createEpicResponseSchemaV12>;
 
 // ─── Local workspace folders ────────────────────────────────────────────────
 
-export const preparedWorkspaceFolderSchema = z.object({
-  workspacePath: z.string(),
-  workspaceName: z.string(),
-  repoIdentifier: taskRepoIdentifierSchema.nullable(),
-  repoUrl: z.string().nullable(),
-});
+export const preparedWorkspaceFolderSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    workspaceName: z.string(),
+    repoIdentifier: taskRepoIdentifierSchema.nullable(),
+    repoUrl: z.string().nullable(),
+  }),
+);
 export type PreparedWorkspaceFolder = z.infer<
   typeof preparedWorkspaceFolderSchema
 >;
 
-export const prepareWorkspaceFoldersRequestSchema = z.object({
-  folderPaths: z.array(z.string()),
-});
+export const prepareWorkspaceFoldersRequestSchema = lazySchema(() =>
+  z.object({
+    folderPaths: z.array(z.string()),
+  }),
+);
 export type PrepareWorkspaceFoldersRequest = z.infer<
   typeof prepareWorkspaceFoldersRequestSchema
 >;
 
-export const prepareWorkspaceFoldersResponseSchema = z.object({
-  folders: z.array(preparedWorkspaceFolderSchema),
-  repoIdentifiers: z.array(taskRepoIdentifierSchema),
-});
+export const prepareWorkspaceFoldersResponseSchema = lazySchema(() =>
+  z.object({
+    folders: z.array(preparedWorkspaceFolderSchema),
+    repoIdentifiers: z.array(taskRepoIdentifierSchema),
+  }),
+);
 export type PrepareWorkspaceFoldersResponse = z.infer<
   typeof prepareWorkspaceFoldersResponseSchema
 >;
 
-export const removeEpicRepoRequestSchema = z.object({
-  epicId: z.string(),
-  repoIdentifier: taskRepoIdentifierSchema,
-});
+export const removeEpicRepoRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    repoIdentifier: taskRepoIdentifierSchema,
+  }),
+);
 export type RemoveEpicRepoRequest = z.infer<typeof removeEpicRepoRequestSchema>;
 
-export const removeEpicRepoResponseSchema = z.object({
-  success: z.boolean(),
-});
+export const removeEpicRepoResponseSchema = lazySchema(() =>
+  z.object({
+    success: z.boolean(),
+  }),
+);
 export type RemoveEpicRepoResponse = z.infer<
   typeof removeEpicRepoResponseSchema
 >;
 
 // ─── Collaborators (epic.listCollaborators@1.0 wire shape) ───────────────────
 
-export const collaboratorProfileSchema = z.object({
-  displayName: z.string(),
-  avatarUrl: z.string(),
-  email: z.string(),
-  handle: z.string(),
-});
+export const collaboratorProfileSchema = lazySchema(() =>
+  z.object({
+    displayName: z.string(),
+    avatarUrl: z.string(),
+    email: z.string(),
+    handle: z.string(),
+  }),
+);
 export type CollaboratorProfile = z.infer<typeof collaboratorProfileSchema>;
 
-export const userCollaboratorSchema = z.object({
-  userId: z.string(),
-  profile: collaboratorProfileSchema.nullable(),
-});
+export const userCollaboratorSchema = lazySchema(() =>
+  z.object({
+    userId: z.string(),
+    profile: collaboratorProfileSchema.nullable(),
+  }),
+);
 export type UserCollaborator = z.infer<typeof userCollaboratorSchema>;
 
-export const teamCollaboratorSchema = z.object({
-  teamId: z.string(),
-  teamName: z.string(),
-  teamMembers: z.array(userCollaboratorSchema),
-});
+export const teamCollaboratorSchema = lazySchema(() =>
+  z.object({
+    teamId: z.string(),
+    teamName: z.string(),
+    teamMembers: z.array(userCollaboratorSchema),
+  }),
+);
 export type TeamCollaborator = z.infer<typeof teamCollaboratorSchema>;
 
-export const collaboratorEntrySchema = z.object({
-  role: LatestPermissionRoleSchema,
-  accessType: accessTypeSchema,
-  grantedAt: z.number(),
-  grantedBy: z.string(),
-  user: userCollaboratorSchema.nullable().optional(),
-  team: teamCollaboratorSchema.nullable().optional(),
-});
+export const collaboratorEntrySchema = lazySchema(() =>
+  z.object({
+    role: LatestPermissionRoleSchema,
+    accessType: accessTypeSchema,
+    grantedAt: z.number(),
+    grantedBy: z.string(),
+    user: userCollaboratorSchema.nullable().optional(),
+    team: teamCollaboratorSchema.nullable().optional(),
+  }),
+);
 export type CollaboratorEntry = z.infer<typeof collaboratorEntrySchema>;
 
-export const listEpicCollaboratorsRequestSchema = z.object({
-  epicId: z.string(),
-});
+export const listEpicCollaboratorsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+  }),
+);
 export type ListEpicCollaboratorsRequest = z.infer<
   typeof listEpicCollaboratorsRequestSchema
 >;
 
-export const listEpicCollaboratorsResponseSchema = z.object({
-  collaborators: z.array(collaboratorEntrySchema),
-  collaboratorsAvailable: z.boolean(),
-});
+export const listEpicCollaboratorsResponseSchema = lazySchema(() =>
+  z.object({
+    collaborators: z.array(collaboratorEntrySchema),
+    collaboratorsAvailable: z.boolean(),
+  }),
+);
 export type ListEpicCollaboratorsResponse = z.infer<
   typeof listEpicCollaboratorsResponseSchema
 >;
 
 // ─── Task list (versioned epic.listTasks wire shapes) ───────────────────────
 
-export const taskLightSchema = z.object({
-  epic: epicLightWithPermissionSchema.nullable().optional(),
-  phase: phaseLightWithPermissionSchema.nullable().optional(),
-});
+export const taskLightSchema = lazySchema(() =>
+  z.object({
+    epic: epicLightWithPermissionSchema.nullable().optional(),
+    phase: phaseLightWithPermissionSchema.nullable().optional(),
+  }),
+);
 export type TaskLight = z.infer<typeof taskLightSchema>;
 
 // The task list carries viewer-specific presentation state in addition to the
@@ -676,9 +931,11 @@ export type TaskLight = z.infer<typeof taskLightSchema>;
 export const listTaskLightSchemaV10 = taskLightSchema;
 export type ListTaskLightV10 = z.infer<typeof listTaskLightSchemaV10>;
 
-export const listTaskLightSchemaPre13 = taskLightSchema.extend({
-  pinned: z.boolean().optional(),
-});
+export const listTaskLightSchemaPre13 = lazySchema(() =>
+  taskLightSchema.extend({
+    pinned: z.boolean().optional(),
+  }),
+);
 export type ListTaskLightPre13 = z.infer<typeof listTaskLightSchemaPre13>;
 
 /**
@@ -692,16 +949,20 @@ export type ListTaskLightPre13 = z.infer<typeof listTaskLightSchemaPre13>;
  * distinction matters, because `[]` is a truthful "none of my chats anywhere"
  * and would let a local predicate confidently filter the row OUT.
  */
-export const listTaskLightSchemaPre14 = listTaskLightSchemaPre13.extend({
-  chatHostIds: z.array(z.string()).optional(),
-});
+export const listTaskLightSchemaPre14 = lazySchema(() =>
+  listTaskLightSchemaPre13.extend({
+    chatHostIds: z.array(z.string()).optional(),
+  }),
+);
 export type ListTaskLightPre14 = z.infer<typeof listTaskLightSchemaPre14>;
 
 // `epic.listTasks@1.4` list row: @1.3's chat-host dimension plus the optional
 // durability home.
-export const listTaskLightSchemaPre15 = listTaskLightSchemaPre14.extend({
-  home: epicListHomeSchema.optional(),
-});
+export const listTaskLightSchemaPre15 = lazySchema(() =>
+  listTaskLightSchemaPre14.extend({
+    home: epicListHomeSchema.optional(),
+  }),
+);
 export type ListTaskLightPre15 = z.infer<typeof listTaskLightSchemaPre15>;
 
 /**
@@ -719,31 +980,41 @@ export type ListTaskLightPre15 = z.infer<typeof listTaskLightSchemaPre15>;
  * pause reasons are informational states of an epic the user can already see;
  * only this one describes an epic that has to be RE-ADMITTED to discovery.
  */
-export const epicListPreservationSchema = z.enum(["orphaned-local-edits"]);
+export const epicListPreservationSchema = lazySchema(() =>
+  z.enum(["orphaned-local-edits"]),
+);
 export type EpicListPreservation = z.infer<typeof epicListPreservationSchema>;
 
 // `epic.listTasks@1.5` list row: adds the preservation marker.
-export const listTaskLightSchema = listTaskLightSchemaPre15.extend({
-  preservation: epicListPreservationSchema.optional(),
-});
+export const listTaskLightSchema = lazySchema(() =>
+  listTaskLightSchemaPre15.extend({
+    preservation: epicListPreservationSchema.optional(),
+  }),
+);
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
-export const listTasksRequestSchemaV11 = z.object({
-  limit: z.number(),
-  cursor: z.string().optional(),
-  filters: taskFiltersSchemaPre13.nullable(),
-  sort: listTasksSortSchemaV11.optional(),
-  extensionPhaseVersion: z.string(),
-  extensionEpicVersion: z.string(),
-});
-export const listTasksRequestSchemaPre13 = listTasksRequestSchemaV11.extend({
-  sort: listTasksSortSchema.optional(),
-});
+export const listTasksRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    limit: z.number(),
+    cursor: z.string().optional(),
+    filters: taskFiltersSchemaPre13.nullable(),
+    sort: listTasksSortSchemaV11.optional(),
+    extensionPhaseVersion: z.string(),
+    extensionEpicVersion: z.string(),
+  }),
+);
+export const listTasksRequestSchemaPre13 = lazySchema(() =>
+  listTasksRequestSchemaV11.extend({
+    sort: listTasksSortSchema.optional(),
+  }),
+);
 export type ListTasksRequestPre13 = z.infer<typeof listTasksRequestSchemaPre13>;
 
-export const listTasksRequestSchemaPre16 = listTasksRequestSchemaPre13.extend({
-  filters: taskFiltersSchema.nullable(),
-});
+export const listTasksRequestSchemaPre16 = lazySchema(() =>
+  listTasksRequestSchemaPre13.extend({
+    filters: taskFiltersSchema.nullable(),
+  }),
+);
 export type ListTasksRequestPre16 = z.infer<typeof listTasksRequestSchemaPre16>;
 
 /**
@@ -755,64 +1026,74 @@ export type ListTasksRequestPre16 = z.infer<typeof listTasksRequestSchemaPre16>;
  * that arrives after a local deletion must be merged against a fresh local
  * projection, which is work only the revalidation phase needs to request.
  */
-export const listTasksRequestSchema = listTasksRequestSchemaPre16.extend({
-  localFirstPhase: z.enum(["initial", "revalidate"]).optional(),
-});
+export const listTasksRequestSchema = lazySchema(() =>
+  listTasksRequestSchemaPre16.extend({
+    localFirstPhase: z.enum(["initial", "revalidate"]).optional(),
+  }),
+);
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
 
 // The pre-@1.3 facet shape, shared by @1.0/@1.1/@1.2 - see the filter note
 // above on why every older minor must point at this one instance.
-export const listTasksFacetsSchemaPre13 = z.object({
-  repos: z.array(
-    z.object({
-      repoIdentifier: taskRepoIdentifierSchema,
-      count: z.number(),
-    }),
-  ),
-  workspaces: z.array(
-    z.object({
-      workspaceIdentifier: taskWorkspaceIdentifierSchema,
-      count: z.number(),
-    }),
-  ),
-  ownershipScopes: z.array(
-    z.object({
-      value: taskOwnershipScopeSchema,
-      count: z.number(),
-    }),
-  ),
-});
-export type ListTasksFacetsPre13 = z.infer<typeof listTasksFacetsSchemaPre13>;
-
-export const listTasksFacetsSchema = listTasksFacetsSchemaPre13.extend({
-  // Optional rather than required: the whole facets object is already
-  // first-page-only, and a host that upgrades ahead of the cloud tier would
-  // otherwise fail the response parse instead of degrading to "no counts".
-  chatHosts: z
-    .array(
+export const listTasksFacetsSchemaPre13 = lazySchema(() =>
+  z.object({
+    repos: z.array(
       z.object({
-        hostId: z.string(),
+        repoIdentifier: taskRepoIdentifierSchema,
         count: z.number(),
       }),
-    )
-    .optional(),
-});
+    ),
+    workspaces: z.array(
+      z.object({
+        workspaceIdentifier: taskWorkspaceIdentifierSchema,
+        count: z.number(),
+      }),
+    ),
+    ownershipScopes: z.array(
+      z.object({
+        value: taskOwnershipScopeSchema,
+        count: z.number(),
+      }),
+    ),
+  }),
+);
+export type ListTasksFacetsPre13 = z.infer<typeof listTasksFacetsSchemaPre13>;
+
+export const listTasksFacetsSchema = lazySchema(() =>
+  listTasksFacetsSchemaPre13.extend({
+    // Optional rather than required: the whole facets object is already
+    // first-page-only, and a host that upgrades ahead of the cloud tier would
+    // otherwise fail the response parse instead of degrading to "no counts".
+    chatHosts: z
+      .array(
+        z.object({
+          hostId: z.string(),
+          count: z.number(),
+        }),
+      )
+      .optional(),
+  }),
+);
 export type ListTasksFacets = z.infer<typeof listTasksFacetsSchema>;
 
-export const listTasksResponseSchemaV10 = z.object({
-  tasks: z.array(listTaskLightSchemaV10),
-  nextCursor: z.string().optional(),
-  hasMore: z.boolean(),
-  facets: listTasksFacetsSchemaPre13.optional(),
-});
+export const listTasksResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    tasks: z.array(listTaskLightSchemaV10),
+    nextCursor: z.string().optional(),
+    hasMore: z.boolean(),
+    facets: listTasksFacetsSchemaPre13.optional(),
+  }),
+);
 export type ListTasksResponseV10 = z.infer<typeof listTasksResponseSchemaV10>;
 
-export const listTasksResponseSchemaPre13 = z.object({
-  tasks: z.array(listTaskLightSchemaPre13),
-  nextCursor: z.string().optional(),
-  hasMore: z.boolean(),
-  facets: listTasksFacetsSchemaPre13.optional(),
-});
+export const listTasksResponseSchemaPre13 = lazySchema(() =>
+  z.object({
+    tasks: z.array(listTaskLightSchemaPre13),
+    nextCursor: z.string().optional(),
+    hasMore: z.boolean(),
+    facets: listTasksFacetsSchemaPre13.optional(),
+  }),
+);
 export type ListTasksResponsePre13 = z.infer<
   typeof listTasksResponseSchemaPre13
 >;
@@ -826,11 +1107,11 @@ export type ListTasksResponsePre13 = z.infer<
 // names the live schema on purpose: the facet shape does not move again on
 // this line, so freezing it would only add a name. Freeze it here the moment
 // a later minor extends `listTasksFacetsSchema`.
-export const listTasksResponseSchemaPre14 = listTasksResponseSchemaPre13.extend(
-  {
+export const listTasksResponseSchemaPre14 = lazySchema(() =>
+  listTasksResponseSchemaPre13.extend({
     tasks: z.array(listTaskLightSchemaPre14),
     facets: listTasksFacetsSchema.optional(),
-  },
+  }),
 );
 export type ListTasksResponsePre14 = z.infer<
   typeof listTasksResponseSchemaPre14
@@ -838,10 +1119,10 @@ export type ListTasksResponsePre14 = z.infer<
 
 // `epic.listTasks@1.4` response: @1.3's rows plus the optional host-side home
 // marker. FROZEN - `@1.5` adds keys this schema would strip.
-export const listTasksResponseSchemaPre15 = listTasksResponseSchemaPre14.extend(
-  {
+export const listTasksResponseSchemaPre15 = lazySchema(() =>
+  listTasksResponseSchemaPre14.extend({
     tasks: z.array(listTaskLightSchemaPre15),
-  },
+  }),
 );
 export type ListTasksResponsePre15 = z.infer<
   typeof listTasksResponseSchemaPre15
@@ -901,27 +1182,30 @@ export type ListTasksResponsePre15 = z.infer<
  *   the requested sort; `loaded-union` when host rows were merged in, so the
  *   order holds over the rows present and is not a global ranking.
  */
-export const listTasksCompletenessSchemaPre16 = z.object({
-  cloudPage: z.enum(["settled", "unavailable"]),
-  facets: z.enum(["server", "partial"]),
-  localRows: z.enum([
-    "present",
-    "none",
-    "truncated",
-    "suppressed-unprovable-filter",
-  ]),
-  sort: z.enum(["server", "loaded-union"]),
-});
+export const listTasksCompletenessSchemaPre16 = lazySchema(() =>
+  z.object({
+    cloudPage: z.enum(["settled", "unavailable"]),
+    facets: z.enum(["server", "partial"]),
+    localRows: z.enum([
+      "present",
+      "none",
+      "truncated",
+      "suppressed-unprovable-filter",
+    ]),
+    sort: z.enum(["server", "loaded-union"]),
+  }),
+);
 export type ListTasksCompletenessPre16 = z.infer<
   typeof listTasksCompletenessSchemaPre16
 >;
 
 // `epic.listTasks@1.6` adds the in-flight state. A `pending` page is a
 // renderable local snapshot, never a cloud failure or a claim of completeness.
-export const listTasksCompletenessSchema =
+export const listTasksCompletenessSchema = lazySchema(() =>
   listTasksCompletenessSchemaPre16.extend({
     cloudPage: z.enum(["settled", "unavailable", "pending"]),
-  });
+  }),
+);
 export type ListTasksCompleteness = z.infer<typeof listTasksCompletenessSchema>;
 
 // `epic.listTasks@1.5` row alias - FROZEN, and NOT a redundant second name for
@@ -944,11 +1228,11 @@ export type ListTaskLightPre16 = z.infer<typeof listTaskLightSchemaPre16>;
 // `epic.listTasks@1.5` response: `@1.4`'s rows plus the preservation marker and
 // the pre-local-first `completeness` statement. FROZEN - `@1.6` widens
 // `completeness.cloudPage`.
-export const listTasksResponseSchemaPre16 = listTasksResponseSchemaPre15.extend(
-  {
+export const listTasksResponseSchemaPre16 = lazySchema(() =>
+  listTasksResponseSchemaPre15.extend({
     tasks: z.array(listTaskLightSchemaPre16),
     completeness: listTasksCompletenessSchemaPre16.optional(),
-  },
+  }),
 );
 export type ListTasksResponsePre16 = z.infer<
   typeof listTasksResponseSchemaPre16
@@ -959,19 +1243,23 @@ export type ListTasksResponsePre16 = z.infer<
 // this line simply omits them; absence remains "this host cannot say", never
 // "complete". The `tasks` redeclaration below carries the LIVE row and is the
 // one place on this line that should.
-export const listTasksResponseSchema = listTasksResponseSchemaPre16.extend({
-  tasks: z.array(listTaskLightSchema),
-  completeness: listTasksCompletenessSchema.optional(),
-});
+export const listTasksResponseSchema = lazySchema(() =>
+  listTasksResponseSchemaPre16.extend({
+    tasks: z.array(listTaskLightSchema),
+    completeness: listTasksCompletenessSchema.optional(),
+  }),
+);
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
 
 // ─── Personal history pinning (epic.setPinned@1.0, @1.1) ────────────────────
 
 // Unchanged across the line: `@1.1` grows only the RESPONSE.
-export const setEpicPinnedRequestSchema = z.object({
-  epicId: z.string(),
-  pinned: z.boolean(),
-});
+export const setEpicPinnedRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    pinned: z.boolean(),
+  }),
+);
 export type SetEpicPinnedRequest = z.infer<typeof setEpicPinnedRequestSchema>;
 
 // `epic.setPinned@1.0` response - FROZEN. Written as its own literal object
@@ -979,9 +1267,11 @@ export type SetEpicPinnedRequest = z.infer<typeof setEpicPinnedRequestSchema>;
 // not a freeze, and this file has already been bitten by one
 // (see `listTaskLightSchemaPre16`'s note). Adding a key here is editing a
 // released line, and should read that way at the call site.
-export const setEpicPinnedResponseSchemaPre11 = z.object({
-  pinned: z.boolean(),
-});
+export const setEpicPinnedResponseSchemaPre11 = lazySchema(() =>
+  z.object({
+    pinned: z.boolean(),
+  }),
+);
 export type SetEpicPinnedResponsePre11 = z.infer<
   typeof setEpicPinnedResponseSchemaPre11
 >;
@@ -999,24 +1289,29 @@ export type SetEpicPinnedResponsePre11 = z.infer<
 // Optional, so an older HOST on this line simply omits it. Absence keeps its
 // released reading, "this host cannot say", and must never be read as
 // `"cloud"`: the whole point of the key is that the assumption was the defect.
-export const setEpicPinnedResponseSchema =
+export const setEpicPinnedResponseSchema = lazySchema(() =>
   setEpicPinnedResponseSchemaPre11.extend({
     home: epicListHomeSchema.optional(),
-  });
+  }),
+);
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
 
 // ─── Personal task view recency (epic.recordViewed@1.0) ─────────────────────
 
-export const recordEpicViewedRequestSchema = z.object({
-  epicId: z.string(),
-});
+export const recordEpicViewedRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+  }),
+);
 export type RecordEpicViewedRequest = z.infer<
   typeof recordEpicViewedRequestSchema
 >;
 
-export const recordEpicViewedResponseSchema = z.object({
-  viewedAt: z.number(),
-});
+export const recordEpicViewedResponseSchema = lazySchema(() =>
+  z.object({
+    viewedAt: z.number(),
+  }),
+);
 export type RecordEpicViewedResponse = z.infer<
   typeof recordEpicViewedResponseSchema
 >;
@@ -1033,77 +1328,87 @@ export type RecordEpicViewedResponse = z.infer<
 
 export const GET_TASK_CONTEXTS_MAX_IDS = 50;
 
-export const getTaskContextsRequestSchema = z.object({
-  taskIds: z.array(z.string()).max(GET_TASK_CONTEXTS_MAX_IDS),
-});
+export const getTaskContextsRequestSchema = lazySchema(() =>
+  z.object({
+    taskIds: z.array(z.string()).max(GET_TASK_CONTEXTS_MAX_IDS),
+  }),
+);
 export type GetTaskContextsRequest = z.infer<
   typeof getTaskContextsRequestSchema
 >;
 
-export const getTaskContextsResponseSchemaV10 = z.object({
-  tasks: z.record(z.string(), listTaskLightSchemaPre13.nullable()),
-});
+export const getTaskContextsResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    tasks: z.record(z.string(), listTaskLightSchemaPre13.nullable()),
+  }),
+);
 export type GetTaskContextsResponseV10 = z.infer<
   typeof getTaskContextsResponseSchemaV10
 >;
 
-export const taskContextUnknownReasonSchema = z.enum([
-  "legacy",
-  "not-found-or-not-permitted",
-  "transport",
-  "server",
-  "auth",
-  "denied",
-  "unexpected-response",
-]);
+export const taskContextUnknownReasonSchema = lazySchema(() =>
+  z.enum([
+    "legacy",
+    "not-found-or-not-permitted",
+    "transport",
+    "server",
+    "auth",
+    "denied",
+    "unexpected-response",
+  ]),
+);
 export type TaskContextUnknownReason = z.infer<
   typeof taskContextUnknownReasonSchema
 >;
 
-export const taskContextResolutionSchemaPre12 = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("found"),
-    task: listTaskLightSchemaPre13,
-  }),
-  z.object({
-    status: z.literal("confirmed-absent"),
-  }),
-  z.object({
-    status: z.literal("unknown"),
-    reason: taskContextUnknownReasonSchema,
-  }),
-]);
+export const taskContextResolutionSchemaPre12 = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("found"),
+      task: listTaskLightSchemaPre13,
+    }),
+    z.object({
+      status: z.literal("confirmed-absent"),
+    }),
+    z.object({
+      status: z.literal("unknown"),
+      reason: taskContextUnknownReasonSchema,
+    }),
+  ]),
+);
 
-export const taskContextResolutionSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("found"),
-    // FROZEN at the row shape `epic.getTaskContexts@1.2` released with, NOT
-    // the live `listTaskLightSchema`.
-    //
-    // This reference is shared by every getTaskContexts minor, so pointing it
-    // at the live row silently reshapes ALREADY-RELEASED versions whenever
-    // `epic.listTasks` grows a row key - which is a different method, on its
-    // own minor line, whose authors have no reason to look here. `@1.2` picked
-    // up `home` and `preservation` that way, with nobody editing a
-    // getTaskContexts schema, and the released-baseline gate caught it as a
-    // BREAKING structural change at a shipped version.
-    //
-    // Nothing wants the newer keys here: `@1.3` deliberately answers the
-    // local-home question with the `localHomedTaskIds` SIBLING list rather
-    // than a row field, and `combineTaskPinnedStateResults` reads that list.
-    // A later minor that genuinely needs a richer row must add its own
-    // resolution schema against the frozen alias of ITS release, never move
-    // this one forward.
-    task: listTaskLightSchemaPre14,
-  }),
-  z.object({
-    status: z.literal("confirmed-absent"),
-  }),
-  z.object({
-    status: z.literal("unknown"),
-    reason: taskContextUnknownReasonSchema,
-  }),
-]);
+export const taskContextResolutionSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("found"),
+      // FROZEN at the row shape `epic.getTaskContexts@1.2` released with, NOT
+      // the live `listTaskLightSchema`.
+      //
+      // This reference is shared by every getTaskContexts minor, so pointing it
+      // at the live row silently reshapes ALREADY-RELEASED versions whenever
+      // `epic.listTasks` grows a row key - which is a different method, on its
+      // own minor line, whose authors have no reason to look here. `@1.2` picked
+      // up `home` and `preservation` that way, with nobody editing a
+      // getTaskContexts schema, and the released-baseline gate caught it as a
+      // BREAKING structural change at a shipped version.
+      //
+      // Nothing wants the newer keys here: `@1.3` deliberately answers the
+      // local-home question with the `localHomedTaskIds` SIBLING list rather
+      // than a row field, and `combineTaskPinnedStateResults` reads that list.
+      // A later minor that genuinely needs a richer row must add its own
+      // resolution schema against the frozen alias of ITS release, never move
+      // this one forward.
+      task: listTaskLightSchemaPre14,
+    }),
+    z.object({
+      status: z.literal("confirmed-absent"),
+    }),
+    z.object({
+      status: z.literal("unknown"),
+      reason: taskContextUnknownReasonSchema,
+    }),
+  ]),
+);
 export type TaskContextResolution = z.infer<typeof taskContextResolutionSchema>;
 
 // Older-host values are parsed by their v1.0 schema and upgraded at the
@@ -1125,9 +1430,11 @@ export function isConfirmedAbsentTaskContext(
   return result?.status === "confirmed-absent";
 }
 
-export const getTaskContextsResponseSchemaPre12 = z.object({
-  tasks: z.record(z.string(), taskContextResolutionSchemaPre12),
-});
+export const getTaskContextsResponseSchemaPre12 = lazySchema(() =>
+  z.object({
+    tasks: z.record(z.string(), taskContextResolutionSchemaPre12),
+  }),
+);
 export type GetTaskContextsResponsePre12 = z.infer<
   typeof getTaskContextsResponseSchemaPre12
 >;
@@ -1137,9 +1444,11 @@ export type GetTaskContextsResponsePre12 = z.infer<
  * union; the `@1.3` growth below is a sibling key on the response object,
  * never a change to this record's value shape.
  */
-export const getTaskContextsResponseSchemaPre13 = z.object({
-  tasks: z.record(z.string(), taskContextResultSchema),
-});
+export const getTaskContextsResponseSchemaPre13 = lazySchema(() =>
+  z.object({
+    tasks: z.record(z.string(), taskContextResultSchema),
+  }),
+);
 export type GetTaskContextsResponsePre13 = z.infer<
   typeof getTaskContextsResponseSchemaPre13
 >;
@@ -1166,42 +1475,49 @@ export type GetTaskContextsResponsePre13 = z.infer<
  * Absence means the host did not say - an older host, or a `@1.0`-`@1.2`
  * negotiation - and must be read as cloud-or-unknown, never as local.
  */
-export const getTaskContextsResponseSchema =
+export const getTaskContextsResponseSchema = lazySchema(() =>
   getTaskContextsResponseSchemaPre13.extend({
     localHomedTaskIds: z.array(z.string()).optional(),
-  });
+  }),
+);
 export type GetTaskContextsResponse = z.infer<
   typeof getTaskContextsResponseSchema
 >;
 
 // ─── Epic/entity mentions ────────────────────────────────────────────────────
 
-export const epicMentionEpicsRequestSchema = z.object({
-  query: z.string(),
-  limit: z.number().int().min(1).max(100),
-});
+export const epicMentionEpicsRequestSchema = lazySchema(() =>
+  z.object({
+    query: z.string(),
+    limit: z.number().int().min(1).max(100),
+  }),
+);
 export type EpicMentionEpicsRequest = z.infer<
   typeof epicMentionEpicsRequestSchema
 >;
 
-export const epicMentionArtifactsRequestSchema = z.object({
-  query: z.string(),
-  limit: z.number().int().min(1).max(100),
-});
+export const epicMentionArtifactsRequestSchema = lazySchema(() =>
+  z.object({
+    query: z.string(),
+    limit: z.number().int().min(1).max(100),
+  }),
+);
 export type EpicMentionArtifactsRequest = z.infer<
   typeof epicMentionArtifactsRequestSchema
 >;
 
-export const epicMentionEpicSuggestionSchema = z.object({
-  kind: z.literal("epic"),
-  id: z.string(),
-  token: z.string(),
-  epicId: z.string(),
-  label: z.string(),
-  description: z.string(),
-  status: z.string(),
-  updatedAt: z.number(),
-});
+export const epicMentionEpicSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("epic"),
+    id: z.string(),
+    token: z.string(),
+    epicId: z.string(),
+    label: z.string(),
+    description: z.string(),
+    status: z.string(),
+    updatedAt: z.number(),
+  }),
+);
 export type EpicMentionEpicSuggestion = z.infer<
   typeof epicMentionEpicSuggestionSchema
 >;
@@ -1228,38 +1544,41 @@ function epicMentionArtifactSuggestionSchemaFor<
   });
 }
 
-export const epicMentionSpecSuggestionSchema =
-  epicMentionArtifactSuggestionSchemaFor("spec");
+export const epicMentionSpecSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("spec"),
+);
 export type EpicMentionSpecSuggestion = z.infer<
   typeof epicMentionSpecSuggestionSchema
 >;
 
-export const epicMentionTicketSuggestionSchema =
-  epicMentionArtifactSuggestionSchemaFor("ticket");
+export const epicMentionTicketSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("ticket"),
+);
 export type EpicMentionTicketSuggestion = z.infer<
   typeof epicMentionTicketSuggestionSchema
 >;
 
-export const epicMentionStorySuggestionSchema =
-  epicMentionArtifactSuggestionSchemaFor("story");
+export const epicMentionStorySuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("story"),
+);
 export type EpicMentionStorySuggestion = z.infer<
   typeof epicMentionStorySuggestionSchema
 >;
 
-export const epicMentionReviewSuggestionSchema =
-  epicMentionArtifactSuggestionSchemaFor("review");
+export const epicMentionReviewSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("review"),
+);
 export type EpicMentionReviewSuggestion = z.infer<
   typeof epicMentionReviewSuggestionSchema
 >;
 
-export const epicMentionArtifactSuggestionSchema = z.discriminatedUnion(
-  "artifactType",
-  [
+export const epicMentionArtifactSuggestionSchema = lazySchema(() =>
+  z.discriminatedUnion("artifactType", [
     epicMentionSpecSuggestionSchema,
     epicMentionTicketSuggestionSchema,
     epicMentionStorySuggestionSchema,
     epicMentionReviewSuggestionSchema,
-  ],
+  ]),
 );
 export type EpicMentionArtifactSuggestion = z.infer<
   typeof epicMentionArtifactSuggestionSchema
@@ -1288,43 +1607,55 @@ export function epicArtifactMentionToken(
   return `${kind}:${epicId}/${artifactId}`;
 }
 
-export const epicMentionSuggestionSchema = z.union([
-  epicMentionEpicSuggestionSchema,
-  epicMentionArtifactSuggestionSchema,
-]);
+export const epicMentionSuggestionSchema = lazySchema(() =>
+  z.union([
+    epicMentionEpicSuggestionSchema,
+    epicMentionArtifactSuggestionSchema,
+  ]),
+);
 export type EpicMentionSuggestion = z.infer<typeof epicMentionSuggestionSchema>;
 
-export const epicMentionEpicsResponseSchema = z.object({
-  entries: z.array(epicMentionEpicSuggestionSchema),
-});
+export const epicMentionEpicsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(epicMentionEpicSuggestionSchema),
+  }),
+);
 export type EpicMentionEpicsResponse = z.infer<
   typeof epicMentionEpicsResponseSchema
 >;
 
-export const epicMentionSpecsResponseSchema = z.object({
-  entries: z.array(epicMentionSpecSuggestionSchema),
-});
+export const epicMentionSpecsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(epicMentionSpecSuggestionSchema),
+  }),
+);
 export type EpicMentionSpecsResponse = z.infer<
   typeof epicMentionSpecsResponseSchema
 >;
 
-export const epicMentionTicketsResponseSchema = z.object({
-  entries: z.array(epicMentionTicketSuggestionSchema),
-});
+export const epicMentionTicketsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(epicMentionTicketSuggestionSchema),
+  }),
+);
 export type EpicMentionTicketsResponse = z.infer<
   typeof epicMentionTicketsResponseSchema
 >;
 
-export const epicMentionStoriesResponseSchema = z.object({
-  entries: z.array(epicMentionStorySuggestionSchema),
-});
+export const epicMentionStoriesResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(epicMentionStorySuggestionSchema),
+  }),
+);
 export type EpicMentionStoriesResponse = z.infer<
   typeof epicMentionStoriesResponseSchema
 >;
 
-export const epicMentionReviewsResponseSchema = z.object({
-  entries: z.array(epicMentionReviewSuggestionSchema),
-});
+export const epicMentionReviewsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(epicMentionReviewSuggestionSchema),
+  }),
+);
 export type EpicMentionReviewsResponse = z.infer<
   typeof epicMentionReviewsResponseSchema
 >;
@@ -1334,41 +1665,53 @@ export type EpicMentionReviewsResponse = z.infer<
 // so these Zod instances are owned by the protocol layer and re-exported
 // back to the HTTP-client layer (preserving instance identity).
 
-export const identifierTypeSchema = z.enum(["email", "github_handle"]);
+export const identifierTypeSchema = lazySchema(() =>
+  z.enum(["email", "github_handle"]),
+);
 export type IdentifierType = z.infer<typeof identifierTypeSchema>;
 
-export const collaboratorInviteEntrySchema = z.object({
-  identifier: z.string(),
-  identifierType: identifierTypeSchema,
-  role: LatestPermissionRoleSchema,
-});
+export const collaboratorInviteEntrySchema = lazySchema(() =>
+  z.object({
+    identifier: z.string(),
+    identifierType: identifierTypeSchema,
+    role: LatestPermissionRoleSchema,
+  }),
+);
 export type CollaboratorInviteEntry = z.infer<
   typeof collaboratorInviteEntrySchema
 >;
 
-export const collaboratorRoleChangeSchema = z.object({
-  userId: z.string().optional(),
-  teamId: z.string().optional(),
-  newRole: LatestPermissionRoleSchema,
-});
+export const collaboratorRoleChangeSchema = lazySchema(() =>
+  z.object({
+    userId: z.string().optional(),
+    teamId: z.string().optional(),
+    newRole: LatestPermissionRoleSchema,
+  }),
+);
 export type CollaboratorRoleChange = z.infer<
   typeof collaboratorRoleChangeSchema
 >;
 
-export const collaboratorRoleUpdateIntentSchema = z.enum(["invite", "direct"]);
+export const collaboratorRoleUpdateIntentSchema = lazySchema(() =>
+  z.enum(["invite", "direct"]),
+);
 export type CollaboratorRoleUpdateIntent = z.infer<
   typeof collaboratorRoleUpdateIntentSchema
 >;
 
-export const userInviteGrantSchema = z.object({
-  invites: z.array(collaboratorInviteEntrySchema),
-});
+export const userInviteGrantSchema = lazySchema(() =>
+  z.object({
+    invites: z.array(collaboratorInviteEntrySchema),
+  }),
+);
 export type UserInviteGrant = z.infer<typeof userInviteGrantSchema>;
 
-export const teamShareGrantSchema = z.object({
-  teamId: z.string(),
-  role: LatestPermissionRoleSchema,
-});
+export const teamShareGrantSchema = lazySchema(() =>
+  z.object({
+    teamId: z.string(),
+    role: LatestPermissionRoleSchema,
+  }),
+);
 export type TeamShareGrant = z.infer<typeof teamShareGrantSchema>;
 
 // ─── Unified artifact light (RPC registry only) ──────────────────────────────
@@ -1377,129 +1720,157 @@ export type TeamShareGrant = z.infer<typeof teamShareGrantSchema>;
 // The `epic.*` RPC surface uses a single `kind` discriminator rather than
 // four per-kind top-level schemas.
 
-export const epicArtifactLightSchema = z.object({
-  kind: LatestEpicArtifactKindSchema,
-  id: z.string(),
-  epicId: z.string(),
-  title: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  createdBy: z.string(),
-  assignee: z.string().optional(),
-  status: LatestTicketStatusSchema.optional(),
-});
+export const epicArtifactLightSchema = lazySchema(() =>
+  z.object({
+    kind: LatestEpicArtifactKindSchema,
+    id: z.string(),
+    epicId: z.string(),
+    title: z.string(),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    createdBy: z.string(),
+    assignee: z.string().optional(),
+    status: LatestTicketStatusSchema.optional(),
+  }),
+);
 export type EpicArtifactLight = z.infer<typeof epicArtifactLightSchema>;
 
-export const epicArtifactLightDeltaSchema = z.object({
-  kind: LatestEpicArtifactKindSchema,
-  id: z.string(),
-  epicId: z.string(),
-  title: z.string().optional(),
-  updatedAt: z.number().optional(),
-  assignee: z.string().optional(),
-  status: LatestTicketStatusSchema.optional(),
-});
+export const epicArtifactLightDeltaSchema = lazySchema(() =>
+  z.object({
+    kind: LatestEpicArtifactKindSchema,
+    id: z.string(),
+    epicId: z.string(),
+    title: z.string().optional(),
+    updatedAt: z.number().optional(),
+    assignee: z.string().optional(),
+    status: LatestTicketStatusSchema.optional(),
+  }),
+);
 export type EpicArtifactLightDelta = z.infer<
   typeof epicArtifactLightDeltaSchema
 >;
 
 // ─── Artifact CRUD (epic.createArtifact / deleteArtifact / updateArtifactStatus / renameArtifact) ──
 
-export const createArtifactRequestSchema = z.object({
-  epicId: z.string(),
-  parentId: z.string().nullable(),
-  artifactType: LatestEpicArtifactKindSchema,
-  title: z.string(),
-});
+export const createArtifactRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    parentId: z.string().nullable(),
+    artifactType: LatestEpicArtifactKindSchema,
+    title: z.string(),
+  }),
+);
 export type CreateArtifactRequest = z.infer<typeof createArtifactRequestSchema>;
 
-export const createArtifactResponseSchema = z.object({
-  artifactId: z.string(),
-});
+export const createArtifactResponseSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string(),
+  }),
+);
 export type CreateArtifactResponse = z.infer<
   typeof createArtifactResponseSchema
 >;
 
-export const deleteArtifactRequestSchema = z.object({
-  epicId: z.string(),
-  artifactId: z.string(),
-});
+export const deleteArtifactRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactId: z.string(),
+  }),
+);
 export type DeleteArtifactRequest = z.infer<typeof deleteArtifactRequestSchema>;
 
-export const deleteArtifactResponseSchema = z.object({ deleted: z.boolean() });
+export const deleteArtifactResponseSchema = lazySchema(() =>
+  z.object({ deleted: z.boolean() }),
+);
 export type DeleteArtifactResponse = z.infer<
   typeof deleteArtifactResponseSchema
 >;
 
 // `updateArtifactStatus` is only valid for ticket and story artifacts - specs
 // and reviews have no status field.
-export const artifactStatusKindSchema = z.enum(["ticket", "story"]);
+export const artifactStatusKindSchema = lazySchema(() =>
+  z.enum(["ticket", "story"]),
+);
 
-export const updateArtifactStatusRequestSchema = z.object({
-  epicId: z.string(),
-  artifactId: z.string(),
-  artifactType: artifactStatusKindSchema,
-  status: LatestTicketStatusSchema,
-});
+export const updateArtifactStatusRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactId: z.string(),
+    artifactType: artifactStatusKindSchema,
+    status: LatestTicketStatusSchema,
+  }),
+);
 export type UpdateArtifactStatusRequest = z.infer<
   typeof updateArtifactStatusRequestSchema
 >;
 
-export const updateArtifactStatusResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const updateArtifactStatusResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type UpdateArtifactStatusResponse = z.infer<
   typeof updateArtifactStatusResponseSchema
 >;
 
-export const renameArtifactRequestSchema = z.object({
-  epicId: z.string(),
-  artifactId: z.string(),
-  title: z.string(),
-});
+export const renameArtifactRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactId: z.string(),
+    title: z.string(),
+  }),
+);
 export type RenameArtifactRequest = z.infer<typeof renameArtifactRequestSchema>;
 
-export const renameArtifactResponseSchema = z.object({ updated: z.boolean() });
+export const renameArtifactResponseSchema = lazySchema(() =>
+  z.object({ updated: z.boolean() }),
+);
 export type RenameArtifactResponse = z.infer<
   typeof renameArtifactResponseSchema
 >;
 
-export const reparentArtifactRequestSchema = z.object({
-  epicId: z.string(),
-  artifactId: z.string(),
-  newParentId: z.string().nullable(),
-});
+export const reparentArtifactRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactId: z.string(),
+    newParentId: z.string().nullable(),
+  }),
+);
 export type ReparentArtifactRequest = z.infer<
   typeof reparentArtifactRequestSchema
 >;
 
-export const reparentArtifactResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const reparentArtifactResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type ReparentArtifactResponse = z.infer<
   typeof reparentArtifactResponseSchema
 >;
 
 // ─── Chat CRUD (epic.createChat / renameChat / deleteChat) ───────────────────
 
-export const createChatForkSourceSchema = z.object({
-  sourceChatId: z.string(),
-  assistantMessageId: z.string(),
-  // Optional content-block boundary within the selected assistant message.
-  // Q&A actions pass the interview block id so a completed assistant turn can
-  // be forked at the question checkpoint instead of at the end of the row.
-  // Message-level forks leave this null/absent and retain the whole message.
-  interviewBlockId: z.string().nullish(),
-  // Disposition for interview (AskUserQuestion) blocks still pending at the
-  // fork boundary when forking mid-Q&A:
-  //  - "pending" - re-open each carried question in the fork as an answerable
-  //    detached pending (A/B fork: answer differently and proceed in parallel).
-  //  - "settled" - close each carried question as reference-only so the fork's
-  //    composer is immediately free (Cross Question fork: interrogate the
-  //    assistant instead of answering).
-  // null/absent defaults to "pending".
-  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
-});
+export const createChatForkSourceSchema = lazySchema(() =>
+  z.object({
+    sourceChatId: z.string(),
+    assistantMessageId: z.string(),
+    // Optional content-block boundary within the selected assistant message.
+    // Q&A actions pass the interview block id so a completed assistant turn can
+    // be forked at the question checkpoint instead of at the end of the row.
+    // Message-level forks leave this null/absent and retain the whole message.
+    interviewBlockId: z.string().nullish(),
+    // Disposition for interview (AskUserQuestion) blocks still pending at the
+    // fork boundary when forking mid-Q&A:
+    //  - "pending" - re-open each carried question in the fork as an answerable
+    //    detached pending (A/B fork: answer differently and proceed in parallel).
+    //  - "settled" - close each carried question as reference-only so the fork's
+    //    composer is immediately free (Cross Question fork: interrogate the
+    //    assistant instead of answering).
+    // null/absent defaults to "pending".
+    carriedInterviews: z.enum(["pending", "settled"]).nullish(),
+  }),
+);
 export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
 
 /**
@@ -1533,14 +1904,16 @@ export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
  * genuinely does not know who owns this", which must never be fabricated
  * into a guess the host would then trust.
  */
-export const createChatForkSourceAssistantBoundarySchema = z.object({
-  boundary: z.literal("assistantMessage"),
-  sourceChatId: z.string(),
-  assistantMessageId: z.string(),
-  interviewBlockId: z.string().nullish(),
-  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
-  sourceOwnerUserId: z.string().min(1).nullable().default(null),
-});
+export const createChatForkSourceAssistantBoundarySchema = lazySchema(() =>
+  z.object({
+    boundary: z.literal("assistantMessage"),
+    sourceChatId: z.string(),
+    assistantMessageId: z.string(),
+    interviewBlockId: z.string().nullish(),
+    carriedInterviews: z.enum(["pending", "settled"]).nullish(),
+    sourceOwnerUserId: z.string().min(1).nullable().default(null),
+  }),
+);
 export type CreateChatForkSourceAssistantBoundary = z.infer<
   typeof createChatForkSourceAssistantBoundarySchema
 >;
@@ -1555,75 +1928,82 @@ export type CreateChatForkSourceAssistantBoundary = z.infer<
  * boundary itself via `buildLatestCheckpointForkSeed` against the
  * best-available transcript (store first, doc second - see `chat-fork-seed.ts`).
  */
-export const createChatForkSourceLatestCheckpointBoundarySchema = z.object({
-  boundary: z.literal("latest"),
-  sourceChatId: z.string(),
-  /**
-   * The owner the CLIENT was showing for this chat when the user clicked
-   * Clone (chat-sync-v2 ticket 37).
-   *
-   * The clone's cloud tier refuses to seed unless the host can check the
-   * resolved publication's owner against an expectation it holds locally -
-   * the anti-squatting guard from ticket 34 B2, which stops a caller
-   * naming somebody else's `chatId` and being handed their transcript.
-   * When local registry facts are absent (a post-restart swept chat, a
-   * fresh identity) the guard refuses correctly and the clone degrades to
-   * settings-only, losing the history. But the client knew the owner all
-   * along: it is on the sidebar row / published ref it just rendered.
-   *
-   * A HINT, never an authority. The host prefers its own registry facts and
-   * REFUSES the cloud tier outright when the two disagree - the registry
-   * outranks the client, and a disagreement is suspicious rather than a
-   * tiebreak to resolve. See `chat-fork-cloud-source.ts`.
-   *
-   * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the
-   * honest value for "the client genuinely does not know who owns this" -
-   * which must never be fabricated into a guess the host would then trust.
-   */
-  sourceOwnerUserId: z.string().min(1).nullable(),
-});
+export const createChatForkSourceLatestCheckpointBoundarySchema = lazySchema(
+  () =>
+    z.object({
+      boundary: z.literal("latest"),
+      sourceChatId: z.string(),
+      /**
+       * The owner the CLIENT was showing for this chat when the user clicked
+       * Clone (chat-sync-v2 ticket 37).
+       *
+       * The clone's cloud tier refuses to seed unless the host can check the
+       * resolved publication's owner against an expectation it holds locally -
+       * the anti-squatting guard from ticket 34 B2, which stops a caller
+       * naming somebody else's `chatId` and being handed their transcript.
+       * When local registry facts are absent (a post-restart swept chat, a
+       * fresh identity) the guard refuses correctly and the clone degrades to
+       * settings-only, losing the history. But the client knew the owner all
+       * along: it is on the sidebar row / published ref it just rendered.
+       *
+       * A HINT, never an authority. The host prefers its own registry facts and
+       * REFUSES the cloud tier outright when the two disagree - the registry
+       * outranks the client, and a disagreement is suspicious rather than a
+       * tiebreak to resolve. See `chat-fork-cloud-source.ts`.
+       *
+       * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the
+       * honest value for "the client genuinely does not know who owns this" -
+       * which must never be fabricated into a guess the host would then trust.
+       */
+      sourceOwnerUserId: z.string().min(1).nullable(),
+    }),
+);
 export type CreateChatForkSourceLatestCheckpointBoundary = z.infer<
   typeof createChatForkSourceLatestCheckpointBoundarySchema
 >;
 
-export const createChatForkSourceSchemaV11 = z.discriminatedUnion("boundary", [
-  createChatForkSourceAssistantBoundarySchema,
-  createChatForkSourceLatestCheckpointBoundarySchema,
-]);
+export const createChatForkSourceSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("boundary", [
+    createChatForkSourceAssistantBoundarySchema,
+    createChatForkSourceLatestCheckpointBoundarySchema,
+  ]),
+);
 export type CreateChatForkSourceV11 = z.infer<
   typeof createChatForkSourceSchemaV11
 >;
 
-export const createChatRequestSchema = z.object({
-  epicId: z.string(),
-  parentId: z.string().nullable(),
-  // Device the chat is bound to. Persisted on the chat artifact so the
-  // tab carries its host binding for life (mirrors the
-  // `tuiAgentSchema.hostId` contract).
-  hostId: z.string(),
-  title: z.string(),
-  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
-  // Client-supplied. The host resolver is idempotent on this id.
-  chatId: z.string(),
-  // Optional per-chat run settings to stamp on the new chat. Existing callers
-  // omit this and let the chat start with host defaults; fork creation passes
-  // the user's modal-selected provider/model settings.
-  settings: chatRunSettingsSchema.nullable().optional(),
-  // Optional intent - when present the host orchestrator resolves it into a
-  // local SQLite WorktreeBinding row for this chat before the first
-  // chat.subscribe send is processed. Intent only carries mode + entries; the
-  // host authors all setup state.
-  worktreeIntent: worktreeIntentSchema.nullable().optional(),
-  // Optional first message. When present (the landing → epic create flow), the
-  // host starts the provider turn immediately after creating the chat, so the
-  // ~3s cold-start overlaps the renderer's chat.subscribe round-trip instead of
-  // running strictly after it.
-  initialMessage: createChatInitialMessageSchema.nullable().optional(),
-  // Optional manual fork source. The host copies source chat history through
-  // the selected completed assistant message and records a `chat.forked` event
-  // for the forked chat's provenance divider.
-  forkSource: createChatForkSourceSchema.nullable().optional(),
-});
+export const createChatRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    parentId: z.string().nullable(),
+    // Device the chat is bound to. Persisted on the chat artifact so the
+    // tab carries its host binding for life (mirrors the
+    // `tuiAgentSchema.hostId` contract).
+    hostId: z.string(),
+    title: z.string(),
+    workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+    // Client-supplied. The host resolver is idempotent on this id.
+    chatId: z.string(),
+    // Optional per-chat run settings to stamp on the new chat. Existing callers
+    // omit this and let the chat start with host defaults; fork creation passes
+    // the user's modal-selected provider/model settings.
+    settings: chatRunSettingsSchema.nullable().optional(),
+    // Optional intent - when present the host orchestrator resolves it into a
+    // local SQLite WorktreeBinding row for this chat before the first
+    // chat.subscribe send is processed. Intent only carries mode + entries; the
+    // host authors all setup state.
+    worktreeIntent: worktreeIntentSchema.nullable().optional(),
+    // Optional first message. When present (the landing → epic create flow), the
+    // host starts the provider turn immediately after creating the chat, so the
+    // ~3s cold-start overlaps the renderer's chat.subscribe round-trip instead of
+    // running strictly after it.
+    initialMessage: createChatInitialMessageSchema.nullable().optional(),
+    // Optional manual fork source. The host copies source chat history through
+    // the selected completed assistant message and records a `chat.forked` event
+    // for the forked chat's provenance divider.
+    forkSource: createChatForkSourceSchema.nullable().optional(),
+  }),
+);
 export type CreateChatRequest = z.infer<typeof createChatRequestSchema>;
 
 /**
@@ -1631,28 +2011,77 @@ export type CreateChatRequest = z.infer<typeof createChatRequestSchema>;
  * caller can name a latest-checkpoint fork alongside the existing precise
  * boundary. Every other field is identical to v1.0.
  */
-export const createChatRequestSchemaV11 = createChatRequestSchema.extend({
-  forkSource: createChatForkSourceSchemaV11.nullable().optional(),
-});
+export const createChatRequestSchemaV11 = lazySchema(() =>
+  createChatRequestSchema.extend({
+    forkSource: createChatForkSourceSchemaV11.nullable().optional(),
+  }),
+);
 export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
 
-export const createChatResponseSchema = z.object({
-  chatId: z.string(),
-  // True when the host kicked the provider turn from `initialMessage`. The
-  // renderer uses this to skip the redundant `send` frame; `false`/absent means
-  // it must fall back to sending the message after chat.subscribe.
-  initialTurnStarted: z.boolean().optional(),
-});
+/**
+ * v1.2 request: `initialMessage` re-typed onto the `@1.2` leaf
+ * (`attachmentsByHash`) and `deferWorktreeProvisioning` beside it - the same
+ * two fields `epic.create@1.2` grows, with the same meanings and the same
+ * "absent means false" reading. See `createChatInitialMessageSchemaV12`.
+ *
+ * DERIVED FROM `createChatRequestSchemaV11`, NOT from the `@1.0` base: `@1.1`'s
+ * whole content is the widened `forkSource` union, and extending the base would
+ * silently drop it - re-narrowing `epic.createChat@1.2` to the precise-boundary
+ * fork shape that `@1.1` exists to widen.
+ */
+export const createChatRequestSchemaV12 = lazySchema(() =>
+  createChatRequestSchemaV11.extend({
+    initialMessage: createChatInitialMessageSchemaV12.nullable().optional(),
+    deferWorktreeProvisioning: z.boolean().optional(),
+  }),
+);
+export type CreateChatRequestV12 = z.infer<typeof createChatRequestSchemaV12>;
+
+export const createChatResponseSchema = lazySchema(() =>
+  z.object({
+    chatId: z.string(),
+    // True when the host kicked the provider turn from `initialMessage`. The
+    // renderer uses this to skip the redundant `send` frame; `false`/absent means
+    // it must fall back to sending the message after chat.subscribe.
+    initialTurnStarted: z.boolean().optional(),
+  }),
+);
 export type CreateChatResponse = z.infer<typeof createChatResponseSchema>;
 
-export const renameChatRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  title: z.string(),
-});
+/**
+ * `epic.createChat@1.2`'s response - the released body plus a `refusal` key it
+ * has never had, over the SAME `@1.2` refusal instance `epic.create@1.2` uses.
+ *
+ * The two methods now share a failure mode (a hash whose bytes the host cannot
+ * find), so they share its vocabulary; a second enum would let the same
+ * condition be spelled two ways.
+ *
+ * The emission rule the released `epic.create` refusal already carries applies
+ * here with more force, because `@1.0`/`@1.1` have no `refusal` key AT ALL: a
+ * stripped refusal leaves `{ chatId }`, which reads as a chat that was created.
+ * So the host emits `refusal` only at negotiated minor >= 2 and throws below
+ * it, and a `@1.2` client must read `refusal` BEFORE treating the body as a
+ * created chat.
+ */
+export const createChatResponseSchemaV12 = lazySchema(() =>
+  createChatResponseSchema.extend({
+    refusal: epicCreateRefusalSchemaV12.optional(),
+  }),
+);
+export type CreateChatResponseV12 = z.infer<typeof createChatResponseSchemaV12>;
+
+export const renameChatRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    title: z.string(),
+  }),
+);
 export type RenameChatRequest = z.infer<typeof renameChatRequestSchema>;
 
-export const renameChatResponseSchema = z.object({ updated: z.boolean() });
+export const renameChatResponseSchema = lazySchema(() =>
+  z.object({ updated: z.boolean() }),
+);
 export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
 
 // Persists a chat's run settings (harness/model/profile/…) WITHOUT sending a
@@ -1662,18 +2091,22 @@ export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
 // Optional (non-floor) capability: old hosts fail only this call with
 // E_HOST_UNSUPPORTED and the renderer degrades to the legacy
 // persist-on-next-send behavior.
-export const updateChatRunSettingsRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  settings: chatRunSettingsSchema,
-});
+export const updateChatRunSettingsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    settings: chatRunSettingsSchema,
+  }),
+);
 export type UpdateChatRunSettingsRequest = z.infer<
   typeof updateChatRunSettingsRequestSchema
 >;
 
-export const updateChatRunSettingsResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const updateChatRunSettingsResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type UpdateChatRunSettingsResponse = z.infer<
   typeof updateChatRunSettingsResponseSchema
 >;
@@ -1683,11 +2116,13 @@ export type UpdateChatRunSettingsResponse = z.infer<
 // schema makes a subset-field "patch" a validation error instead of a silent
 // null-clobber of omitted fields. See `chatRunSettingsStrictSchema`.
 // Profile-only changes belong on `epic.updateChatProfile` below.
-export const updateChatRunSettingsRequestSchemaV11 = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  settings: chatRunSettingsStrictSchema,
-});
+export const updateChatRunSettingsRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    settings: chatRunSettingsStrictSchema,
+  }),
+);
 export type UpdateChatRunSettingsRequestV11 = z.infer<
   typeof updateChatRunSettingsRequestSchemaV11
 >;
@@ -1702,11 +2137,13 @@ export type UpdateChatRunSettingsRequestV11 = z.infer<
 // reconfigure (`agent.configure` / `epic.updateChatRunSettings`).
 // Optional (non-floor) capability: old hosts fail only this call with
 // E_HOST_UNSUPPORTED and the renderer degrades to persist-on-next-send.
-export const updateChatProfileRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  profileId: z.string().nullable(),
-});
+export const updateChatProfileRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    profileId: z.string().nullable(),
+  }),
+);
 export type UpdateChatProfileRequest = z.infer<
   typeof updateChatProfileRequestSchema
 >;
@@ -1714,20 +2151,26 @@ export type UpdateChatProfileRequest = z.infer<
 // `updated` is false when the chat has no persisted run settings yet (a
 // never-configured chat has no tuple to patch; its first send will stamp
 // the composer's full tuple, profile included).
-export const updateChatProfileResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const updateChatProfileResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type UpdateChatProfileResponse = z.infer<
   typeof updateChatProfileResponseSchema
 >;
 
-export const deleteChatRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-});
+export const deleteChatRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+  }),
+);
 export type DeleteChatRequest = z.infer<typeof deleteChatRequestSchema>;
 
-export const deleteChatResponseSchema = z.object({ deleted: z.boolean() });
+export const deleteChatResponseSchema = lazySchema(() =>
+  z.object({ deleted: z.boolean() }),
+);
 export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
 
 // Optional (non-floor) capability: durable host-backed archive toggle. Sets or
@@ -1736,13 +2179,15 @@ export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
 // maps). Idempotent - archiving an already-archived record, or unarchiving an
 // active one, is a no-op. Old hosts lack it; callers get E_HOST_UNSUPPORTED for
 // this call only and hide the archive affordance.
-export const setChatArchivedRequestSchema = z.object({
-  epicId: z.string(),
-  // Names either a chat (in `chats`) or a terminal-agent (in `tuiAgents`)
-  // record; the host resolves the id across both maps.
-  chatId: z.string(),
-  archived: z.boolean(),
-});
+export const setChatArchivedRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    // Names either a chat (in `chats`) or a terminal-agent (in `tuiAgents`)
+    // record; the host resolves the id across both maps.
+    chatId: z.string(),
+    archived: z.boolean(),
+  }),
+);
 export type SetChatArchivedRequest = z.infer<
   typeof setChatArchivedRequestSchema
 >;
@@ -1750,9 +2195,11 @@ export type SetChatArchivedRequest = z.infer<
 // `updated` is true when the record's `archivedAt` actually changed; false when
 // the record was already in the requested state (idempotent no-op) or no record
 // matched the id.
-export const setChatArchivedResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const setChatArchivedResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type SetChatArchivedResponse = z.infer<
   typeof setChatArchivedResponseSchema
 >;
@@ -1775,11 +2222,13 @@ export type SetChatArchivedResponse = z.infer<
  * backed up at all?"); when it is absent the host answers `boundaryCovered:
  * null`, which means NOT ASKED and must never be read as "not covered".
  */
-export const chatPublicationStateRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  boundaryMessageId: z.string().nullish(),
-});
+export const chatPublicationStateRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    boundaryMessageId: z.string().nullish(),
+  }),
+);
 export type ChatPublicationStateRequest = z.infer<
   typeof chatPublicationStateRequestSchema
 >;
@@ -1827,44 +2276,46 @@ export type ChatPublicationStateRequest = z.infer<
  * a lineage that has been SUPERSEDED is not, and reports through `definitive`
  * below rather than hiding here.
  */
-export const chatPublicationStateResponseSchema = z.object({
-  published: z.boolean(),
-  boundaryCovered: z.boolean().nullable(),
-  publishedThroughTs: z.number().nullable(),
-  /**
-   * Set when waiting CANNOT change this answer. `null` means the ordinary
-   * reading applies and the state may still move on its own.
-   *
-   * ## Why a separate field rather than more values on the other three
-   *
-   * Every other answer here is a snapshot of a moving process, and the client
-   * polls precisely because it expects movement. Nothing in `published` /
-   * `boundaryCovered` can express "stop asking": `published: false` is what a
-   * chat mid-first-sweep reports, and it is also what a chat whose publication
-   * halted on an unresolvable conflict reports. The client cannot tell them
-   * apart, so it re-asks every 30s forever and tells the user "it backs up
-   * automatically - try again shortly", which is false and never resolves.
-   *
-   * A caller MUST stop polling when this is non-null and MUST NOT present the
-   * state as transient. Treating an unrecognised reason as terminal-but-
-   * unexplained is correct and forward-compatible; treating it as `null` is
-   * not, and reintroduces the infinite wait.
-   *
-   * - `chat-deleted` - the source chat is a tombstone on its own host. It will
-   *   not come back, and the fork would be refused anyway.
-   * - `lineage-superseded` - this chat lost an arbitrated fork, so its
-   *   publications now land under a different cloud identity. The receipt this
-   *   host holds describes a row a fork of THIS id will never fetch.
-   * - `backup-halted` - publication stopped for a reason the sweep does not
-   *   retry within the process lifetime (an unresolvable conflict, an
-   *   escalation, an unprovable head). A host restart may clear it; waiting on
-   *   this connection will not.
-   */
-  definitive: z
-    .enum(["chat-deleted", "lineage-superseded", "backup-halted"])
-    .nullable()
-    .default(null),
-});
+export const chatPublicationStateResponseSchema = lazySchema(() =>
+  z.object({
+    published: z.boolean(),
+    boundaryCovered: z.boolean().nullable(),
+    publishedThroughTs: z.number().nullable(),
+    /**
+     * Set when waiting CANNOT change this answer. `null` means the ordinary
+     * reading applies and the state may still move on its own.
+     *
+     * ## Why a separate field rather than more values on the other three
+     *
+     * Every other answer here is a snapshot of a moving process, and the client
+     * polls precisely because it expects movement. Nothing in `published` /
+     * `boundaryCovered` can express "stop asking": `published: false` is what a
+     * chat mid-first-sweep reports, and it is also what a chat whose publication
+     * halted on an unresolvable conflict reports. The client cannot tell them
+     * apart, so it re-asks every 30s forever and tells the user "it backs up
+     * automatically - try again shortly", which is false and never resolves.
+     *
+     * A caller MUST stop polling when this is non-null and MUST NOT present the
+     * state as transient. Treating an unrecognised reason as terminal-but-
+     * unexplained is correct and forward-compatible; treating it as `null` is
+     * not, and reintroduces the infinite wait.
+     *
+     * - `chat-deleted` - the source chat is a tombstone on its own host. It will
+     *   not come back, and the fork would be refused anyway.
+     * - `lineage-superseded` - this chat lost an arbitrated fork, so its
+     *   publications now land under a different cloud identity. The receipt this
+     *   host holds describes a row a fork of THIS id will never fetch.
+     * - `backup-halted` - publication stopped for a reason the sweep does not
+     *   retry within the process lifetime (an unresolvable conflict, an
+     *   escalation, an unprovable head). A host restart may clear it; waiting on
+     *   this connection will not.
+     */
+    definitive: z
+      .enum(["chat-deleted", "lineage-superseded", "backup-halted"])
+      .nullable()
+      .default(null),
+  }),
+);
 export type ChatPublicationStateResponse = z.infer<
   typeof chatPublicationStateResponseSchema
 >;
@@ -1874,59 +2325,71 @@ export type ChatPublicationStateResponse = z.infer<
 export const MAX_ARTIFACT_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_ARTIFACT_IMAGE_BASE64_LENGTH =
   4 * Math.ceil(MAX_ARTIFACT_IMAGE_BYTES / 3);
-const artifactImageBase64Schema = z
-  .string()
-  .max(MAX_ARTIFACT_IMAGE_BASE64_LENGTH)
-  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+const artifactImageBase64Schema = lazySchema(() =>
+  z
+    .string()
+    .max(MAX_ARTIFACT_IMAGE_BASE64_LENGTH)
+    .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+);
 
-export const prepareArtifactImageRequestSchema = z.object({
-  epicId: z.string(),
-  source: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("bytes"), base64: artifactImageBase64Schema }),
-    z.object({ kind: z.literal("remote"), url: z.string().url() }),
-  ]),
-});
+export const prepareArtifactImageRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    source: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("bytes"), base64: artifactImageBase64Schema }),
+      z.object({ kind: z.literal("remote"), url: z.string().url() }),
+    ]),
+  }),
+);
 export type PrepareArtifactImageRequest = z.infer<
   typeof prepareArtifactImageRequestSchema
 >;
 
-const artifactImageIngestErrorStateSchema = z.enum([
-  "invalid-path",
-  "blocked-path",
-  "consent-required",
-  "oversized",
-  "invalid-image",
-  "not-found",
-  "budget-exceeded",
-  "io-error",
-]);
-export const prepareArtifactImageResponseSchema = z.discriminatedUnion("ok", [
-  z.object({
-    ok: z.literal(true),
-    operationId: z.string(),
-    attachmentHash: imageSha256HexSchema,
-    mediaType: supportedImageMediaTypeSchema,
-    src: z.string(),
-  }),
-  z.object({
-    ok: z.literal(false),
-    state: artifactImageIngestErrorStateSchema,
-    message: z.string(),
-  }),
-]);
+const artifactImageIngestErrorStateSchema = lazySchema(() =>
+  z.enum([
+    "invalid-path",
+    "blocked-path",
+    "consent-required",
+    "oversized",
+    "invalid-image",
+    "not-found",
+    "budget-exceeded",
+    "io-error",
+  ]),
+);
+export const prepareArtifactImageResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({
+      ok: z.literal(true),
+      operationId: z.string(),
+      attachmentHash: imageSha256HexSchema,
+      mediaType: supportedImageMediaTypeSchema,
+      src: z.string(),
+    }),
+    z.object({
+      ok: z.literal(false),
+      state: artifactImageIngestErrorStateSchema,
+      message: z.string(),
+    }),
+  ]),
+);
 export type PrepareArtifactImageResponse = z.infer<
   typeof prepareArtifactImageResponseSchema
 >;
 
-const finishArtifactImageRequestBaseSchema = z.object({
-  epicId: z.string(),
-  artifactId: z.string(),
-  operationId: z.string(),
-});
-export const finishArtifactImageRequestSchema = z.discriminatedUnion("commit", [
-  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(true) }),
-  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(false) }),
-]);
+const finishArtifactImageRequestBaseSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactId: z.string(),
+    operationId: z.string(),
+  }),
+);
+export const finishArtifactImageRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("commit", [
+    finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(true) }),
+    finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(false) }),
+  ]),
+);
 export type FinishArtifactImageRequest = z.infer<
   typeof finishArtifactImageRequestSchema
 >;
@@ -1943,57 +2406,69 @@ export const artifactImageFinishResponseFixtures = {
   },
 } as const;
 
-export const commitArtifactImageResponseSchema = z.union([
-  z.object({
-    committed: z.literal(
-      artifactImageFinishResponseFixtures.commit.committed.committed,
-    ),
-  }),
-  z.object({
-    status: z.literal(
-      artifactImageFinishResponseFixtures.commit.notYetConverged.status,
-    ),
-  }),
-  z.object({
-    status: z.literal(
-      artifactImageFinishResponseFixtures.commit.unknownOperation.status,
-    ),
-  }),
-]);
+export const commitArtifactImageResponseSchema = lazySchema(() =>
+  z.union([
+    z.object({
+      committed: z.literal(
+        artifactImageFinishResponseFixtures.commit.committed.committed,
+      ),
+    }),
+    z.object({
+      status: z.literal(
+        artifactImageFinishResponseFixtures.commit.notYetConverged.status,
+      ),
+    }),
+    z.object({
+      status: z.literal(
+        artifactImageFinishResponseFixtures.commit.unknownOperation.status,
+      ),
+    }),
+  ]),
+);
 export type CommitArtifactImageResponse = z.infer<
   typeof commitArtifactImageResponseSchema
 >;
 
-export const abortArtifactImageResponseSchema = z.union([
-  z.object({
-    status: z.literal(artifactImageFinishResponseFixtures.abort.aborted.status),
-  }),
-  z.object({
-    status: z.literal(
-      artifactImageFinishResponseFixtures.abort.unknownOperation.status,
-    ),
-  }),
-]);
+export const abortArtifactImageResponseSchema = lazySchema(() =>
+  z.union([
+    z.object({
+      status: z.literal(
+        artifactImageFinishResponseFixtures.abort.aborted.status,
+      ),
+    }),
+    z.object({
+      status: z.literal(
+        artifactImageFinishResponseFixtures.abort.unknownOperation.status,
+      ),
+    }),
+  ]),
+);
 export type AbortArtifactImageResponse = z.infer<
   typeof abortArtifactImageResponseSchema
 >;
 
-export const finishArtifactImageResponseSchema = z.union([
-  commitArtifactImageResponseSchema,
-  abortArtifactImageResponseSchema,
-]);
+export const finishArtifactImageResponseSchema = lazySchema(() =>
+  z.union([
+    commitArtifactImageResponseSchema,
+    abortArtifactImageResponseSchema,
+  ]),
+);
 export type FinishArtifactImageResponse = z.infer<
   typeof finishArtifactImageResponseSchema
 >;
 
-export const reparentChatRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  newParentId: z.string().nullable(),
-});
+export const reparentChatRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    newParentId: z.string().nullable(),
+  }),
+);
 export type ReparentChatRequest = z.infer<typeof reparentChatRequestSchema>;
 
-export const reparentChatResponseSchema = z.object({ updated: z.boolean() });
+export const reparentChatResponseSchema = lazySchema(() =>
+  z.object({ updated: z.boolean() }),
+);
 export type ReparentChatResponse = z.infer<typeof reparentChatResponseSchema>;
 
 // ─── TUI-agent mutations (epic.createTuiAgent) ───────────────────────────────
@@ -2011,44 +2486,46 @@ export type ReparentChatResponse = z.infer<typeof reparentChatResponseSchema>;
 // launch args field. `null` means no override: prepare/launch should resolve
 // the current provider Settings default. `""` means an explicit "no extra
 // args" override. This is distinct from the computed `terminalShellArgs`.
-export const createTuiAgentRequestSchema = z.object({
-  epicId: z.string(),
-  parentId: z.string().nullable(),
-  title: z.string(),
-  harnessId: tuiHarnessIdSchema,
-  harnessSessionId: z.string().nullable().catch(null),
-  terminalAgentArgs: z.string().nullable().default(null).catch(null),
-  terminalShellCommand: z.string().nullable().catch(null),
-  terminalShellArgs: z.array(z.string()).nullable().catch(null),
-  hostId: z.string(),
-  workspaceFolders: z.array(z.string()),
-  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
-  model: z.string().nullable(),
-  reasoningEffort: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  // Optional client-minted tui-agent id. When present the host uses
-  // it as the persisted record's id; when absent the host mints one
-  // server-side. Lets the GUI dispatch worktree.* binding RPCs against the
-  // same id BEFORE creating the record so `agent.tui.prepareLaunch`
-  // reads the correct binding and gates harness launch on `awaitSetup`.
-  tuiAgentId: z.string().nullable().optional(),
-  // Which of the harness's logged-in profiles (subscriptions) to launch
-  // this agent on. `null` = the ambient/host login, so older clients that
-  // predate profiles keep today's exact behavior. See the multi-profile
-  // decision log.
-  profileId: z.string().nullable().default(null),
-  // The upstream harness session id this record was forked FROM, when the
-  // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
-  // above was itself a fork. `null` for a normal (non-fork) create, and for
-  // older clients that predate this field. The resolver persists this
-  // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
-  // provider failure between PTY spawn and destination-transcript
-  // establishment still has durable provenance to retry the fork from -
-  // the renderer's own prepared-launch stash is cleared on PTY creation,
-  // well before that establishment point.
-  // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
-  forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
-});
+export const createTuiAgentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    parentId: z.string().nullable(),
+    title: z.string(),
+    harnessId: tuiHarnessIdSchema,
+    harnessSessionId: z.string().nullable().catch(null),
+    terminalAgentArgs: z.string().nullable().default(null).catch(null),
+    terminalShellCommand: z.string().nullable().catch(null),
+    terminalShellArgs: z.array(z.string()).nullable().catch(null),
+    hostId: z.string(),
+    workspaceFolders: z.array(z.string()),
+    workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    // Optional client-minted tui-agent id. When present the host uses
+    // it as the persisted record's id; when absent the host mints one
+    // server-side. Lets the GUI dispatch worktree.* binding RPCs against the
+    // same id BEFORE creating the record so `agent.tui.prepareLaunch`
+    // reads the correct binding and gates harness launch on `awaitSetup`.
+    tuiAgentId: z.string().nullable().optional(),
+    // Which of the harness's logged-in profiles (subscriptions) to launch
+    // this agent on. `null` = the ambient/host login, so older clients that
+    // predate profiles keep today's exact behavior. See the multi-profile
+    // decision log.
+    profileId: z.string().nullable().default(null),
+    // The upstream harness session id this record was forked FROM, when the
+    // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
+    // above was itself a fork. `null` for a normal (non-fork) create, and for
+    // older clients that predate this field. The resolver persists this
+    // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
+    // provider failure between PTY spawn and destination-transcript
+    // establishment still has durable provenance to retry the fork from -
+    // the renderer's own prepared-launch stash is cleared on PTY creation,
+    // well before that establishment point.
+    // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
+    forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
+  }),
+);
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
 
 /**
@@ -2064,58 +2541,70 @@ export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
  * `.omit()` - a field added to the live shape must not silently leak back into
  * this contract, which is the exact failure this freeze exists to prevent.
  */
-export const createTuiAgentRequestSchemaV10 = z.object({
-  epicId: z.string(),
-  parentId: z.string().nullable(),
-  title: z.string(),
-  harnessId: tuiHarnessIdSchema,
-  harnessSessionId: z.string().nullable().catch(null),
-  terminalAgentArgs: z.string().nullable().default(null).catch(null),
-  terminalShellCommand: z.string().nullable().catch(null),
-  terminalShellArgs: z.array(z.string()).nullable().catch(null),
-  hostId: z.string(),
-  workspaceFolders: z.array(z.string()),
-  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
-  model: z.string().nullable(),
-  reasoningEffort: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  tuiAgentId: z.string().nullable().optional(),
-  profileId: z.string().nullable().default(null),
-});
+export const createTuiAgentRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    parentId: z.string().nullable(),
+    title: z.string(),
+    harnessId: tuiHarnessIdSchema,
+    harnessSessionId: z.string().nullable().catch(null),
+    terminalAgentArgs: z.string().nullable().default(null).catch(null),
+    terminalShellCommand: z.string().nullable().catch(null),
+    terminalShellArgs: z.array(z.string()).nullable().catch(null),
+    hostId: z.string(),
+    workspaceFolders: z.array(z.string()),
+    workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    tuiAgentId: z.string().nullable().optional(),
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type CreateTuiAgentRequestV10 = z.infer<
   typeof createTuiAgentRequestSchemaV10
 >;
 
-export const createTuiAgentResponseSchema = z.object({
-  tuiAgentId: z.string(),
-});
+export const createTuiAgentResponseSchema = lazySchema(() =>
+  z.object({
+    tuiAgentId: z.string(),
+  }),
+);
 export type CreateTuiAgentResponse = z.infer<
   typeof createTuiAgentResponseSchema
 >;
 
-export const deleteTuiAgentRequestSchema = z.object({
-  epicId: z.string(),
-  tuiAgentId: z.string(),
-});
+export const deleteTuiAgentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    tuiAgentId: z.string(),
+  }),
+);
 export type DeleteTuiAgentRequest = z.infer<typeof deleteTuiAgentRequestSchema>;
 
-export const deleteTuiAgentResponseSchema = z.object({
-  deleted: z.boolean(),
-});
+export const deleteTuiAgentResponseSchema = lazySchema(() =>
+  z.object({
+    deleted: z.boolean(),
+  }),
+);
 export type DeleteTuiAgentResponse = z.infer<
   typeof deleteTuiAgentResponseSchema
 >;
 
-export const renameTuiAgentRequestSchema = z.object({
-  epicId: z.string(),
-  tuiAgentId: z.string(),
-  title: z.string(),
-});
+export const renameTuiAgentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    tuiAgentId: z.string(),
+    title: z.string(),
+  }),
+);
 export type RenameTuiAgentRequest = z.infer<typeof renameTuiAgentRequestSchema>;
 
-export const renameTuiAgentResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const renameTuiAgentResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type RenameTuiAgentResponse = z.infer<
   typeof renameTuiAgentResponseSchema
 >;
@@ -2126,23 +2615,27 @@ export type RenameTuiAgentResponse = z.infer<
 // changes array. Responses reuse `listEpicCollaboratorsResponseSchema` so the
 // caller always gets a fresh collaborator list back.
 
-export const grantAccessInputSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("users"),
-    invites: z.array(collaboratorInviteEntrySchema),
-  }),
-  z.object({
-    kind: z.literal("team"),
-    teamId: z.string(),
-    role: LatestPermissionRoleSchema,
-  }),
-]);
+export const grantAccessInputSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("users"),
+      invites: z.array(collaboratorInviteEntrySchema),
+    }),
+    z.object({
+      kind: z.literal("team"),
+      teamId: z.string(),
+      role: LatestPermissionRoleSchema,
+    }),
+  ]),
+);
 export type GrantAccessInput = z.infer<typeof grantAccessInputSchema>;
 
-export const grantEpicAccessRequestSchema = z.object({
-  epicId: z.string(),
-  input: grantAccessInputSchema,
-});
+export const grantEpicAccessRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    input: grantAccessInputSchema,
+  }),
+);
 export type GrantEpicAccessRequest = z.infer<
   typeof grantEpicAccessRequestSchema
 >;
@@ -2153,16 +2646,20 @@ export type GrantEpicAccessResponse = z.infer<
   typeof grantEpicAccessResponseSchema
 >;
 
-export const batchUpdateRolesInputSchema = z.object({
-  changes: z.array(collaboratorRoleChangeSchema),
-  intent: collaboratorRoleUpdateIntentSchema.optional(),
-});
+export const batchUpdateRolesInputSchema = lazySchema(() =>
+  z.object({
+    changes: z.array(collaboratorRoleChangeSchema),
+    intent: collaboratorRoleUpdateIntentSchema.optional(),
+  }),
+);
 export type BatchUpdateRolesInput = z.infer<typeof batchUpdateRolesInputSchema>;
 
-export const batchUpdateEpicRolesRequestSchema = z.object({
-  epicId: z.string(),
-  input: batchUpdateRolesInputSchema,
-});
+export const batchUpdateEpicRolesRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    input: batchUpdateRolesInputSchema,
+  }),
+);
 export type BatchUpdateEpicRolesRequest = z.infer<
   typeof batchUpdateEpicRolesRequestSchema
 >;
@@ -2173,16 +2670,20 @@ export type BatchUpdateEpicRolesResponse = z.infer<
   typeof batchUpdateEpicRolesResponseSchema
 >;
 
-export const revokeInputSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("users"), userId: z.string() }),
-  z.object({ kind: z.literal("team"), teamId: z.string() }),
-]);
+export const revokeInputSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("users"), userId: z.string() }),
+    z.object({ kind: z.literal("team"), teamId: z.string() }),
+  ]),
+);
 export type RevokeInput = z.infer<typeof revokeInputSchema>;
 
-export const revokeEpicCollaboratorRequestSchema = z.object({
-  epicId: z.string(),
-  input: revokeInputSchema,
-});
+export const revokeEpicCollaboratorRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    input: revokeInputSchema,
+  }),
+);
 export type RevokeEpicCollaboratorRequest = z.infer<
   typeof revokeEpicCollaboratorRequestSchema
 >;
@@ -2193,98 +2694,122 @@ export type RevokeEpicCollaboratorResponse = z.infer<
   typeof revokeEpicCollaboratorResponseSchema
 >;
 
-export const createCommentThreadRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-  content: LatestJsonContentSchema,
-  quotedText: z.string(),
-});
+export const createCommentThreadRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+    content: LatestJsonContentSchema,
+    quotedText: z.string(),
+  }),
+);
 export type CreateCommentThreadRequest = z.infer<
   typeof createCommentThreadRequestSchema
 >;
 
-export const createCommentThreadResponseSchema = z.object({
-  threadId: z.string(),
-});
+export const createCommentThreadResponseSchema = lazySchema(() =>
+  z.object({
+    threadId: z.string(),
+  }),
+);
 export type CreateCommentThreadResponse = z.infer<
   typeof createCommentThreadResponseSchema
 >;
 
-export const replyToCommentThreadRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-  threadId: z.string(),
-  content: LatestJsonContentSchema,
-});
+export const replyToCommentThreadRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+    threadId: z.string(),
+    content: LatestJsonContentSchema,
+  }),
+);
 export type ReplyToCommentThreadRequest = z.infer<
   typeof replyToCommentThreadRequestSchema
 >;
 
-export const replyToCommentThreadResponseSchema = z.object({
-  ok: z.literal(true),
-});
+export const replyToCommentThreadResponseSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(true),
+  }),
+);
 export type ReplyToCommentThreadResponse = z.infer<
   typeof replyToCommentThreadResponseSchema
 >;
 
-export const editCommentRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-  threadId: z.string(),
-  commentId: z.string(),
-  content: LatestJsonContentSchema,
-});
+export const editCommentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+    threadId: z.string(),
+    commentId: z.string(),
+    content: LatestJsonContentSchema,
+  }),
+);
 export type EditCommentRequest = z.infer<typeof editCommentRequestSchema>;
 
-export const editCommentResponseSchema = z.object({ ok: z.literal(true) });
+export const editCommentResponseSchema = lazySchema(() =>
+  z.object({ ok: z.literal(true) }),
+);
 export type EditCommentResponse = z.infer<typeof editCommentResponseSchema>;
 
-export const deleteCommentRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-  threadId: z.string(),
-  commentId: z.string(),
-});
+export const deleteCommentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+    threadId: z.string(),
+    commentId: z.string(),
+  }),
+);
 export type DeleteCommentRequest = z.infer<typeof deleteCommentRequestSchema>;
 
-export const deleteCommentResponseSchema = z.object({ ok: z.literal(true) });
+export const deleteCommentResponseSchema = lazySchema(() =>
+  z.object({ ok: z.literal(true) }),
+);
 export type DeleteCommentResponse = z.infer<typeof deleteCommentResponseSchema>;
 
-export const setCommentThreadResolvedRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-  threadId: z.string(),
-  resolved: z.boolean(),
-});
+export const setCommentThreadResolvedRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+    threadId: z.string(),
+    resolved: z.boolean(),
+  }),
+);
 export type SetCommentThreadResolvedRequest = z.infer<
   typeof setCommentThreadResolvedRequestSchema
 >;
 
-export const setCommentThreadResolvedResponseSchema = z.object({
-  ok: z.literal(true),
-});
+export const setCommentThreadResolvedResponseSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(true),
+  }),
+);
 export type SetCommentThreadResolvedResponse = z.infer<
   typeof setCommentThreadResolvedResponseSchema
 >;
 
-export const deleteCommentThreadRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-  threadId: z.string(),
-});
+export const deleteCommentThreadRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+    threadId: z.string(),
+  }),
+);
 export type DeleteCommentThreadRequest = z.infer<
   typeof deleteCommentThreadRequestSchema
 >;
 
-export const deleteCommentThreadResponseSchema = z.object({
-  ok: z.literal(true),
-});
+export const deleteCommentThreadResponseSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(true),
+  }),
+);
 export type DeleteCommentThreadResponse = z.infer<
   typeof deleteCommentThreadResponseSchema
 >;
@@ -2294,46 +2819,58 @@ export type DeleteCommentThreadResponse = z.infer<
 // the same zod instances. The shared TS interfaces re-export this type so
 // consumers continue to import from `@traycer/host/collaboration`.
 
-export const commentUserSchema = z.object({
-  userId: z.string(),
-  fallbackHandle: z.string().nullable(),
-});
+export const commentUserSchema = lazySchema(() =>
+  z.object({
+    userId: z.string(),
+    fallbackHandle: z.string().nullable(),
+  }),
+);
 
-export const commentEntrySchema = z.object({
-  commentId: z.string(),
-  content: LatestJsonContentSchema,
-  createdAt: z.number(),
-  updatedAt: z.number().nullable(),
-  author: commentUserSchema,
-});
+export const commentEntrySchema = lazySchema(() =>
+  z.object({
+    commentId: z.string(),
+    content: LatestJsonContentSchema,
+    createdAt: z.number(),
+    updatedAt: z.number().nullable(),
+    author: commentUserSchema,
+  }),
+);
 
-export const commentThreadDataSchema = z.object({
-  createdByUserId: z.string(),
-  createdByHandle: z.string().nullable().optional(),
-  quotedText: z.string().optional(),
-});
+export const commentThreadDataSchema = lazySchema(() =>
+  z.object({
+    createdByUserId: z.string(),
+    createdByHandle: z.string().nullable().optional(),
+    quotedText: z.string().optional(),
+  }),
+);
 
-export const commentThreadWireSchema = z.object({
-  threadId: z.string(),
-  resolved: z.boolean(),
-  createdAt: z.number(),
-  comments: z.array(commentEntrySchema),
-  data: commentThreadDataSchema,
-});
+export const commentThreadWireSchema = lazySchema(() =>
+  z.object({
+    threadId: z.string(),
+    resolved: z.boolean(),
+    createdAt: z.number(),
+    comments: z.array(commentEntrySchema),
+    data: commentThreadDataSchema,
+  }),
+);
 export type CommentThreadWire = z.infer<typeof commentThreadWireSchema>;
 
-export const listCommentThreadsRequestSchema = z.object({
-  epicId: z.string(),
-  artifactType: LatestEpicArtifactKindSchema,
-  artifactId: z.string(),
-});
+export const listCommentThreadsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    artifactType: LatestEpicArtifactKindSchema,
+    artifactId: z.string(),
+  }),
+);
 export type ListCommentThreadsRequest = z.infer<
   typeof listCommentThreadsRequestSchema
 >;
 
-export const listCommentThreadsResponseSchema = z.object({
-  threads: z.array(commentThreadWireSchema),
-});
+export const listCommentThreadsResponseSchema = lazySchema(() =>
+  z.object({
+    threads: z.array(commentThreadWireSchema),
+  }),
+);
 export type ListCommentThreadsResponse = z.infer<
   typeof listCommentThreadsResponseSchema
 >;
@@ -2347,18 +2884,22 @@ export type ListCommentThreadsResponse = z.infer<
 // response means "not an artifact / not yet minted / unresolved chain" - the
 // GUI degrades to opening the raw file as a workspace-file preview.
 
-export const resolveArtifactByPathRequestSchema = z.object({
-  epicId: z.string(),
-  filePath: z.string(),
-});
+export const resolveArtifactByPathRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    filePath: z.string(),
+  }),
+);
 export type ResolveArtifactByPathRequest = z.infer<
   typeof resolveArtifactByPathRequestSchema
 >;
 
-export const resolveArtifactByPathResultSchema = z.object({
-  artifactId: z.string(),
-  kind: LatestEpicArtifactKindSchema,
-});
+export const resolveArtifactByPathResultSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string(),
+    kind: LatestEpicArtifactKindSchema,
+  }),
+);
 export type ResolveArtifactByPathResult = z.infer<
   typeof resolveArtifactByPathResultSchema
 >;
@@ -2367,9 +2908,11 @@ export type ResolveArtifactByPathResult = z.infer<
 // chain". The wrapper object is intentional: the versioned-RPC fingerprint
 // rejects a top-level nullable response, so the nullable lives on a field
 // (mirroring `epicLightWithPermissionSchema.light`).
-export const resolveArtifactByPathResponseSchema = z.object({
-  artifact: resolveArtifactByPathResultSchema.nullable(),
-});
+export const resolveArtifactByPathResponseSchema = lazySchema(() =>
+  z.object({
+    artifact: resolveArtifactByPathResultSchema.nullable(),
+  }),
+);
 export type ResolveArtifactByPathResponse = z.infer<
   typeof resolveArtifactByPathResponseSchema
 >;
@@ -2385,11 +2928,13 @@ export type ResolveArtifactByPathResponse = z.infer<
 // host-absolute path is never exposed.
 
 /** Which of the artifact's searchable surfaces a query is run against. */
-export const searchArtifactsFieldsSchema = z.object({
-  title: z.boolean(),
-  path: z.boolean(),
-  body: z.boolean(),
-});
+export const searchArtifactsFieldsSchema = lazySchema(() =>
+  z.object({
+    title: z.boolean(),
+    path: z.boolean(),
+    body: z.boolean(),
+  }),
+);
 export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
 
 /**
@@ -2399,45 +2944,48 @@ export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
  * absolute filesystem root - the host derives and authorizes the real root
  * internally). A `null` field means "no restriction on this axis".
  */
-export const searchArtifactsFiltersSchema = z.object({
-  kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
-  statuses: z.array(z.number().int()).nullable(),
-  subtreePath: z
-    .string()
-    .min(1)
-    .refine(
-      (path) =>
-        !path.startsWith("/") &&
-        path
-          .split("/")
-          .every(
-            (segment) => segment !== "" && segment !== "." && segment !== "..",
-          ),
-      "subtreePath must be a non-empty relative POSIX path without traversal",
-    )
-    .nullable(),
-});
+export const searchArtifactsFiltersSchema = lazySchema(() =>
+  z.object({
+    kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
+    statuses: z.array(z.number().int()).nullable(),
+    subtreePath: z
+      .string()
+      .min(1)
+      .refine(
+        (path) =>
+          !path.startsWith("/") &&
+          path
+            .split("/")
+            .every(
+              (segment) =>
+                segment !== "" && segment !== "." && segment !== "..",
+            ),
+        "subtreePath must be a non-empty relative POSIX path without traversal",
+      )
+      .nullable(),
+  }),
+);
 export type SearchArtifactsFilters = z.infer<
   typeof searchArtifactsFiltersSchema
 >;
 
-export const searchArtifactsRequestSchema = z.object({
-  epicId: z.string(),
-  query: z.string(),
-  fields: searchArtifactsFieldsSchema,
-  filters: searchArtifactsFiltersSchema,
-  limit: z.number().int().min(1).max(1_000),
-});
+export const searchArtifactsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    query: z.string(),
+    fields: searchArtifactsFieldsSchema,
+    filters: searchArtifactsFiltersSchema,
+    limit: z.number().int().min(1).max(1_000),
+  }),
+);
 export type SearchArtifactsRequest = z.infer<
   typeof searchArtifactsRequestSchema
 >;
 
 /** Which surface produced a hit. A hit may carry more than one source. */
-export const searchArtifactMatchSourceSchema = z.enum([
-  "title",
-  "path",
-  "body",
-]);
+export const searchArtifactMatchSourceSchema = lazySchema(() =>
+  z.enum(["title", "path", "body"]),
+);
 export type SearchArtifactMatchSource = z.infer<
   typeof searchArtifactMatchSourceSchema
 >;
@@ -2458,11 +3006,13 @@ export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = SEARCH_TEXT_PREVIEW_MAX_BYTES;
  * to {@link SEARCH_ARTIFACT_SNIPPET_MAX_BYTES} bytes host-side; a highlight for a
  * match past that bound is dropped rather than pointing outside `text`.
  */
-export const searchArtifactSnippetSchema = z.object({
-  lineNumber: z.number().int().positive(),
-  text: z.string(),
-  ranges: z.array(searchTextPreviewRangeSchema),
-});
+export const searchArtifactSnippetSchema = lazySchema(() =>
+  z.object({
+    lineNumber: z.number().int().positive(),
+    text: z.string(),
+    ranges: z.array(searchTextPreviewRangeSchema),
+  }),
+);
 export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
 
 /**
@@ -2474,17 +3024,19 @@ export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
  * the existing `epic.resolveArtifactByPath` route so a stale disk result cannot
  * mutate or resurrect deleted state.
  */
-export const searchArtifactHitSchema = z.object({
-  artifactId: z.string(),
-  kind: LatestEpicArtifactKindSchema,
-  title: z.string(),
-  status: z.number().int().nullable(),
-  relativePath: z.string(),
-  breadcrumb: z.array(z.string()),
-  sources: z.array(searchArtifactMatchSourceSchema),
-  score: z.number(),
-  snippets: z.array(searchArtifactSnippetSchema),
-});
+export const searchArtifactHitSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string(),
+    kind: LatestEpicArtifactKindSchema,
+    title: z.string(),
+    status: z.number().int().nullable(),
+    relativePath: z.string(),
+    breadcrumb: z.array(z.string()),
+    sources: z.array(searchArtifactMatchSourceSchema),
+    score: z.number(),
+    snippets: z.array(searchArtifactSnippetSchema),
+  }),
+);
 export type SearchArtifactHit = z.infer<typeof searchArtifactHitSchema>;
 
 /**
@@ -2493,19 +3045,20 @@ export type SearchArtifactHit = z.infer<typeof searchArtifactHitSchema>;
  * yet / is not a directory - a DISTINCT typed condition from zero matches, so a
  * caller can tell "nothing matched" apart from "nothing to search yet".
  */
-export const searchArtifactsOutcomeSchema = z.enum([
-  "ready",
-  "mirror-unavailable",
-]);
+export const searchArtifactsOutcomeSchema = lazySchema(() =>
+  z.enum(["ready", "mirror-unavailable"]),
+);
 export type SearchArtifactsOutcome = z.infer<
   typeof searchArtifactsOutcomeSchema
 >;
 
-export const searchArtifactsResponseSchema = z.object({
-  outcome: searchArtifactsOutcomeSchema,
-  results: z.array(searchArtifactHitSchema),
-  truncated: z.boolean(),
-});
+export const searchArtifactsResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: searchArtifactsOutcomeSchema,
+    results: z.array(searchArtifactHitSchema),
+    truncated: z.boolean(),
+  }),
+);
 export type SearchArtifactsResponse = z.infer<
   typeof searchArtifactsResponseSchema
 >;

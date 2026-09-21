@@ -1,7 +1,12 @@
 import "./stub-sweep-dialog-host-hooks";
 
-import type { DraftRetractResult } from "@/hooks/drafts/use-draft-retract";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ChatSearchMessageMatch } from "@traycer/protocol/host/chat-search/schemas";
+import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
+
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ theme: "dark" }),
+}));
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
@@ -28,37 +33,31 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import {
-  EpicsListPanel,
+  PickerEpicsListPanel,
   type EpicsListPanelVariant,
 } from "@/components/epics/epics-list-panel";
 import { EpicsListHostRequiresCloudToList } from "@/components/epics/epics-list-shared";
 import { historyRowProvenanceLabel } from "@/components/epics/history-row-provenance";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
-import {
-  emptyLandingDraftWorkspaceSnapshot,
-  freshLandingMirrorState,
-  useLandingDraftStore,
-} from "@/stores/home/landing-draft-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 import { harnessDisplayName } from "@/components/session-import/session-import-model";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
-import {
-  landingDraftIsRetired,
-  pendingLandingDraftDeleteHostId,
-  resetLandingDraftRetirementsForTests,
-} from "@/lib/drafts/landing-draft-retirement";
+import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
 import { setLandingPlacementHostReader } from "@/lib/drafts/draft-local-edits";
-import type { JsonContent } from "@traycer/protocol/common/registry";
-import { DraftSurfaceContext } from "@/providers/draft-surface-context";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -197,14 +196,37 @@ const testState = vi.hoisted(() => ({
   pendingDeleteEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
-  openLandingDraftFromHistory: vi.fn(),
   hostId: "host-test" as string | null,
+  // The message-hit section's two inputs. A `null` client is the no-host-runtime
+  // reading every case in this file predates, under which the section is not
+  // mounted at all - so only the cases that set both see it.
+  chatSearchClient: null as { readonly getActiveHostId: () => string } | null,
+  chatSearchHits: { kind: "absent" } as ChatSearchMessageHitsStatus,
 }));
 
-vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
-  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
-    testState.openLandingDraftFromHistory(navigate, draftId);
-  },
+const stubChatSearchHostClient = { getActiveHostId: () => "host-test" };
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useOptionalHostClient: () => testState.chatSearchClient,
+  };
+});
+
+vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
+  useChatSearchMessageHits: (): ChatSearchMessageHitsStatus =>
+    testState.chatSearchHits,
+}));
+
+// Reads the cloud task list through `useHostClient()`, which this fixture has
+// no provider for; the section's rows do not need a task name here.
+vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
+  useChatSearchTaskTitles: () => new Map<string, string>(),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -277,38 +299,6 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
       : (testState.activityByEpicId.get(epicId) ?? "idle"),
 }));
 
-const draftRetractTestState = vi.hoisted(() => ({
-  retract: vi.fn<(draftId: string) => Promise<DraftRetractResult>>(),
-}));
-vi.mock("@/hooks/drafts/use-draft-retract", () => ({
-  useDraftRetract: () => ({
-    mutation: { isPending: false },
-    retract: draftRetractTestState.retract,
-  }),
-}));
-const applyIncomingDraftDocumentMock = vi.hoisted(() => ({
-  apply: vi.fn<(document: unknown) => Promise<void>>(() => Promise.resolve()),
-}));
-const deleteThroughHostMock = vi.hoisted(() => ({
-  record:
-    vi.fn<(draftId: string, hostId: string, hasClient: boolean) => void>(),
-}));
-vi.mock("@/lib/drafts/draft-mirror-coordinator", async () => {
-  const store = await import("@/stores/home/landing-draft-store");
-  return {
-    applyIncomingDraftDocument: (document: unknown): Promise<void> =>
-      applyIncomingDraftDocumentMock.apply(document),
-    deleteLandingDraftThroughHost: (
-      draftId: string,
-      hostId: string,
-      client: unknown,
-    ): void => {
-      deleteThroughHostMock.record(draftId, hostId, client !== null);
-      store.deleteLandingDraftOnHost(draftId, hostId);
-    },
-  };
-});
-
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
     id: "history-epic-1",
@@ -330,6 +320,57 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     isPinned: false,
     ...overrides,
   };
+}
+
+function messageMatch(chatId: string): ChatSearchMessageMatch {
+  return {
+    epicId: "epic-from-history",
+    ownerUserId: "user-1",
+    chatId,
+    title: `Chat ${chatId}`,
+    lifecycleState: "active",
+    updatedAt: 1_700_000_000_000,
+    matchCount: 1,
+    best: {
+      messageId: `${chatId}-m1`,
+      tier: "assistant",
+      createdAt: 1_700_000_000_000,
+      interAgent: false,
+      truncated: false,
+      snippet: { text: "a matching line", highlights: [] },
+    },
+    messages: [],
+  };
+}
+
+/**
+ * Everything the message-hit section needs to be on screen: a host runtime to
+ * ask, a query long enough to ask about, and an answer.
+ */
+function seedMessageHits(
+  messages: ReadonlyArray<ChatSearchMessageMatch>,
+): void {
+  testState.chatSearchClient = stubChatSearchHostClient;
+  testState.chatSearchHits = {
+    kind: "ready",
+    messages,
+    indexState: "complete",
+    expansionBase: {
+      query: "matching",
+      scope: { kind: "all-accessible-tasks" },
+      tiers: null,
+      roleFilter: "any",
+      dateRange: null,
+      harness: null,
+      mode: "ranked",
+    },
+    showMore: null,
+    loadingMore: false,
+    loadMoreError: null,
+  };
+  useHistorySearchStore.setState({
+    search: { ...DEFAULT_HISTORY_SEARCH, query: "matching" },
+  });
 }
 
 function resetImportedUnseenStore(): void {
@@ -370,16 +411,13 @@ function historyWorktree(): WorktreeHostEntryV12 {
 }
 
 function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
-  return renderPanelWithOpenItem(variant, initialEntry, null, null);
+  return renderPanelWithOpenItem(variant, initialEntry, null);
 }
 
 function renderPanelWithOpenItem(
   variant: EpicsListPanelVariant,
   initialEntry: string,
   onOpenItem: ((item: HistoryItem) => void) | null,
-  // The start-task draft whose composer sits above the panel, as the draft
-  // tab provides it; `null` mounts the panel outside any draft surface.
-  surfaceDraftId: string | null,
 ) {
   const rootRoute = createRootRoute({
     component: () => <RootOutlet />,
@@ -388,17 +426,17 @@ function renderPanelWithOpenItem(
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <DraftSurfaceContext.Provider value={surfaceDraftId}>
-        <EpicsListPanel
-          variant={variant}
-          className={undefined}
-          onSelectEpic={null}
-          onOpenItem={onOpenItem}
-          routeSearch={null}
-          historyNowMs={null}
-          autoFocusSearch={false}
-        />
-      </DraftSurfaceContext.Provider>
+      <ScopedEpicsListPanel
+        initialScope="all"
+        onScopeSpy={null}
+        variant={variant}
+        className={undefined}
+        onSelectEpic={null}
+        onOpenItem={onOpenItem}
+        routeSearch={null}
+        historyNowMs={null}
+        autoFocusSearch={false}
+      />
     ),
   });
   const oldEpicRoute = createRoute({
@@ -434,7 +472,9 @@ function renderPanelView(variant: EpicsListPanelVariant, initialEntry: string) {
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <EpicsListPanel
+      <ScopedEpicsListPanel
+        initialScope="all"
+        onScopeSpy={null}
         variant={variant}
         className={undefined}
         onSelectEpic={null}
@@ -452,11 +492,36 @@ function renderPanelView(variant: EpicsListPanelVariant, initialEntry: string) {
   return { router, ...render(<RouterProvider router={router} />) };
 }
 
+function renderPickerPanel() {
+  const rootRoute = createRootRoute({
+    component: () => <RootOutlet />,
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => (
+      <PickerEpicsListPanel
+        className={undefined}
+        onSelectEpic={null}
+        onOpenItem={null}
+        historyNowMs={null}
+        autoFocusSearch={false}
+      />
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  return render(<RouterProvider router={router} />);
+}
+
 function RootOutlet(): ReactNode {
   const content = (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Outlet />
+        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
   );
@@ -496,14 +561,9 @@ describe("<EpicsListPanel />", () => {
     testState.pendingDeleteEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
-    testState.openLandingDraftFromHistory.mockReset();
     testState.hostId = "host-test";
-    draftRetractTestState.retract.mockReset();
-    applyIncomingDraftDocumentMock.apply.mockReset();
-    applyIncomingDraftDocumentMock.apply.mockImplementation(() =>
-      Promise.resolve(),
-    );
-    deleteThroughHostMock.record.mockReset();
+    testState.chatSearchClient = null;
+    testState.chatSearchHits = { kind: "absent" };
     testState.activityByEpicId.clear();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
@@ -523,7 +583,7 @@ describe("<EpicsListPanel />", () => {
 
   it("lets a destination picker replace normal row navigation", async () => {
     const onOpenItem = vi.fn();
-    const router = renderPanelWithOpenItem("embedded", "/", onOpenItem, null);
+    const router = renderPanelWithOpenItem("page", "/", onOpenItem);
 
     fireEvent.click(
       await screen.findByRole("link", { name: "Open task Open from landing" }),
@@ -563,7 +623,7 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     testState.pendingDeleteEpicIds = new Set(["epic-from-history"]);
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     await screen.findByRole("link", { name: "Open task Open from landing" });
 
@@ -617,8 +677,65 @@ describe("<EpicsListPanel />", () => {
     ).toBe("true");
   });
 
+  describe("PickerEpicsListPanel query ownership", () => {
+    it("keeps its query independent of the ambient History store", async () => {
+      useHistorySearchStore.setState({
+        search: { ...DEFAULT_HISTORY_SEARCH, query: "ambient" },
+      });
+      renderPickerPanel();
+
+      const input = await screen.findByRole("searchbox", {
+        name: "Search tasks",
+      });
+      expect((input as HTMLInputElement).value).toBe("");
+
+      fireEvent.change(input, { target: { value: "picked" } });
+
+      expect((input as HTMLInputElement).value).toBe("picked");
+      expect(useHistorySearchStore.getState().search.query).toBe("ambient");
+    });
+
+    it("clears only its own controller", async () => {
+      useHistorySearchStore.setState({
+        search: { ...DEFAULT_HISTORY_SEARCH, query: "ambient" },
+      });
+      renderPickerPanel();
+      const input = await screen.findByRole("searchbox", {
+        name: "Search tasks",
+      });
+      fireEvent.change(input, { target: { value: "picked" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+      expect((input as HTMLInputElement).value).toBe("");
+      expect(useHistorySearchStore.getState().search.query).toBe("ambient");
+    });
+
+    it("starts from the default search on every mount", async () => {
+      const first = renderPickerPanel();
+      fireEvent.change(
+        await screen.findByRole("searchbox", { name: "Search tasks" }),
+        { target: { value: "stale" } },
+      );
+      first.unmount();
+
+      renderPickerPanel();
+
+      const input = await screen.findByRole("searchbox", {
+        name: "Search tasks",
+      });
+      expect((input as HTMLInputElement).value).toBe(
+        DEFAULT_HISTORY_SEARCH.query,
+      );
+    });
+  });
+
   afterEach(() => {
     cleanup();
+    // Sonner's queue is module scope, same as the Zustand stores below - a
+    // toast left showing here would still be queued for the next test's
+    // fresh <Toaster />.
+    toast.dismiss();
     // Zustand stores are module scope, so an auth status staged here outlives
     // this file inside the same worker.
     useAuthStore.setState({ status: "signed-out" });
@@ -632,7 +749,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("opens landing history rows through the canonical epic tab route", async () => {
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("link", { name: /open task open from landing/i }),
@@ -662,7 +779,7 @@ describe("<EpicsListPanel />", () => {
       localRows: "present",
       sort: "loaded-union",
     };
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const rowLink = await screen.findByRole("link", {
       name: "Open task Open from landing",
@@ -689,7 +806,7 @@ describe("<EpicsListPanel />", () => {
       localRows: "present",
       sort: "loaded-union",
     };
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const unavailable = await screen.findByTestId("epics-list-unavailable");
     expect(unavailable).not.toBeNull();
@@ -711,7 +828,7 @@ describe("<EpicsListPanel />", () => {
       sort: "server",
     };
     useAuthStore.setState({ status: "unverified" });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const unavailable = await screen.findByTestId("epics-list-unavailable");
     expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
@@ -732,7 +849,7 @@ describe("<EpicsListPanel />", () => {
     useHistorySearchStore.setState({
       search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
     });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
@@ -750,7 +867,7 @@ describe("<EpicsListPanel />", () => {
     useHistorySearchStore.setState({
       search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
     });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(
       await screen.findByTestId("epics-list-filtered-empty"),
@@ -761,7 +878,7 @@ describe("<EpicsListPanel />", () => {
   it("shows the explicit cloud-pending state instead of an empty list", async () => {
     testState.items = [];
     testState.cloudPagePending = true;
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
@@ -772,7 +889,7 @@ describe("<EpicsListPanel />", () => {
       .getState()
       .openEpicTab("epic-from-history", "Open from landing");
 
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(
       (await screen.findByTestId("task-history-open-epic-from-history"))
@@ -782,7 +899,7 @@ describe("<EpicsListPanel />", () => {
 
   it("unpins a pinned app history epic from the row control", async () => {
     testState.items = [historyItem({ isPinned: true })];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const unpin = await screen.findByRole("button", {
       name: "Unpin Open from landing from top",
@@ -799,7 +916,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("pins an unpinned app history epic", async () => {
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const pin = await screen.findByRole("button", {
       name: "Pin Open from landing to top",
@@ -821,7 +938,7 @@ describe("<EpicsListPanel />", () => {
     // spends a cloud capability on the account with a bearer the cloud has
     // stopped vouching for.
     useAuthStore.setState({ status: "unverified" });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const pin = await screen.findByRole("button", {
       name: "Pinning Open from landing needs a verified session; sign-in could not be confirmed",
@@ -831,7 +948,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("clicks the pin control without triggering the row navigation layer", async () => {
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const pin = await screen.findByRole("button", {
       name: "Pin Open from landing to top",
@@ -874,7 +991,7 @@ describe("<EpicsListPanel />", () => {
       "epic-from-history",
       "epic-two",
     ]);
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const pendingPinOne = await screen.findByRole("button", {
       name: "Pin Open from landing to top",
@@ -909,7 +1026,7 @@ describe("<EpicsListPanel />", () => {
         isPinned: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
@@ -929,7 +1046,7 @@ describe("<EpicsListPanel />", () => {
         isPreservedOrphan: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const section = await screen.findByTestId("epics-list-preserved-section");
     expect(section.textContent).toContain("Deleted — unsynced edits kept");
@@ -954,11 +1071,14 @@ describe("<EpicsListPanel />", () => {
       localRows: "truncated",
       sort: "loaded-union",
     };
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const rows = await screen.findByTestId("epics-list-rows");
     expect(rows.textContent).toContain("Local");
-    expect(screen.queryByRole("status")).toBeNull();
+    // The scope bar's own count line is allowed; a completeness notice is not.
+    expect(screen.queryByRole("status")?.textContent ?? "").not.toMatch(
+      /cloud|device|partial|truncated/i,
+    );
     // Scoped to the list body's own container rather than the whole
     // document: unrelated chrome (a filter chip label, for example) could
     // otherwise fail this assertion for a reason that has nothing to do with
@@ -977,7 +1097,7 @@ describe("<EpicsListPanel />", () => {
         isPinned: false,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const pin = await screen.findByRole("button", {
       name: "Pinning Local only epic needs a newer Traycer host",
@@ -1012,7 +1132,7 @@ describe("<EpicsListPanel />", () => {
         isPinned: false,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const pin = await screen.findByRole("button", {
       name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
@@ -1034,7 +1154,7 @@ describe("<EpicsListPanel />", () => {
         isPinned: false,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const section = await screen.findByTestId("epics-list-preserved-section");
     const heading = section.querySelector("h2");
@@ -1068,7 +1188,7 @@ describe("<EpicsListPanel />", () => {
         isPreservedOrphan: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-preserved-orphan-epic-from-history",
@@ -1086,7 +1206,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1116,7 +1236,7 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     useAuthStore.setState({ status: "unverified" });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1127,7 +1247,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("shows no provenance glyph for an ordinary row carrying neither marker", async () => {
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     await screen.findByRole("link", { name: "Open task Open from landing" });
 
@@ -1163,7 +1283,7 @@ describe("<EpicsListPanel />", () => {
         title: "Ordinary epic",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     await screen.findByRole("link", { name: "Open task Ordinary epic" });
 
@@ -1216,7 +1336,7 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     testState.activityByEpicId.set("epic-from-history", "turn");
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const activityGlyph = await screen.findByTestId(
       "epics-list-row-activity-epic-from-history",
@@ -1243,7 +1363,7 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     testState.activityByEpicId.set("epic-from-history", "turn");
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     await screen.findByTestId("epics-list-row-activity-epic-from-history");
     const link = await screen.findByRole("link", {
@@ -1279,7 +1399,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1305,7 +1425,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1344,7 +1464,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1402,7 +1522,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1449,7 +1569,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1487,7 +1607,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1516,7 +1636,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1551,7 +1671,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1582,7 +1702,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const link = await screen.findByRole("link", {
       name: "Open task Local only epic",
@@ -1606,8 +1726,52 @@ describe("<EpicsListPanel />", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
+  it("shows a neutral toast instead of opening a duplicate tab when middle-clicking an already-open task", async () => {
+    // Foreground-open first, exactly like a real "already open" task: this
+    // also pins down the tab as the active one so the assertions below can
+    // prove the guard leaves it untouched.
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-from-history", "Open from landing");
+    const { activeTabId, openTabOrder, tabsById } =
+      useEpicCanvasStore.getState();
+    const openInBackgroundSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "openEpicTabInBackground",
+    );
+
+    const router = renderPanel("page", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+
+    fireEvent(
+      link,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    const toastEl = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-sonner-toast]");
+      if (el === null) throw new Error("expected a toast");
+      return el;
+    });
+    expect(within(toastEl).getByText("Task already open")).not.toBeNull();
+    expect(within(toastEl).getByText("Open from landing")).not.toBeNull();
+
+    expect(openInBackgroundSpy).not.toHaveBeenCalled();
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual(openTabOrder);
+    expect(useEpicCanvasStore.getState().tabsById).toEqual(tabsById);
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(activeTabId);
+    expect(router.state.location.pathname).toBe("/");
+  });
+
   it("hides the imported-unseen status slot when there is nothing to show, so the title keeps no stray gap", async () => {
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const link = await screen.findByRole("link", {
       name: "Open task Open from landing",
@@ -1645,7 +1809,7 @@ describe("<EpicsListPanel />", () => {
         .getState()
         .markImported("epic-from-history", "claude");
     });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const link = await screen.findByRole("link", {
       name: "Open task Open from landing",
@@ -1673,7 +1837,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const link = await screen.findByRole("link", {
       name: "Open task Local only epic",
@@ -1729,7 +1893,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -1777,7 +1941,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -1820,7 +1984,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1857,7 +2021,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -1905,7 +2069,7 @@ describe("<EpicsListPanel />", () => {
     // Running first: the spinner takes the leading slot ahead of the
     // provenance dot (see `HistoryRowStatusIcon`).
     testState.activityByEpicId.set("epic-from-history", "turn");
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     await screen.findByTestId("epics-list-row-activity-epic-from-history");
     const link = await screen.findByRole("link", {
@@ -1981,7 +2145,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     // Local-home pin support is fixed at `false` in this file (see the
     // `use-epic-pin-local-home-support` mock above), so this control is
@@ -2053,7 +2217,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    const { unmount } = renderPanelView("embedded", "/");
+    const { unmount } = renderPanelView("page", "/");
 
     const card = await screen.findByTestId("epics-list-row-card");
 
@@ -2089,7 +2253,7 @@ describe("<EpicsListPanel />", () => {
         .getState()
         .markImported("epic-from-history", "claude");
     });
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const provenanceGlyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
@@ -2167,7 +2331,7 @@ describe("<EpicsListPanel />", () => {
       }),
       historyItem({}),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2228,7 +2392,7 @@ describe("<EpicsListPanel />", () => {
     testState.worktreesByEpicId = new Map([
       ["epic-from-history", [historyWorktree()]],
     ]);
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const sweep = await screen.findByRole("button", {
       name: /^sweep worktrees for /i,
@@ -2244,7 +2408,7 @@ describe("<EpicsListPanel />", () => {
     // Provenance that names only THIS host adds nothing: the listing above is
     // this host's, and it is empty.
     testState.items = [historyItem({ chatHostIds: ["host-test"] })];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const disabled = await screen.findByRole("button", {
       name: /^no worktrees to sweep for /i,
@@ -2261,7 +2425,7 @@ describe("<EpicsListPanel />", () => {
     // unreachable for exactly the multi-host Tasks it exists for.
     testState.worktreesByEpicId = new Map();
     testState.items = [historyItem({ chatHostIds: ["host-elsewhere"] })];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const sweep = await screen.findByRole("button", {
       name: /^sweep worktrees for /i,
@@ -2278,7 +2442,7 @@ describe("<EpicsListPanel />", () => {
     // own, or every row on an older peer would claim a multi-host Task.
     testState.worktreesByEpicId = new Map();
     testState.items = [historyItem({ chatHostIds: null })];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const disabled = await screen.findByRole("button", {
       name: /^no worktrees to sweep for /i,
@@ -2290,7 +2454,7 @@ describe("<EpicsListPanel />", () => {
     testState.worktreesByEpicId = new Map([
       ["epic-from-history", [historyWorktree()]],
     ]);
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const pr = await screen.findByRole("link", { name: "Open PR #84 Open" });
     expect(pr.getAttribute("href")).toBe("https://github.com/acme/app/pull/84");
@@ -2342,7 +2506,7 @@ describe("<EpicsListPanel />", () => {
         ],
       ],
     ]);
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const overflow = await screen.findByRole("button", {
       name: "Show 1 more pull request",
@@ -2360,7 +2524,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("keeps the updated timestamp visible when a task has no PR pills", async () => {
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const updated = await screen.findByText("updated about 2 hours ago");
     expect(updated.className).not.toContain("group-hover/list-row:opacity-0");
@@ -2371,13 +2535,33 @@ describe("<EpicsListPanel />", () => {
 
   it("offers both context-menu actions for an epic row", async () => {
     enableDesktopBridge();
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
 
     expect(
       await screen.findByTestId("epics-list-row-open-background"),
     ).toBeDefined();
+    expect(
+      screen.queryByTestId("epics-list-row-open-new-window"),
+    ).not.toBeNull();
+  });
+
+  it("disables Open in Background with an 'Already open' hint for an already-open task, keeping Open in New Window available", async () => {
+    enableDesktopBridge();
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-from-history", "Open from landing");
+
+    renderPanel("page", "/");
+
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+
+    const backgroundItem = await screen.findByTestId(
+      "epics-list-row-open-background",
+    );
+    expect(backgroundItem.hasAttribute("data-disabled")).toBe(true);
+    expect(within(backgroundItem).getByText("Already open")).not.toBeNull();
     expect(
       screen.queryByTestId("epics-list-row-open-new-window"),
     ).not.toBeNull();
@@ -2396,7 +2580,7 @@ describe("<EpicsListPanel />", () => {
         title: "Phase from history",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
 
@@ -2421,7 +2605,7 @@ describe("<EpicsListPanel />", () => {
         title: "Phase in browser",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
 
@@ -2432,7 +2616,7 @@ describe("<EpicsListPanel />", () => {
 
   it("shows the running activity status on history rows", async () => {
     testState.activityByEpicId.set("epic-from-history", "turn");
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(
       await screen.findByTestId("epics-list-row-activity-epic-from-history"),
@@ -2442,7 +2626,7 @@ describe("<EpicsListPanel />", () => {
 
   it("shows the background activity status on history rows", async () => {
     testState.activityByEpicId.set("epic-from-history", "background");
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const backgroundIcon = await screen.findByTestId(
       "epics-list-row-background-activity-epic-from-history",
@@ -2454,7 +2638,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     const checkbox = await screen.findByRole("checkbox", {
       name: /select open from landing/i,
@@ -2471,7 +2655,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("selects a history row with ctrl-click without opening the epic", async () => {
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("link", {
@@ -2492,7 +2676,7 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("hides history title edit controls in selection mode", async () => {
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(
       await screen.findByRole("button", {
@@ -2516,7 +2700,7 @@ describe("<EpicsListPanel />", () => {
     // worktree-less tasks must not open a Sweep dialog with nothing in it.
     testState.items = [historyItem({ chatHostIds: ["host-test"] })];
     testState.worktreesByEpicId = new Map();
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2542,7 +2726,7 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     testState.worktreesByEpicId = new Map();
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2566,7 +2750,7 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     testState.worktreesByEpicId = new Map([["epic-two", [historyWorktree()]]]);
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2587,7 +2771,7 @@ describe("<EpicsListPanel />", () => {
         title: "Second history item",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2623,7 +2807,7 @@ describe("<EpicsListPanel />", () => {
         title: "Second history item",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2664,7 +2848,7 @@ describe("<EpicsListPanel />", () => {
         permissionRole: "viewer",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const viewerCheckbox = await screen.findByRole("checkbox", {
       name: /select viewer history item/i,
@@ -2711,7 +2895,7 @@ describe("<EpicsListPanel />", () => {
         permissionRole: "viewer",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     const selectButton = await screen.findByRole("button", {
       name: "Select history items",
@@ -2731,7 +2915,7 @@ describe("<EpicsListPanel />", () => {
         title: "Second history item",
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2773,7 +2957,7 @@ describe("<EpicsListPanel />", () => {
         isLocalHome: true,
       }),
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Select history items" }),
@@ -2832,7 +3016,7 @@ describe("<EpicsListPanel />", () => {
         provenRemovable: false,
       },
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     expect(
@@ -2862,7 +3046,7 @@ describe("<EpicsListPanel />", () => {
 
   it("does not delete the task while its worktree cleanup choices are still loading", async () => {
     testState.worktreeCandidatesFetching = true;
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     const confirm = await screen.findByTestId("delete-tasks-confirm");
@@ -2884,7 +3068,7 @@ describe("<EpicsListPanel />", () => {
         provenRemovable: false,
       },
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     const checkbox = await screen.findByTestId(
@@ -2911,7 +3095,7 @@ describe("<EpicsListPanel />", () => {
         provenRemovable: false,
       },
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     const checkbox = await screen.findByTestId(
@@ -2933,7 +3117,7 @@ describe("<EpicsListPanel />", () => {
         provenRemovable: false,
       },
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     const checkbox = await screen.findByTestId(
@@ -2969,7 +3153,7 @@ describe("<EpicsListPanel />", () => {
         provenRemovable: false,
       },
     ];
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     const checkbox = await screen.findByTestId(
@@ -2980,14 +3164,14 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("omits the worktree cleanup section when there are no candidates", async () => {
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     expect(await screen.findByTestId("delete-tasks-dialog")).not.toBeNull();
     expect(screen.queryByTestId("delete-tasks-worktree-cleanup")).toBeNull();
   });
 
   it("edits an epic title from a history row without opening the epic", async () => {
-    const router = renderPanel("embedded", "/");
+    const router = renderPanel("page", "/");
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -3017,7 +3201,7 @@ describe("<EpicsListPanel />", () => {
       historyItem({ ownership: "shared", permissionRole: "viewer" }),
     ];
 
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     expect(await screen.findByText("Open from landing")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-row-edit-title")).toBeNull();
@@ -3048,7 +3232,7 @@ describe("<EpicsListPanel />", () => {
         { value: "shared", count: 1 },
       ],
     };
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
     expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
@@ -3104,7 +3288,7 @@ describe("<EpicsListPanel />", () => {
       ],
       ownershipScopes: [],
     };
-    renderPanel("embedded", "/");
+    renderPanel("page", "/");
 
     fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
 
@@ -3128,7 +3312,7 @@ describe("<EpicsListPanel />", () => {
   it("preserves spaces typed into the page search box", async () => {
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
 
     fireEvent.change(input, { target: { value: "hello " } });
@@ -3202,7 +3386,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const first = screen.getByRole("link", {
       name: "Open task Open from landing",
@@ -3246,7 +3430,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const orphan = screen.getByRole("link", {
       name: "Open task Preserved orphan",
@@ -3284,7 +3468,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const orphan = screen.getByRole("link", {
       name: "Open task Preserved orphan",
@@ -3303,7 +3487,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     input.focus();
 
@@ -3314,444 +3498,49 @@ describe("<EpicsListPanel />", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it("shows retained drafts above the task list without selecting a filter", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    const drafts = await screen.findByTestId("history-drafts-block");
-    const tasks = await screen.findByTestId("epics-list-rows");
-    expect(screen.getByText("abandoned prompt")).not.toBeNull();
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(
-      drafts.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
-  });
-
-  it("does not show a block for an empty start-task composer", async () => {
-    useLandingDraftStore.getState().createDraft(null);
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
-  });
-
-  it("hides the draft the composer above it is editing", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    const typingId = useLandingDraftStore.getState().createDraft(null);
-    useLandingDraftStore.getState().setDraftContent(
-      typingId,
-      {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [{ type: "text", text: "typing now" }],
-          },
-        ],
-      },
-      null,
-    );
-    renderPanelWithOpenItem("embedded", "/", null, typingId);
-
-    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
-    expect(screen.queryByText("typing now")).toBeNull();
-  });
-
-  it("does not expose drafts as a task filter", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
-    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
-    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
-  });
-
-  it("opens a retained draft through openLandingDraftFromHistory", async () => {
-    const draftId = seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Open draft abandoned prompt",
-      }),
-    );
-
-    expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
-    expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
-      draftId,
-    );
-  });
-
-  it("asks for confirmation before deleting a retained draft", async () => {
-    const draftId = seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
-    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
-
-    expect(
-      await screen.findByTestId("history-drafts-delete-dialog"),
-    ).not.toBeNull();
-    expect(screen.getByText('Delete "abandoned prompt"?')).not.toBeNull();
-    expect(
-      screen.getByText(
-        /removes the start-task draft here and from every device/i,
-      ),
-    ).not.toBeNull();
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-
-    fireEvent.click(screen.getByTestId("history-drafts-delete-cancel"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("history-drafts-delete-dialog")).toBeNull();
-    });
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-
-    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(screen.queryByText("abandoned prompt")).toBeNull();
-  });
-
-  it("warns that an open draft will be deleted on every device", async () => {
-    const draftId = seedRetainedLandingDraft("live tab");
-    useLandingDraftStore.getState().openDraft(draftId);
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    expect(
-      await screen.findByText(/this draft is currently open/i),
-    ).not.toBeNull();
-    expect(screen.getByText(/every device/i)).not.toBeNull();
-  });
-
-  it("retracts through the placement host client and drops the mirror when a replica row's delete is confirmed (retracted)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("someone else's draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "retracted" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    // A retract completes locally - there is nothing left pending on any host.
-    expect(pendingLandingDraftDeleteHostId(draftId)).toBeNull();
-    expect(deleteThroughHostMock.record).not.toHaveBeenCalled();
-  });
-
-  it("drops the mirror when retract reports the cloud row already absent", async () => {
-    const draftId = seedForeignOwnedLandingDraft("already-gone draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "absent" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-  });
-
-  it("retracts a row this host owns but adopted on another host", async () => {
-    const draftId = seedOwnAdoptedOnOtherHostLandingDraft(
-      "own row adopted elsewhere",
-    );
-    draftRetractTestState.retract.mockResolvedValue({ status: "retracted" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    expect(deleteThroughHostMock.record).not.toHaveBeenCalled();
-  });
-
-  it("deletes an own row already owned by the History host through that host, even though the landing placement points elsewhere", async () => {
-    // The placement-based authority (`deleteDraft` consults it) would call
-    // this row foreign, since the placement reader names a different host
-    // than the row's owner. `HistoryDraftsList` must not go through that
-    // authority for a row it already owns - it routes the delete through
-    // `hostId` explicitly via `deleteLandingDraftOnHost`.
-    setLandingPlacementHostReader(() => "other-host");
-    const draftId = seedOwnLandingDraft("own draft on history host");
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(draftRetractTestState.retract).not.toHaveBeenCalled();
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    expect(pendingLandingDraftDeleteHostId(draftId)).toBe(testState.hostId);
-    // This file mounts no <HostRuntimeProvider>, so useHostClientForHostId
-    // resolves null here - the call still names hostId, just with no client.
-    expect(deleteThroughHostMock.record).toHaveBeenCalledWith(
-      draftId,
-      testState.hostId,
-      false,
-    );
-  });
-
-  it("contrast: retires a never-adopted own row locally with a null pending host", async () => {
-    const draftId = seedRetainedLandingDraft("never adopted own draft");
-
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    expect(pendingLandingDraftDeleteHostId(draftId)).toBeNull();
-  });
-
-  it("leaves a foreign-owned draft in place when retract reports unsupported (a host predating drafts.retract)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("unsupported-host draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "unsupported" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-    expect(landingDraftIsRetired(draftId)).toBe(false);
-  });
-
-  it("leaves a foreign-owned draft in place when retract fails (not conclusive)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("failed-retract draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "failed" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    // A `failed` retract is not conclusive (host offline, too old, etc.) -
-    // the row must stay, unlike `retracted`/`absent` above.
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-    expect(landingDraftIsRetired(draftId)).toBe(false);
-  });
-
-  it("deletes an unowned non-replica row locally when there is no resolved host", async () => {
-    const draftId = seedRetainedLandingDraft("no-host own draft");
-    testState.hostId = null;
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    expect(draftRetractTestState.retract).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-  });
-
-  it("leaves a replica draft in place when there is no resolved host (host-scoped delete cannot route a retract)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("no-host replica draft");
-    testState.hostId = null;
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    expect(draftRetractTestState.retract).not.toHaveBeenCalled();
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-    expect(landingDraftIsRetired(draftId)).toBe(false);
-  });
-
-  it("caps the draft block and expands it on request", async () => {
-    for (let index = 0; index < 6; index += 1) {
-      seedRetainedLandingDraft(`draft ${index}`);
-    }
+  it("carries the arrow sequence off the last task row into the message hits", async () => {
+    // The hits are the TAIL of one list, not a second list beside it: the
+    // section renders inside the same scroll container, so DOM order carries
+    // the traversal straight off the last task row and back.
+    seedMessageHits([messageMatch("chat-hit")]);
 
     renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks and messages",
+    });
+    const taskRow = screen.getByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const hitRow = screen.getByRole("button", { name: /Chat chat-hit/ });
+    input.focus();
 
-    expect(await screen.findAllByTestId("history-drafts-row")).toHaveLength(5);
-    fireEvent.click(screen.getByRole("button", { name: "View all 6" }));
-    expect(screen.getAllByTestId("history-drafts-row")).toHaveLength(6);
-    expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(taskRow);
+
+    fireEvent.keyDown(taskRow, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(hitRow);
+
+    fireEvent.keyDown(hitRow, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(taskRow);
   });
 
-  it("hides the drafts block in the destination picker", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("picker", "/");
+  it("withholds the message hits while tasks are being selected", async () => {
+    // Select acts on tasks. A message row is not one, cannot be checked, and
+    // would sit inside a selection the bulk actions could never include.
+    seedMessageHits([messageMatch("chat-hit")]);
 
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+    renderPanel("page", "/");
+    expect(
+      await screen.findByRole("button", { name: /Chat chat-hit/ }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+
+    expect(screen.queryByRole("button", { name: /Chat chat-hit/ })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: /^Message matches/ }),
+    ).toBeNull();
   });
 });
-
-function seedRetainedLandingDraft(text: string): string {
-  const content: JsonContent = {
-    type: "doc",
-    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-  };
-  const id = useLandingDraftStore.getState().createDraft(null);
-  useLandingDraftStore.getState().setDraftContent(id, content, null);
-  useLandingDraftStore.getState().closeDraft(id);
-  return id;
-}
-
-// A row this panel's host ("host-test") already owns and has adopted.
-function seedOwnLandingDraft(text: string): string {
-  const id = "own-history-draft";
-  useLandingDraftStore.setState((state) => ({
-    drafts: [
-      ...state.drafts,
-      {
-        id,
-        content: {
-          type: "doc",
-          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-        },
-        selection: null,
-        lastTouchedAt: Date.now(),
-        settings: null,
-        composerMode: "chat",
-        workspace: emptyLandingDraftWorkspaceSnapshot(),
-        ...freshLandingMirrorState(),
-        ownerHostId: "host-test",
-        origin: "own",
-        adoption: { state: "adopted", hostId: "host-test" },
-        closed: true,
-      },
-    ],
-  }));
-  return id;
-}
-
-// A row this panel's host ("host-test") does not own - `origin: "replica"`,
-// so `HistoryDraftsList`'s delete always retracts it regardless of
-// ownerHostId.
-function seedForeignOwnedLandingDraft(text: string): string {
-  const id = "foreign-draft";
-  useLandingDraftStore.setState((state) => ({
-    drafts: [
-      ...state.drafts,
-      {
-        id,
-        content: {
-          type: "doc",
-          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-        },
-        selection: null,
-        lastTouchedAt: Date.now(),
-        settings: null,
-        composerMode: "chat",
-        workspace: emptyLandingDraftWorkspaceSnapshot(),
-        ...freshLandingMirrorState(),
-        ownerHostId: "host-b",
-        origin: "replica",
-        adoption: { state: "adopted", hostId: "host-b" },
-        closed: true,
-      },
-    ],
-  }));
-  return id;
-}
-
-// A row this panel's host ("host-test") owns (`origin: "own"`) but that is
-// ADOPTED on a different host ("host-other") - the own-row analogue of a
-// replica. `HistoryDraftsList` cannot delete it through `hostId` (it is not
-// the owner there), so it retracts too.
-function seedOwnAdoptedOnOtherHostLandingDraft(text: string): string {
-  const id = "own-draft-adopted-elsewhere";
-  useLandingDraftStore.setState((state) => ({
-    drafts: [
-      ...state.drafts,
-      {
-        id,
-        content: {
-          type: "doc",
-          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-        },
-        selection: null,
-        lastTouchedAt: Date.now(),
-        settings: null,
-        composerMode: "chat",
-        workspace: emptyLandingDraftWorkspaceSnapshot(),
-        ...freshLandingMirrorState(),
-        ownerHostId: "host-other",
-        origin: "own",
-        adoption: { state: "adopted", hostId: "host-other" },
-        closed: true,
-      },
-    ],
-  }));
-  return id;
-}
