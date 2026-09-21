@@ -156,7 +156,8 @@ describe("this project is actually called by CI", () => {
     // `path.join` then normalised `…||true;#/..` away and landed back on the
     // real config file - so an existence check passed too. The shell reads the
     // same string as: run vitest, mask any failure with `||true`, and discard
-    // the rest as a comment. Guard green, suite never runs, exit 0.
+    // the rest as a comment. The guard passes, and the shell reports success
+    // even when Vitest fails.
     //
     // Anything that lets an arbitrary token reach `path.join` keeps producing
     // witnesses, because `path.join` normalises away precisely the characters
