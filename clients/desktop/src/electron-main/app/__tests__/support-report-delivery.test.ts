@@ -4,6 +4,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
+import { BrowserClient } from "@sentry/browser";
+import {
+  createEnvelope,
+  createTransport,
+  parseEnvelope,
+  type BaseTransportOptions,
+  type EventEnvelope,
+  type Transport,
+  type TransportMakeRequestResponse,
+} from "@sentry/core";
 
 interface CapturedAttachment {
   readonly filename: string;
@@ -192,12 +202,13 @@ vi.mock("../sentry-delivery-observer", async (importOriginal) => {
 import { DesktopSupportService } from "../support";
 import {
   createSentryRateLimitWindow,
+  observeSentryTransportFeedback,
   sentryOfflineQueuePath,
   sentryReportRateLimitWindow,
+  sentryFeedbackInclusion,
   type SentryRateLimitWindow,
   type SentryReportRateLimit,
 } from "../sentry-delivery-observer";
-import type { TransportMakeRequestResponse } from "@sentry/core";
 import type { HostFsLayout } from "../../host/host-paths";
 import type { SupportSubmitReportRequest } from "../../../ipc-contracts/window-types";
 
@@ -223,6 +234,30 @@ const FORM: SupportSubmitReportRequest = {
   // the handful exercising unavailable/failed routes override this to
   // "none" explicitly (see the "buildPublicDraft outcome honesty" describe).
   privateOutcome: "delivered",
+};
+
+const DELIVERY_FORM: SupportSubmitReportRequest = {
+  ...FORM,
+  privateDiagnostics: {
+    cause: null,
+    registry: {
+      routeTemplate: { status: "unavailable" },
+      hostId: { status: "unavailable" },
+      epicId: { status: "unavailable" },
+      tabId: { status: "unavailable" },
+      artifactId: { status: "unavailable" },
+      chatId: { status: "unavailable" },
+      agentId: { status: "unavailable" },
+      harnessId: { status: "unavailable" },
+      model: { status: "unavailable" },
+      profileId: { status: "unavailable" },
+      providerSelectionClass: { status: "unavailable" },
+      providerVersion: { status: "unavailable" },
+    },
+    fingerprint: "fp:v1:transport",
+    stackFamily: null,
+    correlationId: "corr-transport",
+  },
 };
 
 const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
@@ -300,6 +335,105 @@ function makeFakeSentryClient(): FakeSentryClient {
   };
 }
 
+interface ObservedTransportHarness {
+  readonly transport: Transport;
+  readonly requestItemTypes: string[][];
+  readonly droppedEvents: Array<{
+    readonly reason: string;
+    readonly category: string;
+    readonly count: number;
+  }>;
+}
+
+function makeObservedTransport(
+  makeRequest: (request: {
+    readonly body: string | Uint8Array;
+  }) => PromiseLike<TransportMakeRequestResponse>,
+): ObservedTransportHarness {
+  const requestItemTypes: string[][] = [];
+  const droppedEvents: ObservedTransportHarness["droppedEvents"] = [];
+  const options: BaseTransportOptions = {
+    url: "https://sentry.invalid/api/1/envelope/",
+    recordDroppedEvent: (reason, category, count) => {
+      droppedEvents.push({ reason, category, count: count ?? 1 });
+    },
+  };
+  const transport = observeSentryTransportFeedback(options, (wrapped) =>
+    createTransport(wrapped, async (request) => {
+      const envelope = parseEnvelope(request.body);
+      requestItemTypes.push(envelope[1].map(([header]) => header.type));
+      return makeRequest(request);
+    }),
+  );
+  return { transport, requestItemTypes, droppedEvents };
+}
+
+async function observedSendOutcome(
+  eventId: string,
+  sendResponse: FakeSendResponse,
+  seedResponse: TransportMakeRequestResponse | null,
+): Promise<TransportMakeRequestResponse> {
+  const responses: Array<FakeSendResponse | TransportMakeRequestResponse> =
+    seedResponse === null ? [sendResponse] : [seedResponse, sendResponse];
+  const transportHarness = makeObservedTransport(async () => {
+    const nextResponse = responses.shift();
+    if (nextResponse === undefined || nextResponse.statusCode === undefined) {
+      throw new Error("simulated network failure");
+    }
+    const response: TransportMakeRequestResponse = {
+      statusCode: nextResponse.statusCode,
+      ...(nextResponse.headers === undefined
+        ? {}
+        : { headers: nextResponse.headers }),
+    };
+    sentryReportRateLimitWindow.observe(response, Date.now());
+    return response;
+  });
+  if (seedResponse !== null) {
+    await transportHarness.transport.send(reportEnvelope("seed-event"));
+  }
+  try {
+    return await transportHarness.transport.send(reportEnvelope(eventId));
+  } catch {
+    return {};
+  }
+}
+
+function reportEnvelope(eventId: string): EventEnvelope {
+  return createEnvelope<EventEnvelope>(
+    { event_id: eventId, sent_at: new Date().toISOString() },
+    [
+      [
+        { type: "feedback" },
+        {
+          event_id: eventId,
+          type: "feedback",
+          contexts: { feedback: { message: "support report" } },
+        },
+      ],
+      [{ type: "attachment", length: 1, filename: "desktop.log" }, "x"],
+      [{ type: "attachment", length: 1, filename: "local-host.log" }, "x"],
+    ],
+  );
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise: ((value: T) => void) | null = null;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => {
+      if (resolvePromise === null) throw new Error("deferred is unresolved");
+      resolvePromise(value);
+    },
+  };
+}
+
 /**
  * Writes a fixture directly under the offline-queue path
  * `sentryOfflineQueuePath(app.getPath("userData"))` derives - the same one
@@ -367,10 +501,13 @@ beforeEach(async () => {
   defaultFakeClient = makeFakeSentryClient();
   sentryMock.getClient.mockReturnValue(defaultFakeClient);
   sentryMock.flush.mockImplementation(async () => {
-    defaultFakeClient.emitAfterSendEvent(
-      { event_id: lastHint().event_id },
+    const eventId = lastHint().event_id;
+    const response = await observedSendOutcome(
+      eventId,
       { statusCode: 200 },
+      null,
     );
+    defaultFakeClient.emitAfterSendEvent({ event_id: eventId }, response);
     return true;
   });
   diagnosticsMock.handleGetMetrics.mockResolvedValue(FAKE_PROCESS_METRICS);
@@ -872,13 +1009,298 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     // has already run, so the event_id it used is on the last captured hint -
     // exactly what `afterSendEvent` would carry for the event actually sent.
     sentryMock.flush.mockImplementationOnce(async () => {
-      fakeClient.emitAfterSendEvent(
-        { event_id: lastHint().event_id },
-        sendResponse,
-      );
+      const eventId = lastHint().event_id;
+      const response = await observedSendOutcome(eventId, sendResponse, null);
+      fakeClient.emitAfterSendEvent({ event_id: eventId }, response);
       return true;
     });
   }
+
+  function mockFlushWithFeedbackLimit(
+    sendResponse: FakeSendResponse,
+    seedResponse: TransportMakeRequestResponse,
+  ): void {
+    sentryMock.flush.mockImplementationOnce(async () => {
+      const eventId = lastHint().event_id;
+      const response = await observedSendOutcome(
+        eventId,
+        sendResponse,
+        seedResponse,
+      );
+      fakeClient.emitAfterSendEvent({ event_id: eventId }, response);
+      return true;
+    });
+  }
+
+  it("attributes overlapping transport responses to their exact feedback event", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const includedResponse = deferred<TransportMakeRequestResponse>();
+      const filteredResponse = deferred<TransportMakeRequestResponse>();
+      const transportHarness = makeObservedTransport(async (request) => {
+        const envelope = parseEnvelope(request.body);
+        const eventId = envelope[0].event_id;
+        if (eventId === "seed-event") {
+          const response: TransportMakeRequestResponse = {
+            statusCode: 429,
+            headers: responseHeaders({
+              rateLimits: "1:feedback",
+              retryAfter: null,
+            }),
+          };
+          sentryReportRateLimitWindow.observe(response, Date.now());
+          return response;
+        }
+        if (eventId === "included-event") {
+          return includedResponse.promise.then((response) => {
+            sentryReportRateLimitWindow.observe(response, Date.now());
+            return response;
+          });
+        }
+        if (eventId === "filtered-event") {
+          return filteredResponse.promise.then((response) => {
+            sentryReportRateLimitWindow.observe(response, Date.now());
+            return response;
+          });
+        }
+        throw new Error(`unexpected event ${eventId ?? "missing"}`);
+      });
+
+      const includedPromise = transportHarness.transport.send(
+        reportEnvelope("included-event"),
+      );
+      await transportHarness.transport.send(reportEnvelope("seed-event"));
+      const filteredPromise = transportHarness.transport.send(
+        reportEnvelope("filtered-event"),
+      );
+
+      expect(transportHarness.requestItemTypes).toEqual([
+        ["feedback", "attachment", "attachment"],
+        ["feedback", "attachment", "attachment"],
+        ["attachment", "attachment"],
+      ]);
+
+      const filtered: TransportMakeRequestResponse = {
+        statusCode: 200,
+        headers: responseHeaders({ rateLimits: null, retryAfter: null }),
+      };
+      filteredResponse.resolve(filtered);
+      const filteredResult = await filteredPromise;
+      expect(sentryFeedbackInclusion(filteredResult, "filtered-event")).toBe(
+        false,
+      );
+      expect(sentryFeedbackInclusion(filteredResult, "included-event")).toBe(
+        null,
+      );
+
+      const included: TransportMakeRequestResponse = {
+        statusCode: 200,
+        headers: responseHeaders({ rateLimits: null, retryAfter: null }),
+      };
+      includedResponse.resolve(included);
+      const includedResult = await includedPromise;
+      expect(sentryFeedbackInclusion(includedResult, "included-event")).toBe(
+        true,
+      );
+      expect(sentryFeedbackInclusion(includedResult, "filtered-event")).toBe(
+        null,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends feedback and attachments after an active pre-capture limit expires during async preparation, and records delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const responses: TransportMakeRequestResponse[] = [
+        {
+          statusCode: 429,
+          headers: responseHeaders({
+            rateLimits: "1:feedback",
+            retryAfter: null,
+          }),
+        },
+        {
+          statusCode: 200,
+          headers: responseHeaders({
+            rateLimits: "60:feedback",
+            retryAfter: null,
+          }),
+        },
+      ];
+      const requestItemTypes: string[][] = [];
+      const browserClient = new BrowserClient({
+        dsn: "https://public@example.invalid/1",
+        integrations: [],
+        stackParser: () => [],
+        sendClientReports: false,
+        transport: (options) =>
+          observeSentryTransportFeedback(options, (wrapped) =>
+            createTransport(wrapped, async (request) => {
+              const envelope = parseEnvelope(request.body);
+              requestItemTypes.push(envelope[1].map(([header]) => header.type));
+              const response = responses.shift();
+              if (response === undefined)
+                throw new Error("missing test response");
+              sentryReportRateLimitWindow.observe(response, Date.now());
+              return response;
+            }),
+          ),
+      });
+      const seedResponse = deferred<TransportMakeRequestResponse>();
+      const unsubscribeSeed = browserClient.on(
+        "afterSendEvent",
+        (event, response) => {
+          if (event.event_id === "seed-event") seedResponse.resolve(response);
+        },
+      );
+      browserClient.captureEvent({
+        event_id: "seed-event",
+        type: "feedback",
+      });
+      await seedResponse.promise;
+      unsubscribeSeed();
+      expect(sentryReportRateLimitWindow.current(0).limited).toBe(true);
+      expect(requestItemTypes).toEqual([["feedback"]]);
+      requestItemTypes.length = 0;
+
+      const preparation = deferred<void>();
+      const captured = deferred<void>();
+      let browserFlushResult: boolean | undefined;
+      const browserResponses: TransportMakeRequestResponse[] = [];
+      const browserClientAdapter: FakeSentryClient = {
+        on: (_hook, callback) =>
+          browserClient.on("afterSendEvent", (event, response) => {
+            browserResponses.push(response);
+            callback(event, response);
+          }),
+        emitAfterSendEvent: () => {
+          throw new Error("the BrowserClient owns afterSendEvent");
+        },
+        listenerCount: () => 0,
+      };
+      sentryMock.getClient.mockReturnValue(browserClientAdapter);
+      sentryMock.captureFeedback.mockImplementationOnce((_feedback, hint) => {
+        captured.resolve(undefined);
+        return browserClient.captureEvent(
+          {
+            event_id: hint.event_id,
+            type: "feedback",
+            tags: hint.captureContext.tags,
+          },
+          {
+            event_id: hint.event_id,
+            attachments: hint.attachments.map((attachment) => ({
+              filename: attachment.filename,
+              // Normalize the jsdom encoder output into this realm for the
+              // SDK serializer's Uint8Array check. Real browsers share one realm.
+              data: new Uint8Array(
+                typeof attachment.data === "string"
+                  ? new TextEncoder().encode(attachment.data)
+                  : attachment.data,
+              ),
+              ...(attachment.contentType === undefined
+                ? {}
+                : { contentType: attachment.contentType }),
+            })),
+          },
+        );
+      });
+      sentryMock.flush.mockImplementationOnce(async (timeout) => {
+        browserFlushResult = await browserClient.flush(timeout);
+        return browserFlushResult;
+      });
+      browserClient.addEventProcessor(async (event) => {
+        await preparation.promise;
+        return event;
+      });
+
+      const service = buildService(null);
+      await service.freezeEvidence(KEY, null);
+      const submit = service.submitReport(DELIVERY_FORM, KEY);
+      await captured.promise;
+      expect(sentryReportRateLimitWindow.current(0).limited).toBe(true);
+      expect(requestItemTypes).toHaveLength(0);
+
+      vi.advanceTimersByTime(1_001);
+      preparation.resolve(undefined);
+      // Settle processor, transport, and flush polling before checking delivery.
+      await vi.runAllTimersAsync();
+      const result = await submit;
+
+      expect(browserFlushResult).toBe(true);
+      expect(browserResponses.at(-1)?.statusCode).toBe(200);
+      expect(result.status).toBe("delivered");
+      expect(requestItemTypes.at(-1)).toEqual([
+        "feedback",
+        "attachment",
+        "attachment",
+      ]);
+      expect(reportLedgerMock.recordFiledReport).toHaveBeenCalledWith(
+        result.status === "delivered" ? result.reportId : "",
+        "fp:v1:transport",
+      );
+      const closed = browserClient.close(100);
+      await vi.runAllTimersAsync();
+      await closed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a feedback-only active limit plus an attachments-only 2xx as rate-limited, without filing a report", async () => {
+    const responses: TransportMakeRequestResponse[] = [
+      {
+        statusCode: 429,
+        headers: responseHeaders({
+          rateLimits: "60:feedback",
+          retryAfter: null,
+        }),
+      },
+      {
+        statusCode: 200,
+        headers: responseHeaders({ rateLimits: null, retryAfter: null }),
+      },
+    ];
+    const transportHarness = makeObservedTransport(async () => {
+      const response = responses.shift();
+      if (response === undefined) throw new Error("missing test response");
+      sentryReportRateLimitWindow.observe(response, Date.now());
+      return response;
+    });
+    await transportHarness.transport.send(reportEnvelope("seed-event"));
+
+    sentryMock.flush.mockImplementationOnce(async () => {
+      const eventId = lastHint().event_id;
+      const response = await transportHarness.transport.send(
+        reportEnvelope(eventId),
+      );
+      fakeClient.emitAfterSendEvent({ event_id: eventId }, response);
+      return true;
+    });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result).toEqual({
+      status: "failed",
+      reason: "rate-limited",
+      retryAfterSeconds: 60,
+    });
+    expect(transportHarness.requestItemTypes.at(-1)).toEqual([
+      "attachment",
+      "attachment",
+    ]);
+    expect(
+      transportHarness.droppedEvents.some(
+        (event) =>
+          event.reason === "ratelimit_backoff" && event.category === "feedback",
+      ),
+    ).toBe(true);
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
+  });
 
   it("returns delivered when afterSendEvent reports a 2xx status for our event", async () => {
     mockFlushWithSendOutcome({ statusCode: 200 });
@@ -931,28 +1353,17 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
   });
 
   it("an undefined status earned by a DIFFERENT event's 429 still maps to rate-limited (the RCA's own scenario)", async () => {
-    // The rate-limit window is fed by a CLIENT-WIDE observer in
-    // `crash-reporter.ts` (`client.on("afterSendEvent", (_, r) =>
-    // window.observe(r, Date.now()))`), not by `support.ts`'s own per-event
-    // hook - a 429 earned by a crash report sharing the same DSN quota is
-    // exactly what a per-event hook cannot see on its own. Simulate that
-    // observer directly here, rather than importing `crash-reporter.ts`
-    // (which pulls in far more than this test needs).
-    const observedAt = Date.now();
-    sentryReportRateLimitWindow.observe(
+    // Feed the window through the same pinned @sentry/core transport wrapper
+    // that produces the production evidence. The 429 belongs to the seed
+    // event; our own event has no status, so this exercises the client-wide
+    // limit signal without fabricating a per-event response for our report.
+    mockFlushWithFeedbackLimit(
+      {},
       {
         statusCode: 429,
         headers: responseHeaders({ rateLimits: null, retryAfter: "5" }),
       },
-      observedAt,
     );
-    // Our own event gets no HTTP response at all (network failure, or the
-    // SDK's client-side drop under the very limit just observed) -
-    // `resolveDeliveryOutcome` must still recognize the still-active window
-    // and not fall through to `unconfirmed`. No cleanup and no sleeping: the
-    // window is installed fresh per test (see `rateLimitWindowMock`), so a
-    // limit fed here cannot reach any other test.
-    mockFlushWithSendOutcome({});
 
     const result = await freezeAndSubmit(buildService(null));
 
@@ -984,7 +1395,16 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
       },
       Date.now(),
     );
-    mockFlushWithSendOutcome({ statusCode: 200 });
+    mockFlushWithFeedbackLimit(
+      { statusCode: 200 },
+      {
+        statusCode: 429,
+        headers: responseHeaders({
+          rateLimits: "60:feedback",
+          retryAfter: null,
+        }),
+      },
+    );
 
     const result = await freezeAndSubmit(buildService(null));
 
@@ -1048,20 +1468,12 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     // folded this response's headers in before our hook runs. A live read
     // here would call a report that LANDED rate-limited and send the user
     // back to retry it.
-    const client = makeFakeSentryClient();
-    sentryMock.getClient.mockReturnValue(client);
-    sentryMock.flush.mockImplementationOnce(async () => {
-      const accepted: TransportMakeRequestResponse = {
-        statusCode: 200,
-        headers: responseHeaders({
-          rateLimits: "60:feedback",
-          retryAfter: null,
-        }),
-      };
-      // Observer first, exactly as insertion order dictates in production.
-      sentryReportRateLimitWindow.observe(accepted, Date.now());
-      client.emitAfterSendEvent({ event_id: lastHint().event_id }, accepted);
-      return true;
+    mockFlushWithSendOutcome({
+      statusCode: 200,
+      headers: responseHeaders({
+        rateLimits: "60:feedback",
+        retryAfter: null,
+      }),
     });
 
     const result = await freezeAndSubmit(buildService(null));
@@ -1087,6 +1499,33 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     // offline transport's own 5s replay timer (`START_DELAY` on the
     // queue-on-error path in `@sentry/core`'s offline transport) could ever
     // fire, so there is no clock to race here.
+    const result = await service.submitReport(FORM, KEY);
+
+    expect(result).toEqual({ status: "queued", reportId: draft.reportId });
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
+  });
+
+  it("keeps exact queued evidence over an unrelated newly active limit after a no-status network failure", async () => {
+    mockFlushWithSendOutcome({});
+    const service = buildService(null);
+    const draft = await service.freezeEvidence(KEY, null);
+    const eventId = draft.reportId.slice("rpt_".length);
+    await writeOfflineQueueFixture([{ id: "entry-a", eventId }]);
+
+    // This limit was earned by another event after our own send failed. It is
+    // a retry hint for future sends, not evidence that the exact envelope in
+    // the offline store was dropped.
+    sentryReportRateLimitWindow.observe(
+      {
+        statusCode: 429,
+        headers: responseHeaders({
+          rateLimits: "60:feedback",
+          retryAfter: null,
+        }),
+      },
+      Date.now(),
+    );
+
     const result = await service.submitReport(FORM, KEY);
 
     expect(result).toEqual({ status: "queued", reportId: draft.reportId });

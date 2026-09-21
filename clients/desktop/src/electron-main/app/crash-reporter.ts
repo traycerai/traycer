@@ -10,6 +10,7 @@ import {
   scrubSentryTransactionInPlace,
 } from "@traycer-clients/shared/platform/sentry-scrub";
 import {
+  observeSentryTransportFeedback,
   sentryOfflineQueuePath,
   sentryReportRateLimitWindow,
 } from "./sentry-delivery-observer";
@@ -69,6 +70,12 @@ export function initCrashReporter(): void {
     // with `type: "feedback"`. So this thins exactly the volume that was
     // eating the quota and leaves the user-submitted reports at 100%.
     sampleRate: isProd ? 0.25 : 1.0,
+    transport: SentryElectron.makeElectronOfflineTransport((options) =>
+      observeSentryTransportFeedback(
+        options,
+        SentryElectron.makeElectronTransport,
+      ),
+    ),
     // The default offline transport already queues to exactly this path
     // (`createOfflineStore` defaults `queuePath` to
     // `join(getSentryCachePath(), 'queue')`, and `getSentryCachePath()` is
