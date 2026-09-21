@@ -14,6 +14,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 type UsageSummaryResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -26,6 +27,7 @@ const DEAD_PICKED_HOST_ID = "host-that-vanished";
 
 const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
+  schedulingPolicy: hostRpcSchedulingPolicy,
   invalidator: { invalidateHostScope: () => undefined },
   findHostById: (hostId) =>
     hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
