@@ -55,8 +55,9 @@ export function AutoPolicyShippedDialog(props: {
       <DialogContent
         // Same pairing as the editor dialog beside it - see its comment:
         // `DialogContent`'s `sm:max-w-sm` survives a bare `w-[...]`, so the
-        // cap has to be restated under the same modifier.
-        className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto sm:max-w-[min(92vw,46rem)]"
+        // cap has to be restated under the same modifier. The scroll lives
+        // on the body below, not here, for the reason given there.
+        className="flex max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] flex-col overflow-hidden sm:max-w-[min(92vw,46rem)]"
         data-testid="auto-policy-shipped-view"
       >
         <DialogHeader>
@@ -64,7 +65,13 @@ export function AutoPolicyShippedDialog(props: {
           <DialogDescription>{VIEW_DESCRIPTION}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5">
+        {/* The body scrolls, not the dialog box. `DialogContent` is a grid,
+            and a grid's `auto` column grows to the widest unbreakable line in
+            it - a path or URL in the host's document would widen the whole
+            dialog and, with `overflow-y-auto` on the box, hand it a
+            horizontal scrollbar (the profile edit dialog shipped exactly
+            that). A flex column keeps the box at its width; the body clips. */}
+        <div className="min-h-0 space-y-5 overflow-y-auto">
           <ShippedSection
             testId="auto-policy-shipped-allow"
             label={ALLOW_LABEL}

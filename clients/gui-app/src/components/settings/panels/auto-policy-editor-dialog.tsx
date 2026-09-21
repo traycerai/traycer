@@ -227,8 +227,15 @@ export function AutoPolicyEditorDialog(props: {
           `sm:max-w-sm`, and `tailwind-merge` only displaces a class whose
           MODIFIERS match - so a bare `w-[...]` leaves that 24rem cap standing
           and `max-width` beats `width`. Without this line the dialog rendered
-          at 24rem on every desktop viewport and the 46rem below was inert. */}
-      <DialogContent className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto sm:max-w-[min(92vw,46rem)]">
+          at 24rem on every desktop viewport and the 46rem below was inert.
+
+          `flex flex-col overflow-hidden` with the scroll on the body, as
+          `notification-hook-editor-dialog` does, rather than `overflow-y-auto`
+          on the box: `DialogContent` is a grid, and a grid's `auto` column
+          grows to the widest unbreakable line inside it, so a long token in
+          the description or a banner would widen the whole dialog and give it
+          a horizontal scrollbar. */}
+      <DialogContent className="flex max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] flex-col overflow-hidden sm:max-w-[min(92vw,46rem)]">
         <DialogHeader>
           <DialogTitle>Auto mode policy</DialogTitle>
           <DialogDescription>
@@ -244,15 +251,16 @@ export function AutoPolicyEditorDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        <AutoPolicyEditorBanners
-          unreadable={unreadable}
-          readIsStale={readIsStale}
-          cannotWrite={cannotWrite}
-          checkFailed={checkFailed}
-          stale={stale}
-        />
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+          <AutoPolicyEditorBanners
+            unreadable={unreadable}
+            readIsStale={readIsStale}
+            cannotWrite={cannotWrite}
+            checkFailed={checkFailed}
+            stale={stale}
+          />
 
-        {/* Locked once Save is pressed, which is the repo's pending rule
+          {/* Locked once Save is pressed, which is the repo's pending rule
             (`disabled` while in flight, label untouched, inline spinner) applied
             to the DRAFT rather than only to the button. The request captured
             `body` at click time and the parent closes this dialog on success, so
@@ -261,24 +269,25 @@ export function AutoPolicyEditorDialog(props: {
             alternative - close only when the draft still matches what was sent -
             leaves the user holding edits that were never saved, with nothing
             saying so; refusing the edit is the honest half. */}
-        <Textarea
-          value={body}
-          onChange={(event) => setBody(event.target.value)}
-          disabled={props.saving}
-          aria-label="Auto mode policy"
-          data-testid="auto-policy-input"
-          spellCheck={false}
-          className="min-h-[min(46vh,24rem)] w-full"
-          font="mono"
-          // The code scale, not a `ui` one: this is a long-form mono document
-          // and it must follow Appearance ▸ Code font size, as the markdown
-          // editor beside it does. `size="xs"` here was a regression twice
-          // over - it pinned 12px at every width AND stopped tracking the
-          // preference, while the class actually in effect before was
-          // `md:text-ui-sm` (the caller's unmodified `text-code-sm` never
-          // displaced a `md:`-modified one).
-          size="code"
-        />
+          <Textarea
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            disabled={props.saving}
+            aria-label="Auto mode policy"
+            data-testid="auto-policy-input"
+            spellCheck={false}
+            className="min-h-[min(46vh,24rem)] w-full"
+            font="mono"
+            // The code scale, not a `ui` one: this is a long-form mono document
+            // and it must follow Appearance ▸ Code font size, as the markdown
+            // editor beside it does. `size="xs"` here was a regression twice
+            // over - it pinned 12px at every width AND stopped tracking the
+            // preference, while the class actually in effect before was
+            // `md:text-ui-sm` (the caller's unmodified `text-code-sm` never
+            // displaced a `md:`-modified one).
+            size="code"
+          />
+        </div>
 
         <DialogFooter className="items-center sm:justify-between">
           <span
