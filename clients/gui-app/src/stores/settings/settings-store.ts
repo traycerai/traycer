@@ -309,8 +309,10 @@ export interface SettingsState {
    */
   defaultEditor: DefaultOpenTarget | null;
   /**
-   * Voice input (on-device dictation). Opt-in: enabling it surfaces the mic
-   * button in the composer and prompts the host to download the STT model.
+   * Voice input (on-device dictation). Enabling it surfaces the mic button
+   * and the dictation shortcut, and lets the host download the STT model.
+   * The microphone stays closed until the user starts a dictation, and
+   * `false` refuses capture even if a caller invokes start.
    */
   voiceInputEnabled: boolean;
   /** BCP-47-ish dictation language hint, or "auto". */

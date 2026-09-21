@@ -2,7 +2,10 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
+import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
+import { isWindows } from "@/lib/keybindings/platform";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // ---------------------------------------------------------------------------
 // Module fakes. The hook's true external boundaries are the speech stream
@@ -146,6 +149,8 @@ function fakeMediaStream(): FakeMediaStream {
 
 let getUserMediaImpl: () => Promise<FakeMediaStream> = () =>
   Promise.resolve(fakeMediaStream());
+let getUserMediaCalls = 0;
+let lastGetUserMediaConstraints: unknown = null;
 
 const globalWithAudio = globalThis as { AudioContext?: unknown };
 let originalAudioContext: unknown;
@@ -184,7 +189,10 @@ beforeEach(() => {
   FakeAudioContext.instances = [];
   streamRuntimeState.wsStreamClient = {};
   runnerHostState.requestMicrophoneAccess = () => Promise.resolve("granted");
+  getUserMediaCalls = 0;
+  lastGetUserMediaConstraints = null;
   getUserMediaImpl = () => Promise.resolve(fakeMediaStream());
+  useSettingsStore.setState({ voiceInputEnabled: true });
   originalAudioContext = globalWithAudio.AudioContext;
   globalWithAudio.AudioContext = FakeAudioContext;
   originalMediaDevices = Object.getOwnPropertyDescriptor(
@@ -193,11 +201,18 @@ beforeEach(() => {
   );
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: () => getUserMediaImpl() },
+    value: {
+      getUserMedia: (constraints: unknown) => {
+        getUserMediaCalls += 1;
+        lastGetUserMediaConstraints = constraints;
+        return getUserMediaImpl();
+      },
+    },
   });
 });
 
 afterEach(() => {
+  useSettingsStore.setState({ voiceInputEnabled: true });
   globalWithAudio.AudioContext = originalAudioContext;
   if (originalMediaDevices !== undefined) {
     Object.defineProperty(navigator, "mediaDevices", originalMediaDevices);
@@ -214,6 +229,57 @@ function renderDictation() {
 }
 
 describe("useVoiceDictation lifecycle", () => {
+  it("does not open the microphone just because the hook is mounted", () => {
+    renderDictation();
+    expect(getUserMediaCalls).toBe(0);
+    expect(FakeAudioContext.instances).toHaveLength(0);
+  });
+
+  it("does not open the microphone when voice input is off, even if start is called", () => {
+    useSettingsStore.setState({ voiceInputEnabled: false });
+    const { result } = renderDictation();
+    act(() => {
+      result.current.start();
+      result.current.toggle();
+    });
+    expect(result.current.state).toBe("idle");
+    expect(getUserMediaCalls).toBe(0);
+    expect(FakeAudioContext.instances).toHaveLength(0);
+    expect(speech.FakeSpeechStreamClient.instances).toHaveLength(0);
+  });
+
+  it("releases an open microphone when voice input is turned off", async () => {
+    const stop = vi.fn();
+    getUserMediaImpl = () => Promise.resolve({ getTracks: () => [{ stop }] });
+    const { result } = renderDictation();
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(result.current.state).toBe("recording");
+    expect(stop).not.toHaveBeenCalled();
+
+    act(() => {
+      useSettingsStore.setState({ voiceInputEnabled: false });
+    });
+    expect(stop).toHaveBeenCalled();
+    expect(result.current.state).toBe("idle");
+  });
+
+  it("opens the microphone with the platform dictation constraints", async () => {
+    const { result } = renderDictation();
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    expect(lastGetUserMediaConstraints).toEqual({
+      audio: dictationCaptureConstraints(isWindows()),
+    });
+  });
+
   it("surfaces an error instead of wedging in requesting when the permission IPC rejects", async () => {
     runnerHostState.requestMicrophoneAccess = () =>
       Promise.reject(new Error("ipc channel dead"));

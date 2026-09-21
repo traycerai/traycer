@@ -7,9 +7,12 @@ import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas"
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { isWindows } from "@/lib/keybindings/platform";
 import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   Analytics,
   AnalyticsEvent,
@@ -376,17 +379,12 @@ export function useVoiceDictation(
       }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          // Use the browser's built-in audio processing (noise suppression /
-          // auto-gain / echo cancellation). Noise suppression silences ambient
-          // hiss so the waveform reads flat at rest and the recognizer gets a
-          // clean signal, and AGC normalizes level. (The earlier raw-capture
-          // workaround was for Whisper; Parakeet handles processed audio.)
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
+          // Noise suppression silences ambient hiss so the waveform reads flat
+          // at rest and the recognizer gets a clean signal, and AGC normalizes
+          // level. Echo cancellation is platform-dependent: on Windows it
+          // selects the communications device (see
+          // `dictationCaptureConstraints`). Parakeet handles processed audio.
+          audio: dictationCaptureConstraints(isWindows()),
         });
         // The session may have been stopped/cancelled while the prompt was open.
         if (generation !== startGenerationRef.current) {
@@ -494,6 +492,11 @@ export function useVoiceDictation(
   );
 
   const start = useCallback(() => {
+    // The setting is the capture gate, read at call time rather than from a
+    // render closure. A hotkey, a stale composer, or any other caller must
+    // not be able to open the microphone after Voice input is off, and
+    // nothing in this hook opens it on its own. Only `start` does.
+    if (!useSettingsStore.getState().voiceInputEnabled) return;
     if (state === "recording" || state === "requesting") return;
     // Clear everything the PREVIOUS attempt left behind FIRST - before any
     // failure path below can read it or outlive it.
@@ -726,6 +729,23 @@ export function useVoiceDictation(
   }, [markClosing, teardownAll]);
 
   const getStream = useCallback(() => mediaStreamRef.current, []);
+
+  const voiceInputEnabled = useSettingsStore(
+    (settings) => settings.voiceInputEnabled,
+  );
+  // `start` refuses a new capture while Voice input is off. This releases one
+  // that is already open when the setting flips off. The ref keeps the effect
+  // on the setting alone, so a new `cancel` identity cannot re-enter it.
+  const cancelRef = useRef(cancel);
+  useEffect(() => {
+    cancelRef.current = cancel;
+  }, [cancel]);
+  const voiceInputWasEnabledRef = useRef(voiceInputEnabled);
+  useEffect(() => {
+    const wasEnabled = voiceInputWasEnabledRef.current;
+    voiceInputWasEnabledRef.current = voiceInputEnabled;
+    if (wasEnabled && !voiceInputEnabled) cancelRef.current();
+  }, [voiceInputEnabled]);
 
   // Tear everything down on unmount. Mark closing first so a stream-close
   // callback that lands after teardown is treated as an expected close, not the
