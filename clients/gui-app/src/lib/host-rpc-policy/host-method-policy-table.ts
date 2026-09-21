@@ -342,6 +342,12 @@ const HARNESS_RESET_LANES: ReadonlySet<string> = new Set([
   HARNESS_ALL_AVAILABLE_POLL_LANE.id,
 ]);
 
+const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
+  id: "a2a-peer-pending",
+  initialDelayMs: 2 * SECOND_MS,
+  maxDelayMs: 5 * MINUTE_MS,
+};
+
 const LATEST_SCHEDULING = {
   mode: "latest",
   joinResponseTimeoutMs: null,
@@ -833,6 +839,20 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.listHarnessModels": { ...LATEST_SCHEDULING, poll: null },
   "agent.list": { ...LATEST_SCHEDULING, poll: null },
+  "agent.resolveMessagePeer": {
+    ...LATEST_SCHEDULING,
+    // Once titled, live projection/remount refresh owns titles. A newly
+    // created peer may still be awaiting automatic title generation.
+    poll: defineConditionPolicy("agent.resolveMessagePeer", {
+      classify: (data) =>
+        data === undefined || data.peer === null || data.peer.title === null
+          ? A2A_PEER_PENDING_POLL_LANE
+          : false,
+      initialErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      staleDataErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
   // Sending a message enqueues it in the recipient's inbox.
   "agent.sendMessage": {
     mode: "fifo",

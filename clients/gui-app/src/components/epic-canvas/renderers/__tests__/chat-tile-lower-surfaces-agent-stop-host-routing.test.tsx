@@ -68,6 +68,14 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
   useAgentStopControls: () => agentStopControlsMock,
 }));
 
+// The layout signal, faked per test. Real module spread back in so everything
+// else it exports keeps working.
+const viewportMock = vi.hoisted(() => ({ phone: false }));
+vi.mock("@/hooks/ui/use-mobile-viewport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/ui/use-mobile-viewport")>()),
+  useIsMobileViewport: (): boolean => viewportMock.phone,
+}));
+
 interface TestHostBinding {
   readonly hostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry>;
@@ -351,6 +359,7 @@ afterEach(() => {
   epicHandle.dispose();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   agentStopControlsMock = { self: null, descendants: [] };
+  viewportMock.phone = false;
   globalClientRef.value = null;
   messengerRef.value = null;
   bindingRef.value = null;
@@ -410,5 +419,95 @@ describe("composer cascade-stop dialog host routing", () => {
 
     expect(onStopTurn).toHaveBeenCalledTimes(1);
     expect(messengerRef.value?.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * The phone layout puts Stop beside Send at 32px each, so a tap meant for
+ * Queue lands on Stop and kills the turn. Everything below turns on the
+ * LAYOUT and nothing else: `descendants` is emptied so the cascade dialog -
+ * which is already its own confirmation - cannot be what is being observed.
+ */
+describe("stop confirmation on a phone layout", () => {
+  beforeEach(() => {
+    agentStopControlsMock = {
+      self: agentRow(CHAT_ID, "This chat"),
+      descendants: [],
+    };
+  });
+
+  function renderTile(onStopTurn: () => string | null): void {
+    render(
+      tile(
+        surfacesProps(onStopTurn),
+        new QueryClient({ defaultOptions: { mutations: { retry: false } } }),
+      ),
+    );
+  }
+
+  it("asks before stopping, and does not stop while the dialog is open", async () => {
+    viewportMock.phone = true;
+    const onStopTurn = vi.fn((): string | null => null);
+    renderTile(onStopTurn);
+
+    fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(within(dialog).getByText("Stop this turn?")).not.toBeNull();
+    // The whole point: raising the dialog must not have stopped anything.
+    expect(onStopTurn).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
+
+    expect(onStopTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the turn running when the confirmation is cancelled", async () => {
+    viewportMock.phone = true;
+    const onStopTurn = vi.fn((): string | null => null);
+    renderTile(onStopTurn);
+
+    fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(dialog).getByTestId("confirm-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(onStopTurn).not.toHaveBeenCalled();
+  });
+
+  it("hands over to the cascade prompt when a sub-agent starts while it is open", async () => {
+    viewportMock.phone = true;
+    const onStopTurn = vi.fn((): string | null => null);
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const view = render(tile(surfacesProps(onStopTurn), client));
+
+    fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    agentStopControlsMock = {
+      self: agentRow(CHAT_ID, "This chat"),
+      descendants: [agentRow("child-1", "Child one")],
+    };
+    view.rerender(tile(surfacesProps(onStopTurn), client));
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
+
+    // Confirming must not stop only this turn behind the sub-agent's back.
+    expect(onStopTurn).not.toHaveBeenCalled();
+    expect(await screen.findByText("Child one")).not.toBeNull();
+  });
+
+  it("stops immediately on a desktop layout, with no confirmation at all", () => {
+    viewportMock.phone = false;
+    const onStopTurn = vi.fn((): string | null => null);
+    renderTile(onStopTurn);
+
+    fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+
+    expect(onStopTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
   });
 });

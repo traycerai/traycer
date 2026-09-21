@@ -14,6 +14,36 @@ import type {
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
 
+interface HeaderStripLayoutRect {
+  readonly left: number;
+  readonly right: number;
+  readonly width: number;
+}
+
+/**
+ * Stable viewport bounds of a strip item or one of its split members. Remove
+ * the enclosing frame's drag displacement while retaining each member's own
+ * offset. Reorder measurements must not depend on how far the tween has run:
+ * its completion changes neither layout size nor DOM order.
+ */
+export function readHeaderStripLayoutRect(
+  element: HTMLElement,
+): HeaderStripLayoutRect {
+  const rect = element.getBoundingClientRect();
+  const frame = element.closest<HTMLElement>("[data-strip-item-id]");
+  const transform = frame === null ? "none" : getComputedStyle(frame).transform;
+  const values = transform.slice(transform.indexOf("(") + 1, -1).split(",");
+  const parsedTranslateX = Number(
+    values[transform.startsWith("matrix3d(") ? 12 : 4],
+  );
+  const translateX = Number.isFinite(parsedTranslateX) ? parsedTranslateX : 0;
+  return {
+    left: rect.left - translateX,
+    right: rect.right - translateX,
+    width: rect.width,
+  };
+}
+
 function stripElement(): HTMLElement | null {
   return document.querySelector<HTMLElement>(
     `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"]`,
@@ -46,17 +76,11 @@ export function readHeaderStripSlots(): ReadonlyArray<StripSlot> {
   )) {
     const itemId = child.dataset.stripItemId;
     if (itemId === undefined || itemId.length === 0) continue;
-    const rect = child.getBoundingClientRect();
-    const transform = getComputedStyle(child).transform;
-    const values = transform.slice(transform.indexOf("(") + 1, -1).split(",");
-    const parsedTranslateX = Number(
-      values[transform.startsWith("matrix3d(") ? 12 : 4],
-    );
-    const translateX = Number.isFinite(parsedTranslateX) ? parsedTranslateX : 0;
+    const rect = readHeaderStripLayoutRect(child);
     measured.push({
       itemId,
       width: rect.width,
-      contentLeft: rect.left - originX - translateX,
+      contentLeft: rect.left - originX,
       isMergeTarget: child.dataset.stripItemMergeable !== "false",
     });
   }

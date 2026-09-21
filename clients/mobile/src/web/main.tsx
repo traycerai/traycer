@@ -17,6 +17,7 @@ import {
   hostRpcRegistry,
   setMobileApp,
   setMobileAppPlatform,
+  setPhoneLayoutOnly,
   setRetentionProfile,
 } from "@traycer-clients/gui-app";
 import type {
@@ -172,6 +173,14 @@ function bootstrap(): void {
     initSentry(sentryOptions);
   }
   document.documentElement.classList.add("traycer-mobile-client");
+  // LAYOUT policy, and UNCONDITIONAL on purpose - the one call here that must
+  // not be gated on `isNativePlatform()`. It is a fact about the BUNDLE, not
+  // the runtime: `src/web/index.css` disables every Tailwind breakpoint for
+  // everything this entry serves, so all of it is painted in the phone layout
+  // and JS has to say the same. The dev browser tab described below is one of
+  // those surfaces, which is why gating this the way the flag under it is
+  // gated would be wrong.
+  setPhoneLayoutOnly(true);
   // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
   // single-composer draft model and the link-code sign-in entry. See gui-app's
   // `src/lib/mobile-app.ts` for how this differs from the viewport signal.

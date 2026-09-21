@@ -47,6 +47,8 @@ import {
 import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -326,6 +328,12 @@ export function ChatLowerInteractionSurfaces(
   const tabHostClient = useTabHostClient();
   const agentStop = useAgentStop(tabHostClient);
   const [stopChildrenOpen, setStopChildrenOpen] = useState(false);
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  // The SAME signal that puts Stop beside Send (`composer-send-button`), so
+  // the confirmation exists exactly where the mis-tap does and desktop is
+  // untouched by construction rather than by a second rule agreeing with the
+  // first.
+  const phoneLayout = useIsMobileViewport();
 
   // Destructure the turn prop for stable use in callbacks
   const turnOnStopTurn = props.turn.onStopTurn;
@@ -347,8 +355,17 @@ export function ChatLowerInteractionSurfaces(
       setStopChildrenOpen(true);
       return null;
     }
+    // In the phone layout Stop sits beside Send at 32px, so a tap meant for
+    // Queue lands on it and kills the turn - the one control here whose
+    // mis-tap destroys work rather than just doing nothing. Confirm it.
+    // The cascade branch above needs nothing: that dialog IS the confirmation,
+    // and it already asks the harder question.
+    if (phoneLayout) {
+      setStopConfirmOpen(true);
+      return null;
+    }
     return turnOnStopTurn();
-  }, [activeAgents.length, turnOnStopTurn]);
+  }, [activeAgents.length, phoneLayout, turnOnStopTurn]);
 
   const turnWithCascade = useMemo(
     () => ({
@@ -583,6 +600,26 @@ export function ChatLowerInteractionSurfaces(
           onStopOnlyThis={() => {
             props.turn.onStopTurn();
             setStopChildrenOpen(false);
+          }}
+        />
+        <ConfirmDestructiveDialog
+          open={stopConfirmOpen}
+          onOpenChange={setStopConfirmOpen}
+          title="Stop this turn?"
+          description="The agent will stop working on its current response."
+          cascadeSummary={null}
+          actionLabel="Stop"
+          blockedReason={null}
+          isPending={false}
+          onConfirm={() => {
+            setStopConfirmOpen(false);
+            // A sub-agent can start while this dialog is open. Go back through
+            // the same gate Stop uses, so the cascade prompt is never skipped.
+            if (activeAgents.length > 0) {
+              setStopChildrenOpen(true);
+              return;
+            }
+            turnOnStopTurn();
           }}
         />
       </ChatDockCompactStripProvider>
