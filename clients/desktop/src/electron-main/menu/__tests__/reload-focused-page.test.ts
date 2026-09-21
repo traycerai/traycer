@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 const fromFrame = vi.hoisted(() => vi.fn());
 const getAllWebContents = vi.hoisted(() => vi.fn());
 const getFocusedWindow = vi.hoisted(() => vi.fn());
+const logWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => {
   class BaseWindow {}
@@ -20,6 +21,10 @@ vi.mock("electron", () => {
     webContents: { fromFrame, getAllWebContents },
   };
 });
+
+vi.mock("../../app/logger", () => ({
+  log: { warn: logWarn },
+}));
 
 import { BaseWindow, BrowserWindow } from "electron";
 import { reloadFocusedPage } from "../reload-focused-page";
@@ -75,6 +80,7 @@ describe("reloadFocusedPage", () => {
     getAllWebContents.mockReturnValue([]);
     getFocusedWindow.mockReset();
     getFocusedWindow.mockReturnValue(null);
+    logWarn.mockReset();
   });
 
   it("is a no-op without a window", () => {
@@ -106,6 +112,20 @@ describe("reloadFocusedPage", () => {
     reloadFocusedPage(windowWith(host), false);
     expect(fromFrame).not.toHaveBeenCalled();
     expectNoReload(host);
+  });
+
+  it("swallows and logs reload failures from a direct menu action", () => {
+    const failure = new Error("reload failed");
+    const host = fakeContents({ focusedFrame: null });
+    host.reload.mockImplementation(() => {
+      throw failure;
+    });
+
+    expect(() => reloadFocusedPage(windowWith(host), false)).not.toThrow();
+    expect(logWarn).toHaveBeenCalledWith(
+      "[menu] reloadFocusedPage failed",
+      failure,
+    );
   });
 
   it("reloads the guest that owns the focused frame, not the host", () => {
