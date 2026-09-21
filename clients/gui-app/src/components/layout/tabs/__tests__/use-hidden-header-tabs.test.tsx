@@ -382,5 +382,28 @@ describe("useHiddenHeaderTabs", () => {
         expect(context).toBe(screen.getByText("b"));
       }
     });
+
+    it("tracks an aria-selected-only change, so a later shrink reveals the new active tab", async () => {
+      geometry.scrollWidth = 400;
+      activeKey = "b";
+      const scroll = vi
+        .spyOn(Element.prototype, "scrollIntoView")
+        .mockImplementation(() => undefined);
+      const { rerender } = render(<Harness layout="scroll" keys={KEYS} />);
+      // Both tabs stay visible and no child is added or removed: only the
+      // selection attribute moves, which the hook must observe by itself.
+      activeKey = "c";
+      await act(async () => {
+        rerender(<Harness layout="scroll" keys={KEYS} />);
+        await Promise.resolve();
+      });
+      scroll.mockClear();
+      geometry.outerWidth = 300;
+      fireResize();
+      expect(scroll).toHaveBeenCalled();
+      for (const context of scroll.mock.contexts) {
+        expect(context).toBe(screen.getByText("c"));
+      }
+    });
   });
 });

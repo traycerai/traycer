@@ -80,12 +80,18 @@ export function useHiddenHeaderTabs(layout: TaskTabLayout) {
       for (const child of element.children) observer.observe(child);
     };
     // Reordering tabs and collapsing groups can change visibility without
-    // resizing the strip. Observe DOM changes alongside resize and scroll.
+    // resizing the strip. Selection changes also refresh the active snapshot
+    // so the next resize can preserve the newly selected tab's visibility.
     const mutations = new MutationObserver(() => {
       observeChildren();
       measure(true);
     });
-    mutations.observe(element, { childList: true, subtree: true });
+    mutations.observe(element, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-selected"],
+    });
     element.addEventListener("scroll", handleScroll, { passive: true });
     observeChildren();
     return () => {
