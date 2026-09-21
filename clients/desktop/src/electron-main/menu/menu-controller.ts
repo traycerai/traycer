@@ -216,10 +216,19 @@ export class MenuController {
       sender instanceof BrowserWindow
         ? (sender.getParentWindow() ?? sender)
         : sender;
-    const windowId = resolveSenderFocusedOrMruWindowId(
-      this.options.windowRegistry,
-      owner ?? null,
-    );
+    const windowId =
+      owner === null
+        ? (this.options.windowRegistry
+            .records()
+            .find(
+              (record) =>
+                record.window instanceof BrowserWindow &&
+                !record.window.isDestroyed() &&
+                !record.window.webContents.isDestroyed() &&
+                record.window.webContents.isDevToolsFocused(),
+            )?.windowId ??
+          resolveSenderFocusedOrMruWindowId(this.options.windowRegistry, null))
+        : resolveSenderFocusedOrMruWindowId(this.options.windowRegistry, owner);
     const target = this.options.windowRegistry
       .records()
       .find((record) => record.windowId === windowId)?.window;

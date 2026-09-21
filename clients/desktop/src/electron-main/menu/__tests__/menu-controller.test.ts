@@ -387,10 +387,14 @@ class MultiWindowRegistry extends EventEmitter implements MenuWindowRegistry {
 
 class FakeAppContents {
   destroyed = false;
+  devToolsFocused = false;
   readonly toggleDevTools = vi.fn<() => void>();
 
   isDestroyed(): boolean {
     return this.destroyed;
+  }
+  isDevToolsFocused(): boolean {
+    return this.devToolsFocused;
   }
 }
 
@@ -1228,6 +1232,25 @@ describe("MenuController", () => {
 
       expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
       expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("built-in detached app DevTools picks the app whose DevTools is focused, even when another app is MRU", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      a.webContents.devToolsFocused = true;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-b",
+      );
+
+      toggleDevTools(undefined);
+
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(b.webContents.toggleDevTools).not.toHaveBeenCalled();
       controller.dispose();
     });
 
