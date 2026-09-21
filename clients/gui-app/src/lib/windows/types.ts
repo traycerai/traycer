@@ -214,6 +214,25 @@ export interface DesktopZoomBridge {
   onChange(handler: (percent: number) => void): { dispose: () => void };
 }
 
+/**
+ * macOS finger-sequence transitions from the shell's NSEvent scroll-phase
+ * monitor. Absent everywhere else (Windows, Linux, browser, mobile), which is
+ * how the history swipe knows it has no lift signal and stays off.
+ */
+export type DesktopTrackpadScrollPhaseKind =
+  | "began"
+  | "ended"
+  | "cancelled"
+  | "momentum-began"
+  | "momentum-ended"
+  | "momentum-cancelled";
+
+export interface DesktopTrackpadScrollPhaseBridge {
+  onTransition(
+    handler: (transition: { readonly kind: DesktopTrackpadScrollPhaseKind }) => void,
+  ): { dispose: () => void };
+}
+
 // Field-for-field match with main's `SupportLogTarget`
 // (`ipc-contracts/window-types.ts`). `browserTelemetry`/`browserTrace` name
 // the two browser diagnostic files - absence of the trace file is the

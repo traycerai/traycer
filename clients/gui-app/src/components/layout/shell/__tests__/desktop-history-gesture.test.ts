@@ -6,6 +6,8 @@ import {
   installDesktopHistoryGesture,
   ownsDesktopHorizontalWheel,
   type DesktopHistoryDirection,
+  type DesktopHistoryFingerSource,
+  type DesktopHistoryFingerTransition,
   type DesktopHistoryGestureView,
 } from "@/components/layout/shell/desktop-history-gesture";
 import { claimBlockingLayer } from "@/components/layout/shell/blocking-layer-claim";
@@ -42,12 +44,21 @@ function dispatchWheel(options: {
   return event;
 }
 
-function horizontalWheel(deltaX: number, target: Element): WheelEvent {
+// `cancelable` is a required argument, not a default, because Chromium wheel
+// scroll latching makes it a fact about WHICH event in a sequence this is
+// (only the first is cancelable) - a test building a latched sequence must
+// say so at every call site rather than silently inheriting a "cancelable"
+// default that only happens to fit the first tick.
+function horizontalWheel(
+  deltaX: number,
+  target: Element,
+  cancelable: boolean,
+): WheelEvent {
   return dispatchWheel({
     deltaX,
     deltaY: 0,
     target,
-    cancelable: true,
+    cancelable,
     deltaMode: WheelEvent.DOM_DELTA_PIXEL,
     ctrlKey: false,
   });
@@ -68,17 +79,52 @@ const ACTIVATION_PX = DESKTOP_HISTORY_GESTURE.intentPx + 8;
  * Drives a sequence from nothing to exactly `totalTravelPx` of committed
  * travel: one event to activate, one to add the remainder. Both events carry
  * pure horizontal deltas, so vertical/diagonal recognition is exercised by
- * its own tests rather than through this helper.
+ * its own tests rather than through this helper. This only drives the WHEEL
+ * side of a gesture (ownership, progress); the finger source's "ended" /
+ * "cancelled" transition is what actually decides the sequence, and callers
+ * emit that separately through `mounted.fingers`.
  */
 function driveToTravel(
   direction: DesktopHistoryDirection,
   totalTravelPx: number,
   target: Element,
 ): void {
-  horizontalWheel(deltaXToward(direction, ACTIVATION_PX), target);
+  horizontalWheel(deltaXToward(direction, ACTIVATION_PX), target, true);
   const remaining = totalTravelPx - ACTIVATION_PX;
   if (remaining !== 0)
-    horizontalWheel(deltaXToward(direction, remaining), target);
+    horizontalWheel(deltaXToward(direction, remaining), target, true);
+}
+
+/**
+ * Fake `DesktopHistoryFingerSource`. The real one forwards macOS NSEvent
+ * scroll-phase transitions from the Electron shell; no DOM event models a
+ * finger lift, so tests drive it directly through `emit`.
+ */
+interface FakeFingerSource extends DesktopHistoryFingerSource {
+  readonly emit: (kind: DesktopHistoryFingerTransition) => void;
+  readonly isDisposed: () => boolean;
+}
+
+function createFakeFingerSource(): FakeFingerSource {
+  let handler:
+    | ((transition: { readonly kind: DesktopHistoryFingerTransition }) => void)
+    | null = null;
+  let disposed = false;
+  return {
+    onTransition: (nextHandler) => {
+      handler = nextHandler;
+      return {
+        dispose: () => {
+          disposed = true;
+        },
+      };
+    },
+    emit: (kind) => {
+      if (handler === null) return;
+      handler({ kind });
+    },
+    isDisposed: () => disposed,
+  };
 }
 
 interface GestureProbe {
@@ -88,6 +134,7 @@ interface GestureProbe {
 
 interface MountedGesture {
   readonly probe: GestureProbe;
+  readonly fingers: FakeFingerSource;
   readonly uninstall: () => void;
   readonly setCurrentEntry: (entry: string) => void;
   readonly setDestination: (
@@ -115,6 +162,7 @@ function mountGesture(options: MountGestureOptions): MountedGesture {
   const navigations: DesktopHistoryDirection[] = [];
   let currentEntry = options.currentEntry;
   let destinationFor = options.destinationFor;
+  const fingers = createFakeFingerSource();
   const uninstall = installDesktopHistoryGesture({
     currentEntry: () => currentEntry,
     destination: (direction) => destinationFor(direction),
@@ -124,9 +172,11 @@ function mountGesture(options: MountGestureOptions): MountedGesture {
     render: (view) => {
       views.push(view);
     },
+    fingers,
   });
   const mounted: MountedGesture = {
     probe: { views, navigations },
+    fingers,
     uninstall,
     setCurrentEntry: (entry) => {
       currentEntry = entry;
@@ -151,15 +201,22 @@ afterEach(() => {
   document.body.style.pointerEvents = "";
 });
 
-describe("committing after an input pause", () => {
-  function expectCommitsOnce(direction: DesktopHistoryDirection): void {
+describe("committing on finger lift", () => {
+  function expectCommitsOnLift(direction: DesktopHistoryDirection): void {
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel(direction, DESKTOP_HISTORY_GESTURE.commitPx, document.body);
     expect(mounted.probe.views.some((view) => view?.phase === "ready")).toBe(
       true,
     );
 
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    // There is no pause-based commit any more: resting fingers - ticks
+    // stopped, no lift yet - must hold the preview no matter how long they
+    // rest.
+    vi.advanceTimersByTime(500);
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.at(-1)?.phase).toBe("ready");
+
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual([direction]);
     expect(
       mounted.probe.views.some(
@@ -167,58 +224,73 @@ describe("committing after an input pause", () => {
       ),
     ).toBe(true);
 
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.settleMs);
+    expect(mounted.probe.views.at(-1)).toBeNull();
+
     // Nothing later re-fires the same step.
-    vi.advanceTimersByTime(
-      DESKTOP_HISTORY_GESTURE.tailMs + DESKTOP_HISTORY_GESTURE.settleMs,
-    );
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
     expect(mounted.probe.navigations).toEqual([direction]);
   }
 
-  it("navigates back exactly once, wheel has no native release event to key off", () => {
-    expectCommitsOnce("back");
+  it("navigates back exactly once, only once the finger actually lifts", () => {
+    expectCommitsOnLift("back");
   });
 
   it("navigates forward exactly once", () => {
-    expectCommitsOnce("forward");
+    expectCommitsOnLift("forward");
   });
 });
 
-it("cancels a drag released before it reaches the commit distance", () => {
+it("cancels a drag lifted before it reaches the commit distance", () => {
   const mounted = mountGesture(DEFAULT_MOUNT);
   driveToTravel("forward", 90, document.body);
   expect(mounted.probe.views.some((view) => view?.phase === "ready")).toBe(
     false,
   );
 
-  vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+  mounted.fingers.emit("ended");
 
   expect(mounted.probe.navigations).toEqual([]);
   expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
 });
 
-it("cancels when the drag reverses back below commit after already reaching ready", () => {
+it("cancels when the drag reverses back below commit after already reaching ready, once lifted", () => {
   const mounted = mountGesture(DEFAULT_MOUNT);
   const target = document.body;
-  horizontalWheel(deltaXToward("back", ACTIVATION_PX), target); // travel 20
+  horizontalWheel(deltaXToward("back", ACTIVATION_PX), target, true); // travel 20
   horizontalWheel(
     deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
     target,
+    true,
   ); // travel 180 - ready
   expect(mounted.probe.views.some((view) => view?.phase === "ready")).toBe(
     true,
   );
 
-  horizontalWheel(deltaXToward("back", -100), target); // travel back down to 80
-  vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+  horizontalWheel(deltaXToward("back", -100), target, true); // travel back down to 80
+  mounted.fingers.emit("ended");
 
   // Having been ready at some point along the way buys it nothing: only the
-  // travel at release decides.
+  // travel at lift decides.
+  expect(mounted.probe.navigations).toEqual([]);
+  expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
+});
+
+it("never commits on 'cancelled', even past the commit distance", () => {
+  const mounted = mountGesture(DEFAULT_MOUNT);
+  driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+  expect(mounted.probe.views.some((view) => view?.phase === "ready")).toBe(
+    true,
+  );
+
+  mounted.fingers.emit("cancelled");
+
   expect(mounted.probe.navigations).toEqual([]);
   expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
 });
 
 describe("vertical and diagonal drags stay content", () => {
-  it("leaves a pure vertical wheel to the page", () => {
+  it("leaves a pure vertical wheel to the page, even though its first tick was canceled for the latching guard", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const event = dispatchWheel({
       deltaX: 0,
@@ -228,14 +300,17 @@ describe("vertical and diagonal drags stay content", () => {
       deltaMode: WheelEvent.DOM_DELTA_PIXEL,
       ctrlKey: false,
     });
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
 
-    expect(event.defaultPrevented).toBe(false);
+    // The recognizer cannot tell this is a vertical scroll until AFTER this
+    // very first tick: it cancels every sequence's opening tick up front (see
+    // the latching comment in onWheel), so a real scroll loses only that
+    // sub-pixel tick before ownership resolves to content.
+    expect(event.defaultPrevented).toBe(true);
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
   });
 
-  it("leaves a diagonal drag that is not primarily horizontal to the page", () => {
+  it("leaves a diagonal drag that is not primarily horizontal to the page, even though its first tick was canceled for the latching guard", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     // 10px across, 15px down: the cross axis (y) both clears the intent
     // threshold and leads the primary axis, so this reads as scroll.
@@ -247,10 +322,93 @@ describe("vertical and diagonal drags stay content", () => {
       deltaMode: WheelEvent.DOM_DELTA_PIXEL,
       ctrlKey: false,
     });
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
 
-    expect(event.defaultPrevented).toBe(false);
+    // Same latching guard as above: the opening tick is canceled before the
+    // recognizer has seen enough of the drag to know it is diagonal.
+    expect(event.defaultPrevented).toBe(true);
     expect(mounted.probe.navigations).toEqual([]);
+  });
+});
+
+// Chromium's wheel-scroll latching lets a page cancel only the FIRST wheel
+// event of a scroll sequence; onWheel's latching guard exploits that by
+// canceling the opening tick up front whenever there is somewhere to
+// navigate (see the comment above it in desktop-history-gesture.ts).
+describe("Chromium wheel-scroll latching: the opening tick is canceled up front", () => {
+  it("claims and commits a real trackpad sequence whose sub-pixel opening tick was canceled, even though its later high-velocity ticks arrive non-cancelable", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+
+    // Deltas modeled on a captured trackpad swipe. The opening tick (-0.8)
+    // is far short of intentPx and cannot resolve direction on its own; the
+    // next two ticks accumulate past intentPx and are what `advanceSequence`
+    // actually checks `event.cancelable` against when it resolves ownership
+    // to "navigation" - so those two, like the opening tick, model the
+    // still-cancelable window the latching guard buys by canceling that
+    // opening tick. Once ownership is "navigation", `advanceSequence` never
+    // consults `cancelable` again, so the remaining, much larger ticks -
+    // typical of the fast part of a real swipe - arrive non-cancelable, the
+    // way real trailing wheel events do, and must not stop the commit.
+    const firstTick = horizontalWheel(-0.8, target, true);
+    horizontalWheel(-4.8, target, true);
+    horizontalWheel(-8, target, true);
+    horizontalWheel(-12.8, target, false);
+    horizontalWheel(-18.4, target, false);
+    horizontalWheel(-65.6, target, false);
+    horizontalWheel(-48.8, target, false);
+    horizontalWheel(-42.4, target, false);
+
+    expect(firstTick.defaultPrevented).toBe(true);
+    expect(
+      mounted.probe.views.some(
+        (view) => view?.direction === "back" && view.phase === "pulling",
+      ),
+    ).toBe(true);
+    expect(
+      mounted.probe.views.some(
+        (view) => view?.direction === "back" && view.phase === "ready",
+      ),
+    ).toBe(true);
+
+    // The lift is what decides, exactly like every other trackpad swipe.
+    mounted.fingers.emit("ended");
+
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  it("still yields a vertical scroll to content after its opening tick was canceled by the latching guard", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+
+    // The opening tick is canceled before the recognizer has seen enough of
+    // the drag to know it will turn out to be a scroll, exactly like the
+    // pure-vertical and diagonal cases above - the difference here is that
+    // the scroll's OWN ticks arrive non-cancelable, matching latched
+    // trailing wheel events on real hardware.
+    const firstTick = horizontalWheel(-0.8, target, true);
+    expect(firstTick.defaultPrevented).toBe(true);
+
+    const verticalTick = dispatchWheel({
+      deltaX: 0,
+      deltaY: 40,
+      target,
+      cancelable: false,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: false,
+    });
+    const trailingVertical = dispatchWheel({
+      deltaX: 0,
+      deltaY: 20,
+      target,
+      cancelable: false,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: false,
+    });
+
+    expect(verticalTick.defaultPrevented).toBe(false);
+    expect(trailingVertical.defaultPrevented).toBe(false);
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
   });
 });
 
@@ -265,8 +423,9 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
     const event = horizontalWheel(
       deltaXToward("back", ACTIVATION_PX),
       document.body,
+      true,
     );
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(event.defaultPrevented).toBe(false);
     expect(mounted.probe.navigations).toEqual([]);
@@ -283,10 +442,37 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
       deltaMode: WheelEvent.DOM_DELTA_PIXEL,
       ctrlKey: true,
     });
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(event.defaultPrevented).toBe(false);
     expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  // The latching guard only fires for a sequence that STARTS "pending"; a
+  // target that already owns horizontal wheel (a scrollable rail) resolves
+  // ownership to content up front, so it has nothing to protect and must not
+  // cancel the tick.
+  it("does not cancel the first tick over a surface that already owns horizontal wheel", () => {
+    const rail = document.createElement("div");
+    rail.style.overflowX = "auto";
+    document.body.appendChild(rail);
+    Object.defineProperty(rail, "scrollWidth", {
+      value: 600,
+      configurable: true,
+    });
+    Object.defineProperty(rail, "clientWidth", {
+      value: 300,
+      configurable: true,
+    });
+
+    mountGesture(DEFAULT_MOUNT);
+    const firstTick = horizontalWheel(
+      deltaXToward("back", ACTIVATION_PX),
+      rail,
+      true,
+    );
+
+    expect(firstTick.defaultPrevented).toBe(false);
   });
 
   it("never claims a line-mode wheel event", () => {
@@ -299,7 +485,7 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
       deltaMode: WheelEvent.DOM_DELTA_LINE,
       ctrlKey: false,
     });
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(event.defaultPrevented).toBe(false);
     expect(mounted.probe.navigations).toEqual([]);
@@ -311,10 +497,27 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
       destinationFor: () => null,
     });
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
+  });
+
+  // The latching guard cancels a sequence's opening tick only when there is
+  // somewhere it could navigate; with nothing in either direction it has
+  // nothing to protect, so the first tick must pass through uncanceled.
+  it("does not cancel the first tick when neither direction has a destination", () => {
+    mountGesture({
+      ...DEFAULT_MOUNT,
+      destinationFor: () => null,
+    });
+    const firstTick = horizontalWheel(
+      deltaXToward("back", ACTIVATION_PX),
+      document.body,
+      true,
+    );
+
+    expect(firstTick.defaultPrevented).toBe(false);
   });
 
   // Ownership is decided once, off the FIRST event of a sequence. A ctrl+wheel
@@ -334,8 +537,9 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
     horizontalWheel(
       deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
       target,
+      true,
     );
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
@@ -384,7 +588,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel(direction, DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([direction]);
   }
@@ -402,7 +606,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });
@@ -413,7 +617,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });
@@ -424,7 +628,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });
@@ -438,7 +642,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });
@@ -450,7 +654,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["back"]);
   });
@@ -463,7 +667,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });
@@ -478,7 +682,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });
@@ -490,7 +694,7 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["forward"]);
   });
@@ -499,27 +703,31 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
     const release = claimBlockingLayer();
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual([]);
+
+    // Let the blocked sequence's drain tail go quiet before a fresh gesture
+    // is allowed to open.
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
 
     release();
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["back"]);
   });
 });
 
-describe("a stale origin or destination blocks the commit even past the threshold", () => {
+describe("a stale origin, destination, or blocking layer refuses the commit even past the threshold", () => {
   it("refuses to commit when the origin route changed mid-gesture", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
     // No further wheel event observes the change - this pins the re-check
-    // `finish()` itself performs before committing, distinct from the
-    // inline check a later wheel event would trigger.
+    // `lift()` itself performs before committing, distinct from the inline
+    // check a later wheel event would trigger.
     mounted.setCurrentEntry("/somewhere-else");
 
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
@@ -530,7 +738,18 @@ describe("a stale origin or destination blocks the commit even past the threshol
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
     mounted.setDestination(() => "/a-different-target");
 
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
+  });
+
+  it("refuses to commit when a blocking layer appears mid-gesture with no further wheel tick to observe it", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    document.body.style.pointerEvents = "none"; // a modal opens mid-drag
+
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
@@ -544,7 +763,7 @@ describe("a modal or a route change discovered mid-gesture still drains its tail
     driveToTravel("back", 60, target); // live navigation, still pulling
 
     document.body.style.pointerEvents = "none"; // a modal opens mid-drag
-    horizontalWheel(deltaXToward("back", 10), target);
+    horizontalWheel(deltaXToward("back", 10), target, true);
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
@@ -552,7 +771,7 @@ describe("a modal or a route change discovered mid-gesture still drains its tail
     // The fix under test: settling on discovery must leave ownership at
     // "draining", not fall through and stomp it back to plain "content" -
     // a trailing wheel right after is still consumed like any other tail.
-    const trailing = horizontalWheel(deltaXToward("back", 20), target);
+    const trailing = horizontalWheel(deltaXToward("back", 20), target, true);
     expect(trailing.defaultPrevented).toBe(true);
     expect(mounted.probe.navigations).toEqual([]);
 
@@ -566,12 +785,12 @@ describe("a modal or a route change discovered mid-gesture still drains its tail
     driveToTravel("forward", 60, target);
 
     mounted.setCurrentEntry("/somewhere-else");
-    horizontalWheel(deltaXToward("forward", 10), target);
+    horizontalWheel(deltaXToward("forward", 10), target, true);
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
 
-    const trailing = horizontalWheel(deltaXToward("forward", 20), target);
+    const trailing = horizontalWheel(deltaXToward("forward", 20), target, true);
     expect(trailing.defaultPrevented).toBe(true);
 
     vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
@@ -592,13 +811,11 @@ describe("blur, Escape, and pointerdown cancel a live gesture", () => {
 
     // Momentum right after an OS-level cancel is still the same physical
     // gesture: consumed like any other draining tail, never a fresh sequence.
-    const trailing = horizontalWheel(deltaXToward("back", 20), target);
+    const trailing = horizontalWheel(deltaXToward("back", 20), target, true);
     expect(trailing.defaultPrevented).toBe(true);
     expect(mounted.probe.navigations).toEqual([]);
 
-    vi.advanceTimersByTime(
-      DESKTOP_HISTORY_GESTURE.releaseMs + DESKTOP_HISTORY_GESTURE.tailMs,
-    );
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
     expect(mounted.probe.views.at(-1)).toBeNull();
   });
 
@@ -665,7 +882,7 @@ describe("blur, Escape, and pointerdown cancel a live gesture", () => {
   it("drops a not-yet-activated gesture on pointerdown, leaving the next gesture unaffected", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const target = document.body;
-    horizontalWheel(deltaXToward("back", 5), target); // under the intent threshold
+    horizontalWheel(deltaXToward("back", 5), target, true); // under the intent threshold
 
     document.dispatchEvent(
       new Event("pointerdown", { bubbles: true, cancelable: true }),
@@ -674,33 +891,125 @@ describe("blur, Escape, and pointerdown cancel a live gesture", () => {
     expect(mounted.probe.navigations).toEqual([]);
 
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["back"]);
   });
 });
 
-describe("the momentum tail after a commit", () => {
-  it("does not navigate twice while trailing wheel events drain", () => {
+describe("the momentum tail after a lift", () => {
+  it("does not navigate twice while trailing wheel events drain after a commit", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const target = document.body;
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual(["back"]);
 
     // Decaying trackpad momentum after the commit: still consumed, never a
     // second navigation.
     vi.advanceTimersByTime(50);
-    horizontalWheel(deltaXToward("back", 6), target);
+    horizontalWheel(deltaXToward("back", 6), target, true);
     vi.advanceTimersByTime(50);
-    horizontalWheel(deltaXToward("back", 3), target);
+    horizontalWheel(deltaXToward("back", 3), target, true);
     vi.advanceTimersByTime(50);
-    horizontalWheel(deltaXToward("back", 1), target);
+    horizontalWheel(deltaXToward("back", 1), target, true);
     expect(mounted.probe.navigations).toEqual(["back"]);
 
     vi.advanceTimersByTime(
       DESKTOP_HISTORY_GESTURE.tailMs + DESKTOP_HISTORY_GESTURE.settleMs,
     );
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  // `consume()` also calls `stopImmediatePropagation()`, which is not
+  // observable on the event after dispatch; a listener registered after the
+  // recognizer's own (mirroring the Escape test above) pins that half.
+  it("consumes horizontal momentum ticks - preventDefault and stops propagation to later listeners - after a committed lift", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back"]);
+
+    const laterListener = vi.fn();
+    document.addEventListener("wheel", laterListener, { capture: true });
+
+    const momentumTick = horizontalWheel(deltaXToward("back", 6), target, true);
+
+    expect(momentumTick.defaultPrevented).toBe(true);
+    expect(laterListener).not.toHaveBeenCalled();
+
+    document.removeEventListener("wheel", laterListener, { capture: true });
+  });
+
+  it("resets on 'momentum-ended' so a brand-new gesture can start right away", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back"]);
+
+    horizontalWheel(deltaXToward("back", 6), target, true); // momentum tick
+    mounted.fingers.emit("momentum-ended");
+    expect(mounted.probe.views.at(-1)).toBeNull();
+
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back", "forward"]);
+  });
+
+  it("ignores 'momentum-began' - it neither opens nor closes anything", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back"]);
+
+    mounted.fingers.emit("momentum-began");
+    // Still draining, still consuming: nothing about the tail changed.
+    const momentumTick = horizontalWheel(deltaXToward("back", 6), target, true);
+    expect(momentumTick.defaultPrevented).toBe(true);
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  it("does not consume momentum after a content scroll's lift, and blocks a new gesture until the tail resets", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    // A vertical drag resolves ownership to content.
+    dispatchWheel({
+      deltaX: 0,
+      deltaY: 30,
+      target,
+      cancelable: true,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: false,
+    });
+    mounted.fingers.emit("ended");
+
+    // Content's own momentum is left alone - the recognizer never claims it.
+    const momentumTick = horizontalWheel(
+      deltaXToward("back", ACTIVATION_PX),
+      target,
+      true,
+    );
+    expect(momentumTick.defaultPrevented).toBe(false);
+    expect(mounted.probe.navigations).toEqual([]);
+
+    // That same tick re-armed the tail: a fresh horizontal pull right now
+    // must not open a gesture of its own either.
+    const duringTail = horizontalWheel(
+      deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx),
+      target,
+      true,
+    );
+    expect(duringTail.defaultPrevented).toBe(false);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual([]);
+
+    // Once the tail goes quiet, a new gesture opens normally.
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual(["back"]);
   });
 
@@ -711,7 +1020,7 @@ describe("the momentum tail after a commit", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const target = document.body;
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual(["back"]);
 
     const verticalDuringDrain = dispatchWheel({
@@ -731,7 +1040,7 @@ describe("the momentum tail after a commit", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const target = document.body;
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, target);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual(["forward"]);
 
     const zoomDuringDrain = dispatchWheel({
@@ -751,7 +1060,7 @@ describe("the momentum tail after a commit", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const target = document.body;
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
     expect(mounted.probe.navigations).toEqual(["back"]);
 
     // Cumulative elapsed time across this loop is several multiples of
@@ -759,7 +1068,7 @@ describe("the momentum tail after a commit", () => {
     // it - so the tail must never go quiet and reset() must never fire.
     for (let i = 0; i < 5; i += 1) {
       vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs - 20);
-      const trailing = horizontalWheel(deltaXToward("back", 2), target);
+      const trailing = horizontalWheel(deltaXToward("back", 2), target, true);
       expect(trailing.defaultPrevented).toBe(true);
     }
     expect(mounted.probe.navigations).toEqual(["back"]);
@@ -771,11 +1080,88 @@ describe("the momentum tail after a commit", () => {
   });
 });
 
+describe("idle safety net when no lift ever arrives", () => {
+  it("cancels a live navigation pull after idleCancelMs of silence, and never commits", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    expect(mounted.probe.views.some((view) => view?.phase === "ready")).toBe(
+      true,
+    );
+
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.idleCancelMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
+
+    // A lift that arrives after the safety net already settled does nothing.
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("resets a pending sequence after idleCancelMs of silence with no lift", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    horizontalWheel(deltaXToward("back", 5), target, true); // under the intent threshold: pending
+
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.idleCancelMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.at(-1)).toBeNull();
+  });
+});
+
+describe("'began' resets a draining tail but leaves a live pull alone", () => {
+  it("resets a draining tail on 'began', so fresh fingers end the previous tail", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back"]);
+    expect(mounted.probe.views.at(-1)?.phase).toBe("committed");
+
+    mounted.fingers.emit("began");
+    expect(mounted.probe.views.at(-1)).toBeNull();
+
+    // The tail is gone: a fresh pull opens its own sequence right away.
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back", "forward"]);
+  });
+
+  it("leaves a live pull alone when 'began' arrives mid-drag - the first tick can outrun the transition over IPC", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    driveToTravel("back", 60, target); // live navigation pull, still pulling
+
+    mounted.fingers.emit("began");
+
+    expect(mounted.probe.views.at(-1)?.phase).toBe("pulling");
+    expect(mounted.probe.navigations).toEqual([]);
+
+    horizontalWheel(
+      deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - 60),
+      target,
+      true,
+    );
+    mounted.fingers.emit("ended");
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+});
+
+it("disposes the finger source on uninstall", () => {
+  const mounted = mountGesture(DEFAULT_MOUNT);
+  expect(mounted.fingers.isDisposed()).toBe(false);
+
+  mounted.uninstall();
+
+  expect(mounted.fingers.isDisposed()).toBe(true);
+});
+
 it("cleanup during the momentum tail after a commit stops the drain and clears the in-flight state", () => {
   const mounted = mountGesture(DEFAULT_MOUNT);
   const target = document.body;
   driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
-  vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+  mounted.fingers.emit("ended");
   expect(mounted.probe.navigations).toEqual(["back"]);
 
   mounted.uninstall();
@@ -783,7 +1169,7 @@ it("cleanup during the momentum tail after a commit stops the drain and clears t
 
   // With the listeners removed, a trailing momentum wheel event is no longer
   // consumed and the tail cannot re-arm.
-  const trailing = horizontalWheel(deltaXToward("back", 20), target);
+  const trailing = horizontalWheel(deltaXToward("back", 20), target, true);
   expect(trailing.defaultPrevented).toBe(false);
 
   vi.advanceTimersByTime(
@@ -804,7 +1190,7 @@ it("cleanup removes every listener and clears an in-flight gesture", () => {
   const viewsAfterCleanup = mounted.probe.views.length;
   const navigationsAfterCleanup = mounted.probe.navigations.length;
 
-  horizontalWheel(deltaXToward("back", 200), target);
+  horizontalWheel(deltaXToward("back", 200), target, true);
   document.dispatchEvent(
     new Event("pointerdown", { bubbles: true, cancelable: true }),
   );
@@ -816,9 +1202,8 @@ it("cleanup removes every listener and clears an in-flight gesture", () => {
     }),
   );
   window.dispatchEvent(new Event("blur"));
-  vi.advanceTimersByTime(
-    DESKTOP_HISTORY_GESTURE.releaseMs + DESKTOP_HISTORY_GESTURE.tailMs,
-  );
+  mounted.fingers.emit("ended");
+  vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
 
   expect(mounted.probe.views.length).toBe(viewsAfterCleanup);
   expect(mounted.probe.navigations.length).toBe(navigationsAfterCleanup);
@@ -895,7 +1280,7 @@ describe("wheel ownership decides who gets the whole sequence", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, rail);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
@@ -908,7 +1293,7 @@ describe("wheel ownership decides who gets the whole sequence", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, strip);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["forward"]);
   });
@@ -921,7 +1306,7 @@ describe("wheel ownership decides who gets the whole sequence", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, terminal);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["back"]);
   });
@@ -945,7 +1330,7 @@ describe("wheel ownership decides who gets the whole sequence", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, terminal);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["forward"]);
   });
@@ -967,7 +1352,7 @@ describe("wheel ownership decides who gets the whole sequence", () => {
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, rail);
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["back"]);
   });
@@ -990,13 +1375,14 @@ describe("wheel ownership decides who gets the whole sequence", () => {
     rail.scrollLeft = 0;
 
     const mounted = mountGesture(DEFAULT_MOUNT);
-    horizontalWheel(deltaXToward("back", ACTIVATION_PX), rail);
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), rail, true);
     rail.scrollLeft = 100; // now sits at its scroll boundary
     horizontalWheel(
       deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
       rail,
+      true,
     );
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
@@ -1043,12 +1429,13 @@ describe("wheel events originating inside an open shadow root", () => {
     const { host, inner } = buildShadowScroller({ overflow: true });
     const mounted = mountGesture(DEFAULT_MOUNT);
 
-    horizontalWheel(deltaXToward("back", ACTIVATION_PX), inner);
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), inner, true);
     horizontalWheel(
       deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
       host,
+      true,
     );
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
@@ -1058,12 +1445,13 @@ describe("wheel events originating inside an open shadow root", () => {
     const { host, inner } = buildShadowScroller({ overflow: false });
     const mounted = mountGesture(DEFAULT_MOUNT);
 
-    horizontalWheel(deltaXToward("forward", ACTIVATION_PX), inner);
+    horizontalWheel(deltaXToward("forward", ACTIVATION_PX), inner, true);
     horizontalWheel(
       deltaXToward("forward", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
       host,
+      true,
     );
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual(["forward"]);
   });
@@ -1075,12 +1463,13 @@ describe("wheel events originating inside an open shadow root", () => {
     });
     const mounted = mountGesture(DEFAULT_MOUNT);
 
-    horizontalWheel(deltaXToward("back", ACTIVATION_PX), inner);
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), inner, true);
     horizontalWheel(
       deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
       host,
+      true,
     );
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    mounted.fingers.emit("ended");
 
     expect(mounted.probe.navigations).toEqual([]);
   });

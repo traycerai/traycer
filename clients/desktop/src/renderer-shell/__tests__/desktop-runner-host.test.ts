@@ -655,6 +655,7 @@ function buildFakeBridge(
     power: {
       setSleepBlocked: async () => undefined,
     },
+    trackpadScrollPhase: null,
     zoom: {
       ladder: [100] as const,
       get: async () => 100,

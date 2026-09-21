@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { animate, useMotionValue } from "motion/react";
+import { useDesktopTrackpadScrollPhaseBridge } from "@/hooks/runner/use-desktop-trackpad-scroll-phase-bridge";
 import {
   installDesktopHistoryGesture,
   type DesktopHistoryGestureView,
@@ -21,20 +22,27 @@ function cancellationMotionAllowed(): boolean {
   );
 }
 
-/** Feedback only: no snapshots, content movement, focus changes or hit targets. */
+/**
+ * Feedback only: no snapshots, content movement, focus changes or hit targets.
+ * Installed only where the shell reports finger transitions (macOS desktop);
+ * elsewhere there is no lift to confirm on, so there is no gesture.
+ */
 export function DesktopHistorySwipes(): ReactNode {
   const router = useRouter();
+  const fingers = useDesktopTrackpadScrollPhaseBridge();
   const progress = useMotionValue(0);
   const [view, setView] = useState<DesktopHistoryGestureAppearance | null>(
     null,
   );
   useEffect(() => {
+    if (fingers === null) return;
     if (!historyNavChromeAvailable(router.history)) return;
     const controller = getHistoryController(router.history);
     if (controller === null) return;
     let appearance: DesktopHistoryGestureAppearance | null = null;
     let stopRetraction: (() => void) | null = null;
     const uninstall = installDesktopHistoryGesture({
+      fingers,
       currentEntry: () =>
         JSON.stringify([
           router.history.location.state.__TSR_key,
@@ -83,7 +91,7 @@ export function DesktopHistorySwipes(): ReactNode {
       uninstall();
       stopRetraction?.();
     };
-  }, [router, progress]);
+  }, [router, progress, fingers]);
   if (view === null) return null;
   return <DesktopHistoryGestureIndicator view={view} progress={progress} />;
 }
