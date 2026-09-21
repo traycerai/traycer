@@ -351,13 +351,15 @@ describe("app route tab-strip navigation", () => {
     renderAppAt(`/epics/epic-current/${epicTabId}`);
     await screen.findByTestId("epic-route-session-body");
 
-    expect(screen.getByTestId("app-header").className).toContain(
-      "after:bg-border/90",
-    );
+    const headerClassTokens = screen
+      .getByTestId("app-header")
+      .className.split(/\s+/);
+    expect(headerClassTokens).toContain("after:bg-border/90");
+    expect(headerClassTokens).toContain("after:h-px");
     const baselineCoverClassName =
       screen.getByTestId("tab-baseline-cover").className;
     expect(baselineCoverClassName).toContain("bottom-0");
-    expect(baselineCoverClassName).toContain("h-[1.5px]");
+    expect(baselineCoverClassName).toContain("h-px");
     expect(baselineCoverClassName).toContain("z-0");
     expect(screen.getByTestId("tab-cap-left").getAttribute("class")).toContain(
       "z-10",
@@ -368,20 +370,26 @@ describe("app route tab-strip navigation", () => {
     expect(screen.getByTestId("tab-chrome-center").className).not.toContain(
       "z-10",
     );
-    expect(screen.getByTestId("tab-chrome-center").className).toContain(
-      "border-t-[1.5px]",
-    );
+    expect(
+      screen.getByTestId("tab-chrome-center").className.split(/\s+/),
+    ).toContain("border-t");
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("M -2 35.25 H 0");
+    ).toContain("M -2 35.5 H 0");
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("V 10.75 A 10 10 0 0 1 22 0.75");
+    ).toContain("V 10.5 A 10 10 0 0 1 22 0.5");
     expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("24 35.25 H 26");
+    ).toContain("24 35.5 H 26");
     expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("M 0 0.75 H 2 A 10 10 0 0 1 12 10.75");
+    ).toContain("M 0 0.5 H 2 A 10 10 0 0 1 12 10.5");
+    expect(
+      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke-width"),
+    ).toBe("1");
+    expect(
+      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke-width"),
+    ).toBe("1");
   });
 });
