@@ -66,13 +66,26 @@
 	<array>
 		<string>armv7</string>
 	</array>
-	<!-- iPhone is portrait-only by decision: landscape width crosses the
-	     GUI's 768px desktop breakpoint, mounting the tab/sidebar layout,
-	     whose minimum content width then wedges the WKWebView layout
-	     viewport on rotation back (shrink-to-fit keeps innerWidth wide, so
-	     the app stays locked in a zoomed-out desktop view). iPad keeps all
-	     orientations - its smaller dimension clears the breakpoint, so the
-	     desktop view there is legitimate and stable. -->
+	<!-- Apple requires this of an app that does not support every iPad
+	     orientation, which the portrait lock below now makes us. Read it as
+	     "request compatibility mode", not as a guarantee of exclusive
+	     full-screen presentation: it opts out of classic Split View and Slide
+	     Over, but Stage Manager and iPadOS 26's windowing still present the
+	     app scaled or windowed, and the key is deprecated for apps built
+	     against the iOS 27 SDK (TN3192). So the app will meet arbitrary
+	     widths eventually and must not depend on this to avoid them - it
+	     does not: one layout, at every width, by construction. -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<!-- Portrait-only on every device, iPad included, and the two arrays are
+	     deliberately identical. The app is a phone-layout product everywhere
+	     (see gui-app/src/hooks/ui/use-mobile-viewport.ts), so landscape would
+	     buy a wider phone shell rather than a different one - while costing
+	     the WKWebView wedge that made the iPhone lock necessary in the first
+	     place: rotating back leaves shrink-to-fit holding innerWidth at the
+	     landscape value, and the app sits in a zoomed-out view until it is
+	     relaunched. Android is locked to portrait to match, in
+	     android/app/src/main/AndroidManifest.xml. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -80,9 +93,6 @@
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>

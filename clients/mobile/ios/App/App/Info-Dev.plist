@@ -67,18 +67,21 @@
 	<array>
 		<string>armv7</string>
 	</array>
+	<!-- Portrait-only on every device, matching Info.plist key for key. This
+	     file is the DEBUG plist, so it is what a simulator or a dev-lane
+	     device build actually runs under - if it kept extra orientations, the
+	     lock would be untestable on precisely the builds it is tested on, and
+	     the header's "identical plus the ATS exception" promise would be
+	     false. Release is the other half; the two move together. -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
