@@ -38,7 +38,7 @@
     "@capacitor/keyboard": "8.0.5",
     "@capacitor/network": "8.0.1",
     "@capacitor/push-notifications": "8.1.2",
-    "@capacitor/share": "8.0.1",
+    "@capacitor/share": "8.0.2",
     "@sentry/browser": "catalog:",
     "capacitor-native-settings": "8.2.0",
     "capacitor-secure-storage-plugin": "0.13.0",
