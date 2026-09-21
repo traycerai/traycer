@@ -1004,3 +1004,36 @@ describe("drafts.putBlob declared budget", () => {
     expect(refused.messenger.calls).toHaveLength(0);
   });
 });
+
+describe("agent.resolveMessagePeer poll policy", () => {
+  const policy = HOST_METHOD_POLL_TABLE["agent.resolveMessagePeer"].poll;
+  const peer = {
+    epicId: "epic-2",
+    agentId: "agent-2",
+    hostId: "host-2",
+    title: "Peer",
+    surface: "gui",
+  } as const;
+
+  it("backs off from 2s to 5min while the peer is unresolved", () => {
+    for (const pending of [undefined, { peer: null }]) {
+      expect(policy.classify(pending)).toMatchObject({
+        id: "a2a-peer-pending",
+        initialDelayMs: 2_000,
+        maxDelayMs: 5 * 60_000,
+      });
+    }
+  });
+
+  it("keeps backing off for a resolved peer whose title has not been generated yet", () => {
+    expect(policy.classify({ peer: { ...peer, title: null } })).toMatchObject({
+      id: "a2a-peer-pending",
+      initialDelayMs: 2_000,
+      maxDelayMs: 5 * 60_000,
+    });
+  });
+
+  it("stops polling once a named peer resolves, so the other task can be reclaimed", () => {
+    expect(policy.classify({ peer })).toBe(false);
+  });
+});

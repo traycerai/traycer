@@ -1,7 +1,7 @@
+import type { AgentMessagePeerOrigin } from "@traycer/protocol/host/agent/message-peer";
 import { Globe2, SendHorizontal, Wrench } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
-import { v4 as uuidv4 } from "uuid";
 import type {
   AgentMessageReceipt,
   AgentMessageSend,
@@ -13,19 +13,14 @@ import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { useEpicAgentReference, useOpenEpicId } from "@/lib/epic-selectors";
+import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import {
   resolveToolInputDetail,
   type ToolInputDetail,
 } from "@traycer/protocol/host/agent/gui/tool-input-detail";
-import type {
-  ChatProjection,
-  TuiAgentProjection,
-} from "@/stores/epics/open-epic/types";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { AgentHeaderLink } from "./agent-header-link";
 import { AgentMessageBody } from "./agent-message-body";
@@ -54,7 +49,6 @@ import { ImageGenerationCard } from "./image-generation-card";
 import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
-import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface ToolSegmentProps {
   id: string;
@@ -116,13 +110,6 @@ interface ToolSegmentBodyProps {
   readonly toolName: string;
 }
 
-type ReceiverNode = ChatProjection | TuiAgentProjection;
-
-interface ReceiverOpenTarget {
-  readonly type: "chat" | "terminal-agent";
-  readonly hostId: string;
-}
-
 type ToolBadgeState =
   | "background-complete"
   | "end-state"
@@ -137,27 +124,12 @@ type ToolHeaderElapsed =
   | { readonly kind: "live"; readonly startedAt: number }
   | { readonly kind: "static"; readonly durationMs: number };
 
-function receiverDisplayName(
-  receiverNode: ReceiverNode | null,
-  receiverAgentId: string,
-): string {
-  if (receiverNode !== null && receiverNode.title.length > 0) {
-    return receiverNode.title;
-  }
-  return `${receiverAgentId.slice(0, 8)}...`;
-}
-
-function receiverOpenTarget(
-  receiverNode: ReceiverNode | null,
-  fallbackHostId: string | null,
-): ReceiverOpenTarget | null {
-  if (receiverNode === null) return null;
-  if ("harnessId" in receiverNode) {
-    return { type: "terminal-agent", hostId: receiverNode.hostId };
-  }
-  const hostId = receiverNode.hostId ?? fallbackHostId;
-  if (hostId === null) return null;
-  return { type: "chat", hostId };
+function sentMessageOrigin(
+  receipt: AgentMessageReceipt | null,
+): AgentMessagePeerOrigin | null {
+  return receipt === null
+    ? null
+    : { direction: "sent", messageId: receipt.messageId };
 }
 
 function ToolBadge({ state, endState }: ToolBadgeProps) {
@@ -656,6 +628,46 @@ function BackgroundOutputPanels(props: {
   );
 }
 
+function useA2ASendReceiver(
+  send: AgentMessageSend,
+  receipt: AgentMessageReceipt | null,
+): { readonly name: string; readonly onOpen: (() => void) | null } {
+  const receiver = useA2AMessagePeer(
+    receipt?.receiverAgentId ?? send.receiverAgentId,
+    sentMessageOrigin(receipt),
+  );
+  const openPeer = useOpenA2AMessagePeer();
+  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
+  const receiverName =
+    receiver?.title ?? `${send.receiverAgentId.slice(0, 8)}...`;
+  const openReceiverTab = () => {
+    if (receiver === null) return;
+    openPeer(receiver, receiverName);
+    // Same mechanism the communication graph uses for its receiver-side
+    // anchor: park a jump for the receiver's tile, which picks it up whether
+    // it is already mounted or is being opened by the call above. The receipt
+    // is the receiver's own transcript message id, so this lands on the exact
+    // row the message was delivered as. A send without one (TUI receiver, or
+    // a block persisted before the host carried receipts) just opens the tile.
+    if (
+      receipt === null ||
+      receiver.surface !== "gui" ||
+      receipt.receiverAgentId !== receiver.agentId
+    ) {
+      return;
+    }
+    requestJump(receiver.hostId, receiver.agentId, {
+      kind: "message",
+      messageId: receipt.messageId,
+    });
+  };
+
+  return {
+    name: receiverName,
+    onOpen: receiver === null ? null : openReceiverTab,
+  };
+}
+
 function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
@@ -686,47 +698,10 @@ function A2ASendToolSegment(
     isStreaming,
     isStopped: false,
   });
-  const receiverNode = useEpicAgentReference(send.receiverAgentId);
-  const activeHostId = useTabHostId();
-  const epicId = useOpenEpicId();
-  const { openTile } = useEpicTileNavigation();
-  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
-  const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
-  const openTarget = receiverOpenTarget(receiverNode, activeHostId);
-  const openReceiverTab = () => {
-    if (openTarget === null || receiverNode === null) return;
-    openTile(
-      tileIntent(
-        {
-          id: receiverNode.id,
-          instanceId: uuidv4(),
-          type: openTarget.type,
-          name: receiverName,
-          hostId: openTarget.hostId,
-        },
-        { epicId },
-        "explicit",
-        "direct_ui",
-      ),
-    );
-    // Same mechanism the communication graph uses for its receiver-side
-    // anchor: park a jump for the receiver's tile, which picks it up whether
-    // it is already mounted or is being opened by the call above. The receipt
-    // is the receiver's own transcript message id, so this lands on the exact
-    // row the message was delivered as. A send without one (TUI receiver, or
-    // a block persisted before the host carried receipts) just opens the tile.
-    if (
-      receipt === null ||
-      openTarget.type !== "chat" ||
-      receipt.receiverAgentId !== receiverNode.id
-    ) {
-      return;
-    }
-    requestJump(openTarget.hostId, receiverNode.id, {
-      kind: "message",
-      messageId: receipt.messageId,
-    });
-  };
+  const { name: receiverName, onOpen: openReceiver } = useA2ASendReceiver(
+    send,
+    receipt,
+  );
 
   // The header is one row and the receiver name is the only element allowed
   // to shrink, so every fixed-width neighbour costs name characters on a
@@ -745,10 +720,7 @@ function A2ASendToolSegment(
       <span className="sr-only">Sent message</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">to</span>
-        <AgentHeaderLink
-          name={receiverName}
-          onOpen={openTarget !== null ? openReceiverTab : null}
-        />
+        <AgentHeaderLink name={receiverName} onOpen={openReceiver} />
         {send.expectReply ? <ReplyExpectedIcon /> : null}
       </span>
       <ToolBadge state={badgeState} endState={endState} />
