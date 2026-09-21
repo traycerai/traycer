@@ -29,6 +29,18 @@ function pickPrompt(): string {
   return PROMPT_POOL[index];
 }
 
+/**
+ * Chosen once per page load. Switching hosts remounts this hero; picking
+ * again made the greeting line jump while the only thing that changed was
+ * the host chip.
+ */
+let sessionPrompt: string | null = null;
+
+function landingPrompt(): string {
+  if (sessionPrompt === null) sessionPrompt = pickPrompt();
+  return sessionPrompt;
+}
+
 function readFirstName(userName: string): string | null {
   if (userName.includes("@")) return null;
 
@@ -56,7 +68,7 @@ export function HomeHero({ workspaceFolders }: HomeHeroProps) {
   const folders = workspaceFolders === null ? globalFolders : workspaceFolders;
   const profile = useAuthStore((state) => state.profile);
   const [greeting] = useState(() => timeGreeting(new Date().getHours()));
-  const [prompt] = useState(() => pickPrompt());
+  const [prompt] = useState(() => landingPrompt());
 
   const projectName = folders.length > 0 ? basenameOfPath(folders[0]) : null;
   const firstName = profile === null ? null : readFirstName(profile.userName);

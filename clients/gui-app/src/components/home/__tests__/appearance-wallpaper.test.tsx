@@ -12,6 +12,7 @@ vi.mock("@/lib/appearance/appearance-image-processing", () => ({
 }));
 
 import { AppearanceWallpaper } from "@/components/home/appearance-wallpaper";
+import { resetRetainedWallpaperFramesForTests } from "@/components/home/appearance-wallpaper-frame";
 
 interface TestImage {
   onload: (() => void) | null;
@@ -46,6 +47,7 @@ describe("AppearanceWallpaper", () => {
   });
 
   afterEach(() => {
+    resetRetainedWallpaperFramesForTests();
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -120,6 +122,81 @@ describe("AppearanceWallpaper", () => {
     expect(firstSignal.aborted).toBe(true);
     expect(secondSignal).not.toBe(firstSignal);
     expect(secondSignal.aborted).toBe(false);
+  });
+
+  it("puts the last dither frame on a remounted canvas before the image reloads", async () => {
+    resetRetainedWallpaperFramesForTests();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(
+      100,
+    );
+    vi.spyOn(
+      HTMLCanvasElement.prototype,
+      "clientHeight",
+      "get",
+    ).mockReturnValue(100);
+    const context: Partial<CanvasRenderingContext2D> = {
+      drawImage: () => undefined,
+      getImageData: (): ImageData => ({
+        data: new Uint8ClampedArray(50 * 50 * 4),
+        width: 50,
+        height: 50,
+        colorSpace: "srgb",
+      }),
+      putImageData: () => undefined,
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context as CanvasRenderingContext2D,
+    );
+
+    const wallpaper = {
+      style: "dither" as const,
+      intensity: 0.6,
+      tintWithAccent: false,
+      name: "wallpaper.png",
+      curatedId: null,
+    };
+    const first = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(first.container.querySelector("canvas")?.width).toBe(50);
+    first.unmount();
+
+    // The reload never arrives. The frame on screen is the one restored in
+    // the layout effect, not a second dither pass.
+    vi.stubGlobal(
+      "Image",
+      class {
+        onload: (() => void) | null = null;
+        readonly naturalWidth = 2000;
+        readonly naturalHeight = 2000;
+        src = "";
+      },
+    );
+    const second = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    expect(second.container.querySelector("canvas")?.width).toBe(50);
   });
 
   describe("live canvas stability while dithering", () => {

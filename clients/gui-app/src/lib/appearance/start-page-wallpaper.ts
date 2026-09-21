@@ -220,29 +220,60 @@ export interface StartPageWallpaperImage {
 
 const NO_WALLPAPER: StartPageWallpaperImage = { url: null, name: null };
 
+/**
+ * The last image a mounted reader resolved. Switching hosts remounts the
+ * start page; the hook's own state would otherwise begin at "no image" and
+ * the wallpaper would blank until IndexedDB answered again. One retained URL
+ * is enough — there is only one start-page image — and the next successful
+ * read replaces it.
+ */
+let retainedImage: StartPageWallpaperImage = NO_WALLPAPER;
+
+function publishRetainedStartPageWallpaperImage(
+  next: StartPageWallpaperImage,
+): void {
+  const previous = retainedImage.url;
+  retainedImage = next;
+  if (previous !== null && previous !== next.url) URL.revokeObjectURL(previous);
+}
+
+function clearRetainedStartPageWallpaperImage(): void {
+  publishRetainedStartPageWallpaperImage(NO_WALLPAPER);
+}
+
+/** Drops the retained object URL. Tests only — a live session keeps it. */
+export function resetRetainedStartPageWallpaperImageForTests(): void {
+  clearRetainedStartPageWallpaperImage();
+}
+
 export function useStartPageWallpaperImage(): StartPageWallpaperImage {
   const version = useSyncExternalStore(subscribe, readRevision, readRevision);
   const name = useSettingsStore(
     (state) => state.startPageWallpaper?.name ?? null,
   );
-  const [image, setImage] = useState<StartPageWallpaperImage>(NO_WALLPAPER);
+  // The retained image is the first paint. A fresh mount must not flash empty
+  // while this effect reads the same bytes back.
+  const [image, setImage] = useState<StartPageWallpaperImage>(
+    () => retainedImage,
+  );
   useEffect(() => {
-    let objectUrl: string | null = null;
     let cancelled = false;
     void readAppearanceBlob(START_PAGE_WALLPAPER_KEY)
       .catch(() => null)
       .then((blob) => {
         if (cancelled) return;
         if (blob === null) {
+          clearRetainedStartPageWallpaperImage();
           setImage(NO_WALLPAPER);
           return;
         }
-        objectUrl = URL.createObjectURL(blob);
-        setImage({ url: objectUrl, name });
+        const objectUrl = URL.createObjectURL(blob);
+        const next = { url: objectUrl, name };
+        publishRetainedStartPageWallpaperImage(next);
+        setImage(next);
       });
     return () => {
       cancelled = true;
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
   }, [version, name]);
   return image;

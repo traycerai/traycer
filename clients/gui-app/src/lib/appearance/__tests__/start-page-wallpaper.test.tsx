@@ -42,12 +42,14 @@ import {
   applyCuratedStartPageWallpaper,
   chooseStartPageWallpaper,
   removeStartPageWallpaper,
+  resetRetainedStartPageWallpaperImageForTests,
   useStartPageWallpaperImage,
 } from "@/lib/appearance/start-page-wallpaper";
 import type { CuratedWallpaper } from "@/lib/appearance/curated-wallpapers";
 
 describe("useStartPageWallpaperImage", () => {
   beforeEach(() => {
+    resetRetainedStartPageWallpaperImageForTests();
     cacheMocks.read.mockReset();
     cacheMocks.remove.mockResolvedValue(undefined);
     useSettingsStore.setState({ startPageWallpaper: null });
@@ -97,6 +99,36 @@ describe("useStartPageWallpaperImage", () => {
       await Promise.resolve();
     });
     expect(result.current).toEqual({ url: currentUrl, name: "latest.png" });
+  });
+
+  it("paints the retained image on the first render of a remount", async () => {
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["bytes"], { type: "image/png" }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:wallpaper"),
+    );
+    expect(first.result.current.name).toBe("horse.png");
+    first.unmount();
+
+    // The remount must not wait on this read. A host switch remounts the
+    // start page, and an empty first render is the full-screen flash.
+    cacheMocks.read.mockReturnValue(new Promise<Blob>(() => undefined));
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current).toEqual({
+      url: "blob:wallpaper",
+      name: "horse.png",
+    });
   });
 });
 

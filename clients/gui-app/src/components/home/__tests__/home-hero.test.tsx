@@ -144,4 +144,18 @@ describe("<HomeHero />", () => {
 
     expect(screen.queryByText("global-app")).toBeNull();
   });
+
+  it("keeps the prompt line when the hero remounts", () => {
+    const first = render(<HomeHero workspaceFolders={[]} />);
+    const prompt = first.container.querySelector(
+      "[data-landing-hero] p",
+    )?.textContent;
+    expect(prompt).toBeTruthy();
+    first.unmount();
+
+    const second = render(<HomeHero workspaceFolders={[]} />);
+    expect(
+      second.container.querySelector("[data-landing-hero] p")?.textContent,
+    ).toBe(prompt);
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import {
   ditherRows,
   ditherRowsPerChannel,
@@ -8,6 +8,10 @@ import {
 } from "@/lib/appearance/appearance-image-processing";
 import { type StartPageWallpaper } from "@/stores/settings/settings-store";
 import { useThemeRevision } from "@/providers/use-theme-revision";
+import {
+  retainWallpaperFrame,
+  restoreWallpaperFrame,
+} from "@/components/home/appearance-wallpaper-frame";
 import "./appearance-wallpaper.css";
 
 /** One dither cell, in CSS px: the canvas is the element at 1/CELL scale. */
@@ -129,6 +133,22 @@ function imageOpacity(wallpaper: StartPageWallpaper, onPage: boolean): number {
   return 0.85;
 }
 
+function wallpaperFrameStyle(args: {
+  readonly url: string;
+  readonly intensity: number;
+  readonly tint: string | null;
+  readonly tintWithAccent: boolean;
+  readonly tintThemeRevision: number;
+}): string {
+  return [
+    args.url,
+    args.intensity,
+    args.tint ?? "",
+    args.tintWithAccent ? "1" : "0",
+    args.tintThemeRevision,
+  ].join("\u001f");
+}
+
 function DitheredWallpaper(props: {
   readonly url: string;
   readonly intensity: number;
@@ -143,6 +163,32 @@ function DitheredWallpaper(props: {
   // the cascade, and covers the OS flip under `theme: "system"` as well.
   const themeRevision = useThemeRevision();
   const tintThemeRevision = tintWithAccent ? themeRevision : 0;
+  const frameStyle = wallpaperFrameStyle({
+    url,
+    intensity,
+    tint,
+    tintWithAccent,
+    tintThemeRevision,
+  });
+  // Set by the layout effect, read by the paint effect in the same commit.
+  // A restored frame is already the picture; the effect must not start a
+  // pass that would clear the canvas on its way to drawing the same thing.
+  const restoredStyleRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    const width = Math.round(canvas.clientWidth / CELL);
+    const height = Math.round(canvas.clientHeight / CELL);
+    restoredStyleRef.current = restoreWallpaperFrame(
+      frameStyle,
+      canvas,
+      width,
+      height,
+    )
+      ? frameStyle
+      : null;
+  }, [frameStyle]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -150,7 +196,11 @@ function DitheredWallpaper(props: {
     let controller: AbortController | null = null;
     const image = new Image();
     let timer: number | null = null;
-    let painted = false;
+    let painted =
+      restoredStyleRef.current === frameStyle &&
+      canvas.width === Math.round(canvas.clientWidth / CELL) &&
+      canvas.height === Math.round(canvas.clientHeight / CELL) &&
+      canvas.width > 0;
     const paint = (): void => {
       controller?.abort();
       if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
@@ -174,7 +224,10 @@ function DitheredWallpaper(props: {
         pass.signal,
       )
         .then((complete) => {
-          if (complete && !pass.signal.aborted) painted = true;
+          if (complete && !pass.signal.aborted) {
+            painted = true;
+            retainWallpaperFrame(frameStyle, canvas);
+          }
         })
         // Aborts (unmount, a newer pass) and a canvas-less environment are the
         // only failures here, and both mean "leave the last frame up".
@@ -202,6 +255,9 @@ function DitheredWallpaper(props: {
     // (which serves `Access-Control-Allow-Origin: *`); the start page's own
     // blob URL is same-origin and unaffected either way.
     image.crossOrigin = "anonymous";
+    // Always load, including after a restore. A later resize repaints from
+    // this image; the restored frame only means the first paint is a no-op
+    // while the raster size still matches.
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
@@ -212,7 +268,7 @@ function DitheredWallpaper(props: {
       image.onload = null;
       image.onerror = null;
     };
-  }, [url, intensity, tint, tintWithAccent, tintThemeRevision]);
+  }, [frameStyle, intensity, tint, tintWithAccent, url]);
 
   return (
     <canvas ref={canvasRef} className="appearance-wallpaper-canvas size-full" />
