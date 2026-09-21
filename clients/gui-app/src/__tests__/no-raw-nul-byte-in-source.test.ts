@@ -45,8 +45,10 @@ import { describe, expect, it } from "vitest";
  * asset, where NUL bytes are the format and not a defect). There is no third
  * outcome: an extension in neither set fails `covers every extension present`,
  * so a new `.yaml`, `.txt` or `.graphql` arriving under `src` has to be
- * classified by a person rather than silently falling out of the scan. The
- * text set deliberately lists spellings that have no files today (`.js`,
+ * classified by a person rather than silently falling out of the scan. Both
+ * halves classify by the lowercased extension, through `classifiedExtension`
+ * alone, so the scan and the coverage guard can never disagree about case.
+ * The text set deliberately lists spellings that have no files today (`.js`,
  * `.mjs`, `.svg`) - a scan that is ready for a file type costs nothing, and
  * the coverage test only fails on a type that is PRESENT and unclassified.
  */
@@ -127,9 +129,14 @@ function collectAllFiles(dir: string): string[] {
   return found;
 }
 
+/** The extension as both halves of the scope classify it: lowercased. */
+function classifiedExtension(file: string): string {
+  return path.extname(file).toLowerCase();
+}
+
 function collectTextFiles(dir: string): string[] {
   return collectAllFiles(dir).filter((file) =>
-    TEXT_EXTENSIONS.has(path.extname(file)),
+    TEXT_EXTENSIONS.has(classifiedExtension(file)),
   );
 }
 
@@ -193,7 +200,7 @@ describe("no raw NUL byte in source", () => {
     const unclassified = [
       ...new Set(
         collectAllFiles(SRC_DIR)
-          .map((file) => path.extname(file).toLowerCase())
+          .map(classifiedExtension)
           .filter(
             (ext) => !TEXT_EXTENSIONS.has(ext) && !BINARY_EXTENSIONS.has(ext),
           ),
@@ -223,15 +230,22 @@ describe("no raw NUL byte in source", () => {
 
   // The scan is only worth having if it can actually SEE a raw NUL byte -
   // otherwise an empty result above is indistinguishable from a scanner that
-  // silently stopped reading. This proves it on a throwaway fixture: one
-  // clean file the scan must pass over, and one dirty file it must report at
-  // the exact line the byte lands on.
+  // silently stopped reading. This proves it on a throwaway fixture: clean
+  // lower- and mixed-case text files the scan must pass over, plus dirty
+  // lower-, upper- and mixed-case text files it must report at the exact lines
+  // where their bytes land. The case variants are here because the coverage
+  // guard has always classified `.TS` as text, so a scanner that skipped it
+  // could report a clean tree for a file it never opened.
   it("proves it can see a raw NUL byte, using a temp fixture", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "no-raw-nul-byte-"));
     try {
       const cleanFile = path.join(dir, "clean.ts");
       const dirtyFile = path.join(dir, "dirty.ts");
+      const cleanMixedCaseFile = path.join(dir, "clean.CsS");
+      const dirtyUpperCaseFile = path.join(dir, "uppercase.TS");
+      const dirtyMixedCaseFile = path.join(dir, "mixed.JsOn");
       writeFileSync(cleanFile, "export const clean = 1;\n");
+      writeFileSync(cleanMixedCaseFile, "body { color: black; }\n");
       writeFileSync(
         dirtyFile,
         Buffer.from(
@@ -239,10 +253,34 @@ describe("no raw NUL byte in source", () => {
           "utf8",
         ),
       );
+      writeFileSync(
+        dirtyUpperCaseFile,
+        Buffer.from(
+          "line one\nbad" + String.fromCharCode(0) + "line\n",
+          "utf8",
+        ),
+      );
+      writeFileSync(
+        dirtyMixedCaseFile,
+        Buffer.from(
+          "line one\nline two\nline three\nbad" +
+            String.fromCharCode(0) +
+            "line\n",
+          "utf8",
+        ),
+      );
 
-      const offenders = findRawNulBytes(dir);
+      const offenders = findRawNulBytes(dir).sort((a, b) =>
+        a.file.localeCompare(b.file),
+      );
 
-      expect(offenders).toEqual([{ file: dirtyFile, line: 3 }]);
+      expect(offenders).toEqual(
+        [
+          { file: dirtyFile, line: 3 },
+          { file: dirtyMixedCaseFile, line: 4 },
+          { file: dirtyUpperCaseFile, line: 2 },
+        ].sort((a, b) => a.file.localeCompare(b.file)),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
