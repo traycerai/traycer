@@ -374,6 +374,7 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
  */
 export function resetLayoutToDefaults(): void {
   applyLayoutPreset("default");
+  useSettingsStore.getState().setTaskTabLayout("scroll");
   const layout = useLayoutStore.getState();
   layout.setStatusBarPlacement(DEFAULT_STATUS_BAR_LAYOUT.placement);
   layout.setStatusBarMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
