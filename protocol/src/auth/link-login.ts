@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Client-side mirror of authn-v3's link-login DTOs — the confirm-gated QR
@@ -97,60 +98,73 @@ export type RespondLinkLoginResponse = {
 };
 
 export const mintLinkLoginCodeResponseSchema: z.ZodType<MintLinkLoginCodeResponse> =
-  z
-    .object({
-      code: z.string().min(1),
-      expires_in: z.number().int().positive(),
-      expires_at: z.number().int().positive(),
-    })
-    .strict();
+  lazySchema(() =>
+    z
+      .object({
+        code: z.string().min(1),
+        expires_in: z.number().int().positive(),
+        expires_at: z.number().int().positive(),
+      })
+      .strict(),
+  );
 
 /**
  * The match code's exact wire shape. Anything else is a contract drift and
  * fails the parse like any other, rather than putting an unreadable "code"
  * in front of the human who is asked to compare it.
  */
-const linkLoginMatchCodeSchema = z.string().regex(/^[0-9]{2}$/);
+const linkLoginMatchCodeSchema = lazySchema(() =>
+  z.string().regex(/^[0-9]{2}$/),
+);
 
 export const claimLinkLoginCodeResponseSchema: z.ZodType<ClaimLinkLoginCodeResponse> =
-  z
-    .object({
-      status: z.literal("claimed"),
-      secret: z.string().min(1),
-      interval: z.number().int().positive(),
-      matchCode: linkLoginMatchCodeSchema.optional(),
-    })
-    .strict();
+  lazySchema(() =>
+    z
+      .object({
+        status: z.literal("claimed"),
+        secret: z.string().min(1),
+        interval: z.number().int().positive(),
+        matchCode: linkLoginMatchCodeSchema.optional(),
+      })
+      .strict(),
+  );
 
-export const linkLoginTokenResponseSchema: z.ZodType<LinkLoginTokenResponse> = z
-  .object({
-    token: z.string().min(1),
-    refreshToken: z.string().min(1),
-    familyId: z.string().min(1),
-  })
-  .strict();
+export const linkLoginTokenResponseSchema: z.ZodType<LinkLoginTokenResponse> =
+  lazySchema(() =>
+    z
+      .object({
+        token: z.string().min(1),
+        refreshToken: z.string().min(1),
+        familyId: z.string().min(1),
+      })
+      .strict(),
+  );
 
 export const linkLoginStatusResponseSchema: z.ZodType<LinkLoginStatusResponse> =
-  z
-    .object({
-      status: z.enum(["unclaimed", "claimed", "approved", "denied"]),
-      claimant: z
-        .object({
-          address: z.string().nullable(),
-          userAgent: z.string().nullable(),
-          location: z.string().nullable(),
-          claimedAt: z.number().nullable(),
-          matchCode: linkLoginMatchCodeSchema.nullable().optional(),
-          claimExpiresAt: z.number().int().positive().optional(),
-        })
-        .strict()
-        .nullable(),
-    })
-    .strict();
+  lazySchema(() =>
+    z
+      .object({
+        status: z.enum(["unclaimed", "claimed", "approved", "denied"]),
+        claimant: z
+          .object({
+            address: z.string().nullable(),
+            userAgent: z.string().nullable(),
+            location: z.string().nullable(),
+            claimedAt: z.number().nullable(),
+            matchCode: linkLoginMatchCodeSchema.nullable().optional(),
+            claimExpiresAt: z.number().int().positive().optional(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  );
 
 export const respondLinkLoginResponseSchema: z.ZodType<RespondLinkLoginResponse> =
-  z
-    .object({
-      ok: z.literal(true),
-    })
-    .strict();
+  lazySchema(() =>
+    z
+      .object({
+        ok: z.literal(true),
+      })
+      .strict(),
+  );

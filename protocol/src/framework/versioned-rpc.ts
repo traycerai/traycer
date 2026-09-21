@@ -81,6 +81,15 @@ export type {
  * 3. Build static registries with `defineVersionedRpcRegistry()`, or validate
  *    dynamic registries with `validateVersionedRpcRegistry()`.
  * 4. Use traversal helpers only with validated registries.
+ *
+ * Construction and full validation are two different entry points. The
+ * `define*` factories run only the structural pass, which never reads a
+ * schema, so importing a registry module builds no JSON Schema and walks no
+ * schema tree. The schema-compatibility pass (additivity within a line,
+ * breaking changes across majors) belongs to `validateVersionedRpcRegistry()`,
+ * which every static registry is held to at build time and in CI
+ * (`protocol/scripts/compat/static-registries.ts`), and which a dynamic
+ * registry must be passed through explicitly.
  */
 
 /**
@@ -139,8 +148,13 @@ export function defineFallbackMethodDegrade<
 /**
  * Preferred authoring path for registries declared in source code.
  *
- * It applies compile-time validation to object literals, then runs the runtime
- * validator so widened or indirectly assembled values still fail with readable errors.
+ * It applies compile-time validation to object literals, then runs the
+ * runtime STRUCTURAL pass so widened or indirectly assembled values still fail
+ * with readable errors. It deliberately does not run the schema-compatibility
+ * pass: that walks every installed schema, and running it here would do so
+ * whenever the declaring module is imported. A static registry gets that pass
+ * from the build-time and CI check instead; a registry assembled from dynamic
+ * input goes through `validateVersionedRpcRegistry()`.
  */
 export function defineVersionedRpcRegistry<
   const Registry extends UncheckedVersionedRpcRegistry,
@@ -150,7 +164,7 @@ export function defineVersionedRpcRegistry<
 export function defineVersionedRpcRegistry(
   registry: UncheckedVersionedRpcRegistry,
 ): VersionedRpcRegistry {
-  validateVersionedRpcRegistry(registry);
+  assertVersionedRpcRegistryStructure(registry);
   return registry as VersionedRpcRegistry;
 }
 
@@ -167,14 +181,17 @@ export function defineFloorAwareVersionedRpcRegistry(
   floorMethodNames: readonly string[],
   registry: UncheckedVersionedRpcRegistry,
 ): VersionedRpcRegistry {
-  validateVersionedRpcRegistry(registry);
+  // Structural like `defineVersionedRpcRegistry`; the degrade check reads
+  // only registry keys, versions and adapter functions, never a schema.
+  assertVersionedRpcRegistryStructure(registry);
   validateVersionedRpcRegistryDegrades(registry, floorMethodNames);
   return registry as VersionedRpcRegistry;
 }
 
 /**
- * Promotes a raw registry to the validated brand after checking every invariant
- * the framework cares about in a single pass:
+ * The full validation entry point: promotes a raw registry to the validated
+ * brand after checking every invariant the framework cares about, the
+ * structural pass first and then the schema-compatibility pass:
  *
  * 1. Structural:
  *    - `latestMinor` points at an installed and highest minor within each line
@@ -197,13 +214,36 @@ export function defineFloorAwareVersionedRpcRegistry(
  *
  * Use this when the registry comes from a dynamic boundary such as parsed JSON,
  * tests that intentionally exercise invalid states, or code paths outside the
- * compiler's view.
+ * compiler's view, and from the build-time and CI check that holds every static
+ * registry to it. It always runs both passes; there is no structural-only mode.
  */
 export function validateVersionedRpcRegistry<
   Registry extends UncheckedVersionedRpcRegistry,
 >(
   registry: Registry,
 ): asserts registry is Registry & VersionedRpcRegistry<Registry> {
+  assertVersionedRpcRegistryStructure(registry);
+
+  // Second pass: Zod-schema-level compatibility. Kept separate so the error
+  // surface of the first pass stays strictly structural - callers can rely on
+  // structural messages landing before any JSON Schema complaint.
+  assertSchemaCompatibility(registry);
+}
+
+/**
+ * The structural pass alone. It reads registry keys, contract method names,
+ * schema versions and bridge endpoints, and never touches a request or
+ * response schema. Private so that construction is its only caller. Being
+ * private does not keep a registry from reaching the brand with only this pass
+ * run: `defineVersionedRpcRegistry` is public and does exactly that, and only
+ * the type-level validator stands in the way of a widened registry (it needs a
+ * visible `@ts-expect-error`). What keeps an unvalidated registry out of a
+ * build is the tripwire (`scripts/compat/__tests__/static-registries-tripwire`),
+ * which fails on any factory call site `STATIC_REGISTRIES` does not name.
+ */
+function assertVersionedRpcRegistryStructure(
+  registry: UncheckedVersionedRpcRegistry,
+): void {
   for (const method in registry) {
     const methodRegistry = registry[method];
     const majorKeys = getSortedNumberKeys(methodRegistry);
@@ -340,11 +380,6 @@ export function validateVersionedRpcRegistry<
       }
     }
   }
-
-  // Second pass: Zod-schema-level compatibility. Kept separate so the error
-  // surface of the first pass stays strictly structural - callers can rely on
-  // structural messages landing before any JSON Schema complaint.
-  assertSchemaCompatibility(registry);
 }
 
 export function validateVersionedRpcRegistryDegrades<

@@ -82,6 +82,7 @@ import {
   worktreeBusyHoldersWireFieldSchemaV1,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Where the command came from. Durable: it rides into the notification
@@ -89,26 +90,24 @@ import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-sche
  * persisting a route. Closed on purpose - an unrecognized source is a client
  * bug, not a compatibility event, and every producer is in this repo.
  */
-export const worktreeDeletionSourceSchema = z.enum([
-  "settings",
-  "task_cleanup",
-  "task_sweep",
-  "cli",
-  "legacy_client",
-]);
+export const worktreeDeletionSourceSchema = lazySchema(() =>
+  z.enum(["settings", "task_cleanup", "task_sweep", "cli", "legacy_client"]),
+);
 export type WorktreeDeletionSource = z.infer<
   typeof worktreeDeletionSourceSchema
 >;
 
-export const worktreeDeleteBatchTargetSchema = z.object({
-  worktreePath: z.string().min(1),
-  /**
-   * Per-target script override from the Settings review modal. `null` means
-   * "read the worktree's own `.traycer/environment.json`", matching the
-   * released single-target request.
-   */
-  scripts: worktreeEntryScriptsSchema.nullable(),
-});
+export const worktreeDeleteBatchTargetSchema = lazySchema(() =>
+  z.object({
+    worktreePath: z.string().min(1),
+    /**
+     * Per-target script override from the Settings review modal. `null` means
+     * "read the worktree's own `.traycer/environment.json`", matching the
+     * released single-target request.
+     */
+    scripts: worktreeEntryScriptsSchema.nullable(),
+  }),
+);
 export type WorktreeDeleteBatchTarget = z.infer<
   typeof worktreeDeleteBatchTargetSchema
 >;
@@ -119,10 +118,11 @@ export type WorktreeDeleteBatchTarget = z.infer<
  * deliberately no holder-inventory revision. Defaulting to false lets a 1.1
  * host parse a 1.0-shaped target with the original refuse-on-busy behavior.
  */
-export const worktreeDeleteBatchTargetSchemaV11 =
+export const worktreeDeleteBatchTargetSchemaV11 = lazySchema(() =>
   worktreeDeleteBatchTargetSchema.extend({
     stopOwners: z.boolean().default(false),
-  });
+  }),
+);
 export type WorktreeDeleteBatchTargetV11 = z.infer<
   typeof worktreeDeleteBatchTargetSchemaV11
 >;
@@ -133,11 +133,10 @@ export type WorktreeDeleteBatchTargetV11 = z.infer<
  * and have the single-flight map silently attach the second one to the first's
  * already-finished result.
  */
-const commandIdSchema = z.uuid();
+const commandIdSchema = lazySchema(() => z.uuid());
 
-export const worktreeDeleteBatchByPathOpenRequestSchema = z.discriminatedUnion(
-  "mode",
-  [
+export const worktreeDeleteBatchByPathOpenRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("mode", [
     /**
      * Authorizes execution. Only ever sent for an explicit user action, and
      * never re-sent automatically after it has reached the host.
@@ -173,7 +172,7 @@ export const worktreeDeleteBatchByPathOpenRequestSchema = z.discriminatedUnion(
       mode: z.literal("observe"),
       commandId: commandIdSchema,
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteBatchByPathOpenRequest = z.infer<
   typeof worktreeDeleteBatchByPathOpenRequestSchema
@@ -184,7 +183,7 @@ export type WorktreeDeleteBatchByPathOpenRequest = z.infer<
  * schema above and strips `stopOwners`; clients therefore gate consented
  * targets on the negotiated minor instead of assuming the field survived.
  */
-export const worktreeDeleteBatchByPathOpenRequestSchemaV11 =
+export const worktreeDeleteBatchByPathOpenRequestSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("mode", [
     z.object({
       mode: z.literal("start"),
@@ -204,24 +203,28 @@ export const worktreeDeleteBatchByPathOpenRequestSchemaV11 =
       mode: z.literal("observe"),
       commandId: commandIdSchema,
     }),
-  ]);
+  ]),
+);
 export type WorktreeDeleteBatchByPathOpenRequestV11 = z.infer<
   typeof worktreeDeleteBatchByPathOpenRequestSchemaV11
 >;
 
-const worktreeDeleteBatchPhaseSchema = z.enum(["teardown", "remove"]);
+const worktreeDeleteBatchPhaseSchema = lazySchema(() =>
+  z.enum(["teardown", "remove"]),
+);
 export type WorktreeDeleteBatchPhase = z.infer<
   typeof worktreeDeleteBatchPhaseSchema
 >;
 
-const worktreeDeleteBatchOutputChannelSchema = z.enum(["stdout", "stderr"]);
+const worktreeDeleteBatchOutputChannelSchema = lazySchema(() =>
+  z.enum(["stdout", "stderr"]),
+);
 export type WorktreeDeleteBatchOutputChannel = z.infer<
   typeof worktreeDeleteBatchOutputChannelSchema
 >;
 
-export const worktreeDeleteBatchByPathServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteBatchByPathServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("target.started"),
       worktreePath: z.string().min(1),
@@ -269,7 +272,7 @@ export const worktreeDeleteBatchByPathServerFrameSchema = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteBatchByPathServerFrame = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchema
@@ -280,7 +283,7 @@ export type WorktreeDeleteBatchByPathServerFrame = z.infer<
  * remains valid. Malformed `holders` and unknown future `code` values sanitize
  * to absent rather than dropping the terminal frame and stranding the target.
  */
-export const worktreeDeleteBatchByPathServerFrameSchemaV11 =
+export const worktreeDeleteBatchByPathServerFrameSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("target.started"),
@@ -331,7 +334,8 @@ export const worktreeDeleteBatchByPathServerFrameSchemaV11 =
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ]);
+  ]),
+);
 export type WorktreeDeleteBatchByPathServerFrameV11 = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchemaV11
 >;
@@ -347,7 +351,7 @@ export const worktreeDeleteBatchByPathOpenRequestSchemaV12 =
 export type WorktreeDeleteBatchByPathOpenRequestV12 =
   WorktreeDeleteBatchByPathOpenRequestV11;
 
-export const worktreeDeleteBatchByPathServerFrameSchemaV12 =
+export const worktreeDeleteBatchByPathServerFrameSchemaV12 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("target.started"),
@@ -398,19 +402,19 @@ export const worktreeDeleteBatchByPathServerFrameSchemaV12 =
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ]);
+  ]),
+);
 export type WorktreeDeleteBatchByPathServerFrameV12 = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchemaV12
 >;
 
-export const worktreeDeleteBatchByPathClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteBatchByPathClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteBatchByPathClientFrame = z.infer<
   typeof worktreeDeleteBatchByPathClientFrameSchema

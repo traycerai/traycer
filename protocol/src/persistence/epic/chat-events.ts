@@ -6,6 +6,7 @@ import {
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/senders";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Durable chat event log - append-only record of state transitions a
@@ -14,7 +15,10 @@ import {
  * the runtime stream.
  */
 
-export const chatEventTypeSchema = z.enum([
+// The literal list is the enum's source (and `KNOWN_CHAT_EVENT_TYPES`'s), not
+// read back from it: reading `.options` at module scope builds the schema at
+// import.
+export const CHAT_EVENT_TYPES = [
   "send.accepted",
   "send.failed",
   "queue.added",
@@ -53,27 +57,33 @@ export const chatEventTypeSchema = z.enum([
   "setup.failed",
   "setup.cancelled",
   "worktree.missing",
-]);
+] as const;
+
+export const chatEventTypeSchema = lazySchema(() => z.enum(CHAT_EVENT_TYPES));
 export type ChatEventType = z.infer<typeof chatEventTypeSchema>;
 
-export const chatEventSeveritySchema = z.enum(["info", "warning", "error"]);
+export const chatEventSeveritySchema = lazySchema(() =>
+  z.enum(["info", "warning", "error"]),
+);
 export type ChatEventSeverity = z.infer<typeof chatEventSeveritySchema>;
 
-export const chatEventSchema = z.object({
-  eventId: z.string(),
-  type: chatEventTypeSchema,
-  timestamp: z.number(),
-  clientActionId: z.string().nullable(),
-  actor: userMessageSenderSchema.nullable(),
-  message: z.string().nullable(),
-  turnId: z.string().nullable(),
-  messageId: z.string().nullable(),
-  queueItemId: z.string().nullable(),
-  approvalId: z.string().nullable(),
-  blockId: z.string().nullable(),
-  severity: chatEventSeveritySchema,
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-});
+export const chatEventSchema = lazySchema(() =>
+  z.object({
+    eventId: z.string(),
+    type: chatEventTypeSchema,
+    timestamp: z.number(),
+    clientActionId: z.string().nullable(),
+    actor: userMessageSenderSchema.nullable(),
+    message: z.string().nullable(),
+    turnId: z.string().nullable(),
+    messageId: z.string().nullable(),
+    queueItemId: z.string().nullable(),
+    approvalId: z.string().nullable(),
+    blockId: z.string().nullable(),
+    severity: chatEventSeveritySchema,
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
 /**
@@ -92,65 +102,69 @@ export type ChatEvent = z.infer<typeof chatEventSchema>;
  * `chatSchemaV14` gives: a released line that follows a live schema by
  * reference silently inherits every later addition.
  */
-export const chatEventTypeSchemaPreImported = z.enum([
-  "send.accepted",
-  "send.failed",
-  "queue.added",
-  "queue.edited",
-  "queue.reordered",
-  "queue.cancelled",
-  "queue.steerRequested",
-  "queue.steerAborted",
-  "queue.paused",
-  "queue.resumed",
-  "queue.started",
-  "queue.steered",
-  "queue.fallback",
-  "turn.started",
-  "turn.completed",
-  "turn.stopped",
-  "turn.interrupted",
-  "approval.requested",
-  "approval.resolved",
-  "approval.denied",
-  "approval.abandoned",
-  "interview.requested",
-  "interview.resolved",
-  "interview.errored",
-  "checkpoint.captured",
-  "checkpoint.restoreStarted",
-  "checkpoint.restored",
-  "permission.blocked",
-  "harness.error",
-  "history.deleted",
-  "chat.forked",
-  "setup.creating",
-  "setup.running",
-  "setup.succeeded",
-  "setup.failed",
-  "setup.cancelled",
-  "worktree.missing",
-]);
+export const chatEventTypeSchemaPreImported = lazySchema(() =>
+  z.enum([
+    "send.accepted",
+    "send.failed",
+    "queue.added",
+    "queue.edited",
+    "queue.reordered",
+    "queue.cancelled",
+    "queue.steerRequested",
+    "queue.steerAborted",
+    "queue.paused",
+    "queue.resumed",
+    "queue.started",
+    "queue.steered",
+    "queue.fallback",
+    "turn.started",
+    "turn.completed",
+    "turn.stopped",
+    "turn.interrupted",
+    "approval.requested",
+    "approval.resolved",
+    "approval.denied",
+    "approval.abandoned",
+    "interview.requested",
+    "interview.resolved",
+    "interview.errored",
+    "checkpoint.captured",
+    "checkpoint.restoreStarted",
+    "checkpoint.restored",
+    "permission.blocked",
+    "harness.error",
+    "history.deleted",
+    "chat.forked",
+    "setup.creating",
+    "setup.running",
+    "setup.succeeded",
+    "setup.failed",
+    "setup.cancelled",
+    "worktree.missing",
+  ]),
+);
 
 // Wire-freeze copy with `actor` swapped for the pre-`inReplyTo` sender freeze,
 // bound to `chat.subscribe@1.0–1.3` serverFrames (`eventAppended` + snapshot
 // `chat.events`). Hand-frozen, not derived from the live shape. See
 // `agentSenderSchemaPreInReplyTo`.
-export const chatEventSchemaPreInReplyTo = z.object({
-  eventId: z.string(),
-  type: chatEventTypeSchemaPreImported,
-  timestamp: z.number(),
-  clientActionId: z.string().nullable(),
-  actor: userMessageSenderSchemaPreInReplyTo.nullable(),
-  message: z.string().nullable(),
-  turnId: z.string().nullable(),
-  messageId: z.string().nullable(),
-  queueItemId: z.string().nullable(),
-  approvalId: z.string().nullable(),
-  blockId: z.string().nullable(),
-  severity: chatEventSeveritySchema,
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-});
+export const chatEventSchemaPreInReplyTo = lazySchema(() =>
+  z.object({
+    eventId: z.string(),
+    type: chatEventTypeSchemaPreImported,
+    timestamp: z.number(),
+    clientActionId: z.string().nullable(),
+    actor: userMessageSenderSchemaPreInReplyTo.nullable(),
+    message: z.string().nullable(),
+    turnId: z.string().nullable(),
+    messageId: z.string().nullable(),
+    queueItemId: z.string().nullable(),
+    approvalId: z.string().nullable(),
+    blockId: z.string().nullable(),
+    severity: chatEventSeveritySchema,
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 
 // Wire-freeze copy bound to `chat.subscribe@1.4`/`@1.5` serverFrames
 // (`eventAppended` + snapshot `chat.events`), frozen on BOTH axes a released
@@ -159,21 +173,23 @@ export const chatEventSchemaPreInReplyTo = z.object({
 // pre-`chat.imported` enum - the released lines predate both additions, and
 // either one alone would let `eventAppended` carry a value a released client
 // rejects. Hand-frozen, not derived.
-export const chatEventSchemaPreReasonix = z.object({
-  eventId: z.string(),
-  type: chatEventTypeSchemaPreImported,
-  timestamp: z.number(),
-  clientActionId: z.string().nullable(),
-  actor: userMessageSenderSchemaPreReasonix.nullable(),
-  message: z.string().nullable(),
-  turnId: z.string().nullable(),
-  messageId: z.string().nullable(),
-  queueItemId: z.string().nullable(),
-  approvalId: z.string().nullable(),
-  blockId: z.string().nullable(),
-  severity: chatEventSeveritySchema,
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-});
+export const chatEventSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    eventId: z.string(),
+    type: chatEventTypeSchemaPreImported,
+    timestamp: z.number(),
+    clientActionId: z.string().nullable(),
+    actor: userMessageSenderSchemaPreReasonix.nullable(),
+    message: z.string().nullable(),
+    turnId: z.string().nullable(),
+    messageId: z.string().nullable(),
+    queueItemId: z.string().nullable(),
+    approvalId: z.string().nullable(),
+    blockId: z.string().nullable(),
+    severity: chatEventSeveritySchema,
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 
 /**
  * The pre-`chat.imported` event shape on the LIVE sender tree: only the type
@@ -182,21 +198,23 @@ export const chatEventSchemaPreReasonix = z.object({
  * wire freezes above, which pin the actor axis too because their released
  * peers' strict schemas do.
  */
-export const chatEventSchemaPreImported = z.object({
-  eventId: z.string(),
-  type: chatEventTypeSchemaPreImported,
-  timestamp: z.number(),
-  clientActionId: z.string().nullable(),
-  actor: userMessageSenderSchema.nullable(),
-  message: z.string().nullable(),
-  turnId: z.string().nullable(),
-  messageId: z.string().nullable(),
-  queueItemId: z.string().nullable(),
-  approvalId: z.string().nullable(),
-  blockId: z.string().nullable(),
-  severity: chatEventSeveritySchema,
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-});
+export const chatEventSchemaPreImported = lazySchema(() =>
+  z.object({
+    eventId: z.string(),
+    type: chatEventTypeSchemaPreImported,
+    timestamp: z.number(),
+    clientActionId: z.string().nullable(),
+    actor: userMessageSenderSchema.nullable(),
+    message: z.string().nullable(),
+    turnId: z.string().nullable(),
+    messageId: z.string().nullable(),
+    queueItemId: z.string().nullable(),
+    approvalId: z.string().nullable(),
+    blockId: z.string().nullable(),
+    severity: chatEventSeveritySchema,
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 
 /**
  * Typed reading of a `chat.imported` event's `metadata` bag.
@@ -219,12 +237,14 @@ export const chatEventSchemaPreImported = z.object({
  * that names no provenance. A folderless import does not produce one either -
  * the session's path survives the folder it named.
  */
-export const chatImportedMetadataSchema = z.object({
-  sourceProvider: guiHarnessIdSchema,
-  nativeSessionId: z.string().min(1),
-  importedAt: z.number(),
-  sourceCwd: z.string().min(1),
-});
+export const chatImportedMetadataSchema = lazySchema(() =>
+  z.object({
+    sourceProvider: guiHarnessIdSchema,
+    nativeSessionId: z.string().min(1),
+    importedAt: z.number(),
+    sourceCwd: z.string().min(1),
+  }),
+);
 export type ChatImportedMetadata = z.infer<typeof chatImportedMetadataSchema>;
 
 /**
@@ -296,16 +316,18 @@ export function importedProvenance(
  * only wants to key a transcript row should still prefer the event's own
  * fields - that is what they are for.
  */
-export const queuedPreparationFailureMetadataSchema = z.object({
-  code: z.string().min(1),
-  queueItemId: z.string().min(1),
-  messageId: z.string().min(1),
-  // The persistence layer's content-address vocabulary, shared with the draft
-  // tier's own schemas - the host's `draftBlobSha256Schema` is its twin over
-  // the same regex. A second hash shape is how the "which bytes are missing"
-  // set and the blob address space drift apart.
-  missingHashes: z.array(sha256HexSchema),
-});
+export const queuedPreparationFailureMetadataSchema = lazySchema(() =>
+  z.object({
+    code: z.string().min(1),
+    queueItemId: z.string().min(1),
+    messageId: z.string().min(1),
+    // The persistence layer's content-address vocabulary, shared with the draft
+    // tier's own schemas - the host's `draftBlobSha256Schema` is its twin over
+    // the same regex. A second hash shape is how the "which bytes are missing"
+    // set and the blob address space drift apart.
+    missingHashes: z.array(sha256HexSchema),
+  }),
+);
 export type QueuedPreparationFailureMetadata = z.infer<
   typeof queuedPreparationFailureMetadataSchema
 >;

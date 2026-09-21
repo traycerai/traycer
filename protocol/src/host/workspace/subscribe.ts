@@ -93,12 +93,15 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { workspaceDirectoryEntryKindSchema } from "@traycer/protocol/host/workspace/unary-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const workspaceSubscribeFileListOpenRequestV10Schema = z.object({
-  // Canonicalized by the host. The server immediately covers this root's first
-  // level and emits its `listing`; no client frame is needed to get started.
-  workspacePath: z.string(),
-});
+export const workspaceSubscribeFileListOpenRequestV10Schema = lazySchema(() =>
+  z.object({
+    // Canonicalized by the host. The server immediately covers this root's first
+    // level and emits its `listing`; no client frame is needed to get started.
+    workspacePath: z.string(),
+  }),
+);
 export type WorkspaceSubscribeFileListOpenRequestV10 = z.infer<
   typeof workspaceSubscribeFileListOpenRequestV10Schema
 >;
@@ -116,12 +119,14 @@ export type WorkspaceSubscribeFileListOpenRequest =
  * the workspace is a git work tree and git ignores the path. Outside a git work
  * tree, or when the ignore check fails, every entry reports `false`.
  */
-export const workspaceFileListEntrySchema = z.object({
-  path: z.string(),
-  name: z.string(),
-  kind: workspaceDirectoryEntryKindSchema,
-  ignored: z.boolean(),
-});
+export const workspaceFileListEntrySchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    name: z.string(),
+    kind: workspaceDirectoryEntryKindSchema,
+    ignored: z.boolean(),
+  }),
+);
 export type WorkspaceFileListEntry = z.infer<
   typeof workspaceFileListEntrySchema
 >;
@@ -131,18 +136,15 @@ export type WorkspaceFileListEntry = z.infer<
  * (deleted or renamed away). `limit` - the stream's coverage budget is spent,
  * so the `watch` was refused. `error` - it could not be read or watched.
  */
-export const workspaceFileListPruneReasonSchema = z.enum([
-  "missing",
-  "limit",
-  "error",
-]);
+export const workspaceFileListPruneReasonSchema = lazySchema(() =>
+  z.enum(["missing", "limit", "error"]),
+);
 export type WorkspaceFileListPruneReason = z.infer<
   typeof workspaceFileListPruneReasonSchema
 >;
 
-export const workspaceSubscribeFileListServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const workspaceSubscribeFileListServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("listing"),
       directoryPath: z.string(),
@@ -162,15 +164,14 @@ export const workspaceSubscribeFileListServerFrameSchema = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorkspaceSubscribeFileListServerFrame = z.infer<
   typeof workspaceSubscribeFileListServerFrameSchema
 >;
 
-export const workspaceSubscribeFileListClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const workspaceSubscribeFileListClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("watch"),
       directoryPaths: z.array(z.string()),
@@ -185,7 +186,7 @@ export const workspaceSubscribeFileListClientFrameSchema = z.discriminatedUnion(
       kind: z.literal("ping"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorkspaceSubscribeFileListClientFrame = z.infer<
   typeof workspaceSubscribeFileListClientFrameSchema

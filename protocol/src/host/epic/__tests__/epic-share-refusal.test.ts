@@ -66,6 +66,25 @@ describe("epic share refusal union <-> wire codes", () => {
     }
   });
 
+  it("maps the unverified reason to its own registered code (E10)", () => {
+    // The `unverified` reason used to ride `offline`'s code; it now has its
+    // own additive code so a client can pick copy from its own session state
+    // instead of the host's one sentence. Pinned explicitly, on top of the
+    // by-construction coverage above, because a future rename of either side
+    // would still round-trip correctly against ITSELF while breaking the
+    // documented wire name.
+    const code = epicShareRefusalErrorCode({
+      kind: "promotion-pending",
+      reason: "unverified",
+    });
+    expect(code).toBe("E_SHARE_PENDING_UNVERIFIED");
+    expect(isRpcErrorCode(code)).toBe(true);
+    expect(RPC_ERROR_CODES).toContain(code);
+    expect(epicShareRefusalFromErrorCode("E_SHARE_PENDING_UNVERIFIED")).toEqual(
+      { kind: "promotion-pending", reason: "unverified" },
+    );
+  });
+
   it("parses the union off the wire", () => {
     expect(
       epicShareRefusalSchema.parse({

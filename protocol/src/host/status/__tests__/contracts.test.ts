@@ -370,6 +370,11 @@ describe("host.status@1.5 install", () => {
 });
 
 describe("host.status registry membership", () => {
+  it("v1.4 and v1.5 reuse the previous line's request schema by identity", () => {
+    expect(hostStatusV14.requestSchema).toBe(hostStatusV13.requestSchema);
+    expect(hostStatusV15.requestSchema).toBe(hostStatusV14.requestSchema);
+  });
+
   it("installs @1.0 through @1.5 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();

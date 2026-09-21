@@ -4,6 +4,7 @@ import {
   agentModeSchema,
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -19,66 +20,72 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
 // ---- Parent reference ------------------------------------------------- //
 
-export const parentArtifactReferenceSchema = z.object({
-  parentId: z.string().nullable(),
-});
+export const parentArtifactReferenceSchema = lazySchema(() =>
+  z.object({
+    parentId: z.string().nullable(),
+  }),
+);
 export type ParentArtifactReference = z.infer<
   typeof parentArtifactReferenceSchema
 >;
 
 // ---- Token usage ----------------------------------------------------- //
 
-export const tokenUsageSchema = z.object({
-  inputTokens: z.number(),
-  outputTokens: z.number(),
-  totalTokens: z.number(),
-  cacheReadInputTokens: z.number().optional(),
-  cacheCreationInputTokens: z.number().optional(),
-  // Adapter-normalized "tokens currently occupying the context window".
-  // Single canonical numerator for the "% context left" chip - avoids
-  // double-counting cache reads on OpenAI-style SDKs where cached input
-  // is a subset of input. See `runtimeTokenUsageSchema.contextTokens`.
-  contextTokens: z.number().optional(),
-  // Model context window at this turn. Adapter-sourced from its SDK; never
-  // hardcoded.
-  contextWindow: z.number().optional(),
-  // Always-present tokens (fixed system prompt + tools) that the renderer
-  // folds into the displayed used total while keeping contextWindow as the
-  // reported model capacity. Harnesses without a separate baseline omit it.
-  // See `runtimeTokenUsageSchema`.
-  contextBaselineTokens: z.number().optional(),
-  // Cumulative billed cost for the turn in USD, where the SDK reports it
-  // (Claude/OpenCode). Omitted by harnesses without a price; the cost row in
-  // the usage tooltip hides without it. See `runtimeTokenUsageSchema.costUsd`.
-  costUsd: z.number().optional(),
-});
+export const tokenUsageSchema = lazySchema(() =>
+  z.object({
+    inputTokens: z.number(),
+    outputTokens: z.number(),
+    totalTokens: z.number(),
+    cacheReadInputTokens: z.number().optional(),
+    cacheCreationInputTokens: z.number().optional(),
+    // Adapter-normalized "tokens currently occupying the context window".
+    // Single canonical numerator for the "% context left" chip - avoids
+    // double-counting cache reads on OpenAI-style SDKs where cached input
+    // is a subset of input. See `runtimeTokenUsageSchema.contextTokens`.
+    contextTokens: z.number().optional(),
+    // Model context window at this turn. Adapter-sourced from its SDK; never
+    // hardcoded.
+    contextWindow: z.number().optional(),
+    // Always-present tokens (fixed system prompt + tools) that the renderer
+    // folds into the displayed used total while keeping contextWindow as the
+    // reported model capacity. Harnesses without a separate baseline omit it.
+    // See `runtimeTokenUsageSchema`.
+    contextBaselineTokens: z.number().optional(),
+    // Cumulative billed cost for the turn in USD, where the SDK reports it
+    // (Claude/OpenCode). Omitted by harnesses without a price; the cost row in
+    // the usage tooltip hides without it. See `runtimeTokenUsageSchema.costUsd`.
+    costUsd: z.number().optional(),
+  }),
+);
 export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 
 // ---- Harness identity ------------------------------------------------ //
 
-export const guiHarnessIdSchema = z.enum([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-  "reasonix",
-  "antigravity",
-]);
+export const guiHarnessIdSchema = lazySchema(() =>
+  z.enum([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+  ]),
+);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
 /**
@@ -92,27 +99,29 @@ export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
  * wire through `chatRunSettingsSchema` on released snapshot / `queueChanged`
  * frames. Do NOT add new harnesses here - extend `guiHarnessIdSchema` above.
  */
-export const guiHarnessIdSchemaPreReasonix = z.enum([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-]);
+export const guiHarnessIdSchemaPreReasonix = lazySchema(() =>
+  z.enum([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+  ]),
+);
 export type GuiHarnessIdPreReasonix = z.infer<
   typeof guiHarnessIdSchemaPreReasonix
 >;
@@ -131,40 +140,39 @@ export type GuiHarnessIdPreReasonix = z.infer<
  * Do NOT add new harnesses here - extend `guiHarnessIdSchema` above and gate
  * emission on the negotiated minor (streams have no downgrade bridge).
  */
-export const guiHarnessIdSchemaPreAntigravity = z.enum([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-  "reasonix",
-]);
+export const guiHarnessIdSchemaPreAntigravity = lazySchema(() =>
+  z.enum([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+  ]),
+);
 export type GuiHarnessIdPreAntigravity = z.infer<
   typeof guiHarnessIdSchemaPreAntigravity
 >;
 
 // Cursor remains a reserved compatibility value: it shipped in this persisted
 // enum before the unfinished runtime surface was withdrawn from the product.
-export const tuiHarnessIdSchema = z.enum([
-  "claude",
-  "codex",
-  "opencode",
-  "cursor",
-]);
+export const tuiHarnessIdSchema = lazySchema(() =>
+  z.enum(["claude", "codex", "opencode", "cursor"]),
+);
 export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
 // ---- Permission + run settings --------------------------------------- //
@@ -173,12 +181,18 @@ export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 // documents that order as load-bearing. `auto` sits above `auto_accept_edits`
 // because it does everything that mode does AND lets a judge approve the
 // commands that mode still parks on a human.
-export const permissionModeSchema = z.enum([
+//
+// The literal list is the enum's source, not read back from it: reading
+// `.options` at module scope would build the schema at import.
+const PERMISSION_MODE_VALUES = [
   "supervised",
   "auto_accept_edits",
   "auto",
   "full_access",
-]);
+] as const;
+export const permissionModeSchema = lazySchema(() =>
+  z.enum(PERMISSION_MODE_VALUES),
+);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
 /**
@@ -214,11 +228,14 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
  * emission on the negotiated version, exactly as `guiHarnessIdSchemaPreReasonix`
  * does for the harness roster.
  */
-export const permissionModeSchemaPreAuto = z.enum([
+const PERMISSION_MODE_VALUES_PRE_AUTO = [
   "supervised",
   "auto_accept_edits",
   "full_access",
-]);
+] as const;
+export const permissionModeSchemaPreAuto = lazySchema(() =>
+  z.enum(PERMISSION_MODE_VALUES_PRE_AUTO),
+);
 export type PermissionModePreAuto = z.infer<typeof permissionModeSchemaPreAuto>;
 
 // Canonical full set of permission modes, ordered most-restrictive to
@@ -228,7 +245,7 @@ export type PermissionModePreAuto = z.infer<typeof permissionModeSchemaPreAuto>;
 //   - the renderer's safest-fallback clamp (normalizePermissionMode)
 // Adding a mode here propagates to every consumer; never duplicate this list.
 export const ALL_PERMISSION_MODES: readonly PermissionMode[] =
-  permissionModeSchema.options;
+  PERMISSION_MODE_VALUES;
 
 // The same list as the released lines shipped it, for the `.default(...)` of
 // every FROZEN `supportedPermissionModes` slot. A frozen enum whose default
@@ -236,25 +253,27 @@ export const ALL_PERMISSION_MODES: readonly PermissionMode[] =
 // line whose enum cannot spell it - a value zod's `.default()` never
 // re-validates, so it would reach a released client's reducer intact.
 export const ALL_PERMISSION_MODES_PRE_AUTO: readonly PermissionModePreAuto[] =
-  permissionModeSchemaPreAuto.options;
+  PERMISSION_MODE_VALUES_PRE_AUTO;
 
-export const chatRunSettingsSchema = z.object({
-  harnessId: guiHarnessIdSchema,
-  // Concrete model slug; there is no "use the harness default" sentinel. The
-  // renderer resolves a real model (defaulting to the provider's first listed
-  // model) before a turn is sent.
-  model: z.string().min(1),
-  permissionMode: permissionModeSchema,
-  reasoningEffort: z.string().nullable(),
-  // Codex-style service / speed tier (e.g. `"fast"`). Defaults to null so
-  // chats persisted before this field was introduced still parse cleanly.
-  serviceTier: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  // Which of the harness's logged-in profiles (subscriptions) this chat runs
-  // on. `null` = the ambient/host login, so chats persisted before profiles
-  // existed still parse cleanly. See the multi-profile decision log.
-  profileId: z.string().nullable().default(null),
-});
+export const chatRunSettingsSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    // Concrete model slug; there is no "use the harness default" sentinel. The
+    // renderer resolves a real model (defaulting to the provider's first listed
+    // model) before a turn is sent.
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    // Codex-style service / speed tier (e.g. `"fast"`). Defaults to null so
+    // chats persisted before this field was introduced still parse cleanly.
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    // Which of the harness's logged-in profiles (subscriptions) this chat runs
+    // on. `null` = the ambient/host login, so chats persisted before profiles
+    // existed still parse cleanly. See the multi-profile decision log.
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
 
 /**
@@ -295,15 +314,17 @@ export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
  * only through this tuple, so pinning it here is what stops an `auto` chat's
  * settings from being served onto a line whose client rejects the value.
  */
-export const chatRunSettingsSchemaPreReasonix = z.object({
-  harnessId: guiHarnessIdSchemaPreReasonix,
-  model: z.string().min(1),
-  permissionMode: permissionModeSchemaPreAuto,
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  profileId: z.string().nullable().default(null),
-});
+export const chatRunSettingsSchemaPreReasonix = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreReasonix,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchemaPreAuto,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type ChatRunSettingsPreReasonix = z.infer<
   typeof chatRunSettingsSchemaPreReasonix
 >;
@@ -358,25 +379,29 @@ export type ChatRunSettingsPreReasonix = z.infer<
  * `chatRunSettingsSchemaPreReasonix`, which pins BOTH axes for the lines below
  * `1.7`, where no such sharing forces the compromise.
  */
-export const chatRunSettingsSchemaPreAuto = z.object({
-  harnessId: guiHarnessIdSchema,
-  model: z.string().min(1),
-  permissionMode: permissionModeSchemaPreAuto,
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  profileId: z.string().nullable().default(null),
-});
+export const chatRunSettingsSchemaPreAuto = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchemaPreAuto,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type ChatRunSettingsPreAuto = z.infer<
   typeof chatRunSettingsSchemaPreAuto
 >;
 
-export const chatRunSettingsStrictSchema = z.object({
-  harnessId: guiHarnessIdSchema,
-  model: z.string().min(1),
-  permissionMode: permissionModeSchema,
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.string().nullable(),
-  agentMode: agentModeSchema,
-  profileId: z.string().nullable(),
-});
+export const chatRunSettingsStrictSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+  }),
+);

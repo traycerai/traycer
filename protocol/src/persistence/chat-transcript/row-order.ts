@@ -4,6 +4,7 @@ import {
   type ChatEvent,
   type ChatImportedMetadata,
 } from "@traycer/protocol/persistence/epic/chat-events";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * # Canonical transcript row order
@@ -234,19 +235,21 @@ export function importedChatMarkerRowSource(
  * both are present. Gating on three fields would be three ways to silently
  * draw nothing where the host meant to say something.
  */
-const autoJudgeUnattendedDenialMetadataSchema = z.object({
-  autoJudge: z.object({
-    attendanceReason: z.literal("agent-created"),
-    // `.catch(null)` rather than a required string: a half-written bag must
-    // cost the SENTENCE, never the row, because the row's existence is what an
-    // ordinal is numbered from. `.catch` covers `undefined` too - an absent key
-    // is a failed parse of a non-optional schema - so no `.default` beside it.
-    // `.min(1)` is the same empty-string rule `renderableMetadataString`
-    // enforces above: `""` reads as absent, here as there.
-    rule: z.string().min(1).nullable().catch(null),
-    reason: z.string().min(1).nullable().catch(null),
+const autoJudgeUnattendedDenialMetadataSchema = lazySchema(() =>
+  z.object({
+    autoJudge: z.object({
+      attendanceReason: z.literal("agent-created"),
+      // `.catch(null)` rather than a required string: a half-written bag must
+      // cost the SENTENCE, never the row, because the row's existence is what an
+      // ordinal is numbered from. `.catch` covers `undefined` too - an absent key
+      // is a failed parse of a non-optional schema - so no `.default` beside it.
+      // `.min(1)` is the same empty-string rule `renderableMetadataString`
+      // enforces above: `""` reads as absent, here as there.
+      rule: z.string().min(1).nullable().catch(null),
+      reason: z.string().min(1).nullable().catch(null),
+    }),
   }),
-});
+);
 
 /** What an unattended auto-mode refusal row renders. */
 export interface AutoJudgeUnattendedDenialRowSource {
