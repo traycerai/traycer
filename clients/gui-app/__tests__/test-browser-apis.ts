@@ -253,6 +253,38 @@ class MockResizeObserver implements ResizeObserver {
   disconnect(): void {}
 }
 
+/** `(max-width: 767px)` / `(min-width: 768px)`, integers or decimals. */
+const PREFIXED_WIDTH_QUERY = /^\(\s*(max|min)-width:\s*(\d+(?:\.\d+)?)px\s*\)$/;
+/** Media Queries Level 4 range syntax: `(width < 768px)`, `(width >= 768px)`. */
+const RANGE_WIDTH_QUERY = /^\(\s*width\s*(<=|>=|<|>)\s*(\d+(?:\.\d+)?)px\s*\)$/;
+
+/**
+ * Evaluates a single width feature against `window.innerWidth`.
+ *
+ * Both spellings, because the app uses both: Tailwind compiles its responsive
+ * variants to range syntax, while plenty of hand-written `@media` blocks are
+ * still prefixed. Anything that is not a bare width query - `prefers-*`,
+ * `hover`, `orientation`, a compound query - is answered `false`, the same
+ * flat answer this shim has always given.
+ */
+function matchesWidthQuery(query: string): boolean {
+  const range = RANGE_WIDTH_QUERY.exec(query);
+  if (range !== null) {
+    const bound = Number(range[2]);
+    const width = window.innerWidth;
+    if (range[1] === "<") return width < bound;
+    if (range[1] === "<=") return width <= bound;
+    if (range[1] === ">") return width > bound;
+    return width >= bound;
+  }
+  const prefixed = PREFIXED_WIDTH_QUERY.exec(query);
+  if (prefixed === null) return false;
+  const bound = Number(prefixed[2]);
+  return prefixed[1] === "max"
+    ? window.innerWidth <= bound
+    : window.innerWidth >= bound;
+}
+
 function createMockStorage(): Storage {
   const storage = new Map<string, string>();
 
@@ -457,9 +489,30 @@ if (typeof window !== "undefined") {
     configurable: true,
     writable: true,
     value: (query: string) => ({
-      matches: false,
+      // A WIDTH query is answered from `window.innerWidth`; everything else
+      // keeps the old flat `false`.
+      //
+      // jsdom evaluates no media query at all, so this used to be false for
+      // every query - which was fine while `useIsMobileViewport` read
+      // `innerWidth` directly. It now reads `matches`, and roughly thirty
+      // suites drive the mobile layout by assigning `innerWidth`. Without
+      // this they would all silently answer "desktop" and keep passing, since
+      // a narrow-viewport assertion that never sees a narrow viewport mostly
+      // just tests the desktop path twice.
+      //
+      // A GETTER, not a value: the object is built once per `matchMedia`
+      // call, and tests assign `innerWidth` after that - often between
+      // renders. Snapshotting the answer here would freeze the width as of
+      // subscription time, which is the very defect this shim now exists to
+      // let us test for.
+      get matches(): boolean {
+        return matchesWidthQuery(query);
+      },
       media: query,
       onchange: null,
+      // Deliberately inert. Several suites depend on "assigning innerWidth
+      // notifies nobody" to assert a component re-reads on its own; a shim
+      // that dispatched would hide that.
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
       addListener: () => undefined,
