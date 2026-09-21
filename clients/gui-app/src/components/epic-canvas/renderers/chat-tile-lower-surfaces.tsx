@@ -49,6 +49,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -173,8 +174,10 @@ export interface ChatLowerTurnState {
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /** Own live stream's draft-blob bridge capability. */
   readonly getDraftBlobBridgeSupported: () => boolean;
-  /** Reads the live turn for steering drift and Stop confirmation checks. */
+  /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
+  /** Reads the live turn lifecycle, including ID-less activation boundaries. */
+  readonly getStopConfirmationTarget: () => ChatStopConfirmationTarget;
   readonly stopDisabled: boolean;
   readonly onStopTurn: () => string | null;
 }
@@ -329,7 +332,8 @@ export function ChatLowerInteractionSurfaces(
   const agentStop = useAgentStop(tabHostClient);
   const [stopConfirmation, setStopConfirmation] = useState<{
     readonly kind: "turn" | "children";
-    readonly turnId: string | null;
+    readonly target: ChatStopConfirmationTarget;
+    readonly readTarget: () => ChatStopConfirmationTarget;
   } | null>(null);
   // The SAME signal that puts Stop beside Send (`composer-send-button`), so
   // the confirmation exists exactly where the mis-tap does and desktop is
@@ -348,35 +352,36 @@ export function ChatLowerInteractionSurfaces(
   const turnGetDraftBlobBridgeSupported =
     props.turn.getDraftBlobBridgeSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
+  const turnGetStopConfirmationTarget = props.turn.getStopConfirmationTarget;
 
   // Read the store at confirmation time: a queued turn can start before React
   // renders again. Neither dialog may redirect the original Stop to that turn.
-  const isConfirmedTurnCurrent = (): boolean =>
-    stopConfirmation !== null &&
-    (turnGetActiveTurnForSteer()?.turnId ?? null) === stopConfirmation.turnId;
+  const isConfirmedTurnCurrent = (): boolean => {
+    if (
+      stopConfirmation === null ||
+      stopConfirmation.readTarget !== turnGetStopConfirmationTarget
+    ) {
+      return false;
+    }
+    const current = turnGetStopConfirmationTarget();
+    return (
+      current.turnId === stopConfirmation.target.turnId &&
+      current.revision === stopConfirmation.target.revision &&
+      current.connectionEpoch === stopConfirmation.target.connectionEpoch
+    );
+  };
 
   // Intercept the composer Stop button: when this chat has active
   // sub-agents, raise the cascade prompt instead of stopping only its turn.
   // The button ignores the return value, so `null` here is just "handled".
   const requestStopTurn = useCallback((): string | null => {
-    if (activeAgents.length > 0) {
+    if (activeAgents.length > 0 || phoneLayout) {
+      // The lifecycle revision distinguishes separate activations even when
+      // both have a null turn ID. Keep it through the child-agent handoff too.
       setStopConfirmation({
-        kind: "children",
-        turnId: turnGetActiveTurnForSteer()?.turnId ?? null,
-      });
-      return null;
-    }
-    // In the phone layout Stop sits beside Send at 32px, so a tap meant for
-    // Queue lands on it and kills the turn - the one control here whose
-    // mis-tap destroys work rather than just doing nothing. Confirm it.
-    // The cascade branch above needs nothing: that dialog IS the confirmation,
-    // and it already asks the harder question.
-    if (phoneLayout) {
-      // Stop is also enabled while the host activates a turn, before its ID
-      // arrives. Preserve that nullable target until confirmation.
-      setStopConfirmation({
-        kind: "turn",
-        turnId: turnGetActiveTurnForSteer()?.turnId ?? null,
+        kind: activeAgents.length > 0 ? "children" : "turn",
+        target: turnGetStopConfirmationTarget(),
+        readTarget: turnGetStopConfirmationTarget,
       });
       return null;
     }
@@ -384,7 +389,7 @@ export function ChatLowerInteractionSurfaces(
   }, [
     activeAgents.length,
     phoneLayout,
-    turnGetActiveTurnForSteer,
+    turnGetStopConfirmationTarget,
     turnOnStopTurn,
   ]);
 
@@ -397,6 +402,7 @@ export function ChatLowerInteractionSurfaces(
         turnAutoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
+      getStopConfirmationTarget: turnGetStopConfirmationTarget,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
     }),
@@ -407,6 +413,7 @@ export function ChatLowerInteractionSurfaces(
       turnAutoPermissionModeProtocolSupported,
       turnGetDraftBlobBridgeSupported,
       turnGetActiveTurnForSteer,
+      turnGetStopConfirmationTarget,
       turnStopDisabled,
       requestStopTurn,
     ],
