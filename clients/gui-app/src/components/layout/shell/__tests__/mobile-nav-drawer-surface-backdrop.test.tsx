@@ -1,9 +1,25 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { domMax, LazyMotion } from "motion/react";
 import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
 
-afterEach(cleanup);
+const nativeOffsetWidth = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "offsetWidth",
+);
+
+afterEach(() => {
+  cleanup();
+  if (nativeOffsetWidth === undefined) {
+    Reflect.deleteProperty(HTMLElement.prototype, "offsetWidth");
+    return;
+  }
+  Object.defineProperty(
+    HTMLElement.prototype,
+    "offsetWidth",
+    nativeOffsetWidth,
+  );
+});
 
 function Harness(props: { readonly open: boolean }) {
   return (
@@ -35,5 +51,33 @@ describe("MobileNavDrawerSurface scrim backdrop blur", () => {
     expect(
       scrim.classList.contains("supports-backdrop-filter:backdrop-blur-xs"),
     ).toBe(false);
+  });
+
+  it("keeps blur during opening and closing settles", async () => {
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      value: 300,
+      configurable: true,
+    });
+
+    const { rerender } = render(<Harness open={false} />);
+    const scrim = screen.getByTestId("mobile-nav-drawer-scrim");
+
+    expect(
+      scrim.classList.contains("supports-backdrop-filter:backdrop-blur-xs"),
+    ).toBe(false);
+
+    rerender(<Harness open />);
+    expect(
+      scrim.classList.contains("supports-backdrop-filter:backdrop-blur-xs"),
+    ).toBe(true);
+
+    await waitFor(() => {
+      expect(scrim.style.opacity).not.toBe("0");
+    });
+
+    rerender(<Harness open={false} />);
+    expect(
+      scrim.classList.contains("supports-backdrop-filter:backdrop-blur-xs"),
+    ).toBe(true);
   });
 });
