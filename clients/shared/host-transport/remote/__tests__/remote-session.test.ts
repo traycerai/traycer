@@ -405,6 +405,8 @@ class FakeRelayHost {
    * method (including the liveness probe) answers normally.
    */
   silentMethods = new Set<string>();
+  /** Delay auto-RESPONSE delivery for timer-bound remote unary tests. */
+  unaryResponseDelayMs: number | null = null;
   /**
    * Withhold the Noise responder message (msg1) after `attach_ack`, so the
    * session sits in `handshaking`.
@@ -805,18 +807,30 @@ class FakeRelayHost {
       ) {
         return;
       }
-      await this.sendMux(connection, {
-        type: MuxFrameType.RESPONSE,
-        streamId: message.streamId,
-        qos: QosClass.INTERACTIVE,
-        json: {
-          requestId: typeof json.requestId === "string" ? json.requestId : "",
-          method,
-          result: this.unaryError === null ? this.unaryResult : null,
-          error: this.unaryError,
-        },
-        binary: null,
-      });
+      const sendResponse = async (): Promise<void> => {
+        await this.sendMux(connection, {
+          type: MuxFrameType.RESPONSE,
+          streamId: message.streamId,
+          qos: QosClass.INTERACTIVE,
+          json: {
+            requestId: typeof json.requestId === "string" ? json.requestId : "",
+            method,
+            result: this.unaryError === null ? this.unaryResult : null,
+            error: this.unaryError,
+          },
+          binary: null,
+        });
+      };
+      const responseDelayMs = this.unaryResponseDelayMs;
+      if (responseDelayMs === null) {
+        await sendResponse();
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            sendResponse().then(resolve, reject);
+          }, responseDelayMs);
+        });
+      }
       // AFTER the send resolves, so this records DELIVERY and not the
       // intention to deliver. `sendMux` awaits WebCrypto encryption, and a
       // test that waits on this entry and then jumps virtual time through a
@@ -6746,6 +6760,118 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         },
       },
     });
+
+  const usageSummaryContract = defineRpcContract({
+    method: "host.usage.summary",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ completed: z.boolean() }),
+  });
+  const usageSummaryRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.usage.summary"] as const, {
+      "host.usage.summary": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: usageSummaryContract,
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "lets host.usage.summary answer at 45s with its extended 90s response budget",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      relay.sendOptionalRpc = true;
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+      };
+      relay.unaryResult = { completed: true };
+      relay.unaryResponseDelayMs = 45_000;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: usageSummaryRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const pending = session.sendUnary(
+          "host.usage.summary",
+          {},
+          null,
+          null,
+          null,
+          90_000,
+          false,
+          null,
+        );
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        await vi.advanceTimersByTimeAsync(45_000);
+        await expect(pending).resolves.toEqual({ completed: true });
+        expect(relay.unaryResponses).toHaveLength(1);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps an ordinary remote unary on the 30s default timeout",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryResult = { ready: true };
+      relay.unaryResponseDelayMs = 45_000;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const settled = pending.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        await vi.advanceTimersByTimeAsync(UNARY_RESPONSE_TIMEOUT_MS);
+        const error: unknown = await settled;
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        expect(relay.unaryResponses).toHaveLength(0);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 
   // The caller's response budget has to reach the remote unary TIMER, not just
   // the messenger. It used to be dropped on the reasoning that the mux session

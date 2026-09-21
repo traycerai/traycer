@@ -15,6 +15,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -2073,6 +2074,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // stuck pending forever with no other trigger (ticket-7 fixup-01).
   "host.usage.summary": {
     ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
 } satisfies HostMethodPolicyTable;

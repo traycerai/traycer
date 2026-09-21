@@ -71,6 +71,12 @@ export interface UseHostQueryWithResponseMapOptions<
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
   /**
+   * Opt into the method's declared response allowance without losing query
+   * cancellation. HostClient rejects values the scheduling policy disallows;
+   * omitted keeps the ordinary transport response deadline.
+   */
+  readonly responseTimeoutMs?: number;
+  /**
    * Extra cache identity that is not sent to the host. Use this when the RPC
    * request addresses a stable resource id but the cached representation must
    * vary by a newer content identity, such as a blob hash or revision.
@@ -260,7 +266,16 @@ export function useHostQueryWithResponseMap<
       const payload =
         buildRequest === undefined ? params : buildRequest(params);
       const requestContext = args.captureRequestContext?.();
-      const response = await client.requestWithSignal(method, payload, signal);
+      const responseTimeoutMs = args.responseTimeoutMs;
+      const response =
+        responseTimeoutMs === undefined
+          ? await client.requestWithSignal(method, payload, signal)
+          : await client.requestWithOptions(method, payload, {
+              responseTimeoutMs,
+              idempotencyKey: null,
+              requiredHostMethodVersion: null,
+              signal,
+            });
       return mapResponse({
         response,
         queryClient,
