@@ -472,6 +472,17 @@ describe("stop confirmation on a phone layout", () => {
     return withActiveTurn(surfacesProps(onStopTurn), getActiveTurnForSteer);
   }
 
+  // Stop is enabled as soon as the host starts activating a turn, before that
+  // turn's ID has arrived from the steer accessor - `activeTurnStatus` is
+  // "running" while `getActiveTurnForSteer()` still returns null.
+  function phonePropsBeforeTurnActivates(
+    onStopTurn: () => string | null,
+    getActiveTurnForSteer: () => ChatActiveTurn | null,
+  ): ChatLowerInteractionSurfacesProps {
+    const base = phoneProps(onStopTurn, getActiveTurnForSteer);
+    return { ...base, turn: { ...base.turn, activeTurnStatus: "running" } };
+  }
+
   function renderTile(
     onStopTurn: () => string | null,
     getActiveTurnForSteer: () => ChatActiveTurn | null,
@@ -516,15 +527,44 @@ describe("stop confirmation on a phone layout", () => {
     expect(onStopTurn).not.toHaveBeenCalled();
   });
 
-  it("does not open the confirmation when there is no live turn to stop", () => {
+  it("opens and stops once when Stop is enabled before the turn's ID has materialized", async () => {
     viewportMock.phone = true;
     const onStopTurn = vi.fn((): string | null => null);
-    renderTile(onStopTurn, () => null);
+    render(
+      tile(
+        phonePropsBeforeTurnActivates(onStopTurn, () => null),
+        new QueryClient({ defaultOptions: { mutations: { retry: false } } }),
+      ),
+    );
 
     fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
 
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(onStopTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop when the turn's ID materializes to something else before confirming", async () => {
+    viewportMock.phone = true;
+    const onStopTurn = vi.fn((): string | null => null);
+    const live: { value: ChatActiveTurn | null } = { value: null };
+    render(
+      tile(
+        phonePropsBeforeTurnActivates(onStopTurn, () => live.value),
+        new QueryClient({ defaultOptions: { mutations: { retry: false } } }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("composer-stop-trigger"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    live.value = activeTurn(PHONE_TURN_ID);
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
+
     expect(onStopTurn).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
   });
 
   it("does not stop the turn when a different turn became active while the confirmation was open", async () => {
@@ -666,10 +706,7 @@ describe("cascade stop confirmation stays scoped to the captured turn", () => {
       const queryClient = new QueryClient({
         defaultOptions: { mutations: { retry: false } },
       });
-      const props = withActiveTurn(
-        surfacesProps(onStopTurn),
-        () => live.value,
-      );
+      const props = withActiveTurn(surfacesProps(onStopTurn), () => live.value);
       const view = render(tile(props, queryClient));
 
       fireEvent.click(screen.getByTestId("composer-stop-trigger"));
@@ -715,9 +752,7 @@ describe("cascade stop confirmation stays scoped to the captured turn", () => {
     const view = render(tile(props, queryClient));
 
     fireEvent.click(screen.getByTestId("composer-stop-trigger"));
-    const phoneDialog = await screen.findByTestId(
-      "confirm-destructive-dialog",
-    );
+    const phoneDialog = await screen.findByTestId("confirm-destructive-dialog");
 
     agentStopControlsMock = {
       self: agentRow(CHAT_ID, "This chat"),

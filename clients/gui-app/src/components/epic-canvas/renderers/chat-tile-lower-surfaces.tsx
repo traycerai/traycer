@@ -372,10 +372,12 @@ export function ChatLowerInteractionSurfaces(
     // The cascade branch above needs nothing: that dialog IS the confirmation,
     // and it already asks the harder question.
     if (phoneLayout) {
-      const turnId = turnGetActiveTurnForSteer()?.turnId;
-      if (turnId !== undefined) {
-        setStopConfirmation({ kind: "turn", turnId });
-      }
+      // Stop is also enabled while the host activates a turn, before its ID
+      // arrives. Preserve that nullable target until confirmation.
+      setStopConfirmation({
+        kind: "turn",
+        turnId: turnGetActiveTurnForSteer()?.turnId ?? null,
+      });
       return null;
     }
     return turnOnStopTurn();
