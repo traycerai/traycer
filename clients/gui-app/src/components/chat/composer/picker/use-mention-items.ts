@@ -3,7 +3,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from "react";
 import { useStore } from "zustand";
@@ -102,17 +101,6 @@ const EMPTY_STEP_ENTRIES: MentionStepEntries = {
 };
 const EMPTY_RECENT_PICKS: ReadonlyMap<string, number> = new Map();
 
-/** Which session and step the hook last published a list for. */
-interface PublishedStepIdentity {
-  readonly sessionId: number;
-  readonly stepKey: string;
-}
-
-function mentionStepKey(step: MentionFlowStep): string {
-  if (step.kind === "root") return "root";
-  return `${step.providerId}:${step.stepId}:${step.workspacePath ?? ""}`;
-}
-
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
@@ -121,6 +109,7 @@ export interface UseMentionItemsParams {
 }
 
 interface MentionPickerSlice {
+  readonly hasPublishedItems: boolean;
   readonly active: boolean;
   readonly sessionId: number | null;
   readonly query: string;
@@ -128,6 +117,7 @@ interface MentionPickerSlice {
 }
 
 function selectMentionSlice(state: {
+  itemsForStepId: string | null;
   open: boolean;
   sessionId: number | null;
   kind: "mention" | "slash" | null;
@@ -136,6 +126,7 @@ function selectMentionSlice(state: {
 }): MentionPickerSlice {
   return {
     active: state.open && state.kind === "mention",
+    hasPublishedItems: state.itemsForStepId !== null,
     // Watched so a swap to a session with an identical query and step still
     // republishes the rows `openPicker` just dropped. See the slash picker's
     // slice for the swap this guards.
@@ -149,7 +140,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const { pickerStore, hostClient, mentionRoots, currentEpicId } = params;
 
   const slice = useStore(pickerStore, useShallow(selectMentionSlice));
-  const { active, sessionId, query, step } = slice;
+  const { active, sessionId, query, step, hasPublishedItems } = slice;
   const debouncedQuery = useDebouncedValue(query, MENTION_QUERY_DEBOUNCE_MS);
 
   // The @-mention Agent list is the ONLY consumer of the open-epic chat and
@@ -551,18 +542,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   );
 
   const stepEntries = liveStepEntries;
-  const holdPublishedItems = useHoldWhileWorkspaceRefetches({
-    active,
-    sessionId,
-    step,
-    // Loading (no rows at all yet) is not held: there is nothing to hold, and
-    // the menu's loading state is the honest thing to show.
-    workspaceRefetching:
-      step.kind === "root" &&
-      workspaceRequests.length > 0 &&
-      workspaceFetching &&
-      !workspaceLoading,
-  });
+  // Only an accepted setItems publication earns a hold. openPicker and
+  // setStep clear the store's stamp; a render attempt publishes nothing.
+  const holdPublishedItems =
+    hasPublishedItems &&
+    step.kind === "root" &&
+    workspaceRequests.length > 0 &&
+    workspaceFetching &&
+    !workspaceLoading;
   const entries = stepEntries.entries;
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
@@ -724,52 +711,6 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     }
     state.closeSession(sessionId);
   }, [dismissForNoMatches, pickerStore, sessionId]);
-}
-
-interface HoldWhileWorkspaceRefetchesInput {
-  readonly active: boolean;
-  readonly sessionId: number | null;
-  readonly step: MentionFlowStep;
-  readonly workspaceRefetching: boolean;
-}
-
-/**
- * True while the store should keep the list it already has instead of taking
- * a new publish: the workspace lane is refetching for the live query, and
- * this session and step have published a list before. `keepPreviousData`
- * leaves the previous query's rows in the workspace entries during that
- * window, and ranking THEM under the new query reorders the menu once before
- * the host's answer reorders it again. A first list for a session or step is
- * never held back: there is nothing on screen to keep.
- *
- * State rather than a ref because the previous render's fact is read DURING
- * render (a ref may not be), and the conditional set is React's own pattern
- * for deriving state from the previous render.
- */
-function useHoldWhileWorkspaceRefetches(
-  input: HoldWhileWorkspaceRefetchesInput,
-): boolean {
-  const { active, sessionId, step, workspaceRefetching } = input;
-  const stepKey = mentionStepKey(step);
-  const [published, setPublished] = useState<PublishedStepIdentity | null>(
-    null,
-  );
-  const hold =
-    workspaceRefetching &&
-    published !== null &&
-    published.sessionId === sessionId &&
-    published.stepKey === stepKey;
-  if (
-    !hold &&
-    active &&
-    sessionId !== null &&
-    (published === null ||
-      published.sessionId !== sessionId ||
-      published.stepKey !== stepKey)
-  ) {
-    setPublished({ sessionId, stepKey });
-  }
-  return hold;
 }
 
 interface SourcePendingInput {
