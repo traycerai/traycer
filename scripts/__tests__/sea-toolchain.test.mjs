@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -140,25 +141,47 @@ describe("this project is actually called by CI", () => {
     );
     expect(project.name).toBe("scripts");
 
-    // An ANCHORED accepted invocation, never a substring. `toContain("vitest
-    // run")` was the `echo '<command>'` workflow decoy reproduced one level
-    // down, in the very assertion added to be stronger than a string match:
-    // `echo vitest run --config scripts/vitest.config.ts` contains it, names a
-    // config that exists, keeps the project name and file-location checks
-    // satisfied - and runs nothing. Anchoring both ends is also what rejects a
-    // trailing `|| true` or `&& echo`, for the same reason the workflow `run`
-    // comparison is an equality rather than a search.
+    // A finite set of COMPLETE commands, compared for equality. Deliberately
+    // not a pattern, because three rounds of this check were defeated through
+    // the same hole: a substring, then an anchored regex with a capture, then
+    // that capture again.
+    //
+    // The capture is the defect. `(\S+)` is a pattern over a PATH being used to
+    // validate a SHELL COMMAND, and a shell does not tokenise the way a regex
+    // does:
+    //
+    //   vitest run --config scripts/vitest.config.ts||true;#/../vitest.config.ts
+    //
+    // is one unbroken non-whitespace run, so the regex accepted it, and
+    // `path.join` then normalised `…||true;#/..` away and landed back on the
+    // real config file - so an existence check passed too. The shell reads the
+    // same string as: run vitest, mask any failure with `||true`, and discard
+    // the rest as a comment. Guard green, suite never runs, exit 0.
+    //
+    // Anything that lets an arbitrary token reach `path.join` keeps producing
+    // witnesses, because `path.join` normalises away precisely the characters
+    // the shell treats as control. An allowlist has no capture to smuggle
+    // anything through, and changing the command means adding a string here -
+    // a one-line diff a reviewer reads.
+    const TEST_CONFIG = "scripts/vitest.config.ts";
+    const ACCEPTED_TEST_COMMANDS = [
+      `vitest run --config ${TEST_CONFIG}`,
+      `bunx vitest run --config ${TEST_CONFIG}`,
+      `npx vitest run --config ${TEST_CONFIG}`,
+    ];
     const command = project.targets.test.options.command;
-    const accepted =
-      /^(?:bunx\s+|npx\s+)?vitest\s+run\s+--config\s+(\S+)$/u.exec(command);
     expect(
-      accepted,
-      `the test target's command is not an accepted vitest invocation: ${command}`,
-    ).not.toBeNull();
+      ACCEPTED_TEST_COMMANDS,
+      `the test target's command is not one of the accepted invocations: ${command}`,
+    ).toContain(command);
 
-    // Resolve the config the command names and require it on disk, so a
-    // rename cannot leave this pointing at a file nobody has.
-    expect(existsSync(path.join(REPO_ROOT, accepted[1]))).toBe(true);
+    // The config is resolved from the CONSTANT above, never from the command
+    // string, so nothing a command could contain can steer this lookup. It must
+    // be a regular file: the `…/..` variant of the witness above resolves to a
+    // directory, which `existsSync` alone would accept.
+    const configPath = path.join(REPO_ROOT, TEST_CONFIG);
+    expect(existsSync(configPath)).toBe(true);
+    expect(statSync(configPath).isFile()).toBe(true);
 
     // And this very file must be inside the project the row selects - the
     // cheapest possible proof that the selected target has something to run.
