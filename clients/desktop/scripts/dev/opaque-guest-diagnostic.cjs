@@ -182,11 +182,31 @@ async function run() {
             height: 300,
           });
           assertCapture(theme + "/" + name + "/" + stage, raw, composed);
+          const rawPixel = pixel(raw, 180, 120);
           for (const [label, image] of [
             ["raw", raw],
             ["composed", composed],
           ]) {
             const actual = pixel(image, 180, 120);
+            if (expected === null) {
+              if (
+                actual.r !== rawPixel.r ||
+                actual.g !== rawPixel.g ||
+                actual.b !== rawPixel.b
+              )
+                throw new Error(
+                  theme +
+                    "/" +
+                    name +
+                    "/" +
+                    stage +
+                    ": " +
+                    label +
+                    " pixel differs from the opaque guest reference " +
+                    JSON.stringify(rawPixel),
+                );
+              continue;
+            }
             if (
               actual.r !== expected[0] ||
               actual.g !== expected[1] ||
@@ -208,12 +228,7 @@ async function run() {
           }
         };
         const expectedFor = (pageName) =>
-          pageName === "explicit-dark"
-            ? [23, 23, 42]
-            : pageName === "scheme-dark" ||
-                (pageName === "light-dark" && theme === "dark")
-              ? [18, 18, 18]
-              : [255, 255, 255];
+          pageName === "explicit-dark" ? [23, 23, 42] : null;
         const expected = expectedFor(name);
         await capture("initial", expected);
         await load(() => guest.reload());

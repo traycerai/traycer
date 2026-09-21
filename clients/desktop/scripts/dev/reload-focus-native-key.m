@@ -22,11 +22,16 @@ static napi_value PerformReloadKeyEquivalent(napi_env env,
   // Let macOS derive the keyboard-layout-dependent character fields. Building
   // NSEvent by hand can select ordinary Reload for the shifted shortcut.
   CGEventRef key = CGEventCreateKeyboardEvent(NULL, 15, true);
+  if (key == NULL) {
+    napi_value failed;
+    napi_get_boolean(env, false, &failed);
+    return failed;
+  }
   CGEventSetFlags(key, kCGEventFlagMaskCommand |
                           (ignoreCache ? kCGEventFlagMaskShift : 0));
   NSEvent *event = [NSEvent eventWithCGEvent:key];
   CFRelease(key);
-  BOOL handled = [[NSApp mainMenu] performKeyEquivalent:event];
+  BOOL handled = event ? [[NSApp mainMenu] performKeyEquivalent:event] : NO;
 
   napi_value result;
   napi_get_boolean(env, handled, &result);
