@@ -45,7 +45,7 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
       ) : (
         <SplitMemberChrome focused={props.isActive} color={color} />
       )}
-      <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
+      <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none group-data-[tab-layout=shrink]/strip:overflow-hidden">
         <TabLeadingIcon
           icon={props.tab.icon}
           identity={props.appearance}

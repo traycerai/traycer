@@ -9,9 +9,10 @@ import { cn } from "@/lib/utils";
  * non-components (which would cost it fast refresh).
  */
 export const TAB_CLASS_BASE =
-  "group/tab relative flex h-9 w-full min-w-0 items-center gap-1.5 px-6 text-ui-sm transition-[color,transform] duration-300 ease-spring";
+  "group/tab relative flex h-9 w-full min-w-0 items-center gap-1.5 px-[var(--header-tab-padding,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
 
-export const SPLIT_MEMBER_CLASS = "gap-1 px-5";
+export const SPLIT_MEMBER_CLASS =
+  "gap-1 px-[var(--header-tab-padding,1.25rem)]";
 export const SPLIT_TAB_CONTROL_CLASS =
   "relative z-20 mr-1 flex h-7 w-10 shrink-0 items-center justify-center rounded-md";
 
