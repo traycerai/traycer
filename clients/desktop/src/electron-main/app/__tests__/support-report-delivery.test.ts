@@ -1282,7 +1282,9 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
       return true;
     });
 
-    const result = await freezeAndSubmit(buildService(null));
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const result = await service.submitReport(DELIVERY_FORM, KEY);
 
     expect(result).toEqual({
       status: "failed",
@@ -1406,7 +1408,9 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
       },
     );
 
-    const result = await freezeAndSubmit(buildService(null));
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const result = await service.submitReport(DELIVERY_FORM, KEY);
 
     expect(result).toEqual({
       status: "failed",
@@ -1499,7 +1503,7 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     // offline transport's own 5s replay timer (`START_DELAY` on the
     // queue-on-error path in `@sentry/core`'s offline transport) could ever
     // fire, so there is no clock to race here.
-    const result = await service.submitReport(FORM, KEY);
+    const result = await service.submitReport(DELIVERY_FORM, KEY);
 
     expect(result).toEqual({ status: "queued", reportId: draft.reportId });
     expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
@@ -1526,7 +1530,7 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
       Date.now(),
     );
 
-    const result = await service.submitReport(FORM, KEY);
+    const result = await service.submitReport(DELIVERY_FORM, KEY);
 
     expect(result).toEqual({ status: "queued", reportId: draft.reportId });
     expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
