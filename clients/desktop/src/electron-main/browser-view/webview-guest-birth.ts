@@ -35,6 +35,7 @@ const HARDENED_GUEST_PREFERENCE_KEYS = new Set([
   "allowRunningInsecureContent",
   "webviewTag",
   "partition",
+  "transparent",
 ]);
 
 interface MintAttachmentGrantInput {
@@ -296,6 +297,9 @@ function hardenGuestPreferences(
   prefs.allowRunningInsecureContent = false;
   prefs.webviewTag = false;
   prefs.partition = partition;
+  // Electron's internal guest creation option: let Chromium paint the page's
+  // canvas (including color-scheme), rather than exposing Traycer underneath.
+  Object.assign(prefs, { transparent: false });
 }
 
 /**
