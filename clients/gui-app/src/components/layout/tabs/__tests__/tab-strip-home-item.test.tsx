@@ -8,8 +8,8 @@
  * names, and the Alt+1 chord would silently point at the wrong control.
  *
  * This file locks the control's own contract in isolation - role, selection,
- * activation, badge formatting, and the precise absence of the dnd/index
- * attributes `TabItem` sets on its own DOM node. Assertions use plain DOM
+ * activation, the plain accessible name, and the precise absence of the
+ * dnd/index attributes `TabItem` sets on its own DOM node. Assertions use plain DOM
  * reads (`getAttribute` / `hasAttribute`) rather than `jest-dom` matchers:
  * this suite has no global `jest-dom` setup, and no other test under
  * `tabs/__tests__/` imports it per-file either.
@@ -24,25 +24,17 @@ afterEach(() => {
   cleanup();
 });
 
-function renderHomeItem(
-  isActive: boolean,
-  onActivate: () => void,
-  badgeCount: number,
-): void {
+function renderHomeItem(isActive: boolean, onActivate: () => void): void {
   render(
     <TooltipProvider>
-      <TabStripHomeItem
-        isActive={isActive}
-        onActivate={onActivate}
-        badgeCount={badgeCount}
-      />
+      <TabStripHomeItem isActive={isActive} onActivate={onActivate} />
     </TooltipProvider>,
   );
 }
 
 describe("<TabStripHomeItem />", () => {
-  it("renders as a tab with the plain Home label at rest", () => {
-    renderHomeItem(false, vi.fn(), 0);
+  it("renders as a tab with the plain Home label", () => {
+    renderHomeItem(false, vi.fn());
 
     const tab = screen.getByTestId("tab-home");
     expect(tab.getAttribute("role")).toBe("tab");
@@ -52,7 +44,7 @@ describe("<TabStripHomeItem />", () => {
   it("follows the isActive prop through aria-selected", () => {
     const { unmount } = render(
       <TooltipProvider>
-        <TabStripHomeItem isActive onActivate={vi.fn()} badgeCount={0} />
+        <TabStripHomeItem isActive onActivate={vi.fn()} />
       </TooltipProvider>,
     );
     expect(screen.getByTestId("tab-home").getAttribute("aria-selected")).toBe(
@@ -62,11 +54,7 @@ describe("<TabStripHomeItem />", () => {
 
     render(
       <TooltipProvider>
-        <TabStripHomeItem
-          isActive={false}
-          onActivate={vi.fn()}
-          badgeCount={0}
-        />
+        <TabStripHomeItem isActive={false} onActivate={vi.fn()} />
       </TooltipProvider>,
     );
     expect(screen.getByTestId("tab-home").getAttribute("aria-selected")).toBe(
@@ -76,7 +64,7 @@ describe("<TabStripHomeItem />", () => {
 
   it("fires onActivate when clicked", () => {
     const onActivate = vi.fn();
-    renderHomeItem(false, onActivate, 0);
+    renderHomeItem(false, onActivate);
 
     fireEvent.click(screen.getByTestId("tab-home"));
 
@@ -84,7 +72,7 @@ describe("<TabStripHomeItem />", () => {
   });
 
   it("carries no data-tab-index - the digit slot TabItem sets and Home must not", () => {
-    renderHomeItem(true, vi.fn(), 0);
+    renderHomeItem(true, vi.fn());
 
     expect(screen.getByTestId("tab-home").hasAttribute("data-tab-index")).toBe(
       false,
@@ -92,7 +80,7 @@ describe("<TabStripHomeItem />", () => {
   });
 
   it("is not a dnd draggable/droppable node like an ordinary TabItem", () => {
-    renderHomeItem(false, vi.fn(), 0);
+    renderHomeItem(false, vi.fn());
 
     const tab = screen.getByTestId("tab-home");
     // `TabItem`'s own control node (`tab-strip-item.tsx`) sets
@@ -116,7 +104,7 @@ describe("<TabStripHomeItem />", () => {
   // the same box, derived from the same token, and differs only in the width
   // rule: a task tab fills its frame, an icon-only item sizes to its padding.
   it("shares the task tabs' height and horizontal padding, and only the width rule differs", () => {
-    renderHomeItem(false, vi.fn(), 0);
+    renderHomeItem(false, vi.fn());
 
     const home = screen.getByTestId("tab-home").className.split(/\s+/);
     const epicTab = headerTabClassName("own", false).split(/\s+/);
@@ -132,61 +120,22 @@ describe("<TabStripHomeItem />", () => {
   });
 
   it("keeps [-webkit-app-region:no-drag] so the window drag region skips the control", () => {
-    renderHomeItem(false, vi.fn(), 0);
+    renderHomeItem(false, vi.fn());
 
     expect(screen.getByTestId("tab-home").className).toContain(
       "[-webkit-app-region:no-drag]",
     );
   });
 
-  it("hides the badge at zero - a permanent '0' would be decoration, not signal", () => {
-    renderHomeItem(false, vi.fn(), 0);
+  // The header bell is the one attention counter; Home carries no count of
+  // its own, so its accessible name never grows a suffix and there is no
+  // badge node inside the tab's silhouette.
+  it("carries no badge and no count in its accessible name", () => {
+    renderHomeItem(false, vi.fn());
 
     expect(screen.queryByTestId("tab-home-badge")).toBeNull();
     expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
       "Home",
-    );
-  });
-
-  it("shows the exact count under the 99 threshold", () => {
-    renderHomeItem(false, vi.fn(), 3);
-
-    const badge = screen.getByTestId("tab-home-badge");
-    expect(badge.textContent).toBe("3");
-    expect(badge.hasAttribute("aria-hidden")).toBe(true);
-    expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
-      "Home, 3 waiting on you",
-    );
-  });
-
-  // The threshold itself, from both sides. `badgeLabel` clamps on `>`, so 99
-  // is the last exact count and 100 the first clamped one - an off-by-one
-  // there would either print a four-character badge or lose a real 99.
-  it("prints the threshold count exactly", () => {
-    renderHomeItem(false, vi.fn(), 99);
-
-    expect(screen.getByTestId("tab-home-badge").textContent).toBe("99");
-    expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
-      "Home, 99 waiting on you",
-    );
-  });
-
-  it("clamps the first count past the threshold", () => {
-    renderHomeItem(false, vi.fn(), 100);
-
-    expect(screen.getByTestId("tab-home-badge").textContent).toBe("99+");
-    expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
-      "Home, 99+ waiting on you",
-    );
-  });
-
-  it("clamps to 99+ once the count passes the threshold", () => {
-    renderHomeItem(false, vi.fn(), 150);
-
-    const badge = screen.getByTestId("tab-home-badge");
-    expect(badge.textContent).toBe("99+");
-    expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
-      "Home, 99+ waiting on you",
     );
   });
 });

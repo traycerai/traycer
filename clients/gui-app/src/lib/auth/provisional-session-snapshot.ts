@@ -24,13 +24,13 @@
  * hand-maintained field list:
  *
  * 1. The validator is the protocol's OWN schema for this type
- *    (`authenticatedUserResponseRecordV100.schema`) - the same one the
+ *    (`authenticatedUserResponseRecordV100.schema`) - the same one a frozen
  *    `/api/v3/user` response is parsed with. What reaches `applySignedIn` is
- *    the PARSED value, never the raw JSON.
- * 2. The stamp is the protocol's own `schemaVersion` for that record, so a
- *    protocol bump invalidates every snapshot written by an older build
- *    automatically. There is deliberately no constant here to remember to
- *    bump: the version that matters is the one the type already carries.
+ *    the PARSED, then UPGRADED value, never the raw JSON.
+ * 2. The stamp is the protocol's own `schemaVersion` for the MAJOR-1 record,
+ *    so a minor bump inside major 1 still invalidates every snapshot an older
+ *    build wrote. There is deliberately no constant here to remember to bump:
+ *    the version that matters is the one the record already carries.
  * 3. The snapshot names the user it describes, and the caller only accepts it
  *    when that id matches the credentials file's. That is also what retires a
  *    snapshot belonging to an account the CLI has since replaced on this
@@ -40,17 +40,46 @@
  * Every refusal falls through to today's awaited validation. The worst case is
  * a boot exactly as slow as it is now, never a session built from a payload
  * nobody checked.
+ *
+ * ## Why this file is pinned to record major 1
+ *
+ * `AuthenticatedUser` is at major 2 (`APPLE`), but the snapshot deliberately
+ * does NOT follow it. The RELEASED reader rejects any stamp other than 1.0
+ * before it parses anything, and both builds write the same storage key - so
+ * a major-2 snapshot would cost every user who downgrades the desktop app
+ * their offline bootstrap, not only the Apple ones. Instead the value is
+ * downgraded through the registry's bridge on the way in and upgraded back on
+ * the way out. Nothing offline needs to tell an Apple account from an email
+ * one, so the bridge's `APPLE` -> `EMAIL` stand-in costs this file nothing.
  */
 
 import { z } from "zod";
-import { authenticatedUserResponseRecordV100 } from "@traycer/protocol/auth/registry";
+import {
+  authenticatedUserResponseRecordV100,
+  authRecordRegistry,
+} from "@traycer/protocol/auth/registry";
+import {
+  downgradeRecordAcrossMajors,
+  getLatestRecordContract,
+  loadRecord,
+} from "@traycer/protocol/framework/index";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { ISecureStorage } from "@traycer-clients/shared/platform/runner-host";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 const SNAPSHOT_KEY = "traycer.auth.provisionalSession.v1";
 
+/** The version this file persists at, and the only stamp it accepts. */
 const RECORD = authenticatedUserResponseRecordV100;
+
+const RECORD_REGISTRY = authRecordRegistry["authenticated-user-response"];
+
+/**
+ * Read off the registry rather than restated, so the two majors this file
+ * bridges between move with the protocol instead of with a literal here.
+ */
+const LATEST_RECORD_MAJOR = getLatestRecordContract(RECORD_REGISTRY, undefined)
+  .schemaVersion.major;
 
 /**
  * The envelope, validated separately from its payload so the two refusals stay
@@ -147,8 +176,20 @@ export async function readProvisionalSessionSnapshot(
     return null;
   }
 
-  const user = RECORD.schema.safeParse(parsed.user);
-  if (!user.success) {
+  // Parsed against the stamped major-1 schema and then migrated forward
+  // through the registry's upgrade chain, so what leaves here is the same
+  // latest-major shape a live validation produces. `loadRecord` throws on a
+  // payload the historical schema refuses, which is the refusal this branch
+  // has always reported.
+  let user: AuthenticatedUser;
+  try {
+    user = loadRecord(
+      authRecordRegistry,
+      "authenticated-user-response",
+      parsed.user,
+      RECORD.schemaVersion,
+    );
+  } catch {
     appLogger.warn("[auth] provisional session snapshot failed validation", {});
     return null;
   }
@@ -158,20 +199,25 @@ export async function readProvisionalSessionSnapshot(
   // but the comparison written here is the one that matters: it is what makes
   // a snapshot whose envelope was hand-edited to match unable to hand back a
   // different user than the one it claims.
-  if (user.data.user.id !== expectedUserId) {
+  if (user.user.id !== expectedUserId) {
     appLogger.warn(
       "[auth] provisional session snapshot envelope disagrees",
       {},
     );
     return null;
   }
-  return user.data;
+  return user;
 }
 
 /**
  * Records `user` as the last validated identity. Called from every path that
  * establishes a session, so the snapshot is never older than the credentials
  * beside it.
+ *
+ * The value is DOWNGRADED to major 1 first - see the file header. The bridge
+ * re-parses through the frozen schema, so what lands in storage is exactly
+ * what a released build's reader would accept, rather than a latest-major
+ * value wearing a 1.0 stamp.
  *
  * Never throws: failing to cache an identity must not fail the sign-in that
  * produced it. The cost of a lost write is one slow boot.
@@ -180,10 +226,29 @@ export async function writeProvisionalSessionSnapshot(
   storage: ISecureStorage,
   user: AuthenticatedUser,
 ): Promise<void> {
+  const downgraded = downgradeRecordAcrossMajors(
+    RECORD_REGISTRY,
+    LATEST_RECORD_MAJOR,
+    RECORD.schemaVersion.major,
+    user,
+  );
+  if (!downgraded.ok) {
+    // Unreachable today - major 2's only addition maps onto `EMAIL` - but a
+    // later major may hold something major 1 genuinely cannot say. CLEARING
+    // rather than leaving the previous snapshot in place is deliberate: a
+    // skipped write would leave a snapshot for this same user id describing
+    // an OLDER session, and the one invariant this file has is that the
+    // snapshot is never older than the credentials beside it.
+    appLogger.warn("[auth] provisional session snapshot cannot be downgraded", {
+      code: downgraded.error.code,
+    });
+    await clearProvisionalSessionSnapshot(storage);
+    return;
+  }
   const payload: PersistedSnapshot = {
     schemaVersion: RECORD.schemaVersion,
-    userId: user.user.id,
-    user,
+    userId: downgraded.value.user.id,
+    user: downgraded.value,
   };
   try {
     await storage.set(SNAPSHOT_KEY, JSON.stringify(payload));

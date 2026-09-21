@@ -1,5 +1,7 @@
 import {
+  checkpointEventTurnKey,
   isNoOpCheckpointEntry,
+  latestCheckpointPerTurn,
   turnCheckpointManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
@@ -20,7 +22,9 @@ import {
  *
  * Mirrors the host's `scopedCheckpointEvents`: checkpoint manifests are
  * keyed to their triggering user message via `ChatEvent.messageId`, so
- * "below the message" is resolved by message index, not timestamp.
+ * "below the message" is resolved by message index, not timestamp. Only each
+ * turn's last checkpoint counts, as in the host's revert
+ * (`latestCheckpointPerTurn`).
  */
 export function hasUndoableFileEditsFromMessage(
   messages: ReadonlyArray<Message>,
@@ -37,20 +41,40 @@ export function hasUndoableFileEditsFromMessage(
       .filter((message): message is UserMessage => message.role === "user")
       .map((message) => message.messageId),
   );
-  return events.some((event) => {
-    if (event.type !== "checkpoint.captured") return false;
-    if (event.messageId === null || !includedMessageIds.has(event.messageId)) {
-      return false;
-    }
-    const parsed = turnCheckpointManifestSchema.safeParse(event.metadata);
-    if (!parsed.success) return false;
-    // A no-op entry (touched but net-unchanged) reverts to nothing, so it must
-    // not count as a reversible edit below the edit point - otherwise the
-    // "Submit from a previous message?" modal would appear with nothing to undo.
-    return parsed.data.entries.some(
-      (entry) => entry.undoable && !isNoOpCheckpointEntry(entry),
-    );
-  });
+  return scopedLatestCheckpointEvents(events, includedMessageIds).some(
+    (event) => {
+      const parsed = turnCheckpointManifestSchema.safeParse(event.metadata);
+      if (!parsed.success) return false;
+      // A no-op entry (touched but net-unchanged) reverts to nothing, so it
+      // must not count as a reversible edit below the edit point - otherwise
+      // the "Submit from a previous message?" modal would appear with nothing
+      // to undo.
+      return parsed.data.entries.some(
+        (entry) => entry.undoable && !isNoOpCheckpointEntry(entry),
+      );
+    },
+  );
+}
+
+/**
+ * The `checkpoint.captured` events a revert from the edit point reads: those
+ * of the included user messages, each turn's last one only. The host's revert
+ * walks the same set (`earliestEntriesByPath`), so what these scans count is
+ * what it reverts.
+ */
+function scopedLatestCheckpointEvents(
+  events: ReadonlyArray<ChatEvent>,
+  includedMessageIds: ReadonlySet<string>,
+): ChatEvent[] {
+  return latestCheckpointPerTurn(
+    events.filter(
+      (event) =>
+        event.type === "checkpoint.captured" &&
+        event.messageId !== null &&
+        includedMessageIds.has(event.messageId),
+    ),
+    checkpointEventTurnKey,
+  );
 }
 
 /**
@@ -60,7 +84,8 @@ export function hasUndoableFileEditsFromMessage(
  * stable `index.md`), matching how the revert collapses entries per path
  * (`restoreCumulative` → `earliestEntriesByPath`) - so the shown count equals
  * what is actually reverted, even if an artifact's id was unresolved in one turn
- * and resolved in a later one. Scoping mirrors `hasUndoableFileEditsFromMessage`.
+ * and resolved in a later one. Scoping mirrors `hasUndoableFileEditsFromMessage`,
+ * each turn's last checkpoint included.
  */
 export function scopedArtifactCountFromMessage(
   messages: ReadonlyArray<Message>,
@@ -78,13 +103,7 @@ export function scopedArtifactCountFromMessage(
       .map((message) => message.messageId),
   );
   const seen = new Set<string>();
-  events
-    .filter(
-      (event) =>
-        event.type === "checkpoint.captured" &&
-        event.messageId !== null &&
-        includedMessageIds.has(event.messageId),
-    )
+  scopedLatestCheckpointEvents(events, includedMessageIds)
     .flatMap((event) => {
       const parsed = turnCheckpointManifestSchema.safeParse(event.metadata);
       return parsed.success ? parsed.data.entries : [];

@@ -31,10 +31,22 @@ interface SettingsRowProps {
   readonly labelStatus?: ReactNode;
   hint?: ReactNode;
   readonly control: ReactNode;
+  /**
+   * Whether the control should SPAN the line it wrapped onto below `md`,
+   * instead of keeping the width it has beside the label. For a control whose
+   * content wants the room - a field, a picker with a name in it - and not for
+   * a button, which would only stretch. Inert from `md` up, where the control
+   * has not wrapped.
+   *
+   * The row declares it because the row owns the flex item: the control itself
+   * is one level down, where a percentage width has nothing definite to
+   * resolve against (see `SETTINGS_ROW_STACK.controlLine`).
+   */
+  readonly controlSpansLine?: boolean;
 }
 
 export function SettingsRow(props: SettingsRowProps) {
-  const { row, status, labelStatus, hint, control } = props;
+  const { row, status, labelStatus, hint, control, controlSpansLine } = props;
   const compact = useSettingsDensity() === "compact";
   const descriptionId = useId();
   const showsStatus = status !== undefined;
@@ -86,6 +98,7 @@ export function SettingsRow(props: SettingsRowProps) {
         className={cn(
           "ml-auto flex max-w-full shrink-0 justify-end [&>*]:max-w-full",
           SETTINGS_ROW_STACK.control,
+          controlSpansLine === true && SETTINGS_ROW_STACK.controlLine,
         )}
       >
         <SettingsRowDescriptionContext.Provider

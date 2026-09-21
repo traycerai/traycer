@@ -56,21 +56,6 @@ function health(overrides: Partial<FocusActivityHealth>): FocusActivityHealth {
 }
 
 describe("buildFocusModel", () => {
-  it("badgeCount equals prompts.length", () => {
-    const approvalRow = makeMergedNotificationRow({
-      feedId: "host:approval-1",
-      hostKind: "approval.requested",
-      severity: "needs_action",
-      payload: makeApprovalPayload("epic-1", "chat-1"),
-    });
-    const input = baseModelInput({ notificationRows: [approvalRow] });
-
-    const model = buildFocusModel(input, EMPTY_FOCUS_MODEL);
-
-    expect(model.badgeCount).toBe(model.prompts.length);
-    expect(model.badgeCount).toBe(1);
-  });
-
   it("gives needsYou: true to a task that only a prompt names, when it also has running agents", () => {
     const approvalRow = makeMergedNotificationRow({
       feedId: "host:approval-1",

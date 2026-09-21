@@ -269,7 +269,7 @@ function HeldManagedCommandRow(props: {
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
       >
         <TooltipWrapper
-          label={`${held.description} — output that arrived as you stopped this chat is held back. It reaches the agent when the chat next wakes (a message or a resume), or right now with Deliver.`}
+          label={`${held.description} — output that arrived as this chat was stopped is held back. It reaches the agent when the chat next wakes (a message or a resume), or right now with Deliver.`}
           side="top"
           sideOffset={undefined}
           align={undefined}
