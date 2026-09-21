@@ -65,7 +65,6 @@ function historyFilterActiveCount(search: HistorySearchState): number {
 }
 
 export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
-  const activeCount = historyFilterActiveCount(props.search);
   const ownershipCounts = new Map(
     props.facets?.ownershipScopes.map((facet) => [facet.value, facet.count]) ??
       [],
@@ -96,7 +95,9 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <EpicsFilterTrigger selectedCount={activeCount} />
+        <EpicsFilterTrigger
+          selectedCount={historyFilterActiveCount(props.search)}
+        />
       </PopoverTrigger>
       <PopoverContent
         align="end"

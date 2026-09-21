@@ -18,6 +18,7 @@ import {
   clientHandshakeIdentitySchema,
   type ClientHandshakeIdentity,
 } from "../framework/client-identity";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Shared client<->host mux wire contract carried E2E-encrypted inside the
@@ -401,96 +402,114 @@ export interface CloudVerdictUpdatePayload {
 // Zod schemas
 // -----------------------------------------------------------------------------
 
-const sessionManifestsSchema: z.ZodType<SessionManifests> = z.object({
-  rpc: connectionManifestSchema,
-  optionalRpc: connectionManifestSchema,
-  stream: connectionManifestSchema,
-});
-
-const reservedAuthzSlotSchema: z.ZodType<ReservedAuthzSlot> = z
-  .object({ v: z.number(), grant: z.string() })
-  .nullable();
-
-export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> = z.object(
-  {
-    muxVersion: z.number().int(),
-    bearer: z.string(),
-    manifest: sessionManifestsSchema,
-    authz: reservedAuthzSlotSchema,
-    resume: z.null(),
-    capabilities: z.array(z.string()).optional(),
-    clientIdentity: clientHandshakeIdentitySchema.optional(),
-    // `.optional()` and NOT `.default(true)`: absence ("this peer does not speak
-    // verdicts, and never will on this session") and an asserted `true` ("it
-    // does, and right now it is authorized") license different host behaviour -
-    // only the second may later be withdrawn by a control frame - so the parse
-    // boundary keeps them apart instead of collapsing them.
-    cloudAuthorized: z.boolean().optional(),
-  },
+const sessionManifestsSchema: z.ZodType<SessionManifests> = lazySchema(() =>
+  z.object({
+    rpc: connectionManifestSchema,
+    optionalRpc: connectionManifestSchema,
+    stream: connectionManifestSchema,
+  }),
 );
+
+const reservedAuthzSlotSchema: z.ZodType<ReservedAuthzSlot> = lazySchema(() =>
+  z.object({ v: z.number(), grant: z.string() }).nullable(),
+);
+
+export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> =
+  lazySchema(() =>
+    z.object({
+      muxVersion: z.number().int(),
+      bearer: z.string(),
+      manifest: sessionManifestsSchema,
+      authz: reservedAuthzSlotSchema,
+      resume: z.null(),
+      capabilities: z.array(z.string()).optional(),
+      clientIdentity: clientHandshakeIdentitySchema.optional(),
+      // `.optional()` and NOT `.default(true)`: absence ("this peer does not speak
+      // verdicts, and never will on this session") and an asserted `true` ("it
+      // does, and right now it is authorized") license different host behaviour -
+      // only the second may later be withdrawn by a control frame - so the parse
+      // boundary keeps them apart instead of collapsing them.
+      cloudAuthorized: z.boolean().optional(),
+    }),
+  );
 
 export const sessionOpenAckPayloadSchema: z.ZodType<SessionOpenAckPayload> =
-  z.object({
-    manifest: sessionManifestsSchema,
-    capabilities: z.array(z.string()),
-  });
+  lazySchema(() =>
+    z.object({
+      manifest: sessionManifestsSchema,
+      capabilities: z.array(z.string()),
+    }),
+  );
 
 export const unaryRequestPayloadSchema: z.ZodType<UnaryRequestPayload> =
-  z.object({
-    requestId: z.string(),
-    method: z.string(),
-    schemaVersion: schemaVersionSchema,
-    params: z.unknown(),
-    callerAgentId: z.string().nullable().default(null),
-    idempotencyKey: z.string().min(1).nullable(),
-  });
+  lazySchema(() =>
+    z.object({
+      requestId: z.string(),
+      method: z.string(),
+      schemaVersion: schemaVersionSchema,
+      params: z.unknown(),
+      callerAgentId: z.string().nullable().default(null),
+      idempotencyKey: z.string().min(1).nullable(),
+    }),
+  );
 
 export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
-  z.object({
-    requestId: z.string(),
-    method: z.string(),
-    result: z.unknown(),
-    error: z
-      .object({
-        code: z.string(),
-        message: z.string(),
-        holders: worktreeBusyHoldersWireFieldSchema,
-        holdersRevision: holdersRevisionWireFieldSchema,
-      })
-      .nullable(),
-  });
+  lazySchema(() =>
+    z.object({
+      requestId: z.string(),
+      method: z.string(),
+      result: z.unknown(),
+      error: z
+        .object({
+          code: z.string(),
+          message: z.string(),
+          holders: worktreeBusyHoldersWireFieldSchema,
+          holdersRevision: holdersRevisionWireFieldSchema,
+        })
+        .nullable(),
+    }),
+  );
 
 export const streamSubscribePayloadSchema: z.ZodType<StreamSubscribePayload> =
-  z.object({
-    method: z.string(),
-    schemaVersion: schemaVersionSchema,
-    params: z.unknown(),
-  });
+  lazySchema(() =>
+    z.object({
+      method: z.string(),
+      schemaVersion: schemaVersionSchema,
+      params: z.unknown(),
+    }),
+  );
 
-export const streamClosePayloadSchema: z.ZodType<StreamClosePayload> = z.object(
-  {
-    reason: z.string(),
-  },
+export const streamClosePayloadSchema: z.ZodType<StreamClosePayload> =
+  lazySchema(() =>
+    z.object({
+      reason: z.string(),
+    }),
+  );
+
+export const fatalPayloadSchema: z.ZodType<FatalPayload> = lazySchema(() =>
+  z.object({
+    details: fatalErrorDetailsSchema,
+  }),
 );
 
-export const fatalPayloadSchema: z.ZodType<FatalPayload> = z.object({
-  details: fatalErrorDetailsSchema,
-});
-
-export const creditPayloadSchema: z.ZodType<CreditPayload> = z.object({
-  credits: z.number().int().nonnegative(),
-});
+export const creditPayloadSchema: z.ZodType<CreditPayload> = lazySchema(() =>
+  z.object({
+    credits: z.number().int().nonnegative(),
+  }),
+);
 
 export const reauthNoticePayloadSchema: z.ZodType<ReauthNoticePayload> =
-  z.object({
-    standingUntil: z.number().int().nonnegative(),
-  });
+  lazySchema(() =>
+    z.object({
+      standingUntil: z.number().int().nonnegative(),
+    }),
+  );
 
 export const credentialUpdatePayloadSchema: z.ZodType<CredentialUpdatePayload> =
-  z.object({ bearer: z.string() });
+  lazySchema(() => z.object({ bearer: z.string() }));
 
 export const cloudVerdictUpdatePayloadSchema: z.ZodType<CloudVerdictUpdatePayload> =
-  z.object({ cloudAuthorized: z.boolean() });
+  lazySchema(() => z.object({ cloudAuthorized: z.boolean() }));
 
 /** Capability tag advertised in `openAck.capabilities` for bearer rotation. */
 export const SESSION_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";

@@ -9,6 +9,10 @@ import {
   scrubSentrySpanInPlace,
   scrubSentryTransactionInPlace,
 } from "@traycer-clients/shared/platform/sentry-scrub";
+import {
+  sentryOfflineQueuePath,
+  sentryReportRateLimitWindow,
+} from "./sentry-delivery-observer";
 
 export { isSentryEnabled } from "./crash-reporter-state";
 
@@ -51,6 +55,31 @@ export function initCrashReporter(): void {
     release: app.getVersion(),
     tracesSampleRate: sampleRate,
     profilesSampleRate: sampleRate,
+    // ERROR sample rate, distinct from the trace/profile rates above, which
+    // never applied to events. It was absent - i.e. 100% - and one machine
+    // in an error storm can spend the whole org's DSN quota, which is how a
+    // user's bug report earns a 429 it had nothing to do with (the RCA's
+    // four `sentry rejected the report { statusCode: 429 }` lines). Kept at
+    // 1.0 outside production, where volume is a handful of events and every
+    // one of them is being looked at deliberately.
+    //
+    // It cannot drop a bug report, which is the thing to check before
+    // believing this is safe: core gates sampling on `isErrorEvent`, i.e.
+    // `event.type === undefined`, and `captureFeedback` builds its event
+    // with `type: "feedback"`. So this thins exactly the volume that was
+    // eating the quota and leaves the user-submitted reports at 100%.
+    sampleRate: isProd ? 0.25 : 1.0,
+    // The default offline transport already queues to exactly this path
+    // (`createOfflineStore` defaults `queuePath` to
+    // `join(getSentryCachePath(), 'queue')`, and `getSentryCachePath()` is
+    // `<userData>/sentry`). Stated so that `support.ts` can read that queue
+    // and tell "stored, will send later" from "we have no idea" - and
+    // stated as THE SAME path, because pointing the store somewhere else
+    // would strand every envelope an earlier build queued under the
+    // default, with nothing left to replay them.
+    transportOptions: {
+      queuePath: sentryOfflineQueuePath(app.getPath("userData")),
+    },
     attachStacktrace: true,
     // Stated, not inherited: the SDK default is already false, but "no PII
     // off this machine" is the policy every Traycer Sentry init writes down.
@@ -82,8 +111,29 @@ export function initCrashReporter(): void {
       return span;
     },
   });
+  installSentryRateLimitObserver();
   markSentryEnabled();
   log.info("[crash-reporter] sentry initialized", { environment });
+}
+
+/**
+ * Feeds every transport response into the process-wide rate-limit window.
+ *
+ * Client-wide on purpose. A per-event hook cannot see a 429 earned by a
+ * different event, and that is the case that matters: the rate limit a bug
+ * report runs into is almost always one the app's own error volume earned.
+ * Installed once, right after `init`, and never removed - it holds a few
+ * numbers and outlives every individual report.
+ */
+function installSentryRateLimitObserver(): void {
+  const client = SentryElectron.getClient();
+  if (client === undefined) {
+    log.warn("[crash-reporter] no sentry client to observe rate limits on");
+    return;
+  }
+  client.on("afterSendEvent", (_event, sendResponse) => {
+    sentryReportRateLimitWindow.observe(sendResponse, Date.now());
+  });
 }
 
 /**

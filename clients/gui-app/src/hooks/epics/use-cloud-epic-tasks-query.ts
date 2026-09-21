@@ -364,6 +364,7 @@ export function useCloudEpicTasksQuery(
         {
           request: variables.request,
           cursor: variables.cursor,
+          abortSignal: undefined,
         },
       ),
     onSuccess: (page, variables) => {

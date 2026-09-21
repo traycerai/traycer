@@ -1676,6 +1676,15 @@ const restyleExemptions = [
         pattern: "^SelectTrigger$",
         allow: ["color", "shape", "spacing", "effects"],
       },
+      // The phone filter sheet's hook for the act's own stylesheet
+      // (onboarding-import.css), which resizes the scan-window pill, the
+      // provider pills and the view toggle to the 44pt a thumb needs. Those
+      // are three DESCENDANTS of the sheet, styled from one place because they
+      // are one decision - no prop on `SheetContent` reaches them, and the
+      // same shape is why `PopoverContent` carries
+      // `onboarding-discovery-popover` below. The sheet's own box (side,
+      // height, scroll) stays in `layout`-shaped utilities beside it.
+      { pattern: "^SheetContent$", allow: ["onboarding-import-filter-sheet"] },
     ],
   },
   {
@@ -2585,6 +2594,31 @@ export default tseslint.config(
     },
   },
   {
+    // The seeded-resend effect decides a WIRE SHAPE from live blob custody,
+    // which is an external system in the same sense as the two above: the
+    // confirmation memo in `lib/drafts/draft-blob-transport.ts` is a module
+    // Map mutated by `drafts.putBlob` acks arriving off the socket, with no
+    // subscription and no React identity. The rule's cure - compute it during
+    // render instead - is the one thing that must not happen here. Render
+    // would have to read that Map, which is neither pure nor reactive: React
+    // has no way to know an ack changed it, so the value would look stable
+    // exactly when it is not, and the hook's own contract ("recomputed, never
+    // captured: a `putBlob` confirmed while this resolution runs should let
+    // its node travel bare; a confirmation invalidated in that window must
+    // not") would be unenforceable.
+    //
+    // Only the every-hash-is-host-held early return is synchronous; the
+    // inlining path already writes from an async `commit`. Routing that early
+    // return through the async path to satisfy the rule is the deferral the
+    // block above records as having BEEN the defect, and here it would also
+    // delay the common case for nothing: the hashes are already in the host's
+    // custody, so there is no byte to fetch and nothing to wait for.
+    files: ["src/hooks/chats/use-initial-chat-handoff-driver.ts"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
     // Router -> store synchronization direction for an already-committed epic
     // route. This is the inverse of navigateToTabIntent's entry-point seam,
     // so it may read the store action directly while the rest of the app may
@@ -2815,8 +2849,10 @@ export default tseslint.config(
             "diorama-*", // src/components/onboarding/onboarding-diorama.css
             "session-import-*", // src/components/onboarding/onboarding-import.css
             // src/components/settings/panels/getting-started-settings.css -
-            // a <progress>, whose fill and track are pseudo-elements.
+            // a <progress>, whose fill and track are pseudo-elements, and a
+            // card whose `scroll-margin-top` lives behind a media query.
             "settings-setup-meter",
+            "settings-setup-card",
 
             // Class names owned by a library, not by us.
             "not-prose", // @tailwindcss/typography, loaded via @plugin

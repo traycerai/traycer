@@ -15,11 +15,11 @@
  * authoritative source in that mode, and they arrive BEFORE the animation
  * starts, which the measured inset never could.
  *
- * Deliberately height-free: the plugin's keyboard height belongs to the
- * animated-inset work (which needs it alongside the animation's duration and
- * curve), and publishing it here before anything consumes it invites reading
- * a value that is wrong for half the transition - at will-hide the keyboard
- * still fills its full height while "0" would already be published.
+ * Deliberately height-free: the plugin's keyboard height is published as the
+ * `--keyboard-inset` CSS variable instead, which the shell's safe-height tokens
+ * animate with the keyboard, and which `readNativeKeyboardInsetPx` reads for
+ * code that needs it as a number. The two are written together, the inset
+ * first, so a listener here always reads the height that matches the state.
  */
 export interface NativeKeyboardState {
   /** Keyboard is up (or animating up). Flips on will-show/will-hide. */
@@ -77,4 +77,32 @@ export function runWhenNativeKeyboardSettled(fn: () => void): () => void {
     cancelled = true;
     unsubscribe();
   };
+}
+
+/**
+ * Height, in CSS px, of the viewport strip the software keyboard covers, or 0
+ * when nothing is covered.
+ *
+ * Read from `--keyboard-inset`, the one value the app's own layout subtracts
+ * for the keyboard, so anything placed against the viewport lines up with it.
+ * The native bridge writes it inline on the root element, and only in the
+ * shell that overlays the keyboard (the installed iOS app), where it is the
+ * plugin's reported height while open and 0 while closed. Android's OS resizes
+ * the web view instead, so nothing is covered and the variable is never
+ * written; nor is it in a browser or on desktop. An unset or unparsable value
+ * reads 0.
+ *
+ * The inline style is read rather than the computed one because the bridge is
+ * its only writer, and it keeps this a plain attribute read with no style
+ * resolution. The value changes exactly when the state above does, so
+ * `subscribeNativeKeyboardState` is the change signal for it. It moves at the
+ * will- events, so for the length of a hide animation it reads 0 while the
+ * keyboard is still sliding away - the same as the layout does.
+ */
+export function readNativeKeyboardInsetPx(): number {
+  if (typeof document === "undefined") return 0;
+  const parsed = Number.parseFloat(
+    document.documentElement.style.getPropertyValue("--keyboard-inset"),
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }

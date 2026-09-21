@@ -85,6 +85,9 @@ export function resolveAbsolutePath(
   relativePath: string,
 ): string {
   const { prefix, rest } = pathAuthority(basePath);
+  if (prefix === "/") {
+    return normalizePosixPreservingBackslashes(`${basePath}/${relativePath}`);
+  }
   const joined = rest.length > 0 ? `${rest}/${relativePath}` : relativePath;
   const segments = joined
     .split(/[/\\]+/u)

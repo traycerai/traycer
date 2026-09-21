@@ -15,6 +15,11 @@ import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { Button } from "@/components/ui/button";
+import {
+  isProviderSettingsUnreadableError,
+  PROVIDER_SETTINGS_UNREADABLE_COPY,
+} from "@/lib/providers/provider-settings-unreadable-error";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -613,6 +618,29 @@ function ProvidersPanelBody({
         </div>
       );
     }
+    // The host read its provider-settings file and failed - which it now
+    // says rather than answering with a synthesized all-disabled list. The
+    // generic card below would blame the host's VERSION for a transient
+    // `EIO`, and worse, it offers no retry: `useHostQuery` pins
+    // `retry: false` on this query's condition-poll branch, so nothing
+    // refetches on its own and the panel would sit on a wrong explanation
+    // until the user navigated away. The host already retried the read once
+    // itself, so this is a second attempt seconds later, not a first.
+    if (isProviderSettingsUnreadableError(query.error)) {
+      return (
+        <div className="flex flex-wrap items-center gap-2 px-6 py-8 text-ui-sm text-destructive">
+          {PROVIDER_SETTINGS_UNREADABLE_COPY}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+            disabled={query.isFetching}
+          >
+            Retry
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="px-6 py-8 text-ui-sm text-destructive">
         Couldn't load provider state. The host may need to be updated.
@@ -817,6 +845,7 @@ function ProvidersRailLayout({
               ariaLabel="Providers"
               variant="settings"
               className="gap-1"
+              phone={false}
               rows={visibleProviders.map((state) => ({
                 providerId: state.providerId,
                 active: state.providerId === active.providerId,
@@ -826,6 +855,7 @@ function ProvidersRailLayout({
                 description: null,
                 trailing: null,
                 disabledReason: null,
+                phoneDescription: null,
                 onSelect: onSelectProvider,
               }))}
             />

@@ -56,6 +56,9 @@ import {
  * hosting surface's own handler and only where it has one. That gate is what
  * keeps a canvas viewer out of both: it opens no tabs and retires no row, so
  * it hands the controller nothing and those chords stay the page's.
+ * Address focus also runs in the renderer's keybinding provider through the
+ * visible tile registry, so chrome and start pages work before a guest exists
+ * or a stream is armed. That route reads the same browser-scoped table.
  *
  * The APP-FORWARDED rows have a streamed equivalent too, and it is the
  * simplest one there could be. Forwarding means main replays the key into the
@@ -239,11 +242,16 @@ export function reservedBrowserChordsFor(
  * argument even though the reserved set now depends on them.
  */
 export function browserScopedChordLabel(chord: ChordString): string | null {
-  const row = BROWSER_SCOPED_CHORDS.find(
-    (reserved) => reserved.token === chord,
+  const command = browserScopedCommandForChord(chord);
+  return command === null ? null : BROWSER_SCOPED_CHORD_LABELS[command];
+}
+
+export function browserScopedCommandForChord(
+  chord: ChordString,
+): BrowserViewReservedChord["command"] {
+  return (
+    BROWSER_SCOPED_CHORDS.find((row) => row.token === chord)?.command ?? null
   );
-  if (row === undefined || row.command === null) return null;
-  return BROWSER_SCOPED_CHORD_LABELS[row.command];
 }
 
 const BROWSER_SCOPED_CHORD_LABELS = {

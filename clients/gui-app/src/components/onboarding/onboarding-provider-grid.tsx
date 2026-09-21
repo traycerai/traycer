@@ -3,6 +3,7 @@ import {
   ProviderList,
   type ProviderListRow,
 } from "@/components/providers/provider-list";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 
 interface VerticalEdges {
   readonly top: boolean;
@@ -55,24 +56,38 @@ function useVerticalScrollEdges(
   return edges;
 }
 
-/** Every provider on one scrolling board - no pages, no arrows. */
+/**
+ * Every provider on one scrolling board - no pages, no arrows.
+ *
+ * On a phone the same rows become a grouped LIST (see `ProviderList`'s phone
+ * shape): fifteen 8.5rem cards is three on screen and a scroll bar for the
+ * rest. The breakpoint is read once here, so the rows below take no
+ * subscription of their own; the list's own class names exist only in that
+ * shape, so the stylesheet needs no media query to reach them.
+ */
 export function OnboardingProviderGrid(props: {
   readonly rows: readonly ProviderListRow[];
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const edges = useVerticalScrollEdges(scrollerRef, props.rows.length);
+  const phone = useIsMobileViewport();
   return (
     <div
       ref={scrollerRef}
       data-testid="onboarding-provider-grid"
-      data-fade-top={edges.top}
-      data-fade-bottom={edges.bottom}
+      // The fades are the CARD board's affordance. A phone list ends on a
+      // hairline and scrolls under the footer, so it takes neither - and a
+      // mask is also a clip, which is what cut a row's first glyph in half
+      // while it was still arriving.
+      data-fade-top={!phone && edges.top}
+      data-fade-bottom={!phone && edges.bottom}
       className="onboarding-provider-scroller no-scrollbar min-h-0 w-full flex-1 overflow-y-auto overscroll-contain"
     >
       <ProviderList
         ariaLabel="Coding agent CLIs"
         variant="onboarding"
         rows={props.rows}
+        phone={phone}
         className="onboarding-provider-cards w-full"
       />
     </div>

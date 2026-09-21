@@ -10,8 +10,17 @@ import { toast } from "sonner";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { AppearanceWallpaper } from "@/components/home/appearance-wallpaper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -30,6 +39,7 @@ import { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 import { cn } from "@/lib/utils";
 import {
   useSettingsStore,
+  type StartPageWallpaper,
   type StartPageWallpaperStyle,
 } from "@/stores/settings/settings-store";
 
@@ -43,6 +53,16 @@ const ACCEPTED_TYPES = "image/png,image/jpeg,image/webp";
  * column count to compute.
  */
 const GALLERY_WIDTH = "w-[min(70vw,26rem)]";
+
+/**
+ * The in-row gallery is three columns at `GALLERY_WIDTH`, so six slots is two
+ * full rows. A catalog that fits shows every tile; a longer one shows the
+ * first five and spends the sixth slot on a "View N more" tile that opens
+ * the full catalog. Never five-plus-more for exactly six: that tile would be
+ * taking the slot the sixth wallpaper could have had.
+ */
+const COMPACT_SLOTS = 6;
+const COMPACT_TILES = COMPACT_SLOTS - 1;
 
 const STYLES: ReadonlyArray<{
   readonly id: StartPageWallpaperStyle;
@@ -89,8 +109,9 @@ function usePendingCuratedId(): string | null {
 
 /**
  * Settings > Appearance > Start page. Plain rows like every other group in the
- * panel; each one writes straight through to the settings store (autosave). The
- * start page itself is the preview.
+ * panel; each one writes straight through to the settings store (autosave).
+ * There is no standalone preview card: the start page itself is the preview,
+ * and the curated tiles render under the current effect so they preview it too.
  */
 export function StartPageSettingsSection() {
   const wallpaper = useSettingsStore((state) => state.startPageWallpaper);
@@ -106,6 +127,7 @@ export function StartPageSettingsSection() {
   const image = useStartPageWallpaperImage();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const manifest = useQuery(
@@ -176,6 +198,25 @@ export function StartPageSettingsSection() {
     });
   };
 
+  const applyTile = (entry: CuratedWallpaper): void => {
+    // A tile supersedes an in-flight local pick exactly as Remove does:
+    // without this the slower local write lands last, over the tile the user
+    // just chose, and `busy` never clears because its own abort never fires.
+    abortRef.current?.abort();
+    setBusy(false);
+    applyCurated.mutate(entry);
+  };
+
+  const gallery = {
+    wallpapers: manifest.data,
+    error: manifest.isError ? manifest.error.message : null,
+    appliedId: wallpaper?.curatedId ?? null,
+    pendingId: pendingCuratedId,
+    treatment: wallpaper,
+    onRetry: () => void manifest.refetch(),
+    onApply: applyTile,
+  };
+
   return (
     <SettingsGroup
       group={APPEARANCE.definitions.startPage}
@@ -232,20 +273,9 @@ export function StartPageSettingsSection() {
           <div className="flex items-start gap-1.5">
             <div className={GALLERY_WIDTH}>
               <CuratedWallpaperGallery
-                wallpapers={manifest.data}
-                error={manifest.isError ? manifest.error.message : null}
-                appliedId={wallpaper?.curatedId ?? null}
-                pendingId={pendingCuratedId}
-                onRetry={() => void manifest.refetch()}
-                onApply={(entry) => {
-                  // A tile supersedes an in-flight local pick exactly as
-                  // Remove does: without this the slower local write lands
-                  // last, over the tile the user just chose, and `busy` never
-                  // clears because its own abort never fires.
-                  abortRef.current?.abort();
-                  setBusy(false);
-                  applyCurated.mutate(entry);
-                }}
+                {...gallery}
+                density="compact"
+                onViewAll={() => setCatalogOpen(true)}
               />
             </div>
             <Button
@@ -261,6 +291,47 @@ export function StartPageSettingsSection() {
           </div>
         }
       />
+
+      <Dialog open={catalogOpen} onOpenChange={setCatalogOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Curated wallpapers</DialogTitle>
+            <DialogDescription>
+              {APPEARANCE.definitions.curatedWallpapers.description}
+            </DialogDescription>
+          </DialogHeader>
+          {/*
+            Applying keeps the dialog open: the tile's own tick and the start
+            page behind it are the feedback, and flipping between a few is the
+            point of having the whole catalog in view.
+          */}
+          <div className="max-h-[70vh] overflow-y-auto">
+            <CuratedWallpaperGallery
+              {...gallery}
+              density="full"
+              onViewAll={undefined}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={manifest.isFetching}
+              onClick={() => void manifest.refetch()}
+            >
+              <RefreshCw className="size-3.5" />
+              Refresh
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCatalogOpen(false)}
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {wallpaper === null ? null : (
         <>
@@ -364,7 +435,7 @@ export function StartPageSettingsSection() {
               trackSettingChanged("appearance", "showRecentHistory");
               setShowRecentHistory(next);
             }}
-            aria-label="Show recent tasks"
+            aria-label="Show tasks on the start page"
           />
         }
       />
@@ -372,16 +443,33 @@ export function StartPageSettingsSection() {
   );
 }
 
-const TILE_GRID = "grid w-full grid-cols-[repeat(auto-fill,minmax(7rem,1fr))]";
+/** `compact` is the in-row gallery with its slot cap; `full` is the dialog. */
+type GalleryDensity = "compact" | "full";
+
+const TILE_GRID: Record<GalleryDensity, string> = {
+  compact: "grid w-full grid-cols-[repeat(auto-fill,minmax(7rem,1fr))]",
+  full: "grid w-full grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]",
+};
 
 function CuratedWallpaperGallery(props: {
   readonly wallpapers: ReadonlyArray<CuratedWallpaper> | undefined;
   readonly error: string | null;
   readonly appliedId: string | null;
   readonly pendingId: string | null;
+  /**
+   * The effect the start page is currently rendering with, so every tile is
+   * a miniature of what applying it would look like - the same component the
+   * start page paints with, fed the thumbnail. `null` (no wallpaper set, so
+   * no effect rows either) shows the thumbnails as they are.
+   */
+  readonly treatment: StartPageWallpaper | null;
+  readonly density: GalleryDensity;
+  /** Opens the full catalog; only the compact gallery has somewhere to go. */
+  readonly onViewAll: (() => void) | undefined;
   readonly onRetry: () => void;
   readonly onApply: (entry: CuratedWallpaper) => void;
 }): ReactNode {
+  const grid = TILE_GRID[props.density];
   if (props.error !== null) {
     return (
       <div
@@ -397,7 +485,7 @@ function CuratedWallpaperGallery(props: {
   }
   if (props.wallpapers === undefined) {
     return (
-      <div className={cn(TILE_GRID, "gap-2")}>
+      <div className={cn(grid, "gap-2")}>
         {[0, 1, 2].map((slot) => (
           <Skeleton key={slot} className="aspect-[16/10] w-full" />
         ))}
@@ -411,66 +499,115 @@ function CuratedWallpaperGallery(props: {
       </p>
     );
   }
+  const capped =
+    props.density === "compact" &&
+    props.onViewAll !== undefined &&
+    props.wallpapers.length > COMPACT_SLOTS;
+  const shown = capped
+    ? props.wallpapers.slice(0, COMPACT_TILES)
+    : props.wallpapers;
+  const hidden = props.wallpapers.length - shown.length;
   return (
-    <div className={cn(TILE_GRID, "gap-2")}>
-      {props.wallpapers.map((entry) => {
-        const applied = entry.id === props.appliedId;
-        const pending = entry.id === props.pendingId;
-        return (
-          <button
-            key={entry.id}
-            type="button"
-            aria-pressed={applied}
-            aria-label={entry.title}
-            // Only the downloading tile is disabled: another tile is how the
-            // user changes their mind, and that click aborts the one in
-            // flight (last action wins). The APPLIED tile stays enabled - a
-            // control a screen reader can reach and a pointer cannot press
-            // reads as broken - and no-ops instead.
-            disabled={pending}
-            onClick={() => {
-              if (applied) return;
-              props.onApply(entry);
-            }}
-            className="block w-full text-left"
-          >
-            <div
-              className={cn(
-                // Foreground alpha, never `bg-muted`: this is the skeleton the tile
-                // shows until its thumbnail paints.
-                "relative aspect-[16/10] w-full overflow-hidden rounded-md border border-border/60 bg-foreground/10",
-                applied && "ring-2 ring-primary",
-              )}
-            >
-              <img
-                src={entry.thumbUrl}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                draggable={false}
-                className="size-full object-cover"
-              />
-              {applied ? (
-                <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                  <Check className="size-2.5" />
-                </span>
-              ) : null}
-              {pending ? (
-                <span className="absolute inset-0 flex items-center justify-center bg-background/60">
-                  <AgentSpinningDots
-                    className={undefined}
-                    testId={undefined}
-                    variant={undefined}
-                  />
-                </span>
-              ) : null}
-            </div>
-            <span className="mt-1 block truncate text-ui-xs text-muted-foreground">
-              {entry.title}
-            </span>
-          </button>
-        );
-      })}
+    <div className={cn(grid, "gap-2")}>
+      {shown.map((entry) => (
+        <CuratedWallpaperTile
+          key={entry.id}
+          entry={entry}
+          applied={entry.id === props.appliedId}
+          pending={entry.id === props.pendingId}
+          treatment={props.treatment}
+          onApply={props.onApply}
+        />
+      ))}
+      {capped ? (
+        <button
+          type="button"
+          aria-label={`View ${hidden} more wallpapers`}
+          onClick={props.onViewAll}
+          // `self-start`: a button centres its content in whatever height the
+          // grid row gives it, and this one has no caption below its box to
+          // fill that row the way a wallpaper tile does - left stretched, the
+          // box floats to the row's middle instead of lining up with the
+          // thumbnails beside it.
+          className="block w-full self-start text-left"
+        >
+          <div className="flex aspect-[16/10] w-full items-center justify-center rounded-md border border-dashed border-border bg-foreground/5 text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground">
+            View {hidden} more
+          </div>
+        </button>
+      ) : null}
     </div>
+  );
+}
+
+function CuratedWallpaperTile(props: {
+  readonly entry: CuratedWallpaper;
+  readonly applied: boolean;
+  readonly pending: boolean;
+  readonly treatment: StartPageWallpaper | null;
+  readonly onApply: (entry: CuratedWallpaper) => void;
+}): ReactNode {
+  const { entry, applied, pending } = props;
+  return (
+    <button
+      type="button"
+      aria-pressed={applied}
+      aria-label={entry.title}
+      // Only the downloading tile is disabled: another tile is how the
+      // user changes their mind, and that click aborts the one in
+      // flight (last action wins). The APPLIED tile stays enabled - a
+      // control a screen reader can reach and a pointer cannot press
+      // reads as broken - and no-ops instead.
+      disabled={pending}
+      onClick={() => {
+        if (applied) return;
+        props.onApply(entry);
+      }}
+      className="block w-full text-left"
+    >
+      <div
+        className={cn(
+          // Foreground alpha, never `bg-muted`: this is the skeleton the tile
+          // shows until its thumbnail paints.
+          "relative aspect-[16/10] w-full overflow-hidden rounded-md border border-border/60 bg-foreground/10",
+          applied && "ring-2 ring-primary",
+        )}
+      >
+        {props.treatment === null ? (
+          <img
+            src={entry.thumbUrl}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            draggable={false}
+            className="size-full object-cover"
+          />
+        ) : (
+          <AppearanceWallpaper
+            wallpaper={props.treatment}
+            url={entry.thumbUrl}
+            tint={null}
+            surface="preview"
+          />
+        )}
+        {applied ? (
+          <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
+            <Check className="size-2.5" />
+          </span>
+        ) : null}
+        {pending ? (
+          <span className="absolute inset-0 flex items-center justify-center bg-background/60">
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          </span>
+        ) : null}
+      </div>
+      <span className="mt-1 block truncate text-ui-xs text-muted-foreground">
+        {entry.title}
+      </span>
+    </button>
   );
 }

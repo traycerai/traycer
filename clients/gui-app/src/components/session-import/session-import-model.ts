@@ -579,7 +579,17 @@ export type SessionImportGroupSelectionState = "none" | "partial" | "all";
 export interface SessionImportProviderView {
   readonly harness: GuiHarnessId;
   readonly name: string;
+  /** What the pill shows: the rows this harness has ON SCREEN. */
   readonly count: number;
+  /**
+   * Every row the scan produced for this harness, view filters included -
+   * which is what says whether the provider answered at all.
+   *
+   * Distinct from {@link count} because a statement of FACT cannot be read off
+   * a display count: with "Show imported" off, a harness whose every session
+   * is already in Traycer shows a pill of 0 while having produced rows.
+   */
+  readonly scannedCount: number;
   readonly enabled: boolean;
 }
 
@@ -621,7 +631,7 @@ export interface SessionImportWizardView {
   readonly visibleSelectedCount: number;
 }
 
-const UNTITLED_SESSION = "Untitled task";
+const UNTITLED_SESSION = "Untitled session";
 const FIRST_PROMPT_PREVIEW_LENGTH = 140;
 
 /** Native title first, then the opening prompt, then a neutral placeholder. */
@@ -638,9 +648,56 @@ export function candidateDisplayTitle(
 }
 
 /** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
+/**
+ * The sentence a provider failure leads with.
+ *
+ * A reader may fail AFTER it has already produced rows - a listing that walked
+ * two pages and then lost the provider is reported as a failure, and those two
+ * pages are on screen and importable. "Couldn't read Codex sessions" above a
+ * list of Codex sessions is the wrong sentence for that; the host's own detail
+ * (which carries the count) follows either way.
+ *
+ * It reads `scannedCount`, not the pill's `count`: whether the provider
+ * ANSWERED is a fact about the scan, and the pill is a fact about the screen.
+ * A harness whose pages all held already-imported sessions shows a pill of 0
+ * while "Show imported" is off, and "Couldn't read" would be false of it - and
+ * visibly so the moment the user turns the toggle on.
+ */
+export function sessionImportProviderFailureLead(
+  providers: ReadonlyArray<SessionImportProviderView>,
+  harness: GuiHarnessId,
+): string {
+  const view = providers.find((provider) => provider.harness === harness);
+  const name = harnessDisplayName(harness);
+  return view !== undefined && view.scannedCount > 0
+    ? `Some ${name} sessions are missing.`
+    : `Couldn’t read ${name} sessions.`;
+}
+
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);
+}
+
+/**
+ * The noun for a COUNT of the things being imported. ONE table, deliberately:
+ * every site that renders such a count calls this, so the word moves in one
+ * edit.
+ *
+ * It is "session" and not "task" because after one task per repository the
+ * two are no longer the same number. Thirty-one sessions out of one checkout
+ * land as thirty-one chats inside ONE task, so "Imported 31 tasks" is not a
+ * wording preference, it is false - and the picker's counts are counts of the
+ * same things, before they land.
+ *
+ * The flow's bare nouns follow the same rule as literal strings: whatever names
+ * the things being imported says "session" ("Back to sessions", "Search
+ * sessions or folders"), and whatever names the task they land IN keeps "task"
+ * ("Ready in your task list.", "Open task", "into Traycer as tasks"). The host's
+ * `session-import-copy-drift.test.ts` pins both halves.
+ */
+export function importedCountNoun(count: number): string {
+  return count === 1 ? "session" : "sessions";
 }
 
 /** Last path segment, on either separator; the full path stays on the row. */
@@ -714,7 +771,7 @@ export function sessionImportNotImportedLine(
     (total, group) => total + group.entries.length,
     0,
   );
-  const noun = count === 1 ? "task" : "tasks";
+  const noun = importedCountNoun(count);
   const only = groups.length === 1 ? groups[0] : undefined;
   if (only === undefined) return `Not imported: ${count} ${noun}`;
   return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
@@ -807,10 +864,18 @@ function providerViewsFor(
   state: SessionImportWizardState,
 ): ReadonlyArray<SessionImportProviderView> {
   const counts = new Map<GuiHarnessId, number>();
-  for (const harness of state.scannedProviders) counts.set(harness, 0);
-  for (const harness of state.disabledHarnesses) counts.set(harness, 0);
+  const scanned = new Map<GuiHarnessId, number>();
+  for (const harness of state.scannedProviders) {
+    counts.set(harness, 0);
+    scanned.set(harness, 0);
+  }
+  for (const harness of state.disabledHarnesses) {
+    counts.set(harness, 0);
+    scanned.set(harness, 0);
+  }
   for (const group of state.groups) {
     for (const candidate of group.sessions) {
+      scanned.set(candidate.harness, (scanned.get(candidate.harness) ?? 0) + 1);
       if (!isVisibleCandidate(state, candidate)) continue;
       counts.set(candidate.harness, (counts.get(candidate.harness) ?? 0) + 1);
     }
@@ -824,6 +889,7 @@ function providerViewsFor(
     harness: entry.id,
     name: harnessDisplayName(entry.id),
     count: entry.count,
+    scannedCount: scanned.get(entry.id) ?? entry.count,
     enabled: !state.disabledHarnesses.has(entry.id),
   }));
 }

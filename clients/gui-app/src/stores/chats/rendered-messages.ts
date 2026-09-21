@@ -64,7 +64,9 @@ import {
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
+  checkpointEventTurnKey,
   isNoOpCheckpointEntry,
+  latestCheckpointPerTurn,
   overlappingCheckpointIds,
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
@@ -4196,12 +4198,24 @@ interface CheckpointManifestView {
  * Reading `=== true` rather than a truthy check is the row-context contract:
  * an ABSENT field is the projection declining to speak, not an assertion of
  * `false`, so absence falls through to the derivation below.
+ *
+ * Each turn's view is its LAST checkpoint, and only those are weighed against
+ * each other - through the same `latestCheckpointPerTurn` the projection uses,
+ * so a turn whose checkpoint was rewritten is not flagged by its own rewrite on
+ * either line.
  */
 function checkpointManifestViewsFromEvents(
   events: ReadonlyArray<ChatEvent>,
   contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
 ): ReadonlyMap<string, CheckpointManifestView> {
-  const checkpoints = events.flatMap((event) => {
+  // Select from the RAW events, then parse what survived - see
+  // `latestCheckpointPerTurn`. Parsing first drops an unreadable rewrite
+  // before it can supersede anything, which would render this turn from the
+  // manifest that rewrite replaced.
+  const checkpoints = latestCheckpointPerTurn(
+    events.filter((event) => event.type === "checkpoint.captured"),
+    checkpointEventTurnKey,
+  ).flatMap((event) => {
     const checkpoint = checkpointManifestFromEvent(event);
     return isParsedCheckpointManifest(checkpoint) ? [checkpoint] : [];
   });

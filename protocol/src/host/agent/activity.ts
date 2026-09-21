@@ -38,6 +38,7 @@ import {
   epicCloudSyncStatusSchema,
   type EpicCloudSyncStatus,
 } from "@traycer/protocol/host/epic/subscribe";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── Frozen `agent.activity.subscribe@1.0`/`@1.1` open request ──────────────
 //
@@ -46,7 +47,9 @@ import {
 // released line by accident: a `@1.0`/`@1.1` peer's contract strips `plane` in
 // the dispatcher, which is what makes absence mean "today's behaviour" on
 // every host that shipped before the selector existed.
-export const agentActivitySubscribeOpenRequestSchemaPre12 = z.object({});
+export const agentActivitySubscribeOpenRequestSchemaPre12 = lazySchema(() =>
+  z.object({}),
+);
 export type AgentActivitySubscribeOpenRequestPre12 = z.infer<
   typeof agentActivitySubscribeOpenRequestSchemaPre12
 >;
@@ -62,7 +65,9 @@ export type AgentActivitySubscribeOpenRequestPre12 = z.infer<
  * reaches, which is why the host may honour it without consulting anything
  * else.
  */
-export const agentActivityPlaneSelectorSchema = z.enum(["local-only"]);
+export const agentActivityPlaneSelectorSchema = lazySchema(() =>
+  z.enum(["local-only"]),
+);
 export type AgentActivityPlaneSelector = z.infer<
   typeof agentActivityPlaneSelectorSchema
 >;
@@ -79,29 +84,33 @@ export type AgentActivityPlaneSelector = z.infer<
 // `servedBy` on the `state` frame is NOT a substitute: it is the host's report
 // of a choice already made, and it arrives after the stream is open. The
 // decision this selector exists for is made BEFORE that.
-export const agentActivitySubscribeOpenRequestSchema =
+export const agentActivitySubscribeOpenRequestSchema = lazySchema(() =>
   agentActivitySubscribeOpenRequestSchemaPre12.extend({
     plane: agentActivityPlaneSelectorSchema.optional(),
-  });
+  }),
+);
 export type AgentActivitySubscribeOpenRequest = z.infer<
   typeof agentActivitySubscribeOpenRequestSchema
 >;
 
-export const agentActivityEpicBucketSchema = z.object({
-  working: z.array(z.string()),
-  turn: z.array(z.string()),
-});
+export const agentActivityEpicBucketSchema = lazySchema(() =>
+  z.object({
+    working: z.array(z.string()),
+    turn: z.array(z.string()),
+  }),
+);
 export type AgentActivityEpicBucket = z.infer<
   typeof agentActivityEpicBucketSchema
 >;
 
-export const agentActivityByEpicSchema = z.record(
-  z.string(),
-  agentActivityEpicBucketSchema,
+export const agentActivityByEpicSchema = lazySchema(() =>
+  z.record(z.string(), agentActivityEpicBucketSchema),
 );
 export type AgentActivityByEpic = z.infer<typeof agentActivityByEpicSchema>;
 
-export const agentActivityServedBySchema = z.enum(["local", "cloud"]);
+export const agentActivityServedBySchema = lazySchema(() =>
+  z.enum(["local", "cloud"]),
+);
 export type AgentActivityServedBy = z.infer<typeof agentActivityServedBySchema>;
 
 /**
@@ -119,9 +128,8 @@ export type AgentActivityCloudSyncStatus = EpicCloudSyncStatus;
 // would drift with every live edit. A `1.0` peer's plain `z.object` parse
 // strips `cloudSyncStatus` from a `1.1` frame; the host also strips it before
 // the wire for `1.0` connections (it serializes frames as-is).
-export const agentActivitySubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const agentActivitySubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("state"),
       servedBy: agentActivityServedBySchema,
@@ -132,16 +140,15 @@ export const agentActivitySubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type AgentActivitySubscribeServerFrameV10 = z.infer<
   typeof agentActivitySubscribeServerFrameSchemaV10
 >;
 
 // ─── Live `agent.activity.subscribe@1.1` shape ──────────────────────────────
-export const agentActivitySubscribeServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const agentActivitySubscribeServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("state"),
       servedBy: agentActivityServedBySchema,
@@ -157,20 +164,19 @@ export const agentActivitySubscribeServerFrameSchema = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type AgentActivitySubscribeServerFrame = z.infer<
   typeof agentActivitySubscribeServerFrameSchema
 >;
 
-export const agentActivitySubscribeClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const agentActivitySubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type AgentActivitySubscribeClientFrame = z.infer<
   typeof agentActivitySubscribeClientFrameSchema

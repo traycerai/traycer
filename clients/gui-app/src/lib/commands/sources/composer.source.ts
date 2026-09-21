@@ -42,14 +42,17 @@ import type {
   CommandSubpage,
   ReactCommandSource,
 } from "@/lib/commands/types";
+import {
+  hasActiveDraftsControl,
+  subscribeActiveDraftsControl,
+} from "@/lib/commands/active-drafts-control-registry";
+import { openDrafts } from "@/lib/keybindings/dispatch";
 import type { ChordString } from "@/lib/keybindings/chord";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useMemo, useSyncExternalStore } from "react";
-
-const NO_ITEMS: ReadonlyArray<CommandItem> = [];
 
 function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const kind = ctx.focusedComposerKind;
@@ -60,6 +63,14 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   );
   const draftsShortcut = useKeybindingStore(
     (state) => state.bindings["composer.drafts"],
+  );
+  // Cmd+S only opens the start-page control. Advertise that chord on the
+  // palette row only while a control is registered; otherwise the row still
+  // opens the avatar dialog, but showing the shortcut would lie.
+  const draftsControlActive = useSyncExternalStore(
+    subscribeActiveDraftsControl,
+    hasActiveDraftsControl,
+    hasActiveDraftsControl,
   );
   // Live snapshot of the active composer picker - the top-of-stack controller,
   // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
@@ -81,8 +92,10 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   // render, so opening the top-level palette does not eagerly hit SDKs.
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
-    if (kind === null) return NO_ITEMS;
-    const items: Array<CommandItem> = [buildDraftsItem(draftsShortcut)];
+    const items: Array<CommandItem> = [
+      buildDraftsItem(draftsControlActive ? draftsShortcut : null),
+    ];
+    if (kind === null) return items;
     if (activeModelPicker !== null) {
       items.push(
         buildChangeModelItem(
@@ -110,6 +123,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeTabId,
     modelPickerShortcut,
     draftsShortcut,
+    draftsControlActive,
     activeModelPicker,
   ]);
 }
@@ -123,14 +137,16 @@ function buildDraftsItem(shortcut: ChordString | null): CommandItem {
   return {
     id: "composer:drafts",
     label: "Drafts",
-    description: "Open the drafts list for this composer.",
+    description: "Browse saved drafts.",
     keywords: ["drafts", "saved", "prompt"],
     group: "suggested",
     scope: "actions",
     shortcut,
-    actionId: "composer.drafts",
+    actionId: null,
     subpage: null,
-    run: () => undefined,
+    run: () => {
+      openDrafts("palette");
+    },
   };
 }
 

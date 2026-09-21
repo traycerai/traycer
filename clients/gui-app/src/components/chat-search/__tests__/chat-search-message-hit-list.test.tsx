@@ -172,12 +172,8 @@ describe("ChatSearchMessageHitList: variant differences", () => {
   });
 });
 
-describe("ChatSearchMessageHitList: snippet clamping", () => {
-  it("clamps the compact snippet to one line and the full snippet to two", () => {
-    // The row's accessible name concatenates the title, snippet and meta
-    // text with no separator, so the snippet element is found positionally
-    // (the button's second direct child) rather than by its own text, which
-    // an unstyled inner span sharing the same textContent would also match.
+describe("ChatSearchMessageHitList: the best-hit child row", () => {
+  it("keeps the snippet on one line in both variants and sizes the role column per variant", () => {
     const snippetText = "the quick brown fox jumps over the lazy dog";
     const match = messageMatch({
       chatId: "c1",
@@ -188,24 +184,31 @@ describe("ChatSearchMessageHitList: snippet clamping", () => {
       status: readyStatus({ messages: [match] }),
       variant: "compact",
     });
-    const compactRow = screen.getByRole("button", { name: /title-c1/ });
+    const compactRow = screen.getByRole("button", {
+      name: new RegExp(`^Agent reply, .*: ${snippetText}$`),
+    });
     const compactSnippet = compactRow.children.item(1);
     if (compactSnippet === null) {
       throw new Error("expected the row to have a snippet element");
     }
-    expect(compactSnippet.className).toContain("line-clamp-1");
+    expect(compactSnippet.className).toContain("truncate");
+    expect(compactSnippet.className).not.toContain("line-clamp");
+    expect(compactRow.children.item(0)?.className).toContain("w-[7ch]");
     cleanup();
 
     renderList({
       status: readyStatus({ messages: [match] }),
       variant: "full",
     });
-    const fullRow = screen.getByRole("button", { name: /title-c1/ });
+    const fullRow = screen.getByRole("button", {
+      name: new RegExp(`^Agent reply, .*: ${snippetText}$`),
+    });
     const fullSnippet = fullRow.children.item(1);
     if (fullSnippet === null) {
       throw new Error("expected the row to have a snippet element");
     }
-    expect(fullSnippet.className).toContain("line-clamp-2");
+    expect(fullSnippet.className).toContain("truncate");
+    expect(fullRow.children.item(0)?.className).toContain("w-[11ch]");
   });
 });
 
@@ -218,7 +221,11 @@ describe("ChatSearchMessageHitList: opening a row", () => {
       status: readyStatus({ messages: [match] }),
     });
 
-    await user.click(screen.getByRole("button", { name: /title-c1/ }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open chat title-c1 at its best match",
+      }),
+    );
 
     expect(onOpen).toHaveBeenCalledWith({
       epicId: "epic-1",
@@ -229,7 +236,7 @@ describe("ChatSearchMessageHitList: opening a row", () => {
 });
 
 describe("ChatSearchMessageHitList: show more", () => {
-  it("renders 'Show more' and calls showMore when clicked", async () => {
+  it("renders 'Show more matches' and calls showMore when clicked", async () => {
     const user = userEvent.setup();
     const showMore = vi.fn<() => void>();
     renderList({
@@ -239,11 +246,11 @@ describe("ChatSearchMessageHitList: show more", () => {
       }),
     });
 
-    await user.click(screen.getByRole("button", { name: "Show more" }));
+    await user.click(screen.getByRole("button", { name: "Show more matches" }));
     expect(showMore).toHaveBeenCalledTimes(1);
   });
 
-  it("hides 'Show more' when showMore is null", () => {
+  it("hides 'Show more matches' when showMore is null", () => {
     renderList({
       status: readyStatus({
         messages: [messageMatch({ chatId: "c1" })],
@@ -251,7 +258,9 @@ describe("ChatSearchMessageHitList: show more", () => {
       }),
     });
 
-    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show more matches" }),
+    ).toBeNull();
   });
 });
 
@@ -267,7 +276,9 @@ describe("ChatSearchMessageHitList: a show-more page that failed", () => {
     });
 
     expect(screen.getByRole("alert").textContent).toBe("Host went away");
-    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show more matches" }),
+    ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledTimes(1);
   });
@@ -304,12 +315,10 @@ describe("ChatSearchMessageHitList: a new request", () => {
       status: readyStatus({ messages: [match] }),
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Show all 4 matches" }),
-    );
+    await user.click(screen.getByRole("button", { name: "4 matches" }));
     expect(
       screen
-        .getByRole("button", { name: "Show all 4 matches" })
+        .getByRole("button", { name: "4 matches" })
         .getAttribute("aria-expanded"),
     ).toBe("true");
     renderExpansion.mockClear();
@@ -326,7 +335,7 @@ describe("ChatSearchMessageHitList: a new request", () => {
 
     expect(
       screen
-        .getByRole("button", { name: "Show all 4 matches" })
+        .getByRole("button", { name: "4 matches" })
         .getAttribute("aria-expanded"),
     ).toBe("false");
     expect(renderExpansion).not.toHaveBeenCalled();
@@ -339,9 +348,7 @@ describe("ChatSearchMessageHitList: a new request", () => {
       status: readyStatus({ messages: [match] }),
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Show all 4 matches" }),
-    );
+    await user.click(screen.getByRole("button", { name: "4 matches" }));
     // A later page of the same request: more rows, same expansionBase.
     rerenderWith(
       readyStatus({
@@ -351,21 +358,21 @@ describe("ChatSearchMessageHitList: a new request", () => {
 
     expect(
       screen
-        .getByRole("button", { name: "Show all 4 matches" })
+        .getByRole("button", { name: "4 matches" })
         .getAttribute("aria-expanded"),
     ).toBe("true");
   });
 });
 
 describe("ChatSearchMessageHitList: expansion", () => {
-  it("shows a 'Show all N matches' toggle and expands via renderExpansion", async () => {
+  it("shows an 'N matches' disclosure and expands via renderExpansion", async () => {
     const user = userEvent.setup();
     const match = messageMatch({ chatId: "c1", matchCount: 4 });
     const { renderExpansion } = renderList({
       status: readyStatus({ messages: [match] }),
     });
 
-    const toggle = screen.getByRole("button", { name: "Show all 4 matches" });
+    const toggle = screen.getByRole("button", { name: "4 matches" });
     expect(renderExpansion).not.toHaveBeenCalled();
 
     await user.click(toggle);
@@ -373,6 +380,10 @@ describe("ChatSearchMessageHitList: expansion", () => {
     expect(renderExpansion).toHaveBeenCalledWith({
       epicId: "epic-1",
       chatId: "c1",
+      best: match.best,
+      matchCount: 4,
+      expanded: true,
+      variant: "full",
     });
   });
 });

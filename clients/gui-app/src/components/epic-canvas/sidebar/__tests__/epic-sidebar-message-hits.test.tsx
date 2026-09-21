@@ -9,7 +9,7 @@
  * and that a hit opens on that same host.
  */
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
-import { userEvent } from "@testing-library/user-event";
+import { userEvent, type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -29,7 +29,11 @@ import type {
   useChatSearchMessageHits,
   ChatSearchMessageHitsStatus,
 } from "@/hooks/chats/use-chat-search-message-hits";
-import type { ChatSearchBaseRequest } from "@/hooks/chats/use-chat-search-query";
+import type {
+  ChatSearchBaseRequest,
+  ChatSearchExpansionStatus,
+  useChatSearchMessageRows,
+} from "@/hooks/chats/use-chat-search-query";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
 import {
@@ -46,6 +50,16 @@ const EFFECTIVE_HOST_ID = "effective-host";
 const hitsMock = vi.hoisted(() => vi.fn<typeof useChatSearchMessageHits>());
 vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
   useChatSearchMessageHits: hitsMock,
+}));
+
+// The expansion's own request is the rows hook's subject; what matters here is
+// the real ExpandedRows and rows drawn from whatever it answers.
+const rowsMock = vi.hoisted(() => vi.fn<typeof useChatSearchMessageRows>());
+vi.mock("@/hooks/chats/use-chat-search-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-chat-search-query")
+  >()),
+  useChatSearchMessageRows: rowsMock,
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
@@ -222,8 +236,39 @@ function lastQueryAsked(): string {
   return calls[calls.length - 1][0].query;
 }
 
+function expansionHit(messageId: string, text: string): ChatSearchMessageHit {
+  return { ...messageHit(messageId), snippet: { text, highlights: [] } };
+}
+
+type ReadyExpansion = Extract<
+  ChatSearchExpansionStatus,
+  { readonly kind: "ready" }
+>;
+
+function readyExpansion(overrides: Partial<ReadyExpansion>): ReadyExpansion {
+  return {
+    kind: "ready",
+    messages: [
+      expansionHit("c1-m2", "second snippet"),
+      expansionHit("c1-m3", "third snippet"),
+    ],
+    matchCount: null,
+    nextCursor: null,
+    loadingMore: false,
+    loadMoreError: null,
+    ...overrides,
+  };
+}
+
+/** Which control has focus, by the name a screen reader would read. */
+function focusedName(): string {
+  const active = document.activeElement;
+  return active?.getAttribute("aria-label") ?? active?.textContent ?? "";
+}
+
 beforeEach(() => {
   hitsMock.mockReturnValue({ kind: "absent" });
+  rowsMock.mockReturnValue({ kind: "loading" });
   effectiveHostId.current = EFFECTIVE_HOST_ID;
   usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "webview");
   useChatSearchStore.getState().resetForTests();
@@ -232,6 +277,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   hitsMock.mockReset();
+  rowsMock.mockReset();
   navigateMock.mockReset();
   openResultMock.mockReset();
   usePanelHeaderSearchStore.getState().closeSearch(TAB_ID, "chats");
@@ -407,10 +453,10 @@ describe("EpicSidebarMessageHits", () => {
   it("keeps expansions across a rerender and drops them when the host changes", async () => {
     const user = userEvent.setup();
     const { rerender } = render(sectionOnHost(SESSION_HOST_ID));
-    await user.click(screen.getByRole("button", { name: /Show all/ }));
+    await user.click(screen.getByRole("button", { name: /^\d+ matches$/ }));
     expect(
       screen
-        .getByRole("button", { name: /Show all/ })
+        .getByRole("button", { name: /^\d+ matches$/ })
         .getAttribute("aria-expanded"),
     ).toBe("true");
 
@@ -420,16 +466,80 @@ describe("EpicSidebarMessageHits", () => {
     rerender(sectionOnHost(SESSION_HOST_ID));
     expect(
       screen
-        .getByRole("button", { name: /Show all/ })
+        .getByRole("button", { name: /^\d+ matches$/ })
         .getAttribute("aria-expanded"),
     ).toBe("true");
 
     rerender(sectionOnHost("other-host"));
     expect(
       screen
-        .getByRole("button", { name: /Show all/ })
+        .getByRole("button", { name: /^\d+ matches$/ })
         .getAttribute("aria-expanded"),
     ).toBe("false");
+  });
+
+  // The sidebar mounts no arrow-key provider, so its expanded children are
+  // ordinary Tab stops - the arrow-only `tabIndex={-1}` would strand them.
+  describe("keyboard, with no arrow-key navigation", () => {
+    async function expandGroup(user: UserEvent) {
+      render(sectionOnHost(SESSION_HOST_ID));
+      const toggle = screen.getByRole("button", { name: /^\d+ matches$/ });
+      await user.click(toggle);
+      toggle.focus();
+      return toggle;
+    }
+
+    it("Tab and Enter reach an expanded child, and Tab and Space reach Show more", async () => {
+      rowsMock.mockImplementation((args) =>
+        readyExpansion({
+          nextCursor: args.cursors.length === 0 ? "cursor-1" : null,
+        }),
+      );
+      const user = userEvent.setup();
+      await expandGroup(user);
+
+      await user.tab();
+      expect(focusedName()).toMatch(/: the webview keeps a destroyed entry$/);
+      await user.tab();
+      expect(focusedName()).toMatch(/: second snippet$/);
+
+      await user.keyboard("{Enter}");
+      expect(openResultMock).toHaveBeenCalledTimes(1);
+      expect(openResultMock.mock.calls[0][1]).toEqual({
+        epicId: EPIC_ID,
+        chatId: "c1",
+        messageId: "c1-m2",
+        hostId: SESSION_HOST_ID,
+      });
+
+      await user.tab();
+      expect(focusedName()).toMatch(/: third snippet$/);
+      await user.tab();
+      expect(focusedName()).toBe("Show more matches");
+
+      await user.keyboard(" ");
+      const calls = rowsMock.mock.calls;
+      expect(calls[calls.length - 1][0].cursors).toEqual(["cursor-1"]);
+    });
+
+    it("Tab and Enter reach Retry after a later page failed", async () => {
+      const retry = vi.fn<() => void>();
+      rowsMock.mockReturnValue(
+        readyExpansion({ loadMoreError: { message: "Page failed", retry } }),
+      );
+      const user = userEvent.setup();
+      await expandGroup(user);
+
+      // Best, second, third, then the retry button.
+      await user.tab();
+      await user.tab();
+      await user.tab();
+      await user.tab();
+      expect(focusedName()).toBe("Retry");
+
+      await user.keyboard("{Enter}");
+      expect(retry).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("reports an error in the section rather than on the tree", () => {

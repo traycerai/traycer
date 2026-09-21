@@ -7,6 +7,7 @@
 // stay declarative.
 
 const { execFileSync, spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -218,6 +219,180 @@ function officialNodeDistTuple() {
   }
   return { platform, arch };
 }
+// ── Official Node tarball pinning ────────────────────────────────────────
+//
+// Committed SHA-256 of every official tarball this script is allowed to
+// download, keyed by version then `<platform>-<arch>`. Before this existed
+// the download was checked only for "`bin/node` exists and contains the
+// fuse sentinel", which any attacker-supplied Node also satisfies - the
+// binary we then postject the product into and ship.
+//
+// ## What this does and does not buy
+//
+// The COMMITTED digest is the whole defense: it is reviewed, it is in git
+// history, and a tarball that does not match it is never extracted. The
+// `SHASUMS256.txt` cross-check below travels over the same channel as the
+// tarball, so a mirror able to swap one can swap the other; it is NOT
+// integrity, and is not treated as such. It catches the realistic clerical
+// failure instead - a digest mis-entered or copied from the wrong version
+// or the wrong platform row - which is precisely the case the committed pin
+// cannot catch by itself, because it would be self-consistently wrong.
+//
+// ## No signature checking
+//
+// nodejs.org signs `SHASUMS256.txt` with the release keys, and verifying
+// that would be the real chain of trust. It is deliberately NOT done here:
+// Node's `crypto` has no OpenPGP parser, the build boxes have no `gpg`, and
+// adding a dependency to the packaging toolchain is a larger decision than
+// this change. Half-doing it - parsing the armored block without verifying
+// the key, say - would read as signature checking while proving nothing, so
+// there is none at all.
+//
+// ## Updating this table when Node is bumped
+//
+// Add the rows BEFORE the version bump lands, or every dev box on a
+// non-SEA-capable Node stops building. All four tuples `officialNodeDistTuple`
+// can produce need an entry:
+//
+//   curl -fsSL https://nodejs.org/dist/<version>/SHASUMS256.txt \
+//     | grep -E 'node-<version>-(darwin|linux)-(arm64|x64)\.tar\.gz$'
+//
+// Retired versions can be dropped once no lane and no dev box runs them.
+const OFFICIAL_NODE_TARBALL_SHA256 = {
+  // The version this repo's SEA lanes pin via actions/setup-node.
+  //
+  // Which lanes actually execute THIS file matters, and is narrower than it
+  // looks: the internal release workflow overlays its own `scripts/` tree
+  // over this one before building, so that lane runs the internal copy, not
+  // this one. What reaches this code is a standalone `build:sea` - a
+  // developer's, or the CLI SEA build in `.github/workflows/test.yml` - and
+  // in CI `setup-node` supplies a fuse-bearing Node, so even there the
+  // download path is skipped. The case it exists for is a dev box whose
+  // `node` is a shared build.
+  "v24.20.0": {
+    "darwin-arm64":
+      "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8",
+    "darwin-x64":
+      "9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4",
+    "linux-arm64":
+      "3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013",
+    "linux-x64":
+      "855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec",
+  },
+};
+
+// Look up the committed digest for one tarball. `null` means "not pinned",
+// which every caller must treat as fail-closed rather than as permission to
+// download something unverifiable.
+function lookupPinnedTarballDigest(version, platform, arch) {
+  const perVersion = Object.prototype.hasOwnProperty.call(
+    OFFICIAL_NODE_TARBALL_SHA256,
+    version,
+  )
+    ? OFFICIAL_NODE_TARBALL_SHA256[version]
+    : undefined;
+  if (perVersion === undefined) return null;
+  const key = `${platform}-${arch}`;
+  if (!Object.prototype.hasOwnProperty.call(perVersion, key)) return null;
+  const digest = perVersion[key];
+  return isSha256Hex(digest) ? digest.toLowerCase() : null;
+}
+
+function isSha256Hex(value) {
+  return typeof value === "string" && /^[0-9a-fA-F]{64}$/.test(value);
+}
+
+/**
+ * Pull one file's digest out of an official `SHASUMS256.txt`.
+ *
+ * The format is one `<64 hex><space><space|*><filename>` record per line
+ * (coreutils text and binary modes both appear in the wild). Returns the
+ * lowercased digest, or `null` when no record matches `fileName` exactly.
+ *
+ * `null` is deliberately the single answer for every way this can go wrong -
+ * a truncated download that lost the line, a SHASUMS for the wrong version,
+ * a renamed artifact, a record whose digest field is short. They differ in
+ * cause and not in consequence: none of them yields a digest to compare, so
+ * all of them must fail closed identically. A partial record cannot slip
+ * through as a partial match because the digest is length-anchored and the
+ * filename is compared whole.
+ */
+function parseShasumsEntry(shasumsText, fileName) {
+  if (typeof shasumsText !== "string") return null;
+  if (typeof fileName !== "string" || fileName.length === 0) return null;
+  for (const rawLine of shasumsText.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const match = /^([0-9a-fA-F]{64}) [ *](.+)$/.exec(line);
+    if (match === null) continue;
+    if (match[2] !== fileName) continue;
+    return match[1].toLowerCase();
+  }
+  return null;
+}
+
+// Compare two hex digests. Anything that is not a well-formed SHA-256 is
+// unequal rather than an exception, so a malformed pin fails the build
+// closed at the comparison instead of throwing somewhere less obvious.
+// Constant time is irrelevant here: both sides are public build metadata.
+function digestsMatch(expected, actual) {
+  if (!isSha256Hex(expected) || !isSha256Hex(actual)) return false;
+  return expected.toLowerCase() === actual.toLowerCase();
+}
+
+// Stream a file through SHA-256. Chunked for the same reason
+// `nodeBinaryHasSeaFuse` is: these tarballs are tens of megabytes and must
+// not be slurped into one Buffer.
+function sha256OfFile(filePath) {
+  const hash = crypto.createHash("sha256");
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buf = Buffer.alloc(1 << 20); // 1 MiB
+    let position = 0;
+    for (;;) {
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, position);
+      if (bytesRead === 0) break;
+      hash.update(buf.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+// Fetch the published SHASUMS256.txt and confirm the committed pin agrees
+// with it. Throws on any outcome that is not agreement - including a failed
+// fetch, which is not "no mismatch" but "unknown", and unknown is not a
+// state a release-signing toolchain may continue from. The tarball is about
+// to come from the same host anyway, so a SHASUMS that will not download is
+// already a broken build, just one step later.
+function assertPinAgreesWithPublishedShasums(version, fileName, pinnedDigest) {
+  const url = `https://nodejs.org/dist/${version}/SHASUMS256.txt`;
+  const fetched = spawnSync("curl", ["-fsSL", "--retry", "3", url], {
+    encoding: "utf8",
+  });
+  if (fetched.status !== 0) {
+    throw new Error(
+      `Could not fetch ${url} (curl exit ${fetched.status}) to cross-check the ` +
+        `pinned SHA-256 for ${fileName}. Refusing to continue unverified.`,
+    );
+  }
+  const published = parseShasumsEntry(fetched.stdout, fileName);
+  if (published === null) {
+    throw new Error(
+      `${url} has no SHA-256 entry for ${fileName}. Either the pinned version ` +
+        `does not publish that tarball or the file is truncated; refusing to ` +
+        `continue unverified.`,
+    );
+  }
+  if (!digestsMatch(pinnedDigest, published)) {
+    throw new Error(
+      `Pinned SHA-256 for ${fileName} disagrees with ${url}: pinned ` +
+        `${pinnedDigest}, published ${published}. A pin was mis-entered, or ` +
+        `the mirror is serving something else. Resolve before building.`,
+    );
+  }
+}
 
 // Download + extract the official monolithic Node matching the running
 // version into the gitignored repo cache, returning the path to its
@@ -225,58 +400,168 @@ function officialNodeDistTuple() {
 // to `process.version` so the SEA host and the interpreter that generated
 // the blob are the same Node version (the blob is version-sensitive when
 // code cache / snapshots are on; pinning keeps us correct regardless).
+//
+// Because the version tracks the running interpreter rather than a constant,
+// the digest table is keyed BY version and an unlisted one is refused before
+// anything is fetched - see `OFFICIAL_NODE_TARBALL_SHA256`.
 function provisionOfficialNode() {
   const { platform, arch } = officialNodeDistTuple();
-  const version = process.version; // e.g. "v26.0.0"
+  const version = process.version; // e.g. "v24.20.0"
   const distName = `node-${version}-${platform}-${arch}`;
+  const tarballName = `${distName}.tar.gz`;
+
+  // Fail closed BEFORE the network is touched. An unpinned version has no
+  // digest to check a download against, and downloading it regardless is the
+  // exact hole this pinning closes. Both ways out are named, because the
+  // first one costs nothing: under an official Node this function is never
+  // called at all (`resolveSeaHostNode` short-circuits on the fuse).
+  const pinnedDigest = lookupPinnedTarballDigest(version, platform, arch);
+  if (pinnedDigest === null) {
+    throw new Error(
+      `No pinned SHA-256 for ${tarballName}, so a download of it cannot be ` +
+        `verified. Either run the build under an official (SEA-capable) Node - ` +
+        `via nvm/fnm or the nodejs.org installer, which needs no download at ` +
+        `all - or add ${version} to OFFICIAL_NODE_TARBALL_SHA256 in ` +
+        `scripts/native-packaging/sea-toolchain.cjs, whose comment carries ` +
+        `the one-liner that produces the rows.`,
+    );
+  }
+
   const cacheRoot = path.join(
     REPO_ROOT,
     "node_modules",
     ".cache",
     "traycer-sea-node",
   );
-  const extractRoot = path.join(cacheRoot, `${version}-${platform}-${arch}`);
+  // The cache key carries the digest AND a scheme namespace, and both are
+  // load-bearing for a different reason.
+  //
+  // The digest retires entries from before any verification existed: those
+  // live under the plain `<version>-<platform>-<arch>` name, which no longer
+  // resolves, so they can never be hit and silently trusted.
+  //
+  // The namespace retires entries published by the FIRST verified scheme,
+  // which is a subtler problem, because those keys look exactly like these.
+  // That implementation downloaded to a pathname every concurrent invocation
+  // computed identically and let `tar` reopen it after hashing, so a second
+  // provisioner could substitute the bytes in between - and the resulting
+  // tree was then published under the key naming the GOOD digest. Reusing
+  // that keyspace would leave a producer of unverified trees that is not
+  // direct `node_modules` tampering: the previous implementation itself.
+  // Bump this when the provisioning scheme changes in a way that could have
+  // published bytes the current scheme would not.
+  const CACHE_SCHEME = "s2";
+  const extractRoot = path.join(
+    cacheRoot,
+    `${CACHE_SCHEME}-${version}-${platform}-${arch}-${pinnedDigest}`,
+  );
   const nodeBin = path.join(extractRoot, distName, "bin", "node");
 
   if (fs.existsSync(nodeBin) && nodeBinaryHasSeaFuse(nodeBin)) {
     return nodeBin;
   }
 
-  ensureDir(extractRoot);
-  const tarball = path.join(cacheRoot, `${distName}.tar.gz`);
-  const url = `https://nodejs.org/dist/${version}/${distName}.tar.gz`;
-  console.warn(
-    `[sea] host '${process.execPath}' is not SEA-capable; downloading official Node ${version} (${platform}-${arch})`,
-  );
-  console.warn(`[sea]   ${url}`);
-  const curl = spawnSync("curl", ["-fSL", "--retry", "3", "-o", tarball, url], {
-    stdio: "inherit",
-  });
-  if (curl.status !== 0) {
-    throw new Error(
-      `Failed to download official Node from ${url} (curl exit ${curl.status}). ` +
-        "Check network access or install official Node manually and re-run.",
-    );
-  }
-  const untar = spawnSync("tar", ["-xzf", tarball, "-C", extractRoot], {
-    stdio: "inherit",
-  });
-  if (untar.status !== 0) {
-    throw new Error(`Failed to extract ${tarball} (tar exit ${untar.status}).`);
-  }
+  // Cheapest check first: a mis-entered pin is caught before ~50 MB moves.
+  assertPinAgreesWithPublishedShasums(version, tarballName, pinnedDigest);
 
-  if (!fs.existsSync(nodeBin)) {
-    throw new Error(
-      `Extracted official Node but ${nodeBin} is missing - unexpected tarball layout.`,
+  // Download, hash and extract inside a directory no other invocation can
+  // name. Writing to a SHARED `<cacheRoot>/<tarballName>` would make the
+  // verification bypassable: curl -o truncates in place, so a second build on
+  // this machine (the host SEA and the CLI SEA are separate invocations) could
+  // replace the bytes in the window between `sha256OfFile` and `tar`, and tar
+  // would unpack an archive this invocation never checked. Verifying one
+  // pathname and extracting another process's bytes from it is not a
+  // verification at all, so the file that is hashed and the file that is
+  // extracted must be the same private file.
+  ensureDir(cacheRoot);
+  const stagingDir = fs.mkdtempSync(path.join(cacheRoot, "download-"));
+  // Everything after the mkdtemp is inside the try, so the `finally` that
+  // removes the staging directory covers EVERY failure that can follow it.
+  // `ensureDir` below used to sit outside, which leaked the directory when it
+  // threw - the one failure the cleanup was written for and did not cover.
+  try {
+    const tarball = path.join(stagingDir, tarballName);
+    const stagedExtract = path.join(stagingDir, "x");
+    ensureDir(stagedExtract);
+    const url = `https://nodejs.org/dist/${version}/${tarballName}`;
+    console.warn(
+      `[sea] host '${process.execPath}' is not SEA-capable; downloading official Node ${version} (${platform}-${arch})`,
     );
-  }
-  if (!nodeBinaryHasSeaFuse(nodeBin)) {
-    throw new Error(
-      `Downloaded official Node at ${nodeBin} still lacks the SEA fuse sentinel - ` +
-        "this should not happen for an official build; aborting.",
+    console.warn(`[sea]   ${url}`);
+    const curl = spawnSync(
+      "curl",
+      ["-fSL", "--retry", "3", "-o", tarball, url],
+      {
+        stdio: "inherit",
+      },
     );
+    if (curl.status !== 0) {
+      throw new Error(
+        `Failed to download official Node from ${url} (curl exit ${curl.status}). ` +
+          "Check network access or install official Node manually and re-run.",
+      );
+    }
+
+    // Verify BEFORE extraction: `tar -xzf` on an attacker-supplied archive is
+    // itself the thing being defended against, so nothing may unpack until the
+    // bytes match the committed pin. A failed match names both digests; the
+    // whole staging directory goes in the `finally`, so the bad bytes cannot
+    // be reused by a re-run either.
+    const actualDigest = sha256OfFile(tarball);
+    if (!digestsMatch(pinnedDigest, actualDigest)) {
+      throw new Error(
+        `SHA-256 mismatch for ${tarballName} downloaded from ${url}: expected ` +
+          `${pinnedDigest}, got ${actualDigest}. The file was discarded and NOT ` +
+          `extracted. Do not retry blindly - either the mirror served something ` +
+          `else or the pin is wrong.`,
+      );
+    }
+
+    const untar = spawnSync("tar", ["-xzf", tarball, "-C", stagedExtract], {
+      stdio: "inherit",
+    });
+    if (untar.status !== 0) {
+      throw new Error(
+        `Failed to extract ${tarball} (tar exit ${untar.status}).`,
+      );
+    }
+
+    // Check the tree we just unpacked, not the published path - another
+    // invocation may be publishing the same digest concurrently, and this
+    // invocation must only ever vouch for bytes it hashed itself.
+    const stagedNodeBin = path.join(stagedExtract, distName, "bin", "node");
+    if (!fs.existsSync(stagedNodeBin)) {
+      throw new Error(
+        `Extracted official Node but ${stagedNodeBin} is missing - unexpected tarball layout.`,
+      );
+    }
+    if (!nodeBinaryHasSeaFuse(stagedNodeBin)) {
+      throw new Error(
+        `Downloaded official Node at ${stagedNodeBin} still lacks the SEA fuse sentinel - ` +
+          "this should not happen for an official build; aborting.",
+      );
+    }
+
+    // Publish by rename, so `extractRoot` never exists in a half-extracted
+    // state for the fast path above to find. Losing the race is a success:
+    // the winner's tree is the same verified digest by construction, because
+    // the digest is IN the directory name.
+    try {
+      fs.renameSync(stagedExtract, extractRoot);
+    } catch (error) {
+      // Only an actual completed winner excuses this. The test is the same
+      // predicate the fast path uses, so "someone else published a usable
+      // tree here" is the ONLY reading that swallows the error - ENOSPC,
+      // EACCES, ENOTDIR and a half-published tree all propagate, because
+      // none of them means the binary is there and verified.
+      if (!fs.existsSync(nodeBin) || !nodeBinaryHasSeaFuse(nodeBin)) {
+        throw error;
+      }
+    }
+    return nodeBin;
+  } finally {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
   }
-  return nodeBin;
 }
 
 // Resolve a SEA-capable `node` to use as both the blob generator and the
@@ -605,6 +890,10 @@ module.exports = {
   writeSeaConfig,
   nodeBinaryHasSeaFuse,
   resolveSeaHostNode,
+  digestsMatch,
+  parseShasumsEntry,
+  lookupPinnedTarballDigest,
+  OFFICIAL_NODE_TARBALL_SHA256,
   provisionOfficialNode,
   generateSeaBlob,
   copyHostNodeBinary,

@@ -7,7 +7,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
@@ -96,6 +96,32 @@ function isTransportClassFailure(error: HostRpcError): boolean {
   return (
     error instanceof HostTransportFailureError && error.fatalDetails === null
   );
+}
+
+/**
+ * The AMBIGUOUS post-send drop - the one condition {@link transportNoticeToast}
+ * narrates as "may or may not have gone through".
+ *
+ * Exported for the one kind of caller that can do better than narrating it: a
+ * request carrying an IDEMPOTENCY KEY is replayable, and its outcome is
+ * DECIDABLE by asking the host what exists, so telling that user it is
+ * unknowable is a worse answer than looking. Such a caller suppresses the
+ * notice on this predicate and raises its own only after its existence poll
+ * comes back negative. Every other caller keeps the notice, because for them
+ * the ambiguity is real.
+ *
+ * NO CALLER YET, deliberately: the keyed `epic.create` dispatch and its poll
+ * land together, and retiring the notice before the poll exists would trade a
+ * vague sentence for silence. This is the seam they attach to.
+ *
+ * Both exclusions are the cases that are NOT ambiguous: `RetryableTransportError`
+ * carries the host's no-dispatch guarantee ("that didn't go through"), and an
+ * abort is a caller-owned cancellation, not a network condition.
+ */
+export function isUnknownOutcomeTransportFailure(error: HostRpcError): boolean {
+  if (error instanceof HostRequestAbortedError) return false;
+  if (error instanceof RetryableTransportError) return false;
+  return isTransportClassFailure(error);
 }
 
 /**
@@ -428,9 +454,10 @@ function hostErrorToastForSimpleCode(
  * outcome, so each one can say what happened and what to do next.
  *
  * The `promotion-pending` reasons are split rather than sharing one string
- * BECAUSE their advice differs: three of them mean "wait", and `failed` is
- * the one where waiting is not the answer. Collapsing them would re-lose
- * exactly what the taxonomy recovered.
+ * BECAUSE their advice differs: three of them mean "wait", `failed` is the
+ * one where waiting is not the answer, and `unverified` is the one whose
+ * advice this client decides for itself (see `shareUnverifiedMessage`).
+ * Collapsing them would re-lose exactly what the taxonomy recovered.
  */
 function shareRefusalMessage(refusal: EpicShareRefusal): string {
   switch (refusal.kind) {
@@ -451,6 +478,30 @@ function shareRefusalMessage(refusal: EpicShareRefusal): string {
   }
 }
 
+const SHARE_PENDING_OFFLINE_MESSAGE =
+  "Couldn't reach the cloud to finish copying this epic. Check your connection and invite again.";
+
+/**
+ * The host refused because this session holds no cloud verdict. That is all
+ * the host can know - the verdict crosses the wire as a boolean - so what to
+ * DO about it is decided here, from why this client lost the verdict.
+ *
+ * Until the host sent this reason it rode `offline`, and "check your
+ * connection" was the advice whatever the cause. It is right for one of them.
+ */
+function shareUnverifiedMessage(loss: CloudVerdictLoss): string {
+  switch (loss) {
+    case "session-rejected":
+      return "Your session has expired. Sign in again, then invite.";
+    case "account-unavailable":
+      return "This account is no longer available, so this epic can't be shared from it.";
+    case "ended-elsewhere":
+      return "This window's cloud session was ended from another window, so this epic can't be shared from here right now. That window says why.";
+    case "unreachable":
+      return SHARE_PENDING_OFFLINE_MESSAGE;
+  }
+}
+
 function sharePendingMessage(reason: EpicSharePromotionPendingReason): string {
   switch (reason) {
     case "recent-attempt":
@@ -458,7 +509,9 @@ function sharePendingMessage(reason: EpicSharePromotionPendingReason): string {
     case "busy":
       return "This epic is busy right now, so it hasn't finished reaching the cloud. Let the current work settle, then invite again.";
     case "offline":
-      return "Couldn't reach the cloud to finish copying this epic. Check your connection and invite again.";
+      return SHARE_PENDING_OFFLINE_MESSAGE;
+    case "unverified":
+      return shareUnverifiedMessage(useAuthStore.getState().cloudVerdictLoss);
     case "failed":
       return "This epic couldn't be copied to the cloud, so there's nothing for a collaborator to open yet. Retrying won't help on its own — reopen the epic, or contact support if it persists.";
   }

@@ -21,6 +21,23 @@ interface ImageAttachmentBaseAttrs {
   readonly fileName: string;
   readonly mimeType: string;
   readonly size: number | null;
+  /**
+   * Whether these bytes may travel to the host BY HASH rather than inline.
+   * METADATA beside the payload XOR below — not a third payload arm.
+   *
+   * Stamped by the preparer (`composer-image-preparation.ts`), which is the only
+   * place that knows: `true` for a raster output it produced, `false` for its
+   * source-bytes fallback (SVG, AVIF, HEIC, BMP, bytes that disagree with their
+   * declared type). The host's staging seam refuses the complement of the same
+   * raster list; its `missing-attachment-bytes` refusal is the backstop for a
+   * disagreement, not the rule.
+   *
+   * Read it with `imageAttachmentByHashEligible` (`lib/composer/image-atoms.ts`)
+   * rather than off the attrs directly — a node that has round-tripped through
+   * the HTML clipboard carries `"true"`/`"false"` strings, exactly as `size` and
+   * the mention chip's `issueNumber` do.
+   */
+  readonly byHashEligible: boolean;
 }
 
 /**
@@ -44,6 +61,26 @@ export type ImageAttachmentAttrs =
       readonly b64content?: never;
     });
 
+/**
+ * What a pending b64 node becomes once its background job settles. It carries
+ * the metadata as well as the hash because preparation may have re-encoded the
+ * bytes on the way to the store: the node's `mimeType`, `fileName` and `size`
+ * must describe the bytes that hash addresses, not the ones that were pasted -
+ * the composer image budget reads `size` back off the node, and `size`/
+ * `mimeType` are what the send carries.
+ *
+ * `byHashEligible` rides along for the same reason and is the sharpest case of
+ * it: the pending node was stamped from the SOURCE bytes, and preparation is
+ * what decides whether the stored bytes are a format the host can take by hash.
+ */
+export interface ImageAttachmentRewrite {
+  readonly hash: string;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly size: number | null;
+  readonly byHashEligible: boolean;
+}
+
 interface ImageAttachmentLabelPluginState {
   readonly decorations: DecorationSet;
 }
@@ -65,7 +102,10 @@ declare module "@tiptap/core" {
     imageAttachment: {
       insertImageAttachment: (attrs: ImageAttachmentAttrs) => ReturnType;
       removeImageAttachmentById: (id: string) => ReturnType;
-      rewriteImageAttachmentHashById: (id: string, hash: string) => ReturnType;
+      rewriteImageAttachmentHashById: (
+        id: string,
+        rewrite: ImageAttachmentRewrite,
+      ) => ReturnType;
     };
   }
 }
@@ -159,7 +199,7 @@ export const ImageAttachmentNode = TiptapNode.create({
           return true;
         },
       rewriteImageAttachmentHashById:
-        (id, hash) =>
+        (id, rewrite) =>
         ({ tr, state, dispatch }) => {
           const matches: Array<{
             readonly pos: number;
@@ -177,10 +217,14 @@ export const ImageAttachmentNode = TiptapNode.create({
           // `setNodeMarkup` rewrites the attrs while preserving the node's exact
           // position (no re-insert, no mapping, caret untouched). This is what
           // lets the paste insert full content in document order and convert each
-          // image's payload once its background hash+store job resolves.
+          // image's payload once its background prepare+hash+store job resolves.
           tr.setNodeMarkup(match.pos, undefined, {
             ...match.attrs,
-            hash,
+            hash: rewrite.hash,
+            fileName: rewrite.fileName,
+            mimeType: rewrite.mimeType,
+            size: rewrite.size,
+            byHashEligible: rewrite.byHashEligible,
             b64content: null,
           });
           if (dispatch) dispatch(tr);

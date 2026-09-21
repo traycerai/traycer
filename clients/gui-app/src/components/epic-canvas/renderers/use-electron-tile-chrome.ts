@@ -6,7 +6,10 @@ import type {
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-display";
+import {
+  normalizeBrowserAddressInput,
+  parseHttpUrl,
+} from "@/lib/browser-view/browser-tab-display";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
@@ -151,9 +154,25 @@ export function useElectronTabChrome(
     };
   }, [surfaceServices, tileKey]);
 
+  const reload = (): void => {
+    setCertificateError(null);
+    setCertificateProceeding(false);
+    void control({ kind: "reload" }).catch(ignoreError);
+  };
+
   const navigateToUrl = (nextUrl: string): void => {
     draft.onAddressSubmitted(nextUrl);
-    if (nextUrl === liveUrl) return;
+    const currentUrl = normalizeBrowserAddressInput(
+      liveUrl,
+      useSettingsStore.getState().browserSearchEngine,
+    );
+    if (
+      (parseHttpUrl(nextUrl)?.href ?? nextUrl) ===
+      (parseHttpUrl(currentUrl)?.href ?? currentUrl)
+    ) {
+      reload();
+      return;
+    }
     onAttemptedUrl(nextUrl);
     setCertificateError(null);
     setCertificateProceeding(false);
@@ -170,12 +189,6 @@ export function useElectronTabChrome(
         useSettingsStore.getState().browserSearchEngine,
       ),
     );
-  };
-
-  const reload = (): void => {
-    setCertificateError(null);
-    setCertificateProceeding(false);
-    void control({ kind: "reload" }).catch(ignoreError);
   };
 
   const stop = (): void => {

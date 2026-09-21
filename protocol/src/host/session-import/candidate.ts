@@ -9,6 +9,7 @@
  */
 import { z } from "zod";
 import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Identifies one native session end to end. `(harness, nativeSessionId)` is
@@ -16,10 +17,12 @@ import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundatio
  * deterministic id derived from this pair, so re-running the wizard over the
  * same session finds the existing chat instead of making a second one.
  */
-export const sessionImportSelectionSchema = z.object({
-  harness: guiHarnessIdSchema,
-  nativeSessionId: z.string().min(1),
-});
+export const sessionImportSelectionSchema = lazySchema(() =>
+  z.object({
+    harness: guiHarnessIdSchema,
+    nativeSessionId: z.string().min(1),
+  }),
+);
 export type SessionImportSelection = z.infer<
   typeof sessionImportSelectionSchema
 >;
@@ -46,13 +49,15 @@ export type SessionImportSelection = z.infer<
  * the other two name work only a run does. That half is not left to this
  * comment - {@link sessionImportUnreadableReasonSchema} enforces it.
  */
-export const sessionImportFailureReasonSchema = z.enum([
-  "source_unreadable",
-  "source_empty",
-  "workspace_bind_failed",
-  "creation_failed",
-  "internal_error",
-]);
+export const sessionImportFailureReasonSchema = lazySchema(() =>
+  z.enum([
+    "source_unreadable",
+    "source_empty",
+    "workspace_bind_failed",
+    "creation_failed",
+    "internal_error",
+  ]),
+);
 export type SessionImportFailureReason = z.infer<
   typeof sessionImportFailureReasonSchema
 >;
@@ -72,11 +77,9 @@ export type SessionImportFailureReason = z.infer<
  * reports a whole provider giving up rather than one session being unreadable,
  * and it classifies its reason from a thrown error, so it keeps the full enum.
  */
-export const sessionImportUnreadableReasonSchema = z.enum([
-  "source_unreadable",
-  "source_empty",
-  "internal_error",
-]);
+export const sessionImportUnreadableReasonSchema = lazySchema(() =>
+  z.enum(["source_unreadable", "source_empty", "internal_error"]),
+);
 export type SessionImportUnreadableReason = z.infer<
   typeof sessionImportUnreadableReasonSchema
 >;
@@ -94,19 +97,21 @@ export type SessionImportUnreadableReason = z.infer<
  * import are described in the same vocabulary rather than in two - narrowed to
  * the reasons a read alone can reach.
  */
-export const sessionImportCandidateStateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("importable") }),
-  z.object({
-    kind: z.literal("already_in_traycer"),
-    epicId: z.string().min(1),
-    chatId: z.string().min(1),
-  }),
-  z.object({
-    kind: z.literal("unreadable"),
-    reason: sessionImportUnreadableReasonSchema,
-    detail: z.string(),
-  }),
-]);
+export const sessionImportCandidateStateSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("importable") }),
+    z.object({
+      kind: z.literal("already_in_traycer"),
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("unreadable"),
+      reason: sessionImportUnreadableReasonSchema,
+      detail: z.string(),
+    }),
+  ]),
+);
 export type SessionImportCandidateState = z.infer<
   typeof sessionImportCandidateStateSchema
 >;
@@ -120,17 +125,19 @@ export type SessionImportCandidateState = z.infer<
  * full file - and the wizard renders the row without a count rather than
  * paying for one.
  */
-export const sessionImportCandidateSchema = z.object({
-  harness: guiHarnessIdSchema,
-  nativeSessionId: z.string().min(1),
-  title: z.string().nullable(),
-  firstPrompt: z.string().nullable(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  messageCount: z.number().int().nonnegative().nullable(),
-  hasSubagents: z.boolean(),
-  state: sessionImportCandidateStateSchema,
-});
+export const sessionImportCandidateSchema = lazySchema(() =>
+  z.object({
+    harness: guiHarnessIdSchema,
+    nativeSessionId: z.string().min(1),
+    title: z.string().nullable(),
+    firstPrompt: z.string().nullable(),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    messageCount: z.number().int().nonnegative().nullable(),
+    hasSubagents: z.boolean(),
+    state: sessionImportCandidateStateSchema,
+  }),
+);
 export type SessionImportCandidate = z.infer<
   typeof sessionImportCandidateSchema
 >;
@@ -151,24 +158,28 @@ export type SessionImportCandidate = z.infer<
  * same registration "add folder" uses, so it no longer looks the folder up and
  * always reports null; the field stays for older hosts, which still fill it.
  */
-export const sessionImportGroupLocationSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("folder"),
-    path: z.string(),
-    workspaceId: z.string().nullable(),
-  }),
-  z.object({ kind: z.literal("missing_folder"), path: z.string() }),
-]);
+export const sessionImportGroupLocationSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("folder"),
+      path: z.string(),
+      workspaceId: z.string().nullable(),
+    }),
+    z.object({ kind: z.literal("missing_folder"), path: z.string() }),
+  ]),
+);
 export type SessionImportGroupLocation = z.infer<
   typeof sessionImportGroupLocationSchema
 >;
 
-export const sessionImportGroupSchema = z.object({
-  location: sessionImportGroupLocationSchema,
-  // Whether the folder is a git checkout. Carried so the wizard can rank
-  // repos above loose folders - that ordering is the host's knowledge (it
-  // resolved the repo root during grouping), not something a path reveals.
-  gitBacked: z.boolean(),
-  sessions: z.array(sessionImportCandidateSchema),
-});
+export const sessionImportGroupSchema = lazySchema(() =>
+  z.object({
+    location: sessionImportGroupLocationSchema,
+    // Whether the folder is a git checkout. Carried so the wizard can rank
+    // repos above loose folders - that ordering is the host's knowledge (it
+    // resolved the repo root during grouping), not something a path reveals.
+    gitBacked: z.boolean(),
+    sessions: z.array(sessionImportCandidateSchema),
+  }),
+);
 export type SessionImportGroup = z.infer<typeof sessionImportGroupSchema>;

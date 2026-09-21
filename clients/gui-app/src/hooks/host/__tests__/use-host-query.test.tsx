@@ -8,6 +8,7 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   mockLocalHostEntry,
@@ -1119,3 +1120,380 @@ function createFixedHostQueryFixture(
   );
   return { client, queryClient, requestCount, Wrapper };
 }
+
+const STATUS_RESPONSE = {
+  ready: true,
+  hostVersion: "1.2.3",
+  protocolVersion: { major: 1, minor: 0 },
+  busy: false,
+  busySessionCount: 0,
+  updateProgress: null,
+  busyBreakdown: null,
+  updateOperation: null,
+  updateTransaction: null,
+  storeFormats: null,
+  install: null,
+} as const;
+
+/**
+ * A `host.status` fixture whose handler can be swapped mid-test
+ * (`setHandler`), with every dispatch recorded on the messenger's own
+ * `calls` log - the ground truth for `idempotencyKey` / `requiredHostMethodVersion`,
+ * since a client-level spy cannot see what a SECOND `redispatch()` attempt
+ * carried without also being re-armed between calls.
+ */
+function createKeyedDispatchFixture(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly setHandler: (handler: () => typeof STATUS_RESPONSE) => void;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+} {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  let handler: () => typeof STATUS_RESPONSE = () => STATUS_RESPONSE;
+  let requestCounter = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => {
+      requestCounter += 1;
+      return `req-keyed-${String(requestCounter)}`;
+    },
+    handlers: {
+      "host.status": () => handler(),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return {
+    client: spine,
+    setHandler: (next) => {
+      handler = next;
+    },
+    messenger,
+    Wrapper,
+  };
+}
+
+/**
+ * Wraps a real `HostRequester` in a plain object that records EVERY call per
+ * member before delegating, and returns both.
+ *
+ * `createRequester` hands back a `Proxy` whose `get` trap re-derives a fresh
+ * bound function for `request` / `requestWithOptions` / … on every property
+ * access (`host-client.ts`'s `createPinnedRequester`), so `vi.spyOn(client,
+ * "request")` silently replaces a property the trap never consults - the spy
+ * is installed but the dispatch never reaches it, and every call still routes
+ * through the ORIGINAL implementation the trap returns. A negative assertion
+ * ("not called") stays vacuously true either way, which is exactly the trap
+ * for a positive one. Recording in a plain wrapper the mutation code calls
+ * directly sidesteps the proxy entirely.
+ */
+function recordingRequester(real: HostRequester<HostRpcRegistry>): {
+  readonly requester: HostRequester<HostRpcRegistry>;
+  readonly calls: {
+    request: unknown[][];
+    requestWithOptions: unknown[][];
+    requestWithSignalRequiringHostMethodVersion: unknown[][];
+  };
+} {
+  const calls = {
+    request: [] as unknown[][],
+    requestWithOptions: [] as unknown[][],
+    requestWithSignalRequiringHostMethodVersion: [] as unknown[][],
+  };
+  const requester: HostRequester<HostRpcRegistry> = {
+    getRegistry: () => real.getRegistry(),
+    getActiveHost: () => real.getActiveHost(),
+    getActiveHostId: () => real.getActiveHostId(),
+    getRequestContext: () => real.getRequestContext(),
+    getRequestContextUserId: () => real.getRequestContextUserId(),
+    onChange: (handler) => real.onChange(handler),
+    request: (method, params) => {
+      calls.request.push([method, params]);
+      return real.request(method, params);
+    },
+    requestWithIdempotencyKey: (method, params, idempotencyKey) =>
+      real.requestWithIdempotencyKey(method, params, idempotencyKey),
+    requestWithOptions: (method, params, options) => {
+      calls.requestWithOptions.push([method, params, options]);
+      return real.requestWithOptions(method, params, options);
+    },
+    requestWithSignal: (method, params, signal) =>
+      real.requestWithSignal(method, params, signal),
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      signal,
+      requiredHostMethodVersion,
+    ) => {
+      calls.requestWithSignalRequiringHostMethodVersion.push([
+        method,
+        params,
+        signal,
+        requiredHostMethodVersion,
+      ]);
+      return real.requestWithSignalRequiringHostMethodVersion(
+        method,
+        params,
+        signal,
+        requiredHostMethodVersion,
+      );
+    },
+    requestWithResponseTimeout: (method, params, responseTimeoutMs) =>
+      real.requestWithResponseTimeout(method, params, responseTimeoutMs),
+  };
+  return { requester, calls };
+}
+
+describe("useHostMutation - idempotency-keyed dispatch and resolveResponse", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("with an idempotencyKey, dispatches through requestWithOptions carrying the key AND the requiredHostMethodVersion floor", async () => {
+    const fixture = createKeyedDispatchFixture();
+    const { requester: client, calls } = recordingRequester(
+      fixture.client.createRequester(mockLocalHostEntry),
+    );
+    const requirement = {
+      method: "host.status" as const,
+      version: { major: 1, minor: 0 },
+    };
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+          idempotencyKey: () => "key-1",
+          requiredHostMethodVersion: () => requirement,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({});
+    });
+
+    expect(calls.request).toHaveLength(0);
+    expect(calls.requestWithSignalRequiringHostMethodVersion).toHaveLength(0);
+    expect(calls.requestWithOptions).toHaveLength(1);
+    const [method, params, options] = calls.requestWithOptions[0];
+    // The positive control: the request actually reached the client with the
+    // right method and params, not just "some option bag was built".
+    expect(method).toBe("host.status");
+    expect(params).toEqual({});
+    expect(options).toMatchObject({
+      idempotencyKey: "key-1",
+      responseTimeoutMs: null,
+      requiredHostMethodVersion: requirement,
+      signal: undefined,
+    });
+    expect(fixture.messenger.calls).toHaveLength(1);
+    expect(fixture.messenger.calls[0]).toMatchObject({
+      method: "host.status",
+      idempotencyKey: "key-1",
+    });
+  });
+
+  it("with no idempotencyKey and no floor, dispatch is byte-identical to today: plain request(), never requestWithOptions", async () => {
+    const fixture = createKeyedDispatchFixture();
+    const { requester: client, calls } = recordingRequester(
+      fixture.client.createRequester(mockLocalHostEntry),
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({});
+    });
+
+    expect(calls.request).toHaveLength(1);
+    expect(calls.request[0]).toEqual(["host.status", {}]);
+    expect(calls.requestWithOptions).toHaveLength(0);
+    expect(fixture.messenger.calls).toHaveLength(1);
+    expect(fixture.messenger.calls[0]).toMatchObject({
+      method: "host.status",
+      idempotencyKey: null,
+    });
+  });
+
+  it("with no idempotencyKey but a floor, dispatch is byte-identical to today: requestWithSignalRequiringHostMethodVersion, never requestWithOptions", async () => {
+    const fixture = createKeyedDispatchFixture();
+    const { requester: client, calls } = recordingRequester(
+      fixture.client.createRequester(mockLocalHostEntry),
+    );
+    const requirement = {
+      method: "host.status" as const,
+      version: { major: 1, minor: 0 },
+    };
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+          requiredHostMethodVersion: () => requirement,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({});
+    });
+
+    expect(calls.requestWithSignalRequiringHostMethodVersion).toHaveLength(1);
+    expect(calls.requestWithSignalRequiringHostMethodVersion[0]).toEqual([
+      "host.status",
+      {},
+      undefined,
+      requirement,
+    ]);
+    expect(calls.requestWithOptions).toHaveLength(0);
+  });
+
+  it("resolveResponse's substituted response is what onResponse, onSuccess and mutateAsync all see", async () => {
+    const fixture = createKeyedDispatchFixture();
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const order: string[] = [];
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client,
+          method: "host.status",
+          options: {
+            onSuccess: (response) => {
+              order.push(`onSuccess:${response.hostVersion}`);
+            },
+          },
+          mapVariables: () => ({}),
+          resolveResponse: (response) =>
+            Promise.resolve({ ...response, hostVersion: "SUBSTITUTED" }),
+          onResponse: (response) => {
+            order.push(`onResponse:${response.hostVersion}`);
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    let resolved: { readonly hostVersion: string } | undefined;
+    await act(async () => {
+      resolved = await rendered.result.current.mutateAsync({});
+    });
+
+    expect(order).toEqual(["onResponse:SUBSTITUTED", "onSuccess:SUBSTITUTED"]);
+    expect(resolved?.hostVersion).toBe("SUBSTITUTED");
+  });
+
+  it("redispatch() replays the SAME method, params, key and floor as the first attempt", async () => {
+    const fixture = createKeyedDispatchFixture();
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const requirement = {
+      method: "host.status" as const,
+      version: { major: 1, minor: 0 },
+    };
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+          idempotencyKey: () => "key-replay",
+          requiredHostMethodVersion: () => requirement,
+          resolveResponse: async (response, _variables, redispatch) => {
+            await redispatch();
+            return response;
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({});
+    });
+
+    expect(fixture.messenger.calls).toHaveLength(2);
+    const [first, second] = fixture.messenger.calls;
+    expect(first.method).toBe("host.status");
+    expect(second.method).toBe(first.method);
+    expect(second.params).toEqual(first.params);
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.idempotencyKey).toBe("key-replay");
+    expect(second.requiredHostMethodVersion).toEqual(
+      first.requiredHostMethodVersion,
+    );
+    expect(second.requiredHostMethodVersion).toEqual(requirement);
+  });
+
+  it("mapDispatchError re-shapes a rejection from a redispatch() attempt exactly as it does the first attempt", async () => {
+    const fixture = createKeyedDispatchFixture();
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    let call = 0;
+    fixture.setHandler(() => {
+      call += 1;
+      if (call === 1) return STATUS_RESPONSE;
+      throw new Error("second dispatch exploded");
+    });
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+          resolveResponse: async (response, _variables, redispatch) => {
+            await redispatch();
+            return response;
+          },
+          mapDispatchError: (cause) =>
+            new Error(
+              `mapped: ${cause instanceof Error ? cause.message : String(cause)}`,
+            ),
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await rendered.result.current.mutateAsync({});
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("mapped: second dispatch exploded");
+  });
+});

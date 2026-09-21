@@ -386,11 +386,24 @@ export type ChatAttachmentByteReader = (
  * Deliberately NOT routed through `imageBlobCache`: that cache hands back a
  * blob URL, not bytes, and its entries are reference-counted against mounted
  * renderers. A copy is neither.
+ *
+ * THIS WINDOW'S COMPOSER STORE IS TRIED FIRST here, unlike in the rendering
+ * fetcher, where it is the last leg. Both resolve the same hash - the fetcher's
+ * chain falls through to that store too - so this is about WHICH leg answers
+ * first, and hash-first composers changed the answer. An image attached to a
+ * chat draft but not yet SENT now lives only in this window's store; before,
+ * such a node carried its own inline base64 and never reached this resolver at
+ * all. Asking the host first would mean a round-trip per image, on every prompt
+ * stash save of an unsent draft, that is now routinely a miss - and on a remote
+ * host that is a network round-trip. The reorder cannot return the wrong bytes:
+ * the store is content-addressed, so a hit under `hash` IS that image.
  */
 export function useChatAttachmentByteReader(): ChatAttachmentByteReader {
   const fetcher = useChatImageFetcher();
   return useCallback<ChatAttachmentByteReader>(
     async (hash) => {
+      const local = await getImageBytes(hash).catch(() => undefined);
+      if (local !== undefined) return local;
       const controller = new AbortController();
       const timer = setTimeout(
         () => controller.abort(),

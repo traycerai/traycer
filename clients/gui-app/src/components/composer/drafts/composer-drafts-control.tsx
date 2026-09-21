@@ -10,13 +10,19 @@ import {
 import { LayersPlus } from "lucide-react";
 import { useStore } from "zustand";
 
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsCountBucket,
+  type AnalyticsDraftEntryPoint,
+  type AnalyticsDraftInput,
+} from "@/lib/analytics";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import {
   DRAFT_ROW_SELECTOR,
   DraftRow,
 } from "@/components/composer/drafts/draft-row";
-import { DraftsFilterToggle } from "@/components/composer/drafts/drafts-filter-toggle";
 import { Button } from "@/components/ui/button";
 import { Command, CommandGroup, CommandList } from "@/components/ui/command";
 import {
@@ -30,16 +36,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  useDraftInventory,
-  useDraftInventoryCount,
-} from "@/hooks/drafts/use-draft-inventory";
+import { useDraftInventory } from "@/hooks/drafts/use-draft-inventory";
 import { useDraftInventoryActions } from "@/hooks/drafts/use-draft-inventory-actions";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { registerActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import {
-  draftRowSourceChip,
-  type DraftInventoryFilter,
+  registerActiveDraftsControl,
+  type DraftsControlEntryPoint,
+} from "@/lib/commands/active-drafts-control-registry";
+import {
+  neighbourRowId,
+  resolveSelectedId,
   type DraftInventoryRow,
   type DraftInventoryScope,
 } from "@/lib/drafts/draft-inventory";
@@ -51,13 +57,7 @@ export interface ComposerDraftsControlProps {
   readonly hostId: string | null;
   readonly pickerStore: ComposerPickerStore;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
-  /**
-   * Whether this surface owns `Cmd+S` right now. The registry is a stack, so
-   * an overlay composer (the new-agent modal) registers over the surface
-   * beneath it and hands the chord back when it closes - which is why the
-   * modal passes `true` for its whole open lifetime rather than tracking its
-   * own mode.
-   */
+  /** Whether this start-page composer currently owns Cmd+S. */
   readonly active: boolean;
 }
 
@@ -81,58 +81,58 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   const { scope, hostId, pickerStore, editorRef, active } = props;
   const mobile = useIsMobileViewport();
   const [open, setOpenState] = useState(false);
-  const [filter, setFilter] = useState<DraftInventoryFilter>("current");
+  const openRef = useRef(open);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const restoreEditorFocusRef = useRef(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const pickerOpen = useStore(pickerStore, (state) => state.open);
 
-  const rows = useDraftInventory(scope, filter);
-  // D18: the badge counts what the CURRENT-surface filter would show, whatever
-  // the open list is currently filtered to.
-  const currentCount = useDraftInventoryCount(scope, "current");
-  const { openRow, copyRow, deleteRow } = useDraftInventoryActions(hostId);
+  const rows = useDraftInventory(scope, "current");
+  const currentCount = rows.length;
+  const { openRow, copyRow, deleteRow } = useDraftInventoryActions(
+    hostId,
+    "start_page",
+  );
 
-  const scopeEpicId = scope.surface === "landing" ? null : scope.epicId;
   const selectedId = resolveSelectedId(rows, highlightedId);
   const selectedRow = rows.find((row) => row.id === selectedId);
 
   const setOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) {
+    (nextOpen: boolean, entryPoint: AnalyticsDraftEntryPoint) => {
+      if (nextOpen && !openRef.current) {
+        Analytics.getInstance().track(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: entryPoint,
+          draft_count: analyticsCountBucket(currentCount),
+        });
         restoreEditorFocusRef.current = editorRef.current?.hasFocus() ?? false;
-        // D05: the filter is not a preference. Every open starts on the
-        // surface that asked.
-        setFilter("current");
         setHighlightedId(null);
       }
+      openRef.current = nextOpen;
       setOpenState(nextOpen);
     },
-    [editorRef],
+    [editorRef, currentCount],
   );
 
   const focusEditor = useCallback(() => {
     editorRef.current?.focus();
   }, [editorRef]);
 
-  // `Cmd+S` toggles rather than opens: the action stays in
-  // `REPEAT_SENSITIVE_ACTIONS` precisely because it is a toggle, and a second
-  // press of a chord that put a list on screen should take it back off. The
-  // open state rides behind a ref so the registration's identity does not move
-  // with it - re-registering would jump this surface above an overlay that
-  // legitimately owns the chord.
-  const openRef = useRef(open);
+  // Registry commands ensure the list is open; explicit dismissals still close it.
   useEffect(() => {
     openRef.current = open;
   }, [open]);
-  const toggleOpen = useCallback(() => {
-    setOpen(!openRef.current);
-  }, [setOpen]);
+  const openList = useCallback(
+    (entryPoint: DraftsControlEntryPoint) => {
+      setOpen(true, entryPoint);
+    },
+    [setOpen],
+  );
   useEffect(() => {
     if (!active) return;
-    return registerActiveDraftsControl(toggleOpen);
-  }, [active, toggleOpen]);
+    return registerActiveDraftsControl(openList);
+  }, [active, openList]);
 
   // The picker popover and this one anchor to the same composer card; only one
   // of them can own the keyboard.
@@ -163,19 +163,19 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   );
 
   const handleOpenRow = useCallback(
-    (row: DraftInventoryRow) => {
+    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
       restoreEditorFocusRef.current = false;
       setOpenState(false);
-      openRow(row);
+      openRow(row, input, false);
     },
     [openRow],
   );
   // Delete keeps the list open on the NEXT row (the deleted one is about to
   // leave the projection), so a run of deletions needs one keystroke each.
   const handleDeleteRow = useCallback(
-    (row: DraftInventoryRow) => {
+    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
       setHighlightedId(neighbourRowId(rows, row.id));
-      deleteRow(row);
+      deleteRow(row, input);
     },
     [deleteRow, rows],
   );
@@ -184,20 +184,20 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
     event.preventDefault();
     event.stopPropagation();
     if (selectedRow === undefined) return;
-    copyRow(selectedRow);
+    copyRow(selectedRow, "keyboard");
   });
   const claimDeleteKey = useBareKeyClaimer("d", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (selectedRow === undefined) return;
-    handleDeleteRow(selectedRow);
+    handleDeleteRow(selectedRow, "keyboard");
   });
   const rowHighlighted = selectedRow !== undefined;
   // `active` is the SURFACE's own focus, and it gates the keys as well as the
   // chord. `PopoverContent` un-presents its portal when the pane loses focus
   // or is concealed while leaving the root open (`usePaneAwareContentGuard`),
   // so a pane switch with the list open otherwise leaves an INVISIBLE control
-  // still eating arrows, Tab and Enter and still holding `c`/`d` - and `d`
+  // still eating arrows and Enter and still holding `c`/`d` - and `d`
   // deletes a draft while the user is typing in the pane they moved to.
   const keysActive = open && active && !mobile && rowHighlighted;
   useEffect(
@@ -217,16 +217,15 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   useEffect(() => {
     if (!open || !active || mobile) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      // An IME confirming a candidate reports Enter too; it is the composer's
+      // to consume, not a request to open the highlighted row. 229 is the
+      // keyCode browsers report for a key an IME has swallowed.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        setOpen(false);
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        event.stopPropagation();
-        setFilter((current) => (current === "current" ? "all" : "current"));
+        setOpen(false, "button");
         return;
       }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -249,7 +248,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         // Not consumed and not prevented: the claimer's own window listener
         // runs in the bubble phase and answers it.
         if (isClaimedRowLetter(event, rowHighlighted)) return;
-        setOpen(false);
+        setOpen(false, "button");
         return;
       }
       if (event.key === "Enter") {
@@ -261,7 +260,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         event.preventDefault();
         event.stopPropagation();
         if (selectedRow === undefined) return;
-        handleOpenRow(selectedRow);
+        handleOpenRow(selectedRow, "keyboard");
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -291,18 +290,11 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         <span className="text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
           Drafts
         </span>
-        <DraftsFilterToggle
-          value={filter}
-          currentLabel={
-            scope.surface === "landing" ? "Start page" : "This task"
-          }
-          onChange={setFilter}
-        />
       </div>
       <CommandList ref={listRef} className="max-h-none min-h-0">
         {rows.length === 0 ? (
           <p className="px-2.5 py-6 text-center text-ui-sm text-muted-foreground">
-            {filter === "current" ? "No drafts here yet" : "No drafts"}
+            No drafts here yet
           </p>
         ) : (
           <CommandGroup>
@@ -310,12 +302,12 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
               <DraftRow
                 key={row.id}
                 row={row}
-                sourceChip={draftRowSourceChip(row, scopeEpicId, filter)}
+                sourceChip={null}
                 mobile={mobile}
                 onHighlight={() => setHighlightedId(row.id)}
-                onOpen={() => handleOpenRow(row)}
-                onCopy={() => copyRow(row)}
-                onDelete={() => handleDeleteRow(row)}
+                onOpen={(input) => handleOpenRow(row, input)}
+                onCopy={(input) => copyRow(row, input)}
+                onDelete={(input) => handleDeleteRow(row, input)}
               />
             ))}
           </CommandGroup>
@@ -350,7 +342,11 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
 
   if (mobile) {
     return (
-      <Drawer open={open} onOpenChange={setOpen} direction="bottom">
+      <Drawer
+        open={open}
+        onOpenChange={(nextOpen) => setOpen(nextOpen, "button")}
+        direction="bottom"
+      >
         <DraftsTriggerRail>
           <DrawerTrigger asChild>{trigger}</DrawerTrigger>
         </DraftsTriggerRail>
@@ -367,7 +363,10 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(nextOpen, "button")}
+    >
       <DraftsTriggerRail>
         <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       </DraftsTriggerRail>
@@ -404,31 +403,6 @@ function DraftsTriggerRail(props: { readonly children: ReactNode }) {
 function draftsTriggerLabel(count: number): string {
   if (count === 0) return "Drafts";
   return `Drafts: ${String(count)}. Open drafts.`;
-}
-
-/**
- * The highlight, falling back to the first row. A highlight that no longer
- * names a listed row (its draft was deleted, or the filter moved) is dropped
- * rather than left pointing at nothing.
- */
-function resolveSelectedId(
-  rows: ReadonlyArray<DraftInventoryRow>,
-  highlightedId: string | null,
-): string | null {
-  if (highlightedId !== null && rows.some((row) => row.id === highlightedId)) {
-    return highlightedId;
-  }
-  return rows.at(0)?.id ?? null;
-}
-
-/** The row a deletion should leave highlighted: the next one, else the previous. */
-function neighbourRowId(
-  rows: ReadonlyArray<DraftInventoryRow>,
-  deletedId: string,
-): string | null {
-  const index = rows.findIndex((row) => row.id === deletedId);
-  if (index === -1) return null;
-  return rows.at(index + 1)?.id ?? rows.at(index - 1)?.id ?? null;
 }
 
 function nextRowIndex(
