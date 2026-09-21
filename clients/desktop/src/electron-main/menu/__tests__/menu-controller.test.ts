@@ -1254,6 +1254,27 @@ describe("MenuController", () => {
       controller.dispose();
     });
 
+    it("swallows and logs a synchronous toggleDevTools exception", () => {
+      const a = new FakeAppWindow();
+      const failure = new Error("toggleDevTools boom");
+      a.webContents.toggleDevTools.mockImplementation(() => {
+        throw failure;
+      });
+      const controller = installWithWindows(
+        [{ windowId: "window-a", window: a }],
+        "window-a",
+      );
+      vi.mocked(log.warn).mockClear();
+
+      expect(() => toggleDevTools(a)).not.toThrow();
+
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(
+        vi.mocked(log.warn).mock.calls.some((call) => call.includes(failure)),
+      ).toBe(true);
+      controller.dispose();
+    });
+
     it("does nothing when no app window can be resolved", () => {
       const controller = installWithWindows([], null);
 

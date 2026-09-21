@@ -207,37 +207,47 @@ export class MenuController {
   }
 
   private toggleAppDevTools(senderWindow: BaseWindow | undefined): void {
-    if (!canOpenDevTools) return;
-    // Built-in detached inspectors have no callback window; custom browser
-    // inspectors are child windows. Resolve both back to a registered app.
-    const sender = senderWindow ?? BrowserWindow.getFocusedWindow();
-    if (sender?.isDestroyed()) return;
-    const owner =
-      sender instanceof BrowserWindow
-        ? (sender.getParentWindow() ?? sender)
-        : sender;
-    const windowId =
-      owner === null
-        ? (this.options.windowRegistry
-            .records()
-            .find(
-              (record) =>
-                record.window instanceof BrowserWindow &&
-                !record.window.isDestroyed() &&
-                !record.window.webContents.isDestroyed() &&
-                record.window.webContents.isDevToolsFocused(),
-            )?.windowId ??
-          resolveSenderFocusedOrMruWindowId(this.options.windowRegistry, null))
-        : resolveSenderFocusedOrMruWindowId(this.options.windowRegistry, owner);
-    const target = this.options.windowRegistry
-      .records()
-      .find((record) => record.windowId === windowId)?.window;
-    if (
-      target instanceof BrowserWindow &&
-      !target.isDestroyed() &&
-      !target.webContents.isDestroyed()
-    ) {
-      target.webContents.toggleDevTools();
+    try {
+      if (!canOpenDevTools) return;
+      // Built-in detached inspectors have no callback window; custom browser
+      // inspectors are child windows. Resolve both back to a registered app.
+      const sender = senderWindow ?? BrowserWindow.getFocusedWindow();
+      if (sender?.isDestroyed()) return;
+      const owner =
+        sender instanceof BrowserWindow
+          ? (sender.getParentWindow() ?? sender)
+          : sender;
+      const windowId =
+        owner === null
+          ? (this.options.windowRegistry
+              .records()
+              .find(
+                (record) =>
+                  record.window instanceof BrowserWindow &&
+                  !record.window.isDestroyed() &&
+                  !record.window.webContents.isDestroyed() &&
+                  record.window.webContents.isDevToolsFocused(),
+              )?.windowId ??
+            resolveSenderFocusedOrMruWindowId(
+              this.options.windowRegistry,
+              null,
+            ))
+          : resolveSenderFocusedOrMruWindowId(
+              this.options.windowRegistry,
+              owner,
+            );
+      const target = this.options.windowRegistry
+        .records()
+        .find((record) => record.windowId === windowId)?.window;
+      if (
+        target instanceof BrowserWindow &&
+        !target.isDestroyed() &&
+        !target.webContents.isDestroyed()
+      ) {
+        target.webContents.toggleDevTools();
+      }
+    } catch (err) {
+      log.warn("[menu] toggleAppDevTools failed", err);
     }
   }
 
