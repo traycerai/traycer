@@ -25,6 +25,22 @@ interface ComposerSendButtonProps {
 const BUTTON_CLASS_NAME =
   "size-8 rounded-full disabled:bg-foreground/8 disabled:text-muted-foreground aria-disabled:cursor-not-allowed aria-disabled:bg-foreground/8 aria-disabled:text-muted-foreground aria-disabled:hover:bg-foreground/8";
 
+/**
+ * Invisible hit slop taking the 32px control to the 44px touch-target
+ * guideline, the same `::after` shape `chat-message-user-body` uses. Visual
+ * size and layout are untouched - `Button` renders no `::after` of its own, so
+ * nothing merges with it.
+ *
+ * Applied ONLY to the side-by-side pair below. A 44px box is wider than the
+ * control, so on a toolbar of flush 4px-apart neighbours it would swallow
+ * their taps - which is why `home-touch-targets.css` keeps its slop
+ * vertical-only. The pair earns horizontal slop by widening its own gap to
+ * 12px: 32 + 12 = 44, so the two targets meet exactly and never overlap. Do
+ * not lift this onto the rest of the toolbar without doing the same.
+ */
+const TOUCH_SLOP_CLASS_NAME =
+  "relative after:absolute after:-inset-1.5 after:content-['']";
+
 function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   const {
     canSubmit,
@@ -49,6 +65,7 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
         onSubmit={onSubmit}
         disabledHint={disabledHint}
         queueing={false}
+        touchSlop={false}
       />
     );
   }
@@ -58,11 +75,19 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
       activeTurnStatus={activeTurnStatus}
       disabled={stopDisabled || onStopTurn === null}
       onStopTurn={onStopTurn}
+      touchSlop={stopBesideSend}
     />
   );
   if (!stopBesideSend) return stop;
+  // Both spacings exist to hold the 44px targets apart, and both are needed.
+  // `gap-3` separates Stop from Send: 32 + 12 = 44, so their targets meet
+  // exactly. `ml-2` widens the toolbar's own gap-1 to 12px on the left, where
+  // the mic button sits - without it Stop's slop would reach 2px across the
+  // mic and take taps meant for it, which is the very failure being fixed.
+  // Send needs no equivalent on the right; it is last, inside the row's
+  // 10px padding.
   return (
-    <>
+    <span className="ml-2 flex items-center gap-3">
       {stop}
       <SendButton
         // The submit hook refuses sends while stopping; show it rather than
@@ -72,8 +97,9 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
         onSubmit={onSubmit}
         disabledHint={disabledHint}
         queueing
+        touchSlop
       />
-    </>
+    </span>
   );
 }
 
@@ -86,10 +112,12 @@ interface SendButtonProps {
   disabledHint: string | null;
   /** True while a turn runs and a press queues rather than sends. */
   queueing: boolean;
+  /** Widen the hit area to 44px - only where the pair has room for it. */
+  touchSlop: boolean;
 }
 
 function SendButton(props: SendButtonProps) {
-  const { canSubmit, attachmentPending, onSubmit, disabledHint, queueing } =
+  const { canSubmit, attachmentPending, onSubmit, disabledHint, queueing, touchSlop } =
     props;
   // Hint mode (e.g. no workspace) marks the button `aria-disabled` rather than
   // using the `disabled` attribute, so it stays focusable and the styled
@@ -115,7 +143,7 @@ function SendButton(props: SendButtonProps) {
           aria-disabled={hintActive || undefined}
           aria-label={label}
           aria-keyshortcuts="Meta+Enter Control+Enter"
-          className={BUTTON_CLASS_NAME}
+          className={cn(BUTTON_CLASS_NAME, touchSlop && TOUCH_SLOP_CLASS_NAME)}
         >
           {sendButtonIcon(attachmentPending)}
         </Button>
@@ -141,10 +169,12 @@ interface StopButtonProps {
   activeTurnStatus: ChatActiveTurn["status"];
   disabled: boolean;
   onStopTurn: (() => void) | null;
+  /** Widen the hit area to 44px - only where the pair has room for it. */
+  touchSlop: boolean;
 }
 
 function StopButton(props: StopButtonProps) {
-  const { activeTurnStatus, disabled, onStopTurn } = props;
+  const { activeTurnStatus, disabled, onStopTurn, touchSlop } = props;
   const label = activeTurnStatus === "stopping" ? "Stopping" : "Stop";
   return (
     <TooltipWrapper
@@ -164,6 +194,7 @@ function StopButton(props: StopButtonProps) {
           className={cn(
             BUTTON_CLASS_NAME,
             "bg-foreground/8 text-foreground hover:bg-foreground/10",
+            touchSlop && TOUCH_SLOP_CLASS_NAME,
           )}
         >
           <Square className="size-3.5 fill-current" />
