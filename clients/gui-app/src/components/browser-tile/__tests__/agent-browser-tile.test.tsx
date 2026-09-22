@@ -451,7 +451,7 @@ describe("ElectronTabSurface", () => {
     ).not.toBe("presented");
     await waitFor(() => {
       expect(bindSurface).toHaveBeenCalledExactlyOnceWith({
-        bindingId: "canvasview-1pane-1tile-1",
+        bindingId: "canvas\u001fview-1\u001fpane-1\u001ftile-1",
         surface: {
           viewTabId: "view-1",
           paneId: "pane-1",

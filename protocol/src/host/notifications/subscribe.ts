@@ -28,6 +28,7 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { hostBusyBreakdownSchema } from "@traycer/protocol/host/status/contracts";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Awareness state field under which each host publishes its agent-activity
@@ -152,24 +153,28 @@ export const HOST_RUNTIME_STATUS_AWARENESS_FIELD = "hostRuntimeStatus";
  * key must be dropped and the rest of the entry still read — a strict parse
  * would blank out a newer host's busy count on every older client.
  */
-export const hostRuntimeStatusAwarenessSchema = z.object({
-  busy: z.boolean(),
-  busySessionCount: z.number().int().nonnegative(),
-  updateProgress: z
-    .object({
-      state: z.enum(["updating", "failed"]),
-      error: z.string().nullable(),
-    })
-    .nullable(),
-  busyBreakdown: hostBusyBreakdownSchema.nullable().optional(),
-});
+export const hostRuntimeStatusAwarenessSchema = lazySchema(() =>
+  z.object({
+    busy: z.boolean(),
+    busySessionCount: z.number().int().nonnegative(),
+    updateProgress: z
+      .object({
+        state: z.enum(["updating", "failed"]),
+        error: z.string().nullable(),
+      })
+      .nullable(),
+    busyBreakdown: hostBusyBreakdownSchema.nullable().optional(),
+  }),
+);
 export type HostRuntimeStatusAwareness = z.infer<
   typeof hostRuntimeStatusAwarenessSchema
 >;
 
-const hostRuntimeStatusAwarenessEntrySchema = z.object({
-  [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: hostRuntimeStatusAwarenessSchema,
-});
+const hostRuntimeStatusAwarenessEntrySchema = lazySchema(() =>
+  z.object({
+    [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: hostRuntimeStatusAwarenessSchema,
+  }),
+);
 
 /**
  * Reads one awareness entry's runtime status, or `null` when the entry does not
@@ -191,14 +196,18 @@ export function readHostRuntimeStatusAwareness(
     : null;
 }
 
-export const notificationsSubscribeOpenRequestSchema = z.object({});
+export const notificationsSubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({}),
+);
 export type NotificationsSubscribeOpenRequest = z.infer<
   typeof notificationsSubscribeOpenRequestSchema
 >;
 
-const notificationsSnapshotMetaSchema = z.object({
-  schemaVersion: z.string(),
-});
+const notificationsSnapshotMetaSchema = lazySchema(() =>
+  z.object({
+    schemaVersion: z.string(),
+  }),
+);
 
 // ─── Frozen notifications.subscribe@1.0 shape (as shipped) ────────────────
 //
@@ -206,9 +215,8 @@ const notificationsSnapshotMetaSchema = z.object({
 // kinds, so this union must never learn a new one - sending a peer a frame it
 // did not negotiate is the host breaking the contract, not a "graceful"
 // degrade the peer happens to drop.
-export const notificationsSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const notificationsSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       meta: notificationsSnapshotMetaSchema,
@@ -222,7 +230,7 @@ export const notificationsSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type NotificationsSubscribeServerFrameV10 = z.infer<
   typeof notificationsSubscribeServerFrameSchemaV10
@@ -244,9 +252,8 @@ export type NotificationsSubscribeServerFrameV10 = z.infer<
 // a @1.0 client must never be sent this frame. Nothing in this contract
 // enforces that at runtime (streams have no bridges), so the gate is a
 // resolver obligation.
-export const notificationsSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
-  "kind",
-  [
+export const notificationsSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       meta: notificationsSnapshotMetaSchema,
@@ -264,7 +271,7 @@ export const notificationsSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
       kind: z.literal("awareness"),
       hasBinaryPayload: z.literal(true),
     }),
-  ],
+  ]),
 );
 export type NotificationsSubscribeServerFrameV11 = z.infer<
   typeof notificationsSubscribeServerFrameSchemaV11
@@ -276,9 +283,8 @@ export const notificationsSubscribeServerFrameSchema =
 export type NotificationsSubscribeServerFrame =
   NotificationsSubscribeServerFrameV11;
 
-export const notificationsSubscribeClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const notificationsSubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("applyUpdate"),
       hasBinaryPayload: z.literal(true),
@@ -287,7 +293,7 @@ export const notificationsSubscribeClientFrameSchema = z.discriminatedUnion(
       kind: z.literal("ping"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type NotificationsSubscribeClientFrame = z.infer<
   typeof notificationsSubscribeClientFrameSchema

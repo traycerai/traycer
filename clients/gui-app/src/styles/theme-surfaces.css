@@ -7,6 +7,19 @@
   color: var(--sidebar-foreground);
 }
 
+/* Respect the platform preference without adding an application setting. */
+@media (prefers-reduced-transparency: reduce) {
+  :is(
+    [data-slot="dialog-overlay"],
+    [data-slot="sheet-overlay"],
+    [data-slot="drawer-overlay"],
+    [data-slot="mobile-nav-overlay"]
+  ) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
 /* Shared surface fills; embedded command lists inherit transparency.
    Tooltip appearances retain their inverted foreground/background tokens. */
 :is(

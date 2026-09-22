@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Host <-> client wire shapes for `chat.search`: full-text search over the
@@ -29,24 +30,23 @@ import { z } from "zod";
  */
 
 /** The kind of text a message document holds; each is a separate document. */
-export const chatSearchTierSchema = z.enum([
-  "user",
-  "assistant",
-  "notice",
-  "card",
-]);
+export const chatSearchTierSchema = lazySchema(() =>
+  z.enum(["user", "assistant", "notice", "card"]),
+);
 export type ChatSearchTier = z.infer<typeof chatSearchTierSchema>;
 
-export const chatSearchScopeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("current-task"), epicId: z.string().min(1) }),
-  z.object({ kind: z.literal("all-accessible-tasks") }),
-  /** One chat's message rows: the expansion of a message or title match. */
-  z.object({
-    kind: z.literal("chat"),
-    epicId: z.string().min(1),
-    chatId: z.string().min(1),
-  }),
-]);
+export const chatSearchScopeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("current-task"), epicId: z.string().min(1) }),
+    z.object({ kind: z.literal("all-accessible-tasks") }),
+    /** One chat's message rows: the expansion of a message or title match. */
+    z.object({
+      kind: z.literal("chat"),
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+    }),
+  ]),
+);
 export type ChatSearchScope = z.infer<typeof chatSearchScopeSchema>;
 
 /**
@@ -56,7 +56,9 @@ export type ChatSearchScope = z.infer<typeof chatSearchScopeSchema>;
  * another agent sent into the chat match under `any` alone. Title matches
  * are unaffected.
  */
-export const chatSearchRoleFilterSchema = z.enum(["any", "human", "assistant"]);
+export const chatSearchRoleFilterSchema = lazySchema(() =>
+  z.enum(["any", "human", "assistant"]),
+);
 export type ChatSearchRoleFilter = z.infer<typeof chatSearchRoleFilterSchema>;
 
 /**
@@ -69,121 +71,143 @@ export type ChatSearchRoleFilter = z.infer<typeof chatSearchRoleFilterSchema>;
  * answers `E_INVALID_ARGUMENT` - the scan over every task's text exceeds the
  * host's event-loop stall budget.
  */
-export const chatSearchModeSchema = z.enum(["ranked", "substring"]);
+export const chatSearchModeSchema = lazySchema(() =>
+  z.enum(["ranked", "substring"]),
+);
 export type ChatSearchMode = z.infer<typeof chatSearchModeSchema>;
 
 /** Epoch-ms bounds, inclusive; `null` leaves that side open. */
-export const chatSearchDateRangeSchema = z
-  .object({
-    from: z.number().int().nullable(),
-    to: z.number().int().nullable(),
-  })
-  .refine(
-    (range) =>
-      range.from === null || range.to === null || range.from <= range.to,
-    { message: "a date range starts at or before it ends" },
-  );
+export const chatSearchDateRangeSchema = lazySchema(() =>
+  z
+    .object({
+      from: z.number().int().nullable(),
+      to: z.number().int().nullable(),
+    })
+    .refine(
+      (range) =>
+        range.from === null || range.to === null || range.from <= range.to,
+      { message: "a date range starts at or before it ends" },
+    ),
+);
 export type ChatSearchDateRange = z.infer<typeof chatSearchDateRangeSchema>;
 
 export const CHAT_SEARCH_MAX_QUERY_CHARS = 512;
 export const CHAT_SEARCH_MAX_PAGE_SIZE = 100;
 
-const pageSizeSchema = z.number().int().min(1).max(CHAT_SEARCH_MAX_PAGE_SIZE);
+const pageSizeSchema = lazySchema(() =>
+  z.number().int().min(1).max(CHAT_SEARCH_MAX_PAGE_SIZE),
+);
 /** Opaque; pass back the `nextCursor` of the previous page, `null` to start. */
-const cursorSchema = z.string().max(64).nullable();
+const cursorSchema = lazySchema(() => z.string().max(64).nullable());
 
-export const chatSearchRequestSchema = z.object({
-  query: z.string().max(CHAT_SEARCH_MAX_QUERY_CHARS),
-  scope: chatSearchScopeSchema,
-  /**
-   * Tiers to search. `null` is the default corpus (`user`, `assistant`,
-   * `notice`); `card` text is searched only when named.
-   */
-  tiers: z.array(chatSearchTierSchema).min(1).nullable(),
-  roleFilter: chatSearchRoleFilterSchema,
-  /** Messages by `createdAt`; title matches by the chat's `updatedAt`. */
-  dateRange: chatSearchDateRangeSchema.nullable(),
-  /** A harness id; `null` searches chats of every harness. */
-  harness: z.string().min(1).nullable(),
-  mode: chatSearchModeSchema,
-  chatCursor: cursorSchema,
-  chatLimit: pageSizeSchema,
-  messageCursor: cursorSchema,
-  messageLimit: pageSizeSchema,
-});
+export const chatSearchRequestSchema = lazySchema(() =>
+  z.object({
+    query: z.string().max(CHAT_SEARCH_MAX_QUERY_CHARS),
+    scope: chatSearchScopeSchema,
+    /**
+     * Tiers to search. `null` is the default corpus (`user`, `assistant`,
+     * `notice`); `card` text is searched only when named.
+     */
+    tiers: z.array(chatSearchTierSchema).min(1).nullable(),
+    roleFilter: chatSearchRoleFilterSchema,
+    /** Messages by `createdAt`; title matches by the chat's `updatedAt`. */
+    dateRange: chatSearchDateRangeSchema.nullable(),
+    /** A harness id; `null` searches chats of every harness. */
+    harness: z.string().min(1).nullable(),
+    mode: chatSearchModeSchema,
+    chatCursor: cursorSchema,
+    chatLimit: pageSizeSchema,
+    messageCursor: cursorSchema,
+    messageLimit: pageSizeSchema,
+  }),
+);
 export type ChatSearchRequest = z.infer<typeof chatSearchRequestSchema>;
 
-export const chatSearchRangeSchema = z
-  .object({
-    start: z.number().int().nonnegative(),
-    end: z.number().int().nonnegative(),
-  })
-  .refine((range) => range.end >= range.start, {
-    message: "a highlight range ends at or after it starts",
-  });
+export const chatSearchRangeSchema = lazySchema(() =>
+  z
+    .object({
+      start: z.number().int().nonnegative(),
+      end: z.number().int().nonnegative(),
+    })
+    .refine((range) => range.end >= range.start, {
+      message: "a highlight range ends at or after it starts",
+    }),
+);
 export type ChatSearchRange = z.infer<typeof chatSearchRangeSchema>;
 
-export const chatSearchSnippetSchema = z.object({
-  text: z.string(),
-  highlights: z.array(chatSearchRangeSchema),
-});
+export const chatSearchSnippetSchema = lazySchema(() =>
+  z.object({
+    text: z.string(),
+    highlights: z.array(chatSearchRangeSchema),
+  }),
+);
 export type ChatSearchSnippet = z.infer<typeof chatSearchSnippetSchema>;
 
 /** Deleted chats are never results. */
-export const chatSearchLifecycleStateSchema = z.enum(["active", "archived"]);
+export const chatSearchLifecycleStateSchema = lazySchema(() =>
+  z.enum(["active", "archived"]),
+);
 
 /** The chat a group belongs to; `(epicId, ownerUserId, chatId)` is its key. */
 const chatSearchChatFields = {
-  epicId: z.string(),
-  ownerUserId: z.string(),
-  chatId: z.string(),
-  title: z.string(),
+  epicId: lazySchema(() => z.string()),
+  ownerUserId: lazySchema(() => z.string()),
+  chatId: lazySchema(() => z.string()),
+  title: lazySchema(() => z.string()),
   lifecycleState: chatSearchLifecycleStateSchema,
-  updatedAt: z.number(),
+  updatedAt: lazySchema(() => z.number()),
 };
 
-export const chatSearchMessageHitSchema = z.object({
-  messageId: z.string(),
-  tier: chatSearchTierSchema,
-  createdAt: z.number(),
-  /** A `user` document sent by another agent. */
-  interAgent: z.boolean(),
-  /** The document was cut at the index's size cap; later text is unsearched. */
-  truncated: z.boolean(),
-  snippet: chatSearchSnippetSchema,
-});
+export const chatSearchMessageHitSchema = lazySchema(() =>
+  z.object({
+    messageId: z.string(),
+    tier: chatSearchTierSchema,
+    createdAt: z.number(),
+    /** A `user` document sent by another agent. */
+    interAgent: z.boolean(),
+    /** The document was cut at the index's size cap; later text is unsearched. */
+    truncated: z.boolean(),
+    snippet: chatSearchSnippetSchema,
+  }),
+);
 export type ChatSearchMessageHit = z.infer<typeof chatSearchMessageHitSchema>;
 
-export const chatSearchChatMatchSchema = z.object({
-  ...chatSearchChatFields,
-  titleHighlights: z.array(chatSearchRangeSchema),
-  /** Message documents in this chat that also match. */
-  messageMatchCount: z.number().int().nonnegative(),
-});
+export const chatSearchChatMatchSchema = lazySchema(() =>
+  z.object({
+    ...chatSearchChatFields,
+    titleHighlights: z.array(chatSearchRangeSchema),
+    /** Message documents in this chat that also match. */
+    messageMatchCount: z.number().int().nonnegative(),
+  }),
+);
 export type ChatSearchChatMatch = z.infer<typeof chatSearchChatMatchSchema>;
 
-export const chatSearchMessageMatchSchema = z.object({
-  ...chatSearchChatFields,
-  /** At least one: `best` is one of them. */
-  matchCount: z.number().int().positive(),
-  best: chatSearchMessageHitSchema,
-  /** A page of this chat's matching rows under `scope: chat`; else empty. */
-  messages: z.array(chatSearchMessageHitSchema),
-});
+export const chatSearchMessageMatchSchema = lazySchema(() =>
+  z.object({
+    ...chatSearchChatFields,
+    /** At least one: `best` is one of them. */
+    matchCount: z.number().int().positive(),
+    best: chatSearchMessageHitSchema,
+    /** A page of this chat's matching rows under `scope: chat`; else empty. */
+    messages: z.array(chatSearchMessageHitSchema),
+  }),
+);
 export type ChatSearchMessageMatch = z.infer<
   typeof chatSearchMessageMatchSchema
 >;
 
-export const chatSearchResponseSchema = z.object({
-  chatMatches: z.array(chatSearchChatMatchSchema),
-  /** Bounded like the request cursors: a page's cursor is the next request's. */
-  chatNextCursor: cursorSchema,
-  messageMatches: z.array(chatSearchMessageMatchSchema),
-  messageNextCursor: cursorSchema,
-  /**
-   * `partial` while the host's index has not yet caught up with every chat,
-   * so a missing result may still appear.
-   */
-  indexState: z.enum(["complete", "partial"]),
-});
+export const chatSearchResponseSchema = lazySchema(() =>
+  z.object({
+    chatMatches: z.array(chatSearchChatMatchSchema),
+    /** Bounded like the request cursors: a page's cursor is the next request's. */
+    chatNextCursor: cursorSchema,
+    messageMatches: z.array(chatSearchMessageMatchSchema),
+    messageNextCursor: cursorSchema,
+    /**
+     * `partial` while the host's index has not yet caught up with every chat,
+     * so a missing result may still appear.
+     */
+    indexState: z.enum(["complete", "partial"]),
+  }),
+);
 export type ChatSearchResponse = z.infer<typeof chatSearchResponseSchema>;

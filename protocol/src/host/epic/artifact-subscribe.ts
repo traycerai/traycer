@@ -65,6 +65,7 @@ import {
   epicLaneEpochFrameFields,
   epicLaneTextFrameFields,
 } from "@traycer/protocol/host/epic/lane-cursor";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The state a reattaching client already holds for THIS body, so the host can
@@ -85,37 +86,41 @@ import {
  * the params it passed and the params that were parsed for what is logically
  * one attach.
  */
-export const artifactSubscribeSeedOfferSchema = z.object({
-  /**
-   * The `docGuid` this client's replica was seeded from - taken off the `doc`
-   * frame that seeded it, never derived from `artifactId`. A body that was
-   * deleted and recreated has a NEW guid under the same artifact id, so the
-   * artifact id cannot answer "is my replica the same document as yours".
-   */
-  knownDocGuid: z.string().min(1),
-  /**
-   * Base64 `Y.encodeStateVector` of the replica the client still holds. The
-   * host answers `Y.encodeStateAsUpdate(doc, thisVector)` - everything it has
-   * that the client does not.
-   */
-  stateVectorBase64: z.string().min(1),
-});
+export const artifactSubscribeSeedOfferSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The `docGuid` this client's replica was seeded from - taken off the `doc`
+     * frame that seeded it, never derived from `artifactId`. A body that was
+     * deleted and recreated has a NEW guid under the same artifact id, so the
+     * artifact id cannot answer "is my replica the same document as yours".
+     */
+    knownDocGuid: z.string().min(1),
+    /**
+     * Base64 `Y.encodeStateVector` of the replica the client still holds. The
+     * host answers `Y.encodeStateAsUpdate(doc, thisVector)` - everything it has
+     * that the client does not.
+     */
+    stateVectorBase64: z.string().min(1),
+  }),
+);
 export type ArtifactSubscribeSeedOffer = z.infer<
   typeof artifactSubscribeSeedOfferSchema
 >;
 
-export const artifactSubscribeOpenRequestSchemaV10 = z.object({
-  epicId: z.string().min(1),
-  artifactId: z.string().min(1),
-  /**
-   * The epic replica generation this attach is made under - `epicGeneration` in
-   * the governing invariant, spelled `authorityEpoch` here because it is the
-   * same value the records lane stamps and two names for one epoch is exactly
-   * the drift these lanes exist to avoid.
-   */
-  authorityEpoch: epicLaneAuthorityEpochSchema,
-  seedOffer: artifactSubscribeSeedOfferSchema.optional(),
-});
+export const artifactSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    artifactId: z.string().min(1),
+    /**
+     * The epic replica generation this attach is made under - `epicGeneration` in
+     * the governing invariant, spelled `authorityEpoch` here because it is the
+     * same value the records lane stamps and two names for one epoch is exactly
+     * the drift these lanes exist to avoid.
+     */
+    authorityEpoch: epicLaneAuthorityEpochSchema,
+    seedOffer: artifactSubscribeSeedOfferSchema.optional(),
+  }),
+);
 export type ArtifactSubscribeOpenRequestV10 = z.infer<
   typeof artifactSubscribeOpenRequestSchemaV10
 >;
@@ -139,11 +144,9 @@ export type ArtifactSubscribeOpenRequestV10 = z.infer<
  * - `bodyUnavailable` - the artifact exists and the host cannot currently
  *   materialize its body. NOT necessarily terminal - see `terminal`.
  */
-export const artifactSubscribeUnavailableCodeSchema = z.enum([
-  "staleAuthorityEpoch",
-  "artifactNotFound",
-  "bodyUnavailable",
-]);
+export const artifactSubscribeUnavailableCodeSchema = lazySchema(() =>
+  z.enum(["staleAuthorityEpoch", "artifactNotFound", "bodyUnavailable"]),
+);
 export type ArtifactSubscribeUnavailableCode = z.infer<
   typeof artifactSubscribeUnavailableCodeSchema
 >;
@@ -160,12 +163,11 @@ export type ArtifactSubscribeUnavailableCode = z.infer<
  * where it does not is a host bug, not a routing instruction.
  */
 const artifactSubscribeAddressFields = {
-  artifactId: z.string().min(1),
+  artifactId: lazySchema(() => z.string().min(1)),
 } as const;
 
-export const artifactSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const artifactSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     /**
      * The body seed. Binary payload is either a full
      * `Y.encodeStateAsUpdate` over the host's doc, or a DELTA against the
@@ -286,15 +288,14 @@ export const artifactSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("pong"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type ArtifactSubscribeServerFrameV10 = z.infer<
   typeof artifactSubscribeServerFrameSchemaV10
 >;
 
-export const artifactSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const artifactSubscribeClientFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     /**
      * A local edit, pushed to the host. `docGuid` is the generation guard on
      * the WRITE path: a host that has reseeded the body since this client last
@@ -317,7 +318,7 @@ export const artifactSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("ping"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type ArtifactSubscribeClientFrameV10 = z.infer<
   typeof artifactSubscribeClientFrameSchemaV10

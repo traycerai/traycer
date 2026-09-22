@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { assetMediaTypeSchema } from "@traycer/protocol/host/asset-stream-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Host <-> client wire shape for reading ONE chat image attachment's bytes.
@@ -60,23 +61,25 @@ import { assetMediaTypeSchema } from "@traycer/protocol/host/asset-stream-schema
  */
 
 /** Lowercase hex sha256 - the only form a content address is written in. */
-const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const sha256HexSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
 
 // `epic.readChatAttachment@1.0` request - FROZEN. Its own literal object, and
 // the schema the released contract points at; the live request below extends
 // it, so a `@1.0` peer's parse strips the selector.
-export const readChatAttachmentRequestSchemaPre11 = z.object({
-  epicId: z.string().min(1),
-  /**
-   * The chat that REFERENCES the attachment - the authorization subject, not a
-   * lookup key. See the visibility argument above: without it the host cannot
-   * gate a local-store hit, and a content address alone would leak private-chat
-   * bytes to any epic participant.
-   */
-  chatId: z.string().min(1),
-  /** Content address of the image bytes. */
-  hash: sha256HexSchema,
-});
+export const readChatAttachmentRequestSchemaPre11 = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    /**
+     * The chat that REFERENCES the attachment - the authorization subject, not a
+     * lookup key. See the visibility argument above: without it the host cannot
+     * gate a local-store hit, and a content address alone would leak private-chat
+     * bytes to any epic participant.
+     */
+    chatId: z.string().min(1),
+    /** Content address of the image bytes. */
+    hash: sha256HexSchema,
+  }),
+);
 export type ReadChatAttachmentRequestPre11 = z.infer<
   typeof readChatAttachmentRequestSchemaPre11
 >;
@@ -100,28 +103,31 @@ export type ReadChatAttachmentRequestPre11 = z.infer<
  * A selector, not a new method: the authorization argument above is unchanged,
  * `chatId` still gates the local read, and asking for less can only narrow.
  */
-export const readChatAttachmentRequestSchema =
+export const readChatAttachmentRequestSchema = lazySchema(() =>
   readChatAttachmentRequestSchemaPre11.extend({
     plane: z.literal("local-only").optional(),
-  });
+  }),
+);
 export type ReadChatAttachmentRequest = z.infer<
   typeof readChatAttachmentRequestSchema
 >;
 
-export const readChatAttachmentFoundSchema = z.object({
-  ok: z.literal(true),
-  /** Base64 of the RAW image bytes - what `hash` is over. */
-  bytesBase64: z.string(),
-  /**
-   * HOST-AUTHORITATIVE, derived from the delivered bytes' magic bytes - never
-   * echoed from a client-declared media type and never inferred from a file
-   * extension. Same rule as the asset-stream header, and deliberately the
-   * IMAGE-ONLY enum (`assetMediaTypeSchema`, the frozen 1.0 set): chat
-   * attachments are an image channel, and this response shipped at 1.0, so
-   * the asset stream's 1.1 PDF growth must not widen it.
-   */
-  mediaType: assetMediaTypeSchema,
-});
+export const readChatAttachmentFoundSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(true),
+    /** Base64 of the RAW image bytes - what `hash` is over. */
+    bytesBase64: z.string(),
+    /**
+     * HOST-AUTHORITATIVE, derived from the delivered bytes' magic bytes - never
+     * echoed from a client-declared media type and never inferred from a file
+     * extension. Same rule as the asset-stream header, and deliberately the
+     * IMAGE-ONLY enum (`assetMediaTypeSchema`, the frozen 1.0 set): chat
+     * attachments are an image channel, and this response shipped at 1.0, so
+     * the asset stream's 1.1 PDF growth must not widen it.
+     */
+    mediaType: assetMediaTypeSchema,
+  }),
+);
 export type ReadChatAttachmentFound = z.infer<
   typeof readChatAttachmentFoundSchema
 >;
@@ -145,18 +151,22 @@ export type ReadChatAttachmentFound = z.infer<
  * one good request away. `missing` is the answer a client should render the
  * "stored on the originating device" marker for.
  */
-export const readChatAttachmentMissingSchema = z.object({
-  ok: z.literal(false),
-  reason: z.literal("missing"),
-});
+export const readChatAttachmentMissingSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal("missing"),
+  }),
+);
 export type ReadChatAttachmentMissing = z.infer<
   typeof readChatAttachmentMissingSchema
 >;
 
-export const readChatAttachmentResponseSchema = z.discriminatedUnion("ok", [
-  readChatAttachmentFoundSchema,
-  readChatAttachmentMissingSchema,
-]);
+export const readChatAttachmentResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    readChatAttachmentFoundSchema,
+    readChatAttachmentMissingSchema,
+  ]),
+);
 export type ReadChatAttachmentResponse = z.infer<
   typeof readChatAttachmentResponseSchema
 >;

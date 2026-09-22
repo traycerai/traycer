@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Client-side mirror of the Remote Host Support status contract.
@@ -226,40 +227,33 @@ export type HostListResponse = {
 // Zod schemas — fail-closed parsing of the untrusted network response
 // -----------------------------------------------------------------------------
 
-export const hostConnectivitySchema = z.enum([
-  "connectable",
-  "offline",
-  "unknown",
-  "local-only",
-]);
+export const hostConnectivitySchema = lazySchema(() =>
+  z.enum(["connectable", "offline", "unknown", "local-only"]),
+);
 
-export const hostViewerReachabilitySchema = z.enum([
-  "ok",
-  "failing",
-  "unknown",
-]);
+export const hostViewerReachabilitySchema = lazySchema(() =>
+  z.enum(["ok", "failing", "unknown"]),
+);
 
-export const hostClientCloudStateSchema = z.enum(["ok", "down"]);
+export const hostClientCloudStateSchema = lazySchema(() =>
+  z.enum(["ok", "down"]),
+);
 
-export const hostUpdateStateSchema = z.enum([
-  "current",
-  "available",
-  "pending",
-  "updating",
-  "failed",
-  "required",
-]);
+export const hostUpdateStateSchema = lazySchema(() =>
+  z.enum(["current", "available", "pending", "updating", "failed", "required"]),
+);
 
-export const hostRegistryKindSchema = z.enum(["personal", "sandbox"]);
+export const hostRegistryKindSchema = lazySchema(() =>
+  z.enum(["personal", "sandbox"]),
+);
 
-export const hostUpdatePolicySchema = z.enum(["manual", "auto"]);
+export const hostUpdatePolicySchema = lazySchema(() =>
+  z.enum(["manual", "auto"]),
+);
 
-export const hostCommandInterpreterSchema = z.enum([
-  "posix-shell",
-  "git-bash",
-  "powershell",
-  "cmd",
-]);
+export const hostCommandInterpreterSchema = lazySchema(() =>
+  z.enum(["posix-shell", "git-bash", "powershell", "cmd"]),
+);
 
 // `.strict()` on every level (S5 / fix #5): a non-strict `z.object` silently
 // STRIPS a field the server adds, so a contract addition would render with a
@@ -267,42 +261,49 @@ export const hostCommandInterpreterSchema = z.enum([
 // each nested object below opts in individually — the negative fixture test
 // in `__tests__/host-status.test.ts` proves this actually rejects rather than
 // strips at every level, not just the top one.
-export const hostStatusDtoSchema: z.ZodType<HostStatusDTO> = z
-  .object({
-    connectivity: hostConnectivitySchema,
-    viewerReachability: hostViewerReachabilitySchema,
-    clientCloud: hostClientCloudStateSchema,
-    updateState: hostUpdateStateSchema,
-    appVersion: z.string().nullable(),
-    lastSeenAt: z.string().nullable(),
-  })
-  .strict();
+export const hostStatusDtoSchema: z.ZodType<HostStatusDTO> = lazySchema(() =>
+  z
+    .object({
+      connectivity: hostConnectivitySchema,
+      viewerReachability: hostViewerReachabilitySchema,
+      clientCloud: hostClientCloudStateSchema,
+      updateState: hostUpdateStateSchema,
+      appVersion: z.string().nullable(),
+      lastSeenAt: z.string().nullable(),
+    })
+    .strict(),
+);
 
-export const hostListItemSchema: z.ZodType<HostListItem> = z
-  .object({
-    hostId: z.string(),
-    displayName: z.string().nullable(),
-    platform: z.string().nullable(),
-    kind: hostRegistryKindSchema,
-    publicKey: z.string(),
-    createdAt: z.string(),
-    status: hostStatusDtoSchema,
-    // `.optional().nullable()` under `.strict()`: absent is the un-opted
-    // response every released client already receives, and null is the
-    // opted-in "this host has never reported one". Adding it here does NOT
-    // make an older client tolerate it — a released binary carries its own
-    // frozen copy of this schema and would reject the extra key — which is
-    // exactly why the server keeps it behind an explicit `?include=`.
-    commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
-    updatePolicy: hostUpdatePolicySchema,
-  })
-  .strict();
+export const hostListItemSchema: z.ZodType<HostListItem> = lazySchema(() =>
+  z
+    .object({
+      hostId: z.string(),
+      displayName: z.string().nullable(),
+      platform: z.string().nullable(),
+      kind: hostRegistryKindSchema,
+      publicKey: z.string(),
+      createdAt: z.string(),
+      status: hostStatusDtoSchema,
+      // `.optional().nullable()` under `.strict()`: absent is the un-opted
+      // response every released client already receives, and null is the
+      // opted-in "this host has never reported one". Adding it here does NOT
+      // make an older client tolerate it — a released binary carries its own
+      // frozen copy of this schema and would reject the extra key — which is
+      // exactly why the server keeps it behind an explicit `?include=`.
+      commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
+      updatePolicy: hostUpdatePolicySchema,
+    })
+    .strict(),
+);
 
-export const hostListResponseSchema: z.ZodType<HostListResponse> = z
-  .object({
-    hosts: z.array(hostListItemSchema),
-  })
-  .strict();
+export const hostListResponseSchema: z.ZodType<HostListResponse> = lazySchema(
+  () =>
+    z
+      .object({
+        hosts: z.array(hostListItemSchema),
+      })
+      .strict(),
+);
 
 // -----------------------------------------------------------------------------
 // `PATCH /api/v3/hosts/:hostId` response — "Update now" / auto-policy toggle /
@@ -322,8 +323,10 @@ export type HostVersionPolicyResponse = {
 };
 
 export const hostVersionPolicyResponseSchema: z.ZodType<HostVersionPolicyResponse> =
-  z.object({
-    host_id: z.string(),
-    update_policy: hostUpdatePolicySchema,
-    desired_version: z.string().nullable(),
-  });
+  lazySchema(() =>
+    z.object({
+      host_id: z.string(),
+      update_policy: hostUpdatePolicySchema,
+      desired_version: z.string().nullable(),
+    }),
+  );

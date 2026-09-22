@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * What a fallback action did, or the reason it did nothing.
@@ -101,7 +102,9 @@ export const FALLBACK_ACTION_OUTCOMES = [
   "return_unavailable",
 ] as const;
 
-export const fallbackActionOutcomeSchema = z.enum(FALLBACK_ACTION_OUTCOMES);
+export const fallbackActionOutcomeSchema = lazySchema(() =>
+  z.enum(FALLBACK_ACTION_OUTCOMES),
+);
 export type FallbackActionOutcome = z.infer<typeof fallbackActionOutcomeSchema>;
 
 /**
@@ -113,17 +116,21 @@ export type FallbackActionOutcome = z.infer<typeof fallbackActionOutcomeSchema>;
  * finds the revision it was told to expect. A client that omitted it would be
  * asking the host to guess which traversal state it had been looking at.
  */
-export const fallbackTraversalRefSchema = z.object({
-  epicId: z.string().trim().min(1),
-  chatId: z.string().trim().min(1),
-  traversalId: z.string().trim().min(1),
-  revision: z.number().int().nonnegative(),
-});
+export const fallbackTraversalRefSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().trim().min(1),
+    chatId: z.string().trim().min(1),
+    traversalId: z.string().trim().min(1),
+    revision: z.number().int().nonnegative(),
+  }),
+);
 export type FallbackTraversalRef = z.infer<typeof fallbackTraversalRefSchema>;
 
-const fallbackActionResponseSchema = z.object({
-  outcome: fallbackActionOutcomeSchema,
-});
+const fallbackActionResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: fallbackActionOutcomeSchema,
+  }),
+);
 
 /**
  * "Don't switch" on the grace card, "Stop waiting" on the waiting card, and the
@@ -160,11 +167,12 @@ export type ChatFallbackCancelResponse = z.infer<
  *
  * A reset probe that lands after this call is ignored: the explicit pick wins.
  */
-export const chatFallbackChooseTargetRequestSchema =
+export const chatFallbackChooseTargetRequestSchema = lazySchema(() =>
   fallbackTraversalRefSchema.extend({
     target: chatRunSettingsSchema,
     leaseToken: z.string().nullable(),
-  });
+  }),
+);
 export type ChatFallbackChooseTargetRequest = z.infer<
   typeof chatFallbackChooseTargetRequestSchema
 >;
@@ -209,71 +217,73 @@ export type ChatFallbackChooseTargetResponse = z.infer<
  * cannot re-read a verified reset: a card offering a wait whose boundary has
  * since passed is stale, and honouring it would park the chat on nothing.
  */
-export const chatFallbackRunManualRungRequestSchema = z
-  .object({
-    epicId: z.string().trim().min(1),
-    chatId: z.string().trim().min(1),
-    rung: z.enum(["retry", "switch", "wait_once"]),
-    /**
-     * The key is present on every rung and non-null on `switch` alone - see the
-     * refinement below, which is what enforces the pairing.
-     *
-     * A `rung`-discriminated union would carry that rule in the TYPE, and was
-     * rejected for what it costs the two peers, neither of which wants the
-     * fork: it splits {@link ChatFallbackRunManualRungRequest} into three
-     * branches, and both ends hold this request as ONE value. The GUI sends all
-     * three rungs through a single mutation and its `onSuccess` reads
-     * `variables.rung` and `variables.target` off the same object, after the
-     * surface that sent them has unmounted; the host resolver forwards
-     * `params.target` into the domain action without inspecting the rung at
-     * all. A union would make both of them narrow in order to read a field
-     * neither branches on, and it refuses exactly the same wire values this
-     * does - so the fork buys nothing at the boundary and costs at every read.
-     */
-    target: chatRunSettingsSchema.nullable(),
-    /** The failed attempt's identity. Both fields, for the reason above. */
-    userMessageId: z.string().trim().min(1),
-    turnId: z.string().trim().min(1),
-  })
-  .superRefine((request, ctx) => {
-    // Both halves of the coupling, because both halves fail SILENTLY without it.
-    //
-    // `{ rung: "switch", target: null }` parsed and reached the engine, which
-    // had nothing to switch to and could only answer `rung_unavailable` - the
-    // NEUTRAL residue, whose entry in {@link FALLBACK_ACTION_OUTCOMES} promises
-    // the host is not claiming to know why. Spending it on a request that was
-    // malformed is exactly the conflation that value was split out to end, and
-    // it renders as "that action isn't available right now" over a menu the user
-    // just picked from.
-    //
-    // The other direction never even produced an outcome: `retry` re-sends the
-    // failed tuple and `wait_once` parks on that tuple's reset boundary, so both
-    // read the chat's own settings and DISCARD anything sent here. A client that
-    // believed it had chosen a destination would instead watch the chat carry on
-    // against the tuple that just failed, with no refusal to contradict it.
-    //
-    // Free to tighten only because nothing has shipped: `chat.fallback.*` is off
-    // the released floor and this is its first line, so no released peer can be
-    // emitting the combinations this now refuses. Once a release pins v1.0 the
-    // same edit becomes a breaking narrowing and needs a new major.
-    if (request.rung === "switch") {
-      if (request.target === null) {
+export const chatFallbackRunManualRungRequestSchema = lazySchema(() =>
+  z
+    .object({
+      epicId: z.string().trim().min(1),
+      chatId: z.string().trim().min(1),
+      rung: z.enum(["retry", "switch", "wait_once"]),
+      /**
+       * The key is present on every rung and non-null on `switch` alone - see the
+       * refinement below, which is what enforces the pairing.
+       *
+       * A `rung`-discriminated union would carry that rule in the TYPE, and was
+       * rejected for what it costs the two peers, neither of which wants the
+       * fork: it splits {@link ChatFallbackRunManualRungRequest} into three
+       * branches, and both ends hold this request as ONE value. The GUI sends all
+       * three rungs through a single mutation and its `onSuccess` reads
+       * `variables.rung` and `variables.target` off the same object, after the
+       * surface that sent them has unmounted; the host resolver forwards
+       * `params.target` into the domain action without inspecting the rung at
+       * all. A union would make both of them narrow in order to read a field
+       * neither branches on, and it refuses exactly the same wire values this
+       * does - so the fork buys nothing at the boundary and costs at every read.
+       */
+      target: chatRunSettingsSchema.nullable(),
+      /** The failed attempt's identity. Both fields, for the reason above. */
+      userMessageId: z.string().trim().min(1),
+      turnId: z.string().trim().min(1),
+    })
+    .superRefine((request, ctx) => {
+      // Both halves of the coupling, because both halves fail SILENTLY without it.
+      //
+      // `{ rung: "switch", target: null }` parsed and reached the engine, which
+      // had nothing to switch to and could only answer `rung_unavailable` - the
+      // NEUTRAL residue, whose entry in {@link FALLBACK_ACTION_OUTCOMES} promises
+      // the host is not claiming to know why. Spending it on a request that was
+      // malformed is exactly the conflation that value was split out to end, and
+      // it renders as "that action isn't available right now" over a menu the user
+      // just picked from.
+      //
+      // The other direction never even produced an outcome: `retry` re-sends the
+      // failed tuple and `wait_once` parks on that tuple's reset boundary, so both
+      // read the chat's own settings and DISCARD anything sent here. A client that
+      // believed it had chosen a destination would instead watch the chat carry on
+      // against the tuple that just failed, with no refusal to contradict it.
+      //
+      // Free to tighten only because nothing has shipped: `chat.fallback.*` is off
+      // the released floor and this is its first line, so no released peer can be
+      // emitting the combinations this now refuses. Once a release pins v1.0 the
+      // same edit becomes a breaking narrowing and needs a new major.
+      if (request.rung === "switch") {
+        if (request.target === null) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "rung 'switch' requires a target",
+            path: ["target"],
+          });
+        }
+        return;
+      }
+      if (request.target !== null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "rung 'switch' requires a target",
+          message: `rung '${request.rung}' must carry a null target`,
           path: ["target"],
         });
       }
-      return;
-    }
-    if (request.target !== null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `rung '${request.rung}' must carry a null target`,
-        path: ["target"],
-      });
-    }
-  });
+    }),
+);
 export type ChatFallbackRunManualRungRequest = z.infer<
   typeof chatFallbackRunManualRungRequestSchema
 >;
@@ -315,10 +325,11 @@ export type ChatFallbackRunManualRungResponse = z.infer<
  * All three END the traversal. A dismissal that left the record live would
  * leave an index row with no deadline, which nothing ever prunes.
  */
-export const chatFallbackReturnToPreferredRequestSchema =
+export const chatFallbackReturnToPreferredRequestSchema = lazySchema(() =>
   fallbackTraversalRefSchema.extend({
     action: z.enum(["switch_back", "stay", "dismiss_for_chat"]),
-  });
+  }),
+);
 export type ChatFallbackReturnToPreferredRequest = z.infer<
   typeof chatFallbackReturnToPreferredRequestSchema
 >;
@@ -378,10 +389,12 @@ export const chatFallbackReturnToPreferredV10 = defineRpcContract({
  * `already-tried` and `rate-limited` are both rows the verb would accept, and
  * whether to offer the click is the surface's decision, not this field's.
  */
-export const fallbackTargetSkipSchema = z.object({
-  reason: z.string(),
-  label: z.string(),
-});
+export const fallbackTargetSkipSchema = lazySchema(() =>
+  z.object({
+    reason: z.string(),
+    label: z.string(),
+  }),
+);
 export type FallbackTargetSkip = z.infer<typeof fallbackTargetSkipSchema>;
 
 /**
@@ -408,75 +421,79 @@ export type FallbackTargetSkip = z.infer<typeof fallbackTargetSkipSchema>;
  * a tuple whose fields the engine DERIVED". If a future profile row ever gains a
  * derived field, it needs a `target` too, and this doc stops being true.
  */
-export const fallbackProfileTargetSchema = z.object({
-  /** `null` is the ambient login, never a sentinel string. */
-  profileId: z.string().nullable(),
-  label: z.string(),
-  /** `"ok" | "near_limit" | "hard_limit" | "unknown"`, open for the same reason. */
-  severity: z.string(),
-  /**
-   * Worst applicable window, or `null` for NOT COMPARABLE.
-   *
-   * `null` is never "zero" - the engine's ranking orders the two differently,
-   * and a bar drawn at 0% for an unread gauge tells the user the opposite of
-   * what is true.
-   */
-  usedPercent: z.number().nullable(),
-  /**
-   * The account the ladder would take next - true on at most one row, false on
-   * every row when nothing is rankable.
-   *
-   * A flag rather than "the array is in rank order" deliberately: rank order is
-   * an invariant a future reorder breaks with no compile error, and the
-   * error-card entry point has no live record to cross-check it against.
-   */
-  recommended: z.boolean(),
-  selectable: z.boolean(),
-  skip: fallbackTargetSkipSchema.nullable(),
-});
+export const fallbackProfileTargetSchema = lazySchema(() =>
+  z.object({
+    /** `null` is the ambient login, never a sentinel string. */
+    profileId: z.string().nullable(),
+    label: z.string(),
+    /** `"ok" | "near_limit" | "hard_limit" | "unknown"`, open for the same reason. */
+    severity: z.string(),
+    /**
+     * Worst applicable window, or `null` for NOT COMPARABLE.
+     *
+     * `null` is never "zero" - the engine's ranking orders the two differently,
+     * and a bar drawn at 0% for an unread gauge tells the user the opposite of
+     * what is true.
+     */
+    usedPercent: z.number().nullable(),
+    /**
+     * The account the ladder would take next - true on at most one row, false on
+     * every row when nothing is rankable.
+     *
+     * A flag rather than "the array is in rank order" deliberately: rank order is
+     * an invariant a future reorder breaks with no compile error, and the
+     * error-card entry point has no live record to cross-check it against.
+     */
+    recommended: z.boolean(),
+    selectable: z.boolean(),
+    skip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
 export type FallbackProfileTarget = z.infer<typeof fallbackProfileTargetSchema>;
 
 /** An equivalent model on ANOTHER provider - the tier rung. */
-export const fallbackModelTargetSchema = z.object({
-  /**
-   * The group this candidate came from. Its `id` is all a group has - the
-   * persisted `tierGroupSchema` is `{ id, candidates }` with no display name -
-   * so a surface titles the section from the id or from its own copy.
-   */
-  groupId: z.string(),
-  /** Always present: with `modelFamily`, the row's title even when unresolved. */
-  harnessId: z.string(),
-  modelFamily: z.string(),
-  /** The resolved slug; `null` when resolution stopped before one existed. */
-  model: z.string().nullable(),
-  reasoningEffort: z.string().nullable(),
-  profileId: z.string().nullable(),
-  severity: z.string(),
-  usedPercent: z.number().nullable(),
-  /**
-   * The tuple to hand straight back to `chat.fallback.runManualRung`, or `null`
-   * when there is nothing to send.
-   *
-   * Never reconstruct this client-side. The engine re-derives effort and fast
-   * mode against the TARGET's catalog and carries permission mode and agent
-   * mode from the failed tuple untouched; a client-assembled tuple drifts from
-   * the engine on the next catalog change, which is the drift this whole method
-   * exists to remove.
-   */
-  target: chatRunSettingsSchema.nullable(),
-  /** Dropped effort / fast mode, in `agent.configure`'s wording. Unjoined. */
-  warnings: z.array(z.string()),
-  /**
-   * Whether the VERB would accept this pick - exactly `target !== null`.
-   *
-   * It does NOT answer "should the menu offer the click". The manual switch
-   * validates usability alone, so an `already-tried` or `rate-limited` row is
-   * one the host would accept; encoding the stricter answer here would make
-   * every menu a second policy nothing enforces.
-   */
-  selectable: z.boolean(),
-  skip: fallbackTargetSkipSchema.nullable(),
-});
+export const fallbackModelTargetSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The group this candidate came from. Its `id` is all a group has - the
+     * persisted `tierGroupSchema` is `{ id, candidates }` with no display name -
+     * so a surface titles the section from the id or from its own copy.
+     */
+    groupId: z.string(),
+    /** Always present: with `modelFamily`, the row's title even when unresolved. */
+    harnessId: z.string(),
+    modelFamily: z.string(),
+    /** The resolved slug; `null` when resolution stopped before one existed. */
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable(),
+    profileId: z.string().nullable(),
+    severity: z.string(),
+    usedPercent: z.number().nullable(),
+    /**
+     * The tuple to hand straight back to `chat.fallback.runManualRung`, or `null`
+     * when there is nothing to send.
+     *
+     * Never reconstruct this client-side. The engine re-derives effort and fast
+     * mode against the TARGET's catalog and carries permission mode and agent
+     * mode from the failed tuple untouched; a client-assembled tuple drifts from
+     * the engine on the next catalog change, which is the drift this whole method
+     * exists to remove.
+     */
+    target: chatRunSettingsSchema.nullable(),
+    /** Dropped effort / fast mode, in `agent.configure`'s wording. Unjoined. */
+    warnings: z.array(z.string()),
+    /**
+     * Whether the VERB would accept this pick - exactly `target !== null`.
+     *
+     * It does NOT answer "should the menu offer the click". The manual switch
+     * validates usability alone, so an `already-tried` or `rate-limited` row is
+     * one the host would accept; encoding the stricter answer here would make
+     * every menu a second policy nothing enforces.
+     */
+    selectable: z.boolean(),
+    skip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
 export type FallbackModelTarget = z.infer<typeof fallbackModelTargetSchema>;
 
 /**
@@ -501,50 +518,54 @@ export type FallbackModelTarget = z.infer<typeof fallbackModelTargetSchema>;
  * an `outcome` and empty lists, exactly as the action verbs answer
  * `traversal_advanced` rather than failing the call.
  */
-export const chatFallbackListTargetsRequestSchema = z.object({
-  epicId: z.string().trim().min(1),
-  chatId: z.string().trim().min(1),
-  selector: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("traversal"),
-      traversalId: z.string().trim().min(1),
-      revision: z.number().int().nonnegative(),
-    }),
-    z.object({
-      kind: z.literal("attempt"),
-      userMessageId: z.string().trim().min(1),
-      turnId: z.string().trim().min(1),
-    }),
-  ]),
-});
+export const chatFallbackListTargetsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().trim().min(1),
+    chatId: z.string().trim().min(1),
+    selector: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("traversal"),
+        traversalId: z.string().trim().min(1),
+        revision: z.number().int().nonnegative(),
+      }),
+      z.object({
+        kind: z.literal("attempt"),
+        userMessageId: z.string().trim().min(1),
+        turnId: z.string().trim().min(1),
+      }),
+    ]),
+  }),
+);
 export type ChatFallbackListTargetsRequest = z.infer<
   typeof chatFallbackListTargetsRequestSchema
 >;
 
-export const chatFallbackListTargetsResponseSchema = z.object({
-  outcome: z.enum([
-    "listed",
-    "no_active_traversal",
-    "traversal_advanced",
-    "attempt_not_latest",
-    "state_unreadable",
-  ]),
-  /** The tuple that failed, so a surface can assert it is never offered. */
-  failedTuple: chatRunSettingsSchema.nullable(),
-  profileTargets: z.array(fallbackProfileTargetSchema),
-  modelTargets: z.array(fallbackModelTargetSchema),
-  /**
-   * Why `modelTargets` is EMPTY, when that is a rung-level fact rather than
-   * every candidate having been skipped - in practice `no-group`.
-   *
-   * Beside the array rather than inside it because it describes the absence of
-   * candidates, not a candidate. Load-bearing for the UI: `no-group` is the
-   * COMMONEST ineligibility, being what a user sees after deleting or narrowing
-   * their groups, so an empty list with no explanation would be the menu's
-   * worst cell.
-   */
-  modelTargetsSkip: fallbackTargetSkipSchema.nullable(),
-});
+export const chatFallbackListTargetsResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: z.enum([
+      "listed",
+      "no_active_traversal",
+      "traversal_advanced",
+      "attempt_not_latest",
+      "state_unreadable",
+    ]),
+    /** The tuple that failed, so a surface can assert it is never offered. */
+    failedTuple: chatRunSettingsSchema.nullable(),
+    profileTargets: z.array(fallbackProfileTargetSchema),
+    modelTargets: z.array(fallbackModelTargetSchema),
+    /**
+     * Why `modelTargets` is EMPTY, when that is a rung-level fact rather than
+     * every candidate having been skipped - in practice `no-group`.
+     *
+     * Beside the array rather than inside it because it describes the absence of
+     * candidates, not a candidate. Load-bearing for the UI: `no-group` is the
+     * COMMONEST ineligibility, being what a user sees after deleting or narrowing
+     * their groups, so an empty list with no explanation would be the menu's
+     * worst cell.
+     */
+    modelTargetsSkip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
 export type ChatFallbackListTargetsResponse = z.infer<
   typeof chatFallbackListTargetsResponseSchema
 >;

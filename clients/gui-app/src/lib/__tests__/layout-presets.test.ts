@@ -614,4 +614,13 @@ describe("layout presets", () => {
       DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
     );
   });
+
+  it("resets the task tab layout to scroll but leaves it alone when a preset applies", () => {
+    useSettingsStore.getState().setTaskTabLayout("shrink");
+    applyLayoutPreset("default");
+    expect(useSettingsStore.getState().taskTabLayout).toBe("shrink");
+
+    resetLayoutToDefaults();
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
+  });
 });

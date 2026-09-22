@@ -12,9 +12,11 @@ import {
   TRAYCER_RELEASE_NOTES_URL,
 } from "../app/support-links";
 import type { MenuState } from "./menu-state";
+import { reloadFocusedPage } from "./reload-focused-page";
 
 export interface MenuBuildActions {
   command(command: MenuCommandId, senderWindow: BaseWindow | null): void;
+  toggleAppDevTools(senderWindow: BaseWindow | undefined): void;
   focusWindow(windowId: string): void;
   openExternal(url: string): void;
 }
@@ -194,8 +196,19 @@ function buildViewMenu(
           { role: "togglefullscreen" } satisfies MenuItemConstructorOptions,
         ];
   const submenu: MenuItemConstructorOptions[] = [
-    terminalConflictingRole("reload", state.platform),
-    { role: "forceReload" },
+    {
+      label: "Reload",
+      accelerator: "CmdOrCtrl+R",
+      registerAccelerator: registerTerminalConflictingAccelerator(
+        state.platform,
+      ),
+      click: (_item, window) => reloadFocusedPage(window, false),
+    },
+    {
+      label: "Force Reload",
+      accelerator: "Shift+CmdOrCtrl+R",
+      click: (_item, window) => reloadFocusedPage(window, true),
+    },
     { type: "separator" },
     {
       label: "Actual Size",
@@ -295,13 +308,17 @@ function buildHelpMenu(
           actions.command("app.reportIssue", browserWindow ?? null),
       },
       { type: "separator" },
-      // DevTools are available in non-production builds. Production drops the
-      // menu role so an end-user can't open a privileged inspector against the
-      // renderer.
-      // (`Ctrl+Shift+I` / `Cmd+Opt+I` accelerators land on the same role and
-      // are filtered out by Electron when the menu item is absent.)
+      // This command inspects Traycer. The browser tile has its own DevTools
+      // action; Electron's role would select a guest through global focus.
       ...(state.canOpenDevTools
-        ? [{ role: "toggleDevTools" } satisfies MenuItemConstructorOptions]
+        ? [
+            {
+              label: "Toggle Developer Tools",
+              accelerator:
+                state.platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
+              click: (_item, window) => actions.toggleAppDevTools(window),
+            } satisfies MenuItemConstructorOptions,
+          ]
         : []),
       {
         label: "Open Logs",
@@ -346,7 +363,7 @@ function registerTerminalConflictingAccelerator(
  * the key event. macOS keeps its native menu key equivalents.
  */
 function terminalConflictingRole(
-  role: "close" | "quit" | "reload" | "selectAll",
+  role: "close" | "quit" | "selectAll",
   platform: NodeJS.Platform,
 ): MenuItemConstructorOptions {
   return {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
 import {
   agentListDowngradeV2ToV1,
@@ -98,11 +99,11 @@ import {
   providersListResponseSchemaV80,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
-// Importing from the registry runs `defineVersionedRpcRegistry` (full structural
-// + schema-compatibility validation) at module load, so this import alone
-// asserts the new v2.0/v3.0/v4.0/v5.0/v6.0/v7.0/v8.0/v9.0 lines and their
-// upgrade/downgrade bridges are well-formed.
+// Construction is structural-only. The full schema-compatibility pass is
+// the explicit `validateVersionedRpcRegistry(hostRpcRegistry)` below, which
+// is what holds the v2.0–v9.0 lines and their upgrade/downgrade bridges.
 import {
+  hostRpcRegistry,
   providersAwaitLoginDowngradeV21ToV10,
   providersListDowngradeV2ToV1,
   providersListDowngradeV4ToV1,
@@ -201,6 +202,12 @@ function providerState(providerId: string, status: string) {
     },
   };
 }
+
+describe("hostRpcRegistry full validation", () => {
+  it("passes schema compatibility for the v2.0–v9.0 provider/harness lines", () => {
+    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  });
+});
 
 describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
   it("drops post-v1.0 harnesses from agent.gui.listHarnesses for v1.0 callers", () => {

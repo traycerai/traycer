@@ -137,8 +137,52 @@ function render(ui: ReactNode) {
   );
 }
 
+// Cross-task opens go through the top-level task navigation seam
+// (`activateTabIntent`), not the current task's tile navigation.
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  activateTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useNavigate: () => navigationMocks.navigate };
+});
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+});
+
+function expectCrossTaskActivation(node: {
+  readonly id: string;
+  readonly type: "chat" | "terminal-agent";
+  readonly hostId: string;
+}): void {
+  expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+  const call = navigationMocks.activateTabIntent.mock.calls.at(0);
+  if (call === undefined) throw new Error("activateTabIntent was not called");
+  const [navigate, intent] = call;
+  expect(navigate).toBe(navigationMocks.navigate);
+  expect(intent).toMatchObject({
+    kind: "open-epic",
+    epicId: "epic-2",
+    includeNestedFocus: true,
+    preparation: { kind: "open-tile", gesture: "explicit", node },
+  });
+  // No double open through the current task's tile navigation.
+  expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+}
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined }),
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: (artifactId: string | null) => {
+  useRegisteredEpicLiveAgents: () => [],
+  useEpicAgentReference: (artifactId: string | null) => {
     if (artifactId === "agent-sender-1") {
       return {
         id: "agent-sender-1",
@@ -166,6 +210,42 @@ vi.mock("@/lib/epic-selectors", () => ({
 const tileNavigationMocks = vi.hoisted(() => ({
   openTile: vi.fn(() => null),
 }));
+
+// Cross-task senders come from the shared `useA2AMessagePeer` hook. An id with
+// no entry falls through to the real hook so same-task tests are unchanged.
+const peerMocks = vi.hoisted(() => ({
+  /** Every (agentId, origin) the card asked the hook about. */
+  origins: [] as { agentId: string; origin: unknown }[],
+  byId: {} as Record<
+    string,
+    {
+      epicId: string;
+      agentId: string;
+      hostId: string;
+      title: string | null;
+      surface: "gui" | "tui";
+    } | null
+  >,
+}));
+
+vi.mock(
+  import("@/hooks/agent/use-a2a-message-peer"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useA2AMessagePeer: (
+        agentId: string,
+        origin: Parameters<typeof actual.useA2AMessagePeer>[1],
+      ) => {
+        peerMocks.origins.push({ agentId, origin });
+        return agentId in peerMocks.byId
+          ? peerMocks.byId[agentId]
+          : actual.useA2AMessagePeer(agentId, origin);
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: tileNavigationMocks.openTile }),
@@ -1093,6 +1173,107 @@ describe("<UserMessageBody /> agent messages", () => {
 
     expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
     expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
+  });
+
+  describe("cross-task senders", () => {
+    const CROSS_ID = "agent-sender-cross";
+
+    afterEach(() => {
+      navigationMocks.activateTabIntent.mockClear();
+      peerMocks.byId = {};
+      peerMocks.origins = [];
+    });
+
+    function crossMessage(fromTitle: string | null): ChatMessageModel {
+      const base = agentMessage("Reply from the other task.");
+      return {
+        ...base,
+        agentSenderInfo: {
+          agentId: CROSS_ID,
+          senderTitle: fromTitle,
+          expectReply: true,
+          responseId: "response-1",
+        },
+        agentMessage: {
+          kind: "agent",
+          content: AGENT_CONTENT,
+          fromAgentId: CROSS_ID,
+          senderTitle: fromTitle,
+          senderHarnessId: "codex",
+          reply: { expectsReply: true, responseId: "response-1" },
+        },
+      };
+    }
+
+    it("shows the resolved title and opens the OTHER task on its host, parking a receipt jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Task Sender",
+        surface: "gui",
+      };
+      const message = crossMessage(null);
+      render(<UserMessageBody actions={null} message={message} />);
+
+      // The received card anchors a fork lookup to its own message id.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: { direction: "received", messageId: message.id },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Cross Task Sender" }),
+      );
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CROSS_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "receipt", messageId: message.id });
+    });
+
+    it("opens a cross-task terminal sender without parking a jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Terminal",
+        surface: "tui",
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Cross Terminal" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "terminal-agent",
+        hostId: "host-2",
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+    });
+
+    it("renders the stamped title as plain text when the peer cannot be resolved", () => {
+      peerMocks.byId[CROSS_ID] = null;
+      render(
+        <UserMessageBody
+          actions={null}
+          message={crossMessage("Stamped Title")}
+        />,
+      );
+
+      expect(screen.getByText("Stamped Title")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Stamped Title" }),
+      ).toBeNull();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
+    });
   });
 
   it("opens received A2A cards through the provider store", () => {

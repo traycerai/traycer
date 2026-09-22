@@ -50,6 +50,7 @@ import type {
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -149,6 +150,20 @@ describe("host method poll policy table", () => {
         entry.joinResponseTimeoutMs === null || entry.joinResponseTimeoutMs > 0,
       ).toBe(true);
     }
+  });
+
+  it("keeps usage summary above the host and server response budgets", () => {
+    expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBe(90_000);
+    expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBeGreaterThan(75_000);
+    expect(HOST_METHOD_POLL_TABLE["host.usage.summary"]).toMatchObject({
+      joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("host.usage.summary"),
+    ).toBe(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS);
+    expect(HOST_METHOD_POLL_TABLE["host.status"].joinResponseTimeoutMs).toBe(
+      null,
+    );
   });
 
   it("keeps ambiguous verbs on their declared side of the command/read boundary", () => {
@@ -1002,5 +1017,38 @@ describe("drafts.putBlob declared budget", () => {
     expect(refusedRequestSpy).not.toHaveBeenCalled();
     expect(refusedTimeoutSpy).not.toHaveBeenCalled();
     expect(refused.messenger.calls).toHaveLength(0);
+  });
+});
+
+describe("agent.resolveMessagePeer poll policy", () => {
+  const policy = HOST_METHOD_POLL_TABLE["agent.resolveMessagePeer"].poll;
+  const peer = {
+    epicId: "epic-2",
+    agentId: "agent-2",
+    hostId: "host-2",
+    title: "Peer",
+    surface: "gui",
+  } as const;
+
+  it("backs off from 2s to 5min while the peer is unresolved", () => {
+    for (const pending of [undefined, { peer: null }]) {
+      expect(policy.classify(pending)).toMatchObject({
+        id: "a2a-peer-pending",
+        initialDelayMs: 2_000,
+        maxDelayMs: 5 * 60_000,
+      });
+    }
+  });
+
+  it("keeps backing off for a resolved peer whose title has not been generated yet", () => {
+    expect(policy.classify({ peer: { ...peer, title: null } })).toMatchObject({
+      id: "a2a-peer-pending",
+      initialDelayMs: 2_000,
+      maxDelayMs: 5 * 60_000,
+    });
+  });
+
+  it("stops polling once a named peer resolves, so the other task can be reclaimed", () => {
+    expect(policy.classify({ peer })).toBe(false);
   });
 });

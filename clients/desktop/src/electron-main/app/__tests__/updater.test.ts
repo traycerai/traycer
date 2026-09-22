@@ -9,6 +9,16 @@ import type {
 
 type UpdaterModule = typeof import("../updater");
 
+// Stands in for `electron`'s native `autoUpdater` (Squirrel.Mac), which
+// `updater.ts` imports directly to learn when macOS preparation actually
+// finishes - `electron-updater`'s own `MacUpdater` never re-emits that success
+// on itself, only the failure (see `FakeAutoUpdater`'s constructor below).
+class FakeNativeAutoUpdater extends EventEmitter {
+  readonly checkForUpdates = vi.fn((): void => undefined);
+  readonly quitAndInstall = vi.fn((): void => undefined);
+  readonly setFeedURL = vi.fn((_options: unknown): void => undefined);
+}
+
 class FakeAutoUpdater extends EventEmitter {
   logger: unknown = null;
   autoDownload = false;
@@ -23,6 +33,34 @@ class FakeAutoUpdater extends EventEmitter {
   readonly quitAndInstall = vi.fn(
     (_isSilent: boolean, _isForceRunAfter: boolean): void => undefined,
   );
+  // macOS only: whether this fake auto-completes native preparation right
+  // after its own `update-downloaded` fires (see `emit` override below). Every
+  // pre-existing test emits the wrapper event expecting immediate readiness,
+  // which is only true once native preparation has also finished - so the
+  // default here reproduces that common (native succeeds right away) case
+  // without touching every call site. A regression test that needs to observe
+  // the gap between wrapper staging and native completion sets this to
+  // `false` and drives `nativeAutoUpdater` itself.
+  autoForwardNativeSuccess = true;
+
+  constructor(readonly nativeAutoUpdater: FakeNativeAutoUpdater) {
+    super();
+    // Mirrors real `MacUpdater`'s constructor, which re-emits every native
+    // `error` as the wrapper's OWN `error` event - in production that is the
+    // only way a native preparation failure reaches `autoUpdater.on("error",
+    // ...)`, since `electron-updater` is otherwise mocked away wholesale here.
+    this.nativeAutoUpdater.on("error", (err) => {
+      super.emit("error", err);
+    });
+  }
+
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    const result = super.emit(event, ...args);
+    if (event === "update-downloaded" && this.autoForwardNativeSuccess) {
+      this.nativeAutoUpdater.emit("update-downloaded");
+    }
+    return result;
+  }
 }
 
 // Window-focus deps the updater needs. Default focused=true so the OS
@@ -3609,6 +3647,358 @@ describe("masked 404 in release discovery: no probe without a token", () => {
   });
 });
 
+// The MacUpdater bug this covers: electron-updater's wrapper fires its own
+// `update-downloaded` the moment the ZIP is verified, but Squirrel.Mac (the
+// NATIVE `electron.autoUpdater`) hasn't validated and staged the app yet -
+// that happens afterward, asynchronously, via a native `update-downloaded` of
+// its own. Treating the wrapper event alone as "ready" let a user click
+// Restart before Squirrel finished, and a native preparation failure arrived
+// as an `error` event that the old "already ready" guard silently discarded -
+// so `quitAndInstall` then waited forever for a native completion that had
+// already failed. Every test here forces `autoForwardNativeSuccess = false`
+// to hold that gap open and drive `nativeAutoUpdater` by hand; every other
+// test in this file leaves it at its default (`true`), which models native
+// preparation succeeding immediately after the wrapper stages the ZIP.
+describe("macOS native update preparation", () => {
+  async function stageMacDownload(
+    updater: UpdaterModule,
+    autoUpdater: FakeAutoUpdater,
+  ): Promise<void> {
+    autoUpdater.autoForwardNativeSuccess = false;
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    updater.startUpdateDownload();
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+  }
+
+  it("stays downloading at 100% once the wrapper stages the ZIP, before native preparation finishes", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+
+    await stageMacDownload(updater, autoUpdater);
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "downloading",
+      downloadProgress: 100,
+    });
+  });
+
+  it("refuses to install while native preparation is still pending", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    updater.installDownloadedUpdate();
+
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage: "No downloaded update is ready to install.",
+    });
+  });
+
+  it("promotes the staged update to ready once native preparation actually finishes", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    nativeAutoUpdater.emit("update-downloaded");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      latestVersion: "2.0.0",
+      downloadProgress: null,
+    });
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  it("treats a native preparation failure as a download failure and clears the stage so install can't hang", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    // Modeled on the real `MacUpdater`, which re-emits every native `error` as
+    // the wrapper's own `error` event (see `FakeAutoUpdater`'s constructor).
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+
+    // Same classification and transition as an ordinary mid-download failure -
+    // no bespoke "native prep" copy or status.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      downloadProgress: null,
+      errorMessage:
+        "Traycer couldn't download and install the latest update. Please try again in a little while.",
+    });
+
+    // The old bug: clicking Restart here called `quitAndInstall`, which then
+    // waited forever for a native completion that had already failed. Nothing
+    // is staged anymore, so the readiness guard refuses cleanly instead.
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late native success that arrives after preparation already failed", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    const sequenceAfterFailure = updater.getAppUpdateSnapshot().sequence;
+
+    // Squirrel finishes anyway, after the app already gave up on it.
+    nativeAutoUpdater.emit("update-downloaded");
+
+    // No new snapshot at all - the late event found nothing pending and was a
+    // pure no-op, not merely one that failed to move `status` off "error".
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      sequence: sequenceAfterFailure,
+      status: "error",
+    });
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("lets a retried download reach ready after an earlier native preparation failure", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+
+    // Retry: a fresh check resurfaces the same candidate, and this time
+    // native preparation succeeds.
+    await updater.checkForUpdatesNow(false, "automatic");
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    updater.startUpdateDownload();
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    nativeAutoUpdater.emit("update-downloaded");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      latestVersion: "2.0.0",
+    });
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  it("stays ready as soon as the wrapper reports the download on non-macOS platforms", async () => {
+    setPlatform("win32");
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    // Disabled on purpose: Windows/Linux never wait on `nativeAutoUpdater`, so
+    // readiness must follow the wrapper event directly even with no native
+    // completion (real or auto-forwarded) in the picture at all.
+    autoUpdater.autoForwardNativeSuccess = false;
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    updater.startUpdateDownload();
+
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      downloadProgress: null,
+    });
+    expect(nativeAutoUpdater.listenerCount("update-downloaded")).toBe(0);
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  // PR review finding: `updateArtifactStaged` used to be raised at the
+  // WRAPPER's own `update-downloaded` (`stageMacDownload`'s last line), before
+  // Squirrel.Mac had validated anything - so a failed native preparation left
+  // it permanently `true` (nothing ever un-sets it on error) and every later
+  // channel-switch attempt was refused as `refused-update-pending` forever,
+  // even though nothing was ever actually staged natively. The fix raises it
+  // for darwin only once native preparation succeeds; non-mac keeps raising it
+  // at the wrapper event, same as before.
+  it("refuses a channel switch while native preparation is still pending", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+
+    expect(change.outcome).toBe("refused-update-pending");
+    expect(change.snapshot.allowPrerelease).toBe(false);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+  });
+
+  it("allows a channel switch once native preparation has failed, since nothing was ever actually staged", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+
+    expect(change.outcome).toBe("changed");
+    expect(change.snapshot.allowPrerelease).toBe(true);
+  });
+
+  // Companion to the two tests above, from the other caller that reads
+  // `updateArtifactStaged` (the compat-recovery dialog): a failed native
+  // preparation must not be reported as a build that will apply at the next
+  // quit whatever the user does.
+  it("stops reporting a native preparation failure as a staged build blocking recovery", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    autoUpdater.autoForwardNativeSuccess = false;
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", {
+        version: "2.0.0",
+        compatibilityEpoch: 1,
+      });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    updater.startUpdateDownload();
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      compatibilityEpoch: 1,
+    });
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+
+    // Not "restart-to-clear-staged": nothing is staged to clear.
+    expect(plan.route).toBe("manual");
+  });
+
+  // Not duplicated here: "keeps a channel switch refused after an install
+  // attempt on a staged artifact errors (finding 2)" (RC release discovery
+  // describe block) already runs on the default darwin platform and covers
+  // native success followed by a POST-install `quitAndInstall` failure -
+  // `updateArtifactStaged` is raised at native success there, same as it is
+  // under this fix, and the switch stays refused.
+
+  // PR review finding: electron-updater's wrapper can emit its OWN `error`
+  // for something that has nothing to do with native preparation (e.g. a
+  // blockmap-caching I/O failure logged after the ZIP HTTP transfer
+  // resolves), while Squirrel.Mac is still working in the background.
+  // Mistaking that for a native preparation failure would abandon a download
+  // that was actually still going to succeed (or would still eventually fail
+  // on its own, native, terms). Ownership of a pending download stays with
+  // native preparation until a NATIVE terminal event decides it either way;
+  // a wrapper-only error while `pendingMacUpdate` is set is a no-op.
+  it("ignores a wrapper-only error while native preparation is still pending, keeping the download intact", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+    autoUpdater.checkForUpdates.mockClear();
+    autoUpdater.downloadUpdate.mockClear();
+
+    autoUpdater.emit(
+      "error",
+      new Error(
+        "EACCES: permission denied, open '/Users/x/Library/Caches/traycer.ShipIt/pending/current.blockmap'",
+      ),
+    );
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "downloading",
+      downloadProgress: 100,
+    });
+    // Neither a fresh check nor a fresh download attempt does anything while
+    // the download is still pending native preparation - same guards as the
+    // ordinary "already downloading" case, undisturbed by the ignored error.
+    await updater.checkForUpdatesNow(false, "manual");
+    updater.startUpdateDownload();
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("still reaches ready via native success after a wrapper-only error was ignored", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    autoUpdater.emit(
+      "error",
+      new Error(
+        "EACCES: permission denied, open '/Users/x/Library/Caches/traycer.ShipIt/pending/current.blockmap'",
+      ),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    nativeAutoUpdater.emit("update-downloaded");
+
+    // The candidate native preparation resolves is the one staged before the
+    // ignored error, not something re-fetched or re-derived.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      latestVersion: "2.0.0",
+    });
+    updater.installDownloadedUpdate();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  it("still reaches error via a genuine native failure after a wrapper-only error was ignored, and permits a retry", async () => {
+    const { autoUpdater, nativeAutoUpdater, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageMacDownload(updater, autoUpdater);
+    autoUpdater.emit(
+      "error",
+      new Error(
+        "EACCES: permission denied, open '/Users/x/Library/Caches/traycer.ShipIt/pending/current.blockmap'",
+      ),
+    );
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    nativeAutoUpdater.emit(
+      "error",
+      new Error("sha512 checksum mismatch, expected abc got def"),
+    );
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      downloadProgress: null,
+      errorMessage:
+        "Traycer couldn't download and install the latest update. Please try again in a little while.",
+    });
+
+    // The earlier ignored wrapper-only error did not strand ownership of the
+    // download: this genuine native failure released it, so a retry actually
+    // reaches the feed again rather than silently no-opping.
+    autoUpdater.checkForUpdates.mockClear();
+    await updater.checkForUpdatesNow(false, "automatic");
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+  });
+});
+
 interface LinuxGuidanceTestConfig {
   readonly packageType: "deb" | "rpm" | null;
   readonly silentInstallSupported: boolean;
@@ -3626,6 +4016,7 @@ const NOT_LINUX_GUIDANCE: LinuxGuidanceTestConfig = {
 
 interface LoadedUpdater {
   readonly autoUpdater: FakeAutoUpdater;
+  readonly nativeAutoUpdater: FakeNativeAutoUpdater;
   readonly notify: Mock;
   readonly logger: Record<string, Mock>;
   readonly preferences: { allowPrerelease: boolean };
@@ -3738,7 +4129,8 @@ async function loadUpdaterWithControls(
   releaseChannel: "dev" | "staging",
 ): Promise<LoadedUpdater> {
   vi.resetModules();
-  const autoUpdater = new FakeAutoUpdater();
+  const nativeAutoUpdater = new FakeNativeAutoUpdater();
+  const autoUpdater = new FakeAutoUpdater(nativeAutoUpdater);
   const notify = vi.fn();
   const logger = {
     debug: vi.fn(),
@@ -3751,6 +4143,7 @@ async function loadUpdaterWithControls(
     app: {
       getVersion: () => appVersion,
     },
+    autoUpdater: nativeAutoUpdater,
   }));
   if (releaseChannel === "staging") {
     vi.doMock("../../../config", () => ({
@@ -3828,6 +4221,7 @@ async function loadUpdaterWithControls(
   }));
   return {
     autoUpdater,
+    nativeAutoUpdater,
     notify,
     logger,
     preferences,

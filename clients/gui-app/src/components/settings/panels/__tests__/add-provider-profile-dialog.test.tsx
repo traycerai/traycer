@@ -181,4 +181,81 @@ describe("<AddProfileWaitingStep />", () => {
     ).toBeDefined();
     cleanup();
   });
+
+  it("shows the tick only on the copy button that was clicked", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    const writeText = vi.fn((_value: string) => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(
+        <AddProfileWaitingStep
+          loginUrl="https://auth.openai.com/codex/device"
+          userCode="7CH1-OXNVU"
+          loginCapability={{
+            oauthArgs: ["login", "--device-auth"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: {},
+            selfOpensBrowser: null,
+          }}
+          isLocalHost={false}
+          queuePending={false}
+          cancelRequested={false}
+          cancelPending={false}
+          cancelDisabled={false}
+          waiting
+          codePaste={DISABLED_CODE_PASTE}
+          onOpenExternalLink={() => {}}
+          onCancel={() => {}}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy sign-in code" }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(
+        screen.getByRole("button", { name: "Copied sign-in code" }),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Copy sign-in link" }),
+      ).toBeDefined();
+      expect(writeText).toHaveBeenCalledWith("7CH1-OXNVU");
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy sign-in link" }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(
+        screen.getByRole("button", { name: "Copied sign-in link" }),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Copied sign-in code" }),
+      ).toBeDefined();
+      expect(writeText).toHaveBeenCalledWith(
+        "https://auth.openai.com/codex/device",
+      );
+    } finally {
+      cleanup();
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
+  });
 });

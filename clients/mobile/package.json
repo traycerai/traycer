@@ -62,5 +62,12 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"
+  },
+  "nx": {
+    "implicitDependencies": [
+      "@traycer/protocol",
+      "@traycer-clients/shared",
+      "traycer-clients-gui-app"
+    ]
   }
 }

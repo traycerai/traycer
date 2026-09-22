@@ -4,6 +4,7 @@ import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-bl
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * # Locating a row the client cannot name
@@ -85,54 +86,56 @@ export const LOCATOR_MESSAGE_TEXT_MAX_CHARS = 64_000;
  * function that consumes it, so the request shape and the search that answers
  * it cannot drift apart.
  */
-export const transcriptRowLocatorSchema = z.discriminatedUnion("kind", [
-  /** A tool / sub-agent card, by the block id the transcript rendered it from. */
-  z.object({ kind: z.literal("block"), blockId: z.string() }),
-  /**
-   * The SENDER-side card of an A2A exchange, matched the way the renderer
-   * matches it: on receiver and the verbatim message text, because those are
-   * the only identifiers the send block and the comm-event row durably share -
-   * the sender's block id is its harness's tool id and never reaches the host's
-   * capture. `timestamp` breaks ties when the same text went to the same
-   * receiver more than once, and both clocks are this host's.
-   */
-  z.object({
-    kind: z.literal("sent-message"),
-    receiverAgentId: z.string(),
-    messageText: z.string().max(LOCATOR_MESSAGE_TEXT_MAX_CHARS),
-    timestamp: z.number(),
-  }),
-  /**
-   * The SENDER-side card of an A2A exchange, named from the RECEIVER's side.
-   * `messageId` is the received row's own id: the host mints it before
-   * delivery, the receiver's append uses it verbatim, and the sender's
-   * harness stamps it on the send's tool block as `agentMessageReceipt` at
-   * completion. So a received card can name its sender's card exactly, with
-   * no text or clock heuristic - the id is unique across the epic.
-   *
-   * Misses (`null`) for a block persisted before receipts existed; the caller
-   * degrades to the tile it already opened.
-   */
-  z.object({ kind: z.literal("receipt"), messageId: z.string() }),
-  /**
-   * The inline plan card named by a pending plan approval. Plan approvals are
-   * answered on that card, not the composer queue, so a jump that only has
-   * the approval id still has to find the plan block — and a cold row has
-   * none of those models. Composer-pending tool/file-edit approvals never
-   * send this: they are already on screen.
-   */
-  z.object({ kind: z.literal("approval"), approvalId: z.string() }),
-  /**
-   * A durable record id, for the case the client's own id-as-row-id read
-   * cannot cover: an ASSISTANT record, whose rows are turn-keyed.
-   *
-   * The client asks for this only after its own lookups miss, so answering a
-   * user record here too is not redundancy to remove - it makes the search
-   * total over "the row that renders this record", which is what the caller
-   * asked. A caller that can already place the row does not send the request.
-   */
-  z.object({ kind: z.literal("message"), messageId: z.string() }),
-]);
+export const transcriptRowLocatorSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    /** A tool / sub-agent card, by the block id the transcript rendered it from. */
+    z.object({ kind: z.literal("block"), blockId: z.string() }),
+    /**
+     * The SENDER-side card of an A2A exchange, matched the way the renderer
+     * matches it: on receiver and the verbatim message text, because those are
+     * the only identifiers the send block and the comm-event row durably share -
+     * the sender's block id is its harness's tool id and never reaches the host's
+     * capture. `timestamp` breaks ties when the same text went to the same
+     * receiver more than once, and both clocks are this host's.
+     */
+    z.object({
+      kind: z.literal("sent-message"),
+      receiverAgentId: z.string(),
+      messageText: z.string().max(LOCATOR_MESSAGE_TEXT_MAX_CHARS),
+      timestamp: z.number(),
+    }),
+    /**
+     * The SENDER-side card of an A2A exchange, named from the RECEIVER's side.
+     * `messageId` is the received row's own id: the host mints it before
+     * delivery, the receiver's append uses it verbatim, and the sender's
+     * harness stamps it on the send's tool block as `agentMessageReceipt` at
+     * completion. So a received card can name its sender's card exactly, with
+     * no text or clock heuristic - the id is unique across the epic.
+     *
+     * Misses (`null`) for a block persisted before receipts existed; the caller
+     * degrades to the tile it already opened.
+     */
+    z.object({ kind: z.literal("receipt"), messageId: z.string() }),
+    /**
+     * The inline plan card named by a pending plan approval. Plan approvals are
+     * answered on that card, not the composer queue, so a jump that only has
+     * the approval id still has to find the plan block — and a cold row has
+     * none of those models. Composer-pending tool/file-edit approvals never
+     * send this: they are already on screen.
+     */
+    z.object({ kind: z.literal("approval"), approvalId: z.string() }),
+    /**
+     * A durable record id, for the case the client's own id-as-row-id read
+     * cannot cover: an ASSISTANT record, whose rows are turn-keyed.
+     *
+     * The client asks for this only after its own lookups miss, so answering a
+     * user record here too is not redundancy to remove - it makes the search
+     * total over "the row that renders this record", which is what the caller
+     * asked. A caller that can already place the row does not send the request.
+     */
+    z.object({ kind: z.literal("message"), messageId: z.string() }),
+  ]),
+);
 export type TranscriptRowLocator = z.infer<typeof transcriptRowLocatorSchema>;
 
 /**

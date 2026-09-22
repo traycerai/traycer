@@ -13,6 +13,7 @@ import {
   recordListStampSchema,
 } from "@traycer/protocol/host/epic/record-list-revision";
 import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/worktree-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * `epic.listTuiAgents@1.0` - the terminal-agent RECORD read, the TUI sibling
@@ -82,9 +83,11 @@ import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/workt
  * is the only party that knows, and a fact it declares cannot drift out of
  * step with a version it negotiated elsewhere.
  */
-export const listTuiAgentsRequestSchema = z.object({
-  epicId: z.string().min(1),
-});
+export const listTuiAgentsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
 export type ListTuiAgentsRequest = z.infer<typeof listTuiAgentsRequestSchema>;
 
 /**
@@ -103,45 +106,49 @@ export type ListTuiAgentsRequest = z.infer<typeof listTuiAgentsRequestSchema>;
  * head seq), exactly as on `chatRecordSummarySchema`: a consumer applies an
  * upsert only when its revision strictly exceeds the one held.
  */
-export const tuiAgentRecordSummarySchema = z.object({
-  tuiAgentId: z.string().min(1),
-  /** IDENTITY-BEARING, as on the chat row - never render, always key. */
-  ownerUserId: z.string().min(1),
-  /**
-   * The BINDING host - the record is bound to it for life. Non-empty like the
-   * owner: a row with no binding could not be addressed by any affordance.
-   */
-  hostId: z.string().min(1),
-  /**
-   * The harness discriminator, an OPEN string on the wire so a newer host's
-   * vendor still parses; clients narrow through their own harness catalog
-   * and drop what they cannot dispatch.
-   */
-  harnessId: z.string().min(1),
-  harnessSessionId: z.string().nullable(),
-  parentId: z.string().nullable(),
-  title: z.string(),
-  isTitleEditedByUser: z.boolean(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  archived: z.boolean(),
-  archivedAt: z.number().int().nonnegative().nullable(),
-  workspaceFolders: z.array(z.string()),
-  workspaceMode: worktreeBindingWorkspaceModeSchema.nullable(),
-  model: z.string().nullable(),
-  reasoningEffort: z.string().nullable(),
-  agentMode: agentModeSchema,
-  profileId: z.string().nullable(),
-  terminalAgentArgs: z.string().nullable(),
-  terminalShellCommand: z.string().nullable(),
-  terminalShellArgs: z.array(z.string()).nullable(),
-  revision: z.number().int().nonnegative(),
-});
+export const tuiAgentRecordSummarySchema = lazySchema(() =>
+  z.object({
+    tuiAgentId: z.string().min(1),
+    /** IDENTITY-BEARING, as on the chat row - never render, always key. */
+    ownerUserId: z.string().min(1),
+    /**
+     * The BINDING host - the record is bound to it for life. Non-empty like the
+     * owner: a row with no binding could not be addressed by any affordance.
+     */
+    hostId: z.string().min(1),
+    /**
+     * The harness discriminator, an OPEN string on the wire so a newer host's
+     * vendor still parses; clients narrow through their own harness catalog
+     * and drop what they cannot dispatch.
+     */
+    harnessId: z.string().min(1),
+    harnessSessionId: z.string().nullable(),
+    parentId: z.string().nullable(),
+    title: z.string(),
+    isTitleEditedByUser: z.boolean(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+    archived: z.boolean(),
+    archivedAt: z.number().int().nonnegative().nullable(),
+    workspaceFolders: z.array(z.string()),
+    workspaceMode: worktreeBindingWorkspaceModeSchema.nullable(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+    terminalAgentArgs: z.string().nullable(),
+    terminalShellCommand: z.string().nullable(),
+    terminalShellArgs: z.array(z.string()).nullable(),
+    revision: z.number().int().nonnegative(),
+  }),
+);
 export type TuiAgentRecordSummary = z.infer<typeof tuiAgentRecordSummarySchema>;
 
-export const listTuiAgentsResponseSchema = z.object({
-  tuiAgents: z.array(tuiAgentRecordSummarySchema),
-});
+export const listTuiAgentsResponseSchema = lazySchema(() =>
+  z.object({
+    tuiAgents: z.array(tuiAgentRecordSummarySchema),
+  }),
+);
 export type ListTuiAgentsResponse = z.infer<typeof listTuiAgentsResponseSchema>;
 
 export const epicListTuiAgentsV10 = defineRpcContract({
@@ -171,17 +178,20 @@ export const epicListTuiAgentsV10 = defineRpcContract({
  * So the marker is not metadata. It is the doc-replica-derived distinction,
  * preserved for a client that no longer has a doc replica to derive it from.
  */
-export const tuiAgentRecordSummaryV11Schema =
+export const tuiAgentRecordSummaryV11Schema = lazySchema(() =>
   tuiAgentRecordSummarySchema.extend({
     docResident: z.boolean(),
-  });
+  }),
+);
 export type TuiAgentRecordSummaryV11 = z.infer<
   typeof tuiAgentRecordSummaryV11Schema
 >;
 
-export const listTuiAgentsResponseV11Schema = z.object({
-  tuiAgents: z.array(tuiAgentRecordSummaryV11Schema),
-});
+export const listTuiAgentsResponseV11Schema = lazySchema(() =>
+  z.object({
+    tuiAgents: z.array(tuiAgentRecordSummaryV11Schema),
+  }),
+);
 export type ListTuiAgentsResponseV11 = z.infer<
   typeof listTuiAgentsResponseV11Schema
 >;
@@ -202,9 +212,11 @@ export type ListTuiAgentsResponseV11 = z.infer<
  * an absent field would have to be given a default - which is precisely the
  * host-side guess this field exists to remove.
  */
-export const listTuiAgentsRequestV11Schema = listTuiAgentsRequestSchema.extend({
-  hasDocReplica: z.boolean(),
-});
+export const listTuiAgentsRequestV11Schema = lazySchema(() =>
+  listTuiAgentsRequestSchema.extend({
+    hasDocReplica: z.boolean(),
+  }),
+);
 export type ListTuiAgentsRequestV11 = z.infer<
   typeof listTuiAgentsRequestV11Schema
 >;
@@ -276,11 +288,9 @@ export const epicListTuiAgentsUpgradeV10ToV11 = defineUpgradePath<
  * peer's schema requires it, and minors inside a major are additive - there is
  * no per-minor response downgrade to strip a field back in.
  */
-export const tuiAgentRecordOriginSchema = z.enum([
-  "registry",
-  "doc",
-  "cloud",
-] as const);
+export const tuiAgentRecordOriginSchema = lazySchema(() =>
+  z.enum(["registry", "doc", "cloud"] as const),
+);
 export type TuiAgentRecordOrigin = z.infer<typeof tuiAgentRecordOriginSchema>;
 
 /**
@@ -293,19 +303,21 @@ export type TuiAgentRecordOrigin = z.infer<typeof tuiAgentRecordOriginSchema>;
  * projecting onto this arm, which is the whole basis on which the additivity
  * check admits the widening. The invariant is enforced where the row is BUILT.
  */
-export const tuiAgentRecordSummaryV12RegistrySchema =
+export const tuiAgentRecordSummaryV12RegistrySchema = lazySchema(() =>
   tuiAgentRecordSummaryV11Schema.extend({
     origin: z.literal("registry"),
-  });
+  }),
+);
 export type TuiAgentRecordSummaryV12Registry = z.infer<
   typeof tuiAgentRecordSummaryV12RegistrySchema
 >;
 
 /** The `@1.1` row, marked as the doc map's frozen copy. `docResident` is `true`. */
-export const tuiAgentRecordSummaryV12DocSchema =
+export const tuiAgentRecordSummaryV12DocSchema = lazySchema(() =>
   tuiAgentRecordSummaryV11Schema.extend({
     origin: z.literal("doc"),
-  });
+  }),
+);
 export type TuiAgentRecordSummaryV12Doc = z.infer<
   typeof tuiAgentRecordSummaryV12DocSchema
 >;
@@ -349,23 +361,25 @@ export type TuiAgentRecordSummaryV12Doc = z.infer<
  * rendering-authoritative field, so the arm loses nothing by omitting a key it
  * could only ever answer `null` for.
  */
-export const tuiAgentRecordSummaryV12CloudSchema = z.object({
-  origin: z.literal("cloud"),
-  tuiAgentId: z.string().min(1),
-  /** IDENTITY-BEARING, as on every other row - never render, always key. */
-  ownerUserId: z.string().min(1),
-  /** The BINDING host: the machine this agent lives on and is addressed through. */
-  hostId: z.string().min(1),
-  /** From the cloud row's `runSettingsSummary`; see the header. */
-  harnessId: z.string().min(1).nullable(),
-  parentId: z.string().nullable(),
-  title: z.string(),
-  isTitleEditedByUser: z.boolean(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  archived: z.boolean(),
-  revision: z.number().int().nonnegative(),
-});
+export const tuiAgentRecordSummaryV12CloudSchema = lazySchema(() =>
+  z.object({
+    origin: z.literal("cloud"),
+    tuiAgentId: z.string().min(1),
+    /** IDENTITY-BEARING, as on every other row - never render, always key. */
+    ownerUserId: z.string().min(1),
+    /** The BINDING host: the machine this agent lives on and is addressed through. */
+    hostId: z.string().min(1),
+    /** From the cloud row's `runSettingsSummary`; see the header. */
+    harnessId: z.string().min(1).nullable(),
+    parentId: z.string().nullable(),
+    title: z.string(),
+    isTitleEditedByUser: z.boolean(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+    archived: z.boolean(),
+    revision: z.number().int().nonnegative(),
+  }),
+);
 export type TuiAgentRecordSummaryV12Cloud = z.infer<
   typeof tuiAgentRecordSummaryV12CloudSchema
 >;
@@ -378,18 +392,22 @@ export type TuiAgentRecordSummaryV12Cloud = z.infer<
  * STREAM FRAME both embed the older consts by reference, so mutating one in
  * place would silently change a released shape.
  */
-export const tuiAgentRecordSummaryV12Schema = z.discriminatedUnion("origin", [
-  tuiAgentRecordSummaryV12RegistrySchema,
-  tuiAgentRecordSummaryV12DocSchema,
-  tuiAgentRecordSummaryV12CloudSchema,
-]);
+export const tuiAgentRecordSummaryV12Schema = lazySchema(() =>
+  z.discriminatedUnion("origin", [
+    tuiAgentRecordSummaryV12RegistrySchema,
+    tuiAgentRecordSummaryV12DocSchema,
+    tuiAgentRecordSummaryV12CloudSchema,
+  ]),
+);
 export type TuiAgentRecordSummaryV12 = z.infer<
   typeof tuiAgentRecordSummaryV12Schema
 >;
 
-export const listTuiAgentsResponseV12Schema = z.object({
-  tuiAgents: z.array(tuiAgentRecordSummaryV12Schema),
-});
+export const listTuiAgentsResponseV12Schema = lazySchema(() =>
+  z.object({
+    tuiAgents: z.array(tuiAgentRecordSummaryV12Schema),
+  }),
+);
 export type ListTuiAgentsResponseV12 = z.infer<
   typeof listTuiAgentsResponseV12Schema
 >;
@@ -472,11 +490,12 @@ export const epicListTuiAgentsUpgradeV11ToV12 = defineUpgradePath<
  * this is additive with nothing to gate. Only the response's new ROOT arm is
  * growth (see {@link listTuiAgentsResponseV13Schema}).
  */
-export const tuiAgentRecordSummaryV13RegistrySchema =
+export const tuiAgentRecordSummaryV13RegistrySchema = lazySchema(() =>
   tuiAgentRecordSummaryV12RegistrySchema.extend({
     sessionState: agentSessionStateSchema.nullable(),
     lastExit: agentSessionLastExitSchema.nullable(),
-  });
+  }),
+);
 export type TuiAgentRecordSummaryV13Registry = z.infer<
   typeof tuiAgentRecordSummaryV13RegistrySchema
 >;
@@ -492,11 +511,12 @@ export type TuiAgentRecordSummaryV13Registry = z.infer<
  * stamp anything. Narrowing the arm to `z.null()` would state a fact about
  * every future host's behaviour that this contract has no business promising.
  */
-export const tuiAgentRecordSummaryV13DocSchema =
+export const tuiAgentRecordSummaryV13DocSchema = lazySchema(() =>
   tuiAgentRecordSummaryV12DocSchema.extend({
     sessionState: agentSessionStateSchema.nullable(),
     lastExit: agentSessionLastExitSchema.nullable(),
-  });
+  }),
+);
 export type TuiAgentRecordSummaryV13Doc = z.infer<
   typeof tuiAgentRecordSummaryV13DocSchema
 >;
@@ -513,21 +533,24 @@ export type TuiAgentRecordSummaryV13Doc = z.infer<
  * follow-up; when it lands it needs no protocol move, because the arm already
  * has somewhere to put the answer.
  */
-export const tuiAgentRecordSummaryV13CloudSchema =
+export const tuiAgentRecordSummaryV13CloudSchema = lazySchema(() =>
   tuiAgentRecordSummaryV12CloudSchema.extend({
     sessionState: agentSessionStateSchema.nullable(),
     lastExit: agentSessionLastExitSchema.nullable(),
-  });
+  }),
+);
 export type TuiAgentRecordSummaryV13Cloud = z.infer<
   typeof tuiAgentRecordSummaryV13CloudSchema
 >;
 
 /** The `@1.3` row: the same three populations, each carrying the facet. */
-export const tuiAgentRecordSummaryV13Schema = z.discriminatedUnion("origin", [
-  tuiAgentRecordSummaryV13RegistrySchema,
-  tuiAgentRecordSummaryV13DocSchema,
-  tuiAgentRecordSummaryV13CloudSchema,
-]);
+export const tuiAgentRecordSummaryV13Schema = lazySchema(() =>
+  z.discriminatedUnion("origin", [
+    tuiAgentRecordSummaryV13RegistrySchema,
+    tuiAgentRecordSummaryV13DocSchema,
+    tuiAgentRecordSummaryV13CloudSchema,
+  ]),
+);
 export type TuiAgentRecordSummaryV13 = z.infer<
   typeof tuiAgentRecordSummaryV13Schema
 >;
@@ -566,18 +589,20 @@ export type TuiAgentRecordSummaryV13 = z.infer<
  * The `unchanged` arm's stamp is NOT nullable: only a host that computed a
  * revision can conclude nothing changed.
  */
-export const listTuiAgentsResponseV13Schema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    listStamp: recordListStampSchema.nullable(),
-    tuiAgents: z.array(tuiAgentRecordSummaryV13Schema),
-  }),
-  z.object({
-    kind: z.literal("unchanged"),
-    listStamp: recordListStampSchema,
-    touched: z.array(recordListRecencyPatchSchema),
-  }),
-]);
+export const listTuiAgentsResponseV13Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      tuiAgents: z.array(tuiAgentRecordSummaryV13Schema),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+    }),
+  ]),
+);
 export type ListTuiAgentsResponseV13 = z.infer<
   typeof listTuiAgentsResponseV13Schema
 >;
@@ -595,10 +620,11 @@ export type ListTuiAgentsResponseV13 = z.infer<
  * must drop the one it holds whenever the store it was read into is replaced -
  * the stamp describes a specific client-side row set, not a point in time.
  */
-export const listTuiAgentsRequestV13Schema =
+export const listTuiAgentsRequestV13Schema = lazySchema(() =>
   listTuiAgentsRequestV12Schema.extend({
     knownRevision: recordListStampSchema.nullable(),
-  });
+  }),
+);
 export type ListTuiAgentsRequestV13 = z.infer<
   typeof listTuiAgentsRequestV13Schema
 >;

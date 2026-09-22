@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { earlyMetaEpicSchema } from "@traycer/protocol/host/epic/snapshot-meta";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * `epic.getWorkspaceContext@1.0` - the workspace context a tab needs before any
@@ -56,9 +57,11 @@ import { earlyMetaEpicSchema } from "@traycer/protocol/host/epic/snapshot-meta";
  * client's source for exactly this payload. The degrade is the legacy adapter
  * that is already there, not a blank surface.
  */
-export const getWorkspaceContextRequestSchema = z.object({
-  epicId: z.string().min(1),
-});
+export const getWorkspaceContextRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
 export type GetWorkspaceContextRequest = z.infer<
   typeof getWorkspaceContextRequestSchema
 >;
@@ -73,9 +76,11 @@ export type GetWorkspaceContextRequest = z.infer<
  * leaves the shared shape alone - the `chatRunSettingsSchemaV10` discipline,
  * applied before rather than after the incident.
  */
-export const getWorkspaceContextResponseSchema = z.object({
-  context: earlyMetaEpicSchema,
-});
+export const getWorkspaceContextResponseSchema = lazySchema(() =>
+  z.object({
+    context: earlyMetaEpicSchema,
+  }),
+);
 export type GetWorkspaceContextResponse = z.infer<
   typeof getWorkspaceContextResponseSchema
 >;
@@ -140,12 +145,16 @@ export const epicGetWorkspaceContextV10 = defineRpcContract({
  * where the retry frame it does understand still exists - so the legacy adapter
  * covers the gap, and a client must not surface a dead Retry button.
  */
-export const retryMigrationRequestSchema = z.object({
-  epicId: z.string().min(1),
-});
+export const retryMigrationRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
 export type RetryMigrationRequest = z.infer<typeof retryMigrationRequestSchema>;
 
-export const retryMigrationResponseSchema = z.object({ ok: z.literal(true) });
+export const retryMigrationResponseSchema = lazySchema(() =>
+  z.object({ ok: z.literal(true) }),
+);
 export type RetryMigrationResponse = z.infer<
   typeof retryMigrationResponseSchema
 >;

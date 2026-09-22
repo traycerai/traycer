@@ -21,6 +21,8 @@ import {
   ROW_META_CLASS,
   ROW_STATUS_CELL_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
+import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
+import { formatClockDuration } from "@/lib/format-duration";
 import {
   FOCUS_ROW_STATES,
   type FocusRowState,
@@ -155,7 +157,8 @@ export function RowContext(props: {
  * `tabular-nums` keeps a ticking duration from jittering its own width as the
  * digits change; it is not what holds the word still - the track and the left
  * alignment below are. The detail is a separate node so the tick repaints it
- * alone, without the word beside it.
+ * alone, without the word beside it - which matters most for the job row's
+ * clock, where the tick is every second.
  */
 export function RowStatus(props: {
   readonly state: FocusRowState;
@@ -165,10 +168,11 @@ export function RowStatus(props: {
    * inventing one is the kind of confident guess this page exists to stop
    * making.
    *
-   * A slot rather than a duration: how long a thing has been running is the
-   * commonest answer ({@link RowStatusDuration}), but a browser tab's is who is
-   * driving it ({@link RowStatusNote}), and both belong in the same place after
-   * the same word for the column to stay one column.
+   * A slot rather than a duration: how long a thing has been waiting is the
+   * prompt row's answer ({@link RowStatusDuration}), how long it has been
+   * running is the job row's ({@link RowStatusElapsed}), a browser tab's is
+   * who is driving it ({@link RowStatusNote}), and all three belong in the
+   * same place after the same word for the column to stay one column.
    */
   readonly detail: ReactNode;
 }): ReactNode {
@@ -205,9 +209,10 @@ export function RowStatus(props: {
  * The `· driven by Reviewer` half of a status cell: a fixed fact rather than a
  * ticking one.
  *
- * Truncates rather than hiding on a narrow row, exactly as
- * {@link RowStatusDuration} does - but holds no clock, because nothing about it
- * changes between frames.
+ * Truncates rather than hiding on a narrow row - a name is still a name when
+ * its tail is cut, where a number with its tail cut is a different number,
+ * which is why {@link RowStatusDuration} and {@link RowStatusElapsed} never
+ * shrink. Holds no clock, because nothing about it changes between frames.
  */
 export function RowStatusNote(props: { readonly text: string }): ReactNode {
   return (
@@ -268,7 +273,12 @@ export function RowActionsCell(props: {
 }
 
 /**
- * The `· 5h` half of a status cell, on the app's shared 60s clock.
+ * The `· 5h` half of a status cell: an AGE, on the app's shared 60s clock.
+ *
+ * This is the prompt row's part - `needs you · 5m` says how long a question
+ * has sat unanswered, and the coarse reading is the right one for that, since
+ * nothing about a wait changes second to second. A running job's part is
+ * {@link RowStatusElapsed}, which is a clock rather than an age.
  *
  * Its own leaf for the same reason `NotificationTimestamp` is one: the tick
  * repaints this label and not the row around it.
@@ -288,6 +298,35 @@ export function RowStatusDuration(props: {
       data-testid="home-focus-row-status-duration"
     >
       · {elapsed === "now" ? "just now" : elapsed}
+    </span>
+  );
+}
+
+/**
+ * The `· 42h 47m 13s` half of a status cell: a running job's CLOCK, ticking
+ * once a second.
+ *
+ * The chat's Background panel prints exactly this reading for the same shell,
+ * and a reader who has just seen `42h 47m 13s` there should not find `1d` here
+ * - same fact, same clock. So this is the panel's mechanism (`useElapsedSeconds`
+ * + `formatClockDuration`) in the status cell's tone, not a third formatter.
+ *
+ * The 1 s tick lives in this leaf and nowhere above it: the row, the chat above
+ * it and the task group are untouched by it, exactly as the compact age keeps
+ * its 60 s tick to itself. It mounts only while the job is running - the
+ * model clears `startedAtMs` otherwise - which is exactly when the interval
+ * should exist.
+ */
+export function RowStatusElapsed(props: {
+  readonly startedAtMs: number;
+}): ReactNode {
+  const elapsedSeconds = useElapsedSeconds(props.startedAtMs, 0, null);
+  return (
+    <span
+      className="shrink-0 text-muted-foreground"
+      data-testid="home-focus-row-status-elapsed"
+    >
+      · {formatClockDuration(elapsedSeconds)}
     </span>
   );
 }

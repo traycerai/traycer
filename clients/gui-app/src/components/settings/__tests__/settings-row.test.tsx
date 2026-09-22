@@ -196,6 +196,44 @@ describe("SettingsRow", () => {
     expect(controlWrapper.className).toContain("justify-end");
   });
 
+  it("spans a wrapped control across its line only when the row asks for it", () => {
+    // What a control does with the line it wrapped onto is the row's to
+    // declare, because the row owns the flex item: the control itself sits one
+    // level down, where a percentage width has no definite containing block to
+    // resolve against and shrink-wraps to the content it was meant to widen.
+    //
+    // It stays an opt-in. Spanning every control would take the choice away
+    // from the rows the floor deliberately leaves inline - a switch beside its
+    // label reads as one line on a phone, and a full-width item would push it
+    // onto a line of its own.
+    render(
+      <>
+        <SettingsRow
+          row={ROWS.definitions.wideControl}
+          controlSpansLine
+          control={<div data-testid="spanning-control">Picker</div>}
+        />
+        <SettingsRow
+          row={ROWS.definitions.someLabel}
+          control={<div data-testid="inline-control">Switch</div>}
+        />
+      </>,
+    );
+
+    const spanning = screen.getByTestId("spanning-control").parentElement;
+    const inline = screen.getByTestId("inline-control").parentElement;
+    if (spanning === null || inline === null) {
+      throw new Error("expected SettingsRow control wrappers");
+    }
+    expect(spanning.className).toContain("max-md:w-full");
+    expect(inline.className).not.toContain("max-md:w-full");
+    // Layered on, not swapped in: the trailing-edge contract is untouched, and
+    // nothing here applies from md up.
+    expect(spanning.className).toContain("ml-auto");
+    expect(spanning.className).toContain("justify-end");
+    expect(spanning.className).toContain("max-md:shrink-0");
+  });
+
   it("hands its description's id to a control that asks for one", () => {
     // The description is the row's real second line of copy, so the control
     // should be DESCRIBED by it rather than leaving a screen reader with a

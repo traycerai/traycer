@@ -24,7 +24,7 @@ export function TabChromeBackground({
         data-testid="tab-chrome-center"
         className={cn(
           "-mx-px h-full flex-1 bg-[var(--swatch)]",
-          borderColor && "border-t-[1.5px] border-t-[var(--swatch-border)]",
+          borderColor && "border-t border-t-[var(--swatch-border)]",
         )}
         style={
           { "--swatch": fill, "--swatch-border": borderColor } as CSSProperties
@@ -35,7 +35,7 @@ export function TabChromeBackground({
         <span
           aria-hidden
           data-testid="tab-baseline-cover"
-          className="absolute inset-x-0 bottom-0 z-0 h-[1.5px] bg-[var(--swatch)]"
+          className="absolute inset-x-0 bottom-0 z-0 h-px bg-[var(--swatch)]"
           style={{ "--swatch": fill } as CSSProperties}
         />
       ) : null}
@@ -56,14 +56,12 @@ function TabCap({
     side === "left"
       ? "M 24 0 H 22 A 10 10 0 0 0 12 10 V 24 A 12 12 0 0 1 0 36 H 24 Z"
       : "M 0 0 H 2 A 10 10 0 0 1 12 10 V 24 A 12 12 0 0 0 24 36 H 0 Z";
-  // SVG strokes are centered on their path. Inset the top edge by half the
-  // stroke width so it occupies the same inside pixel row as the center's CSS
-  // border; placing it at y=0 clips the outer half and makes the center look
-  // like a second line at display scaling.
+  // Match the 1px center border, header baseline, and task-surface-frame.
+  // Inset the centered SVG stroke by half a pixel at the horizontal joins.
   const outline =
     side === "left"
-      ? "M -2 35.25 H 0 A 12 12 0 0 0 12 23.25 V 10.75 A 10 10 0 0 1 22 0.75 H 24"
-      : "M 0 0.75 H 2 A 10 10 0 0 1 12 10.75 V 23.25 A 12 12 0 0 0 24 35.25 H 26";
+      ? "M -2 35.5 H 0 A 12 12 0 0 0 12 23.5 V 10.5 A 10 10 0 0 1 22 0.5 H 24"
+      : "M 0 0.5 H 2 A 10 10 0 0 1 12 10.5 V 23.5 A 12 12 0 0 0 24 35.5 H 26";
   return (
     <svg
       data-testid={`tab-cap-${side}`}
@@ -78,7 +76,7 @@ function TabCap({
           d={outline}
           fill="none"
           stroke={borderColor}
-          strokeWidth="1.5"
+          strokeWidth="1"
           strokeLinecap="square"
           vectorEffect="non-scaling-stroke"
         />
