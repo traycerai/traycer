@@ -376,6 +376,48 @@ describe("useWorktreeOwnerMetadata", () => {
     expect(branches).toEqual(["feature/a-renamed", "feature/b-renamed"]);
   });
 
+  it("(R2) a background read resolves a trailing-slash binding path with the host's un-slashed row", async () => {
+    const fixture = createSlashedBindingFixture();
+
+    const rendered = renderHook(() => useSlashedOwnerMetadata(fixture.client), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.worktrees).toHaveLength(1);
+    });
+    expect(rendered.result.current.worktrees[0]?.worktreePath).toBe(
+      HOST_SPELLED_WORKTREE_PATH,
+    );
+  });
+
+  it("(R2) a forced refresh writes the host's un-slashed row into the per-path key for the trailing-slash binding path", async () => {
+    const fixture = createSlashedBindingFixture();
+
+    const rendered = renderHook(() => useSlashedOwnerMetadata(fixture.client), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.binding).not.toBeNull();
+    });
+
+    await act(async () => {
+      await rendered.result.current.refresh();
+    });
+
+    const cached = fixture.queryClient.getQueryData<{
+      readonly worktrees: readonly WorktreeHostEntryV16[];
+    }>(
+      perPathEnrichmentQueryKey(
+        fixture.client.getActiveHostId(),
+        SLASHED_WORKTREE_PATH,
+      ),
+    );
+    expect(cached?.worktrees).toHaveLength(1);
+    expect(cached?.worktrees[0]?.worktreePath).toBe(HOST_SPELLED_WORKTREE_PATH);
+  });
+
   it("issues neither read while the card is closed", () => {
     const fixture = createFixture(null);
     renderHook(
@@ -407,6 +449,93 @@ function useOwnerMetadata(client: HostClient<HostRpcRegistry>) {
     binding: BINDING,
     enabled: true,
   });
+}
+
+// R2: an explicit `worktree.import` persists the binding path exactly as the
+// caller sent it, while the host answers (and frames) under `path.resolve` of
+// it - so a CLI-typed trailing slash comes back without one.
+const SLASHED_WORKTREE_PATH = "/worktrees/app/feature-slash/";
+const HOST_SPELLED_WORKTREE_PATH = "/worktrees/app/feature-slash";
+
+// Reads the binding over the wire (`binding: undefined`), as a surface that is
+// not handed one does, so the slashed path is the one the host stored.
+function useSlashedOwnerMetadata(client: HostClient<HostRpcRegistry>) {
+  return useWorktreeOwnerMetadata({
+    client,
+    epicId: EPIC_ID,
+    ownerId: OWNER_ID,
+    ownerKind: "chat",
+    binding: undefined,
+    enabled: true,
+  });
+}
+
+function createSlashedBindingFixture(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+} {
+  const binding: WorktreeBinding = {
+    entries: [
+      {
+        workspacePath: "/repos/app-slash",
+        mode: "worktree",
+        repoIdentifier: { owner: "acme", repo: "app" },
+        worktreePath: SLASHED_WORKTREE_PATH,
+        branch: "feature/slash",
+        isPrimary: true,
+        isImported: true,
+        setupState: "succeeded",
+        setupTerminalSessionId: null,
+        setupExitCode: 0,
+        setupFailedAt: null,
+        createdAt: 1,
+        ownedSubmodules: [],
+      },
+    ],
+  };
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-owner-metadata-slash",
+    handlers: {
+      "worktree.getBinding": () =>
+        Promise.resolve({ binding, missingWorktreePaths: [] }),
+      "worktree.listAllForHost": (params) =>
+        Promise.resolve({
+          worktrees: (params.activityPaths ?? []).map(() =>
+            worktreeEntry({
+              worktreePath: HOST_SPELLED_WORKTREE_PATH,
+              branch: "feature/slash",
+              resolvedAt: 1_000,
+            }),
+          ),
+          nextCursor: null,
+        }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return {
+    client: spine.createRequester(mockLocalHostEntry),
+    queryClient,
+    Wrapper,
+  };
 }
 
 function worktreeEntry(args: {

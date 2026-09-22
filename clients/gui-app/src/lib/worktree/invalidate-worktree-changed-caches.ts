@@ -10,6 +10,7 @@ import {
   isEpicCreateSeedPending,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import type { WorktreeChangedAccumulatedScopes } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
+import { worktreePathMatcher } from "@/lib/worktree/worktree-path-match";
 
 /**
  * Drops the host's worktree listing and binding caches for one accumulated
@@ -35,6 +36,12 @@ import type { WorktreeChangedAccumulatedScopes } from "@/lib/worktree/worktree-c
  *   remove rows, which no per-path overlay can express. It always goes, at any
  *   scope - once per burst, active observers only.
  *
+ * A frame names a path in the host's spelling (the lexical `path.resolve` of
+ * the row's path), while a per-path key names whatever the client requested -
+ * which for a binding-sourced path may be spelled differently. The two are
+ * matched by `worktreePathMatcher`, so such a key still refreshes on its own
+ * row's frame.
+ *
  * The workspace-path queries and the epic-scoped binding listing always go
  * too: a worktree path does not map back to the workspace folders or epics
  * that list it. Called once per BURST rather than per event: the host's sweep
@@ -51,16 +58,21 @@ export function invalidateWorktreeChangedCaches(
     hostId,
     "worktree.listAllForHost",
   );
+  const isFramedPath = worktreePathMatcher(scopes.worktreePaths);
   void queryClient.invalidateQueries({
     queryKey: listAllScope,
     refetchType: "active",
     predicate: (query) => {
       if (scopes.root) return true;
       // The base list (and the task-delete whole-list): non-spawning, and row
-      // membership may have changed, so it always refetches.
+      // membership may have changed, so it always refetches. That holds for
+      // the task-delete walk's `includeActivity: true` too: a paged read
+      // (`activityPaths: null`) never derives - the host serves every row,
+      // activity facts included, from its row cache, and only selection mode
+      // derives - so `includeActivity` there costs a larger page, not git.
       if (!isPerPathEnrichmentQueryKey(query.queryKey)) return true;
       const path = perPathEnrichmentQueryPath(query.queryKey);
-      return path !== null && scopes.worktreePaths.has(path);
+      return path !== null && isFramedPath(path);
     },
   });
   // A MULTI-path enrichment key is never refetched by a path event: its read
@@ -75,11 +87,7 @@ export function invalidateWorktreeChangedCaches(
       refetchType: "none",
       predicate: (query) => {
         const paths = enrichmentQueryPaths(query.queryKey);
-        return (
-          paths !== null &&
-          paths.length > 1 &&
-          paths.some((path) => scopes.worktreePaths.has(path))
-        );
+        return paths !== null && paths.length > 1 && paths.some(isFramedPath);
       },
     });
   }

@@ -5,6 +5,7 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
@@ -373,6 +374,87 @@ describe("invalidateWorktreeChangedCaches + an ACTIVE multi-path enrichment obse
 
     expect(fetches).toBe(1);
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    stop();
+  });
+});
+
+// R2: a frame names a path in the HOST's spelling (the lexical
+// `path.resolve` of the row's path), while a per-path key may name a
+// binding-sourced spelling the host normalized away (a trailing slash an
+// explicit `worktree.import` kept). `worktreePathMatcher` is what lets such a
+// key still refresh on its own row's frame.
+describe("invalidateWorktreeChangedCaches + a lexically-equal (not byte-equal) framed path", () => {
+  it("refetches an ACTIVE per-path key for a trailing-slash spelling on a frame naming the host's un-slashed path", async () => {
+    const queryClient = createAppQueryClient();
+    // The production key builder, so this key is exactly the one the
+    // invalidator classifies as per-path (a hand-built lookalike it did not
+    // recognise would be refetched as a base list and pass for that reason).
+    const slashedKey = perPathEnrichmentQueryKey(HOST_ID, "/wt/app/");
+    const otherKey = perPathEnrichmentQueryKey(HOST_ID, "/wt/other");
+    let slashedFetches = 0;
+    let otherFetches = 0;
+    const slashedObserver = new QueryObserver(queryClient, {
+      queryKey: slashedKey,
+      queryFn: () => {
+        slashedFetches += 1;
+        return Promise.resolve({ worktrees: [], nextCursor: null });
+      },
+    });
+    const otherObserver = new QueryObserver(queryClient, {
+      queryKey: otherKey,
+      queryFn: () => {
+        otherFetches += 1;
+        return Promise.resolve({ worktrees: [], nextCursor: null });
+      },
+    });
+    const stopSlashed = slashedObserver.subscribe(() => undefined);
+    const stopOther = otherObserver.subscribe(() => undefined);
+    await waitUntil(
+      () => slashedObserver.getCurrentResult().data !== undefined,
+    );
+    await waitUntil(() => otherObserver.getCurrentResult().data !== undefined);
+    expect(slashedFetches).toBe(1);
+    expect(otherFetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set(["/wt/app"]),
+    });
+
+    await waitUntil(
+      () =>
+        slashedFetches === 2 &&
+        queryClient.getQueryState(slashedKey)?.isInvalidated === false,
+    );
+    // The unrelated path never refetches.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(otherFetches).toBe(1);
+    expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(false);
+    stopSlashed();
+    stopOther();
+  });
+
+  it("marks but does not refetch a multi-path key containing a trailing-slash spelling, on a frame naming the host's un-slashed path", async () => {
+    const queryClient = createAppQueryClient();
+    const key = multiPathEnrichmentKey(["/wt/app/", "/wt/other"]);
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({ worktrees: [], nextCursor: null });
+    };
+    const observer = new QueryObserver(queryClient, { queryKey: key, queryFn });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set(["/wt/app"]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fetches).toBe(1);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
     stop();
   });
 });

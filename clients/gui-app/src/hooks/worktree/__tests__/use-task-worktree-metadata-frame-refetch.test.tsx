@@ -29,11 +29,13 @@ import {
  * re-derived - spawning git for all of them), instead of just the one row the
  * frame named.
  *
- * Against the pre-fix code, (a), (b) and (d) fail on their assertions: the old
- * hook read ONE `activityPaths: ownedPaths` key, and the old invalidator
- * refetched any multi-path key on every path frame - so a frame for one row, or
- * for a row not on the page at all, re-requested all 27 paths. (c) is the
- * control and passes on both: a root frame re-reads every owned row either way.
+ * Against the pre-fix code, (mount), (a), (b) and (d) ALL fail on their
+ * assertions: the old hook read ONE `activityPaths: ownedPaths` key rather
+ * than one batched call per 8 owned paths, so (mount) alone already
+ * mismatches (1 selection call, not 4); and the old invalidator refetched any
+ * multi-path key on every path frame - so a frame for one row, or for a row
+ * not on the page at all, re-requested all 27 paths. (c) is the control and
+ * passes on both: a root frame re-reads every owned row either way.
  *
  * Every count is read only once NOTHING is fetching. A per-path refetch waits
  * in the batcher's coalescing window before its RPC is sent, so asserting as
@@ -372,10 +374,14 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
     });
     await settled(fixture);
     expect(baseCallsOf(fixture)).toHaveLength(1);
-    const union = selectionCallsOf(fixture).flatMap(
-      (call) => call.activityPaths ?? [],
-    );
+    const selection = selectionCallsOf(fixture);
+    const union = selection.flatMap((call) => call.activityPaths ?? []);
     expect([...union].sort()).toEqual([...OWNED_PATHS].sort());
+    // R6: still bounded by the batch size, even though this control
+    // deliberately does not pin the exact selection-call count.
+    expect(selection.length).toBeLessThanOrEqual(
+      Math.ceil(OWNED_COUNT / BATCH_LIMIT),
+    );
   });
 
   it("(d) coalesces a burst of path frames (10×P1, 5×P2, 3×off-screen Q) inside the debounce window into one flush: one base call and one selection call covering exactly {P1,P2}", async () => {

@@ -23,6 +23,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { queryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
+import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
 
 const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV14[] = [];
 
@@ -260,16 +261,27 @@ export function useWorktreeOwnerMetadata(args: {
       // would fork keys that no observer reads, so the fresh facts would never
       // reach the screen. Built from the captured context, not the render's
       // paths, so each row lands in the entry THIS request actually covered -
-      // split by exact `worktreePath`, the same fan-out the batcher applies to
-      // a background read.
+      // split by `rowsByRequestedPath`, the same fan-out the batcher applies
+      // to a background read. These paths come from the BINDING, which an
+      // explicit import stores as given, so the host may answer one under its
+      // own normalized spelling; exact matching alone would drop that row.
+      //
+      // The write runs through the entry's `keepResolvedEnrichmentRows`, and
+      // that is intended: a forced read that answers a row UNRESOLVED
+      // (`resolvedAt: null`, the host could not derive it this time) keeps the
+      // resolved row already shown rather than blanking it to "detached HEAD".
+      // `checkedAt` then still reports that row's own derive time, which is
+      // the honest age of what the card is showing.
       onSuccess: (response, _variables, context) => {
+        const rowsByPath = rowsByRequestedPath(
+          context.worktreePaths,
+          response.worktrees,
+        );
         for (const worktreePath of context.worktreePaths) {
           queryClient.setQueryData<WorktreeListAllForHostResponse>(
             perPathEnrichmentQueryKey(context.hostId, worktreePath),
             {
-              worktrees: response.worktrees.filter(
-                (row) => row.worktreePath === worktreePath,
-              ),
+              worktrees: [...(rowsByPath.get(worktreePath) ?? [])],
               nextCursor: null,
             },
           );
