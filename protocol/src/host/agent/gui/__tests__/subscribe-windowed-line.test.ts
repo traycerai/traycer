@@ -324,6 +324,8 @@ describe("chatSubscribeWindowedServerFrameSchema's frame kinds", () => {
     "heldUpdatesChanged",
     // `1.14`: the agent's port forwards, whole-set like the two above.
     "portForwardsChanged",
+    // `1.15`: the host-owned accepted-message lifecycle.
+    "messageDeliveryChanged",
     "actionAck",
     "messageAccepted",
     "queueChanged",
