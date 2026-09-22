@@ -2045,14 +2045,22 @@ export function* foldTranscriptRows(
       }
       held.push(positioned);
     };
+    // The change's own events first, and a stored row for an event the change
+    // rewrote is skipped whatever turn it names: a store may answer with the
+    // row as it stood before this change or as it was just written, and the
+    // change's copy is the current one either way.
+    const changedEventIds = new Set(
+      change.appendedEvents.map((touch) => touch.event.eventId),
+    );
+    for (const [turnKey, events] of changeEventsByTurn) {
+      for (const positioned of events) place(turnKey, positioned);
+    }
     for (const stored of yield* loadTurnEvents([...touchedTurns])) {
+      if (changedEventIds.has(stored.event.eventId)) continue;
       place(stored.rowTurnKey, {
         position: stored.position,
         event: stored.event,
       });
-    }
-    for (const [turnKey, events] of changeEventsByTurn) {
-      for (const positioned of events) place(turnKey, positioned);
     }
     for (const events of decoratingByTurn.values()) {
       events.sort((a, b) => a.position - b.position);
