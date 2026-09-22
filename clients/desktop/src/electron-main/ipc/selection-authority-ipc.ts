@@ -145,6 +145,19 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
   };
   const localInventory = startLocalHostInventorySubscription({
     localHost: localHostEndpoint,
+    // The SAME identity source the authority and the fleet port read, so the
+    // generation a snapshot is stamped with at open and the one it is fenced
+    // against at adoption can never disagree.
+    identity: () => {
+      const current = identity.current();
+      return { userId: current.identityKey, generation: current.generation };
+    },
+    onAuthChanged: (listener) => {
+      bridge.authSession.on("change", listener);
+      return () => {
+        bridge.authSession.off("change", listener);
+      };
+    },
     onLocalHostChanged: (listener) => {
       bridge.options.host.on("change", listener);
       return () => {

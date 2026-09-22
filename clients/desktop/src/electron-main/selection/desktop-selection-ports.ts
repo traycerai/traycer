@@ -125,6 +125,22 @@ export interface RegistryRead {
   readonly readAtMs: number;
 }
 
+/**
+ * A registry answer this port did not fetch, with the identity generation the
+ * SUBSCRIPTION that produced it was opened under.
+ *
+ * A stream speaks for one account for its whole life - the serving host bound
+ * the subscribing user at subscribe time - so a snapshot that was already in
+ * flight when this process changed accounts is A's rows arriving in B's world.
+ * Stamping it with the generation current at adoption, as a fetch of our own
+ * is stamped, would publish and adopt A's membership as B's. The producer
+ * tears its stream down on an identity change; this field is what does not
+ * depend on which callback ran first.
+ */
+export interface PushedRegistryRead extends RegistryRead {
+  readonly openedAtGeneration: number;
+}
+
 export interface DesktopHostFleetSourceOptions {
   readonly authnBaseUrl: string;
   readonly identity: AuthorityIdentitySource;
@@ -393,7 +409,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * TOTAL, like {@link refresh}: its caller is a stream callback with nobody
    * to reject to.
    */
-  async acceptPushedRows(read: RegistryRead): Promise<void> {
+  async acceptPushedRows(read: PushedRegistryRead): Promise<void> {
     if (this.disposed) return;
     try {
       await this.adoptRegistryResponse(read);
@@ -426,7 +442,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     await this.refreshWith(null);
   }
 
-  private async adoptRegistryResponse(read: RegistryRead): Promise<void> {
+  private async adoptRegistryResponse(read: PushedRegistryRead): Promise<void> {
     await this.refreshWith(read);
   }
 
@@ -440,7 +456,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * signed-out and unverified branches, publishing before adopting - is a rule
    * about ADOPTING registry rows, not about who read them.
    */
-  private async refreshWith(pushed: RegistryRead | null): Promise<void> {
+  private async refreshWith(pushed: PushedRegistryRead | null): Promise<void> {
     // Stamped at fetch START (contract: "the generation this snapshot was
     // FETCHED under"), so a completion that lands after an account switch is
     // recognisably stale. The identity KEY is captured in the same read for
@@ -451,6 +467,20 @@ export class DesktopHostFleetSource implements HostFleetSource {
     const generation = identity.generation;
     this.refreshSeq += 1;
     const seq = this.refreshSeq;
+    if (pushed !== null && pushed.openedAtGeneration !== generation) {
+      // Rows read for an account this process has left. Checked BEFORE the
+      // await, so nothing about them is published, adopted, or even read from
+      // disk on their behalf: the generation this port would otherwise stamp
+      // them with is the CURRENT one, which is exactly the mis-attribution.
+      this.options.log.debug(
+        "[selection-fleet] dropped a push from a retired identity",
+        {
+          openedAtGeneration: pushed.openedAtGeneration,
+          generation,
+        },
+      );
+      return;
+    }
     // The time the registry was OBSERVED, which is what adoption is ordered
     // on. A fetch of our own is stamped HERE - at its start, before the await
     // - so it is the moment this process went to look, not the moment the

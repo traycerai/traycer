@@ -88,6 +88,26 @@ export interface LocalHostInventorySubscriptionDeps {
   /** Fires when the published host changes (pid.json moved, host restarted). */
   readonly onLocalHostChanged: (listener: () => void) => () => void;
   /**
+   * Who this process is signed in as right now, and the generation the
+   * consumer fences membership on.
+   *
+   * A stream speaks for ONE account for its whole life: the host resolver
+   * captured the subscribing user at subscribe time and keeps answering for
+   * that user, so a socket opened as A goes on serving A's rows while this
+   * process has become B.
+   */
+  readonly identity: () => {
+    readonly userId: string | null;
+    readonly generation: number;
+  };
+  /**
+   * Fires on any auth-session change - a token rotation as well as a sign-in,
+   * sign-out or account switch. This module decides which of those it is by
+   * comparing {@link identity}'s `userId` against the one it opened under, the
+   * same way `browser-sessions-owner.ts` does for the jar plane.
+   */
+  readonly onAuthChanged: (listener: () => void) => () => void;
+  /**
    * Opens a stream client for this machine's host.
    *
    * A port rather than a `new WsStreamClient(...)` inside `attach`, and not
@@ -113,6 +133,18 @@ export interface LocalHostInventorySubscriptionDeps {
   readonly onRows: (read: {
     readonly response: HostListResponse;
     readonly readAtMs: number;
+    /**
+     * The identity generation this SUBSCRIPTION was opened under - not the one
+     * current when the snapshot arrived.
+     *
+     * The teardown on an identity change below is the primary defence and this
+     * is the one that does not depend on callback ordering: a snapshot already
+     * in flight when the account changed would otherwise be stamped by the
+     * consumer with the generation current at adoption, which is B's, and
+     * published and adopted as B's membership though every row in it was read
+     * for A.
+     */
+    readonly openedAtGeneration: number;
   }) => void;
   /**
    * Whether the push is currently covering the registry. `false` is a
@@ -134,6 +166,7 @@ export function startLocalHostInventorySubscription(
   let stream: HostInventoryStreamClient | null = null;
   let unsubscribeSupport: (() => void) | null = null;
   let attachedHostId: string | null = null;
+  let openedUserId: string | null = null;
   let pushActive = false;
   let disposed = false;
 
@@ -151,6 +184,7 @@ export function startLocalHostInventorySubscription(
     client?.close(reason);
     client = null;
     attachedHostId = null;
+    openedUserId = null;
     setPushActive(false);
   };
 
@@ -163,7 +197,7 @@ export function startLocalHostInventorySubscription(
    * `unsupported` declines, and the support subscription below re-runs this if
    * that answer ever changes (an upgraded host, a fresh handshake).
    */
-  const openStreamIfSupported = (): void => {
+  const openStreamIfSupported = (generationAtOpen: number): void => {
     if (disposed || client === null || stream !== null) return;
     if (client.getMethodSupport(INVENTORY_METHOD) === "unsupported") {
       deps.log.debug("[local-inventory] host does not serve the method", {});
@@ -181,6 +215,7 @@ export function startLocalHostInventorySubscription(
           deps.onRows({
             response: { hosts: [...snapshot.hosts] },
             readAtMs: snapshot.fetchedAtMs,
+            openedAtGeneration: generationAtOpen,
           });
           setPushActive(!snapshot.stale);
         },
@@ -198,6 +233,14 @@ export function startLocalHostInventorySubscription(
 
   const attach = (): void => {
     if (disposed) return;
+    const identity = deps.identity();
+    if (identity.userId === null) {
+      // Signed out: there is no account whose registry this could be, and a
+      // socket opened now would be one more thing to tear down on the way in.
+      if (client !== null) teardown("local-inventory-signed-out");
+      setPushActive(false);
+      return;
+    }
     const endpoint = deps.localHost();
     if (endpoint === null) {
       // No published host: nothing to dial, and the poll is the only reader.
@@ -211,11 +254,23 @@ export function startLocalHostInventorySubscription(
     // all keyed to the old one.
     if (client !== null) teardown("local-inventory-host-changed");
     attachedHostId = endpoint.hostId;
+    // Captured at OPEN, and carried with every snapshot this client produces.
+    // The stream speaks for this account for its whole life.
+    openedUserId = identity.userId;
+    // A `const` per open, threaded into the stream's callbacks as a parameter
+    // rather than read out of module state when a snapshot arrives. Reading it
+    // at DELIVERY time was a defect a test caught: a frame arriving on a
+    // torn-down session after a re-attach would be stamped with the NEW
+    // account's generation - the exact mis-attribution the stamp exists to
+    // prevent, reintroduced by the stamp itself. Each stream now carries the
+    // generation that was in force when THAT stream opened, whatever has
+    // happened since and whatever order the callbacks run in.
+    const generationAtOpen = identity.generation;
     client = deps.openStreamClient(endpoint);
     unsubscribeSupport = client.subscribeMethodSupport(() => {
       if (disposed) return;
       if (stream === null) {
-        openStreamIfSupported();
+        openStreamIfSupported(generationAtOpen);
         return;
       }
       if (client?.getMethodSupport(INVENTORY_METHOD) === "unsupported") {
@@ -224,12 +279,49 @@ export function startLocalHostInventorySubscription(
         setPushActive(false);
       }
     });
-    openStreamIfSupported();
+    openStreamIfSupported(generationAtOpen);
+  };
+
+  /**
+   * An auth-session change, which is two different events wearing one name.
+   *
+   * A DIFFERENT account - sign-out and account switch included - tears the
+   * stream down and opens a new one. Pushing the new bearer down the open
+   * socket would not be enough and would be worse than doing nothing: the host
+   * resolver captured the subscribing user at subscribe time and keeps
+   * answering for that user, so the socket would go on serving A's registry
+   * under B's credential, and this process would publish and adopt it as B's
+   * membership. The teardown also clears coverage, which matters on its own -
+   * A's `pushActive` would otherwise keep suppressing B's poll, leaving B with
+   * one identity-triggered fetch and then nothing.
+   *
+   * The SAME account with a new token is an in-place update. The host closes
+   * an admitted connection at its bearer's own `exp`
+   * (`connection-reauthorization.ts`), and this client carries no revalidator,
+   * so without this every ordinary renewal would end the push for the rest of
+   * the session. `notifyBearerRotated()` pushes a `credentialUpdate` on the
+   * live socket, which is what the host re-validates on.
+   *
+   * Deliberately NOT the other half of `browser-sessions-owner`'s version: it
+   * also restarts a stream that already died on the old bearer, and this one
+   * does not. A terminal close stays terminal here (see the module header),
+   * and what it costs is the poll.
+   */
+  const onAuthChanged = (): void => {
+    if (disposed) return;
+    const identity = deps.identity();
+    if (identity.userId !== openedUserId) {
+      teardown("local-inventory-identity-changed");
+      attach();
+      return;
+    }
+    client?.notifyBearerRotated();
   };
 
   const unsubscribeHostChange = deps.onLocalHostChanged(() => {
     attach();
   });
+  const unsubscribeAuthChange = deps.onAuthChanged(onAuthChanged);
   attach();
 
   return {
@@ -237,6 +329,7 @@ export function startLocalHostInventorySubscription(
       if (disposed) return;
       disposed = true;
       unsubscribeHostChange();
+      unsubscribeAuthChange();
       teardown("local-inventory-disposed");
     },
   };

@@ -1601,6 +1601,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     await fleet.acceptPushedRows({
       response: { hosts: pushedRows },
       readAtMs: 1_000,
+      openedAtGeneration: 0,
     });
 
     expect(published).toHaveLength(1);
@@ -1633,6 +1634,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     await fleet.acceptPushedRows({
       response: { hosts: [buildHostListItem("remote-host")] },
       readAtMs: 1_000,
+      openedAtGeneration: 0,
     });
 
     expect(published).toEqual([]);
@@ -1662,6 +1664,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     await fleet.acceptPushedRows({
       response: { hosts: [buildHostListItem("remote-host")] },
       readAtMs: 1_000,
+      openedAtGeneration: 0,
     });
 
     expect(published).toEqual([]);
@@ -1708,6 +1711,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
       fleet.acceptPushedRows({
         response: { hosts: [buildHostListItem("remote-host")] },
         readAtMs: 1_000,
+        openedAtGeneration: 0,
       }),
     ).resolves.toBeUndefined();
 
@@ -1759,6 +1763,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     await fleet.acceptPushedRows({
       response: { hosts: [rowA, rowB, rowC] },
       readAtMs: T0_MS,
+      openedAtGeneration: 0,
     });
 
     // Declined before the publish - the renderer must not be shown a fleet
@@ -1802,6 +1807,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     await fleet.acceptPushedRows({
       response: { hosts: [rowA, rowB, rowC] },
       readAtMs: T2_MS,
+      openedAtGeneration: 0,
     });
 
     // Adopted: the publisher fires again and the snapshot carries "host-c".
@@ -1812,6 +1818,69 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
         .hosts.map((entry) => entry.hostId)
         .sort(),
     ).toEqual(["host-a", "host-b", "host-c"]);
+    fleet.dispose();
+  });
+
+  // Task C: the generation fence on `acceptPushedRows` itself - distinct from
+  // T1/T2's readAtMs ordering above. Named C5/C6 rather than C1/C2 to avoid
+  // colliding with the existing C1-C4 titles in this describe block.
+  it("C5: a push whose openedAtGeneration does NOT match the current identity generation is dropped before anything is published or adopted", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 5);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error(
+          "must not be called - acceptPushedRows adopts rows it is handed, it does not fetch",
+        );
+      },
+    });
+    const snapshotBefore = fleet.snapshot();
+
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+      openedAtGeneration: 4,
+    });
+
+    // Dropped before the generation-fence check reaches the fetch-vs-adopt
+    // machinery at all: no publish, and the snapshot is the exact object the
+    // port started with (nothing re-published it).
+    expect(published).toEqual([]);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    fleet.dispose();
+  });
+
+  it("C6: a push whose openedAtGeneration MATCHES the current identity generation is adopted as usual - the control for C5", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 5);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error(
+          "must not be called - acceptPushedRows adopts rows it is handed, it does not fetch",
+        );
+      },
+    });
+
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+      openedAtGeneration: 5,
+    });
+
+    expect(published).toHaveLength(1);
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "remote-host",
+    ]);
     fleet.dispose();
   });
 });
