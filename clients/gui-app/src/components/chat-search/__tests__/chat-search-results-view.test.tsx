@@ -8,6 +8,7 @@ import type {
   ChatSearchMessageMatch,
 } from "@traycer/protocol/host/chat-search/schemas";
 import {
+  ChatSearchMessageRow,
   ChatSearchResultsView,
   MessageMatchRow,
   type ChatSearchExpansionTarget,
@@ -215,6 +216,7 @@ describe("ChatSearchResultsView: expansion", () => {
     await user.click(toggle);
 
     expect(renderExpansion).toHaveBeenCalledWith({
+      chatTitle: "title-c1",
       epicId: "epic-1",
       chatId: "c1",
       best: null,
@@ -337,6 +339,7 @@ describe("ChatSearchResultsView: a message-hit row", () => {
     await user.click(screen.getByRole("button", { name: "25 matches" }));
 
     expect(renderExpansion).toHaveBeenCalledWith({
+      chatTitle: "title-c1",
       epicId: "epic-1",
       chatId: "c1",
       best,
@@ -754,7 +757,12 @@ describe("MessageMatchRow: group separation", () => {
       results: results({ messageMatches: [messageMatch({ chatId: "c1" })] }),
     });
 
-    const title = screen.getByText("title-c1");
+    // The best-hit row's chip repeats the same title text, so scope to the
+    // header button rather than a bare `getByText`.
+    const header = screen.getByRole("button", {
+      name: "Open chat title-c1 at its best match",
+    });
+    const title = within(header).getByText("title-c1");
     expect(title.classList.contains("font-semibold")).toBe(true);
     expect(title.classList.contains("font-medium")).toBe(false);
   });
@@ -779,8 +787,56 @@ describe("MessageMatchRow: group separation", () => {
     expect(group.classList.contains("py-3")).toBe(false);
     expect(group.classList.contains("border-b")).toBe(false);
     expect(group.classList.contains("last:border-b-0")).toBe(false);
-    const title = screen.getByText("title-c1");
+    // The best-hit row's chip repeats the same title text, so scope to the
+    // header button rather than a bare `getByText`.
+    const header = screen.getByRole("button", {
+      name: "Open chat title-c1 at its best match",
+    });
+    const title = within(header).getByText("title-c1");
     expect(title.classList.contains("font-medium")).toBe(true);
     expect(title.classList.contains("font-semibold")).toBe(false);
+  });
+});
+
+describe("ChatSearchMessageRow: chat-title chip", () => {
+  it("shows the chat title, not the role, for an inter-agent match", () => {
+    render(
+      <ChatSearchMessageRow
+        hit={{
+          ...messageHit({ messageId: "m1", text: "handoff notes" }),
+          tier: "user",
+          interAgent: true,
+        }}
+        chatTitle="Design Sync"
+        count={1}
+        onOpenMessage={vi.fn<(messageId: string) => void>()}
+        variant="full"
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByText("Design Sync")).toBeTruthy();
+    expect(screen.queryByText("Other agent")).toBeNull();
+    // The accessible name still carries the role, unaffected by the chip.
+    expect(
+      screen.getByRole("button", {
+        name: /^From another agent, .*: handoff notes$/,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("falls back to 'Untitled chat' for an empty chat title", () => {
+    render(
+      <ChatSearchMessageRow
+        hit={messageHit({ messageId: "m1", text: "snippet text" })}
+        chatTitle=""
+        count={1}
+        onOpenMessage={vi.fn<(messageId: string) => void>()}
+        variant="full"
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByText("Untitled chat")).toBeTruthy();
   });
 });

@@ -1,7 +1,11 @@
 /**
- * `OfficeViewPicker` is pure - a `choice`/`autoViewId`/`decision` triple in,
- * a trigger label and a radio group of test-id'd rows out. This suite pins
- * its text contract and that `onChoose` reports exactly what was clicked.
+ * `OfficeViewPicker` is pure - a `choice` in, a trigger label and a radio
+ * group of test-id'd rows out. This suite pins its text contract and that
+ * `onChoose` reports exactly what was clicked, over the four views the app
+ * actually offers (`OFFICE_VIEW_CHOICES`): Floor, Building, Mission control,
+ * Campus. Auto, Towers and City are retired layout ids kept readable for
+ * migration only (see `office-view-vocabulary.ts`) - they are not offered
+ * here and have no row.
  */
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({
@@ -13,47 +17,9 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OfficeViewPicker } from "@/components/epic-canvas/comm-graph/office/office-view-picker";
-import {
-  decideOfficeView,
-  type OfficeAutoDecision,
-} from "@/lib/comm-graph/office/office-auto";
-import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
-import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
-import type {
-  OfficeSize,
-  OfficeViewId,
-} from "@/lib/comm-graph/office/office-types";
-import type { OfficePlanInput } from "@/lib/comm-graph/office/views/office-view";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
+import { OFFICE_VIEW_CHOICES } from "@/lib/comm-graph/office/office-view-vocabulary";
 import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
-
-/** The tile's canvas box after chrome, on the recording's own epic. */
-const FULL_CANVAS: OfficeSize = { width: 1040, height: 700 };
-
-/** The camera's fit margin, mirrored from `FIT_PADDING` on the canvas. */
-const FIT_PADDING = 24;
-
-/**
- * Built the way the scene builds it, matching `office-auto.test.ts`'s own
- * helper of the same purpose - a real `decideOfficeView` result, not a
- * hand-built literal, is what makes the "fits at" case below prove the fix
- * against the actual candidate order rather than an author's assumption of it.
- */
-function triageInput(count: number, seed: number): OfficePlanInput {
-  const epic = makeTestEpic("triage", count, seed);
-  return {
-    agents: epic.agents,
-    partition: partitionOfficePopulation({
-      agents: epic.agents,
-      statusById: epic.statusById,
-      previous: null,
-    }),
-    occupancy: new Map<string, string>(),
-    needsCapacity: [],
-    activityById: new Map<string, number>(),
-    viewport: FULL_CANVAS,
-    previous: null,
-  };
-}
 
 function openPicker(): void {
   // Radix opens on pointerdown, not click - a bare click leaves the menu shut
@@ -67,190 +33,51 @@ function openPicker(): void {
 
 function renderPicker(props: {
   readonly choice: OfficeViewChoice;
-  readonly autoViewId: OfficeViewId | null;
-  readonly decision: OfficeAutoDecision | null;
   readonly onChoose: (choice: OfficeViewChoice) => void;
 }) {
   return render(
-    <OfficeViewPicker
-      choice={props.choice}
-      autoViewId={props.autoViewId}
-      decision={props.decision}
-      onChoose={props.onChoose}
-    />,
+    <OfficeViewPicker choice={props.choice} onChoose={props.onChoose} />,
   );
 }
 
 afterEach(() => cleanup());
 
 describe("OfficeViewPicker", () => {
-  it("labels the trigger with Auto's resolved view while choice is auto", () => {
-    renderPicker({
-      choice: "auto",
-      autoViewId: "building",
-      decision: null,
-      onChoose: vi.fn(),
-    });
+  it.each(OFFICE_VIEW_CHOICES)(
+    "labels the trigger with %s's own label",
+    (choice) => {
+      renderPicker({ choice, onChoose: vi.fn() });
 
-    expect(
-      screen.getByTestId("comm-graph-office-view-picker").textContent,
-    ).toBe("Auto · Building");
-  });
+      expect(
+        screen.getByTestId("comm-graph-office-view-picker").textContent,
+      ).toBe(OFFICE_VIEWS[choice].label);
+    },
+  );
 
-  it("labels the trigger with the view's own label for a concrete choice", () => {
-    renderPicker({
-      choice: "towers",
-      autoViewId: null,
-      decision: null,
-      onChoose: vi.fn(),
-    });
-
-    expect(
-      screen.getByTestId("comm-graph-office-view-picker").textContent,
-    ).toBe("Towers");
-  });
-
-  it("states Auto's reason in full once it has measured", () => {
-    // Neither candidate reaches office detail here (0.12x and 0.68x, both
-    // under the 0.7x threshold), so the outcome is the Building FALLBACK -
-    // a view in no `fits` entry at all. That is why NEITHER clause below
-    // says "fits at": the claim belongs to whichever candidate actually won,
-    // and here nothing in `fits` did.
-    const decision: OfficeAutoDecision = {
-      view: "building",
-      fits: [
-        { view: "floor", zoom: 0.12 },
-        { view: "towers", zoom: 0.68 },
-      ],
-      agents: 309,
-    };
-    renderPicker({
-      choice: "auto",
-      autoViewId: "building",
-      decision,
-      onChoose: vi.fn(),
-    });
+  it("lists exactly the four offered views, each with its label and description, and offers no Auto/Towers/City row", () => {
+    renderPicker({ choice: "floor", onChoose: vi.fn() });
 
     openPicker();
 
-    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
-      "AutoFloor at 0.12×, Towers at 0.68×; office detail needs 0.7×. Choose Auto again to re-measure.",
-    );
-  });
-
-  it('attaches "fits at" to the view that actually won, not the first one measured', () => {
-    // `decideOfficeView` keeps `fits` in candidate order - Floor, then
-    // Towers - and takes the first that reaches office detail, so a
-    // decision where TOWERS wins is exactly the case an `index === 0` key
-    // gets wrong: the phrase used to land on Floor, the loser, because it
-    // measured first. Built through the real function (same fixture as
-    // `office-auto.test.ts`'s "picks Towers where it reaches office detail
-    // and Floor does not") rather than a hand-built literal, so this proves
-    // the fix against the actual candidate order.
-    const decision = decideOfficeView(
-      triageInput(40, 1),
-      FULL_CANVAS,
-      FIT_PADDING,
-    );
-    expect(decision.view).toBe("towers");
-
-    renderPicker({
-      choice: "auto",
-      autoViewId: decision.view,
-      decision,
-      onChoose: vi.fn(),
-    });
-
-    openPicker();
-
-    const reason = screen.getByTestId(
-      "comm-graph-office-view-auto",
-    ).textContent;
-    expect(reason).toContain("Towers fits at");
-    expect(reason).toContain("Floor at");
-    expect(reason).not.toContain("Floor fits at");
-  });
-
-  it("says it is measuring while the choice is auto and nothing has resolved yet", () => {
-    renderPicker({
-      choice: "auto",
-      autoViewId: null,
-      decision: null,
-      onChoose: vi.fn(),
-    });
-
-    openPicker();
-
-    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
-      "AutoMeasuring this tile…",
-    );
-  });
-
-  it("describes Auto generically when the choice is not auto and there is no decision to show", () => {
-    renderPicker({
-      choice: "floor",
-      autoViewId: null,
-      decision: null,
-      onChoose: vi.fn(),
-    });
-
-    openPicker();
-
-    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
-      "AutoPicks by how much of the office fits this tile.",
-    );
+    for (const id of OFFICE_VIEW_CHOICES) {
+      const row = screen.getByTestId(`comm-graph-office-view-${id}`);
+      expect(row.textContent).toBe(
+        `${OFFICE_VIEWS[id].label}${OFFICE_VIEWS[id].description}`,
+      );
+    }
+    expect(screen.queryByTestId("comm-graph-office-view-auto")).toBeNull();
+    expect(screen.queryByTestId("comm-graph-office-view-towers")).toBeNull();
+    expect(screen.queryByTestId("comm-graph-office-view-city")).toBeNull();
   });
 
   it("reports the chosen id through onChoose", () => {
     const onChoose = vi.fn();
-    renderPicker({
-      choice: "auto",
-      autoViewId: "floor",
-      decision: null,
-      onChoose,
-    });
+    renderPicker({ choice: "floor", onChoose });
 
     openPicker();
-    fireEvent.click(screen.getByTestId("comm-graph-office-view-towers"));
+    fireEvent.click(screen.getByTestId("comm-graph-office-view-campus"));
 
-    expect(onChoose).toHaveBeenCalledWith("towers");
-  });
-
-  it("reports auto through onChoose when the Auto row is chosen", () => {
-    const onChoose = vi.fn();
-    renderPicker({
-      choice: "towers",
-      autoViewId: null,
-      decision: null,
-      onChoose,
-    });
-
-    openPicker();
-    fireEvent.click(screen.getByTestId("comm-graph-office-view-auto"));
-
-    expect(onChoose).toHaveBeenCalledWith("auto");
-  });
-
-  it("reports auto through onChoose when the Auto row is clicked WHILE ALREADY on auto", () => {
-    // Auto is a command ("re-measure"), not a value - an epic that has
-    // doubled in size since it was last measured is exactly when someone
-    // re-picks it. The case above only clicks Auto from a DIFFERENT
-    // `choice`, so it cannot catch a regression that suppresses the click
-    // Radix's own RadioGroup would ordinarily treat as "no change": this is
-    // the click that has to fire `onChoose` even though the group's value
-    // does not move.
-    const onChoose = vi.fn();
-    renderPicker({
-      choice: "auto",
-      autoViewId: "building",
-      decision: null,
-      onChoose,
-    });
-
-    openPicker();
-    fireEvent.click(screen.getByTestId("comm-graph-office-view-auto"));
-
-    expect(onChoose).toHaveBeenCalledWith("auto");
+    expect(onChoose).toHaveBeenCalledWith("campus");
   });
 
   it("sizes the open menu independently of the trigger width, with a fluid width and a tokenized cap (Finding 14)", () => {
@@ -261,12 +88,7 @@ describe("OfficeViewPicker", () => {
     // last `w-*` and drops the base var); `max-w-sm` is the
     // tokenized ceiling the fluid-sizing rule asks for on a wide screen -
     // layout itself is not asserted here because jsdom does not compute it.
-    renderPicker({
-      choice: "towers",
-      autoViewId: null,
-      decision: null,
-      onChoose: vi.fn(),
-    });
+    renderPicker({ choice: "building", onChoose: vi.fn() });
 
     openPicker();
 

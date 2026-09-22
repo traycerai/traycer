@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import {
@@ -12,6 +13,7 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
+import { useHostUpdateCompletion } from "@/hooks/host/use-host-update-completion";
 
 /**
  * The selected host's update operation, on its Overview.
@@ -19,9 +21,8 @@ import { cn } from "@/lib/utils";
  * Deliberately the SAME two functions the landing banner renders from —
  * `describeUpdateOperation` for the sentence and `offersForceRestart` for the
  * affordance — so the two surfaces cannot describe one attempt differently or
- * disagree about whether force is offered. This component owns layout and
- * nothing else; every decision it looks like it is making was already made in
- * the projection.
+ * disagree about whether force is offered. Successful updates are acknowledged
+ * here with a dismissible notice that auto-collapses; landing shows no success.
  *
  * WHAT IT DOES NOT DO, which is the load-bearing half:
  *
@@ -36,14 +37,8 @@ import { cn } from "@/lib/utils";
  * want to restart — parked on live work, or failed — are exactly the states a
  * page-wide lock would trap them in.
  *
- * IT ALSO DOES NOT READ THE LANDING BANNER'S DISMISSAL STATE, and that omission
- * is load-bearing rather than incidental. Dismissing a failed update on the home
- * screen is client-local presentation state; "the failure remains discoverable
- * in the selected-host Overview until host-side expiry or a newer attempt
- * supersedes it" (experience doc). This card IS that Overview. Wiring
- * `landingDismissedAttemptIds` in here — an easy-looking consistency fix —
- * would delete the evidence the dismissal was explicitly allowed to hide only
- * from the other surface.
+ * Only successful updates can be dismissed here. Failed attempts remain
+ * discoverable in this Overview even after dismissal on the landing page.
  *
  * Retry and Diagnostics are likewise absent ON PURPOSE. Both already exist on
  * this page: the version rows below are how a person installs again, and the
@@ -135,6 +130,9 @@ export function HostOverviewOperationCard(props: {
   readonly cliFloorBlocked: boolean;
 }): ReactNode {
   const { view } = props;
+  const completion = useHostUpdateCompletion(view);
+  if (completion.dismissed) return null;
+
   const copy = describeUpdateOperation({
     view,
     hostName: props.hostName,
@@ -216,6 +214,19 @@ export function HostOverviewOperationCard(props: {
             onForceRestart={props.onForceRestart}
           />
         ) : null}
+        {completion.dismiss === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Dismiss"
+            className="shrink-0"
+            onClick={completion.dismiss}
+            data-testid="host-overview-operation-dismiss"
+          >
+            <X className="size-3" aria-hidden />
+          </Button>
+        )}
       </div>
       {showProgress ? (
         <UpdateProgressBar

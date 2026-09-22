@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -1759,6 +1759,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                           },
                           "timestamp": {
                             "type": "number"
+                          },
+                          "providerHistory": {
+                            "type": "string",
+                            "const": "excluded"
                           }
                         },
                         "required": [

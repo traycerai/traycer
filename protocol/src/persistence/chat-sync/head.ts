@@ -356,6 +356,28 @@ export const CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR = {
  * `supportsAutoPermissionMode` / `chatSubscribeSupportsPermissionMode` and
  * `agentConfigureResponseCanCarryPermissionMode`.
  */
+export const CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR: SchemaVersion = {
+  major: 1,
+  minor: 6,
+};
+
+/** Raw rows are enough: this policy fact must survive unknown-variant copying. */
+export function chatSyncReaderFloorForMessageBodies(
+  messages: Iterable<unknown>,
+): SchemaVersion | null {
+  for (const message of messages) {
+    if (
+      typeof message === "object" &&
+      message !== null &&
+      Reflect.get(message, "role") === "user" &&
+      Reflect.get(message, "providerHistory") === "excluded"
+    ) {
+      return CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR;
+    }
+  }
+  return null;
+}
+
 export function chatSyncReaderFloorForTranscriptEvents(
   events: Iterable<ChatEvent>,
 ): SchemaVersion | null {

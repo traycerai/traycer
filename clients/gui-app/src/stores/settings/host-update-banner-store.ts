@@ -12,7 +12,7 @@ const HOST_UPDATE_BANNER_PERSIST_KEY = persistKey(STORE_KEYS.hostUpdateBanner);
 export const HOST_UPDATE_BANNER_SNOOZE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How long a completed update stays on the landing banner before collapsing.
+ * How long a completed update stays visible in Settings before collapsing.
  *
  * "Completion may auto-collapse after a short acknowledgement" (experience doc).
  * Long enough to read one sentence, short enough that a success nobody needs to
@@ -43,19 +43,17 @@ interface HostUpdateBannerState {
   snooze: (latestVersion: string, snoozeUntilMs: number) => void;
   clearSnooze: (latestVersion: string) => void;
   /**
-   * Terminal attempts the LANDING banner has finished with — a failure the user
-   * dismissed, or a completion that acknowledged itself and collapsed.
+   * Dismissed terminal attempts: successes in Settings and failures on landing.
+   * Landing does not show successful updates.
+   * The persisted field and action keep their original names for compatibility.
    *
    * Keyed by `attemptId`, and that is what makes supersession free: a newer
    * attempt has an id nobody has dismissed, so it presents normally without any
    * expiry rule or version comparison. Keying by host, or by a boolean, would
    * mean the next failure on that machine arrived pre-dismissed.
    *
-   * LANDING ONLY. The selected-host Overview reads none of this: "failure
-   * dismissal is client-local presentation state; the failure remains
-   * discoverable in the selected-host Overview until host-side expiry or a
-   * newer attempt supersedes it" (experience doc). Dismissing is "stop telling
-   * me on the home screen", never "delete the evidence".
+   * The selected-host Overview consults this only for successful updates.
+   * Failures remain discoverable there until host-side expiry or supersession.
    */
   readonly landingDismissedAttemptIds: ReadonlyArray<string>;
   dismissLandingAttempt: (attemptId: string) => void;

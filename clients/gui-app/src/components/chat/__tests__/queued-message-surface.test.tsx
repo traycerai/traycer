@@ -13,6 +13,7 @@ import type {
   ChatQueuedItem,
   ChatQueuedPromptItem,
   ChatQueuedManagedCommandItem,
+  ChatQueuedPortForwardItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { buildQueuedMessageOrderKey } from "@/components/chat/queued-message-reorder-dnd";
@@ -919,6 +920,114 @@ describe("<QueuedMessagePanel />", () => {
     ).toBeNull();
   });
 
+  it("renders a port-forward item as a describable, cancellable chip whose status uses the delivery vocabulary", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        portForwardQueuedItem("queue-forward", "dev server was interrupted"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(screen.getAllByTestId("queued-message-row")).toHaveLength(2);
+    const forwardRow = screen.getAllByTestId("queued-message-row")[1];
+
+    // The content is the item's own description - it is content-free
+    // otherwise, like the managed-command item.
+    expect(
+      within(forwardRow).getByText("dev server was interrupted"),
+    ).not.toBeNull();
+    expect(
+      within(forwardRow).getByTestId("queued-port-forward-badge"),
+    ).not.toBeNull();
+
+    // Never editable, never hand-steerable - same as a managed-command row.
+    expect(
+      within(forwardRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(forwardRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+
+    // Its own cancel aria-label, distinct from the managed-command one.
+    const cancel = within(forwardRow).getByRole("button", {
+      name: "Dismiss port forward notice",
+    });
+    fireEvent.click(cancel);
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-forward",
+      kind: "port-forward",
+    });
+  });
+
+  it("labels a paused port-forward item with the same status vocabulary a managed-command item uses", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...portForwardQueuedItem("queue-forward", "interrupted"),
+          status: "paused",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const forwardRow = screen.getByTestId("queued-message-row");
+    // Same literal "Paused" the managed-command item's paused test above
+    // asserts - the host-authored kinds share the delivery vocabulary.
+    expect(within(forwardRow).getByText("Paused")).not.toBeNull();
+  });
+
+  it("labels a steering port-forward item Delivering and closes its cancel lever, matching the managed-command item", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...portForwardQueuedItem("queue-forward", "interrupted"),
+          status: "steering",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const forwardRow = screen.getByTestId("queued-message-row");
+    expect(within(forwardRow).getByText("Delivering")).not.toBeNull();
+    expect(forwardRow.getAttribute("aria-busy")).toBe("true");
+    expect(
+      within(forwardRow).queryByRole("button", { name: /cancel|dismiss/i }),
+    ).toBeNull();
+  });
+
+  it("keeps the managed-command row's own cancel aria-label distinct from the port-forward one", () => {
+    renderPanel({
+      queue: queueState([
+        managedCommandQueuedItem("queue-managed", "bun test --watch"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(
+      within(managedRow).getByRole("button", {
+        name: "Cancel queued command output",
+      }),
+    ).not.toBeNull();
+    expect(
+      within(managedRow).queryByRole("button", {
+        name: "Dismiss port forward notice",
+      }),
+    ).toBeNull();
+  });
+
   it("does not label a received A2A response with the user steer affordance", () => {
     renderPanel({
       queue: queueState([
@@ -1029,6 +1138,23 @@ function managedCommandQueuedItem(
     hostId: null,
     description,
     monitoring: true,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function portForwardQueuedItem(
+  queueItemId: string,
+  description: string,
+): ChatQueuedPortForwardItem {
+  return {
+    kind: "port-forward",
+    queueItemId,
+    forwardId: `${queueItemId}-forward`,
+    description,
     delivery: "next_turn",
     targetTurnId: null,
     status: "pending",

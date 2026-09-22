@@ -24,6 +24,7 @@ import type {
   ChatSearchRange,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
@@ -50,6 +51,7 @@ export interface ChatSearchOpenTarget {
 }
 
 export interface ChatSearchExpansionTarget {
+  readonly chatTitle: string;
   readonly epicId: string;
   readonly chatId: string;
   readonly best: ChatSearchMessageHit | null;
@@ -287,6 +289,7 @@ function ChatMatchRow(props: RowProps<ChatSearchChatMatch>) {
       <div id={expansionId}>
         <LazyExpansion
           target={{
+            chatTitle: match.title,
             epicId: match.epicId,
             chatId: match.chatId,
             best: null,
@@ -393,6 +396,7 @@ export function MessageMatchRow(props: ChatSearchMessageMatchRowProps) {
       >
         <LazyExpansion
           target={{
+            chatTitle: match.title,
             epicId: match.epicId,
             chatId: match.chatId,
             best: match.best,
@@ -404,6 +408,7 @@ export function MessageMatchRow(props: ChatSearchMessageMatchRowProps) {
         >
           <ChatSearchMessageRow
             hit={match.best}
+            chatTitle={match.title}
             count={1}
             onOpenMessage={(messageId) =>
               onOpen({ epicId: match.epicId, chatId: match.chatId, messageId })
@@ -452,6 +457,7 @@ const ROW_BUTTON_CLASS =
 
 /** One real message, shared by the collapsed best hit and fetched snippets. */
 export function ChatSearchMessageRow(props: {
+  readonly chatTitle: string;
   readonly hit: ChatSearchMessageHit;
   readonly count: number;
   readonly onOpenMessage: (messageId: string) => void;
@@ -461,6 +467,7 @@ export function ChatSearchMessageRow(props: {
   const { hit, count, onOpenMessage, variant, disabled } = props;
   const navProps = useChatSearchNavProps();
   const role = chatSearchRoleLabels(hit);
+  const chatTitle = displayChatTitle(props.chatTitle);
   const date = new Date(hit.createdAt).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -479,21 +486,18 @@ export function ChatSearchMessageRow(props: {
       className="relative flex w-full min-w-0 items-baseline gap-2 rounded-sm px-2 py-1.5 text-left text-ui-xs outline-none transition-colors duration-120 hover:bg-foreground/6 active:press-scrim focus-visible:bg-foreground/8 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <TooltipWrapper
-        label={role.full}
+        label={`In ${chatTitle} · ${role.full}`}
         side="top"
         sideOffset={undefined}
         align={undefined}
       >
-        <span
-          aria-label={role.full}
-          className={cn(
-            "shrink-0 truncate text-muted-foreground",
-            variant === "compact" ? "w-[7ch]" : "w-[11ch]",
-            role.short === "You" && "text-foreground",
-          )}
+        <Badge
+          variant="secondary"
+          size="xs"
+          className={variant === "compact" ? "max-w-1/3" : "max-w-2/5"}
         >
-          {role.short}
-        </span>
+          <span className="truncate">{chatTitle}</span>
+        </Badge>
       </TooltipWrapper>
       <CenteredSnippet hit={hit} />
       {count > 1 ? (

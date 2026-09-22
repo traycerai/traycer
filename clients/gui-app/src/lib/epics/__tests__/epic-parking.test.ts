@@ -436,6 +436,7 @@ function emitOwnerChatSnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -713,6 +714,7 @@ function emitOwnerChatSnapshotWithQueue(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -763,6 +765,7 @@ function emitOwnerWindowedChatSnapshot(
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: 1,
       rowCount: 0,
       indexRevision: null,

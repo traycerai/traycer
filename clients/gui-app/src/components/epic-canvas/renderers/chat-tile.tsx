@@ -1834,6 +1834,7 @@ function useChatTileSessionViewModel(
       transcriptWindow: s.transcriptWindow,
       transcriptDerived: s.transcriptDerived,
       queue: s.queue,
+      messageDelivery: s.messageDelivery,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
@@ -2595,6 +2596,7 @@ function useChatTileSessionViewModel(
       chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
+      messageDelivery: state.messageDelivery,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are

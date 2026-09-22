@@ -15,16 +15,22 @@
  * precisely the case the Deliver button exists for. There, both other counts
  * are zero: gating on them alone hid the whole section, taking the only
  * affordance that clears a hold off screen while the hold survived restarts.
+ *
+ * Port forwards are a FOURTH input for the same reason: a forward outlives the
+ * turn that made it, so a chat that is otherwise idle can still hold one - and
+ * an `interrupted` one is the row a person most needs to be able to reach.
  */
 export function chatBackgroundSectionVisible(input: {
   readonly backgroundItemCount: number;
   readonly runningManagedCommandCount: number;
   readonly heldManagedCommandCount: number;
+  readonly portForwardCount: number;
 }): boolean {
   return (
     input.backgroundItemCount > 0 ||
     input.runningManagedCommandCount > 0 ||
-    input.heldManagedCommandCount > 0
+    input.heldManagedCommandCount > 0 ||
+    input.portForwardCount > 0
   );
 }
 

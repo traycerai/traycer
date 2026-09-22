@@ -742,6 +742,40 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     // Visible, though: this is a card, not a quiet state.
     expect(isQuietUpdateView(view)).toBe(false);
   });
+
+  // PR2069 (CodeRabbit): the `stale` branch used to read only the raw phase,
+  // so a wire that had concluded finalizing-record lost that conclusion the
+  // instant it expired and fell back to the bare `verifying` phase.
+  it("a stale wire read that concluded finalizing-record keeps that as its retained kind, not bare verifying", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("finalizing-record");
+    expect(view.lastKnownKind).not.toBe("verifying");
+    expect(view.qualified).toBe(true);
+  });
+
+  it("a stale wire read at the old running version still decays to bare verifying — staleness alone does not manufacture a success", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.0.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("verifying");
+    expect(view.lastKnownKind).not.toBe("finalizing-record");
+  });
 });
 
 /**
@@ -2178,15 +2212,9 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
   });
 
   it("(3) complete with installed == running keeps its COMPLETE kind - the acknowledgement is not spent to reach the rule", () => {
-    // The FALL-BACK half, and the reason the rule is not a replacement. With
-    // no park the attempt arm still answers, so the landing banner's
-    // completion acknowledgement (`useLandingCompletionCollapse`, keyed on
-    // `kind === "complete"` and the attempt id) survives. Its own leg passes
-    // `legacyFacts: null` — the fixture default here — so a substitution that
-    // returned `{kind:"none"}`'s answer outright would project `idle` and
-    // delete that surface. Falsification: make the fall-through return the
-    // `none` arm's result instead of falling back, and this reddens along
-    // with `host-update-banner-bound.test.tsx:437` and `:1001`.
+    // With no record-derived park, the attempt still projects `complete` for
+    // Settings to acknowledge. Landing suppresses only its presentation;
+    // replacing this result with `idle` would also remove the Settings notice.
     const view = projectFleetUpdateView({
       observation: observation({
         operation: attemptOperation({
