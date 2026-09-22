@@ -6870,21 +6870,25 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   let canceledRafIds = new Set<number>();
   let calls: RecordedCall[] = [];
   let restoreGetContext: (() => void) | null = null;
+  // Advance synthetic frames beyond the 30fps draw cap. Real wall-clock
+  // deltas can be too small to draw the post-hover frame in a fast test run.
+  let clockMs = 0;
 
   function flushRaf(times: number): void {
     for (let step = 0; step < times; step += 1) {
       const pending = rafQueue;
       rafQueue = [];
+      clockMs += 100;
       act(() => {
         for (const queued of pending) {
-          if (!canceledRafIds.has(queued.id))
-            queued.callback(performance.now());
+          if (!canceledRafIds.has(queued.id)) queued.callback(clockMs);
         }
       });
     }
   }
 
   beforeEach(() => {
+    clockMs = 0;
     activeObserverCallbacks = [];
     vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
     calls = [];
