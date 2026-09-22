@@ -21,7 +21,7 @@ const PREVIEW_LIMIT = 400;
 
 /** A row published by a host before any local composer named its chat/epic. */
 const CHAT_TITLE_FALLBACK = "Chat";
-const EPIC_TITLE_FALLBACK = "Epic";
+const EPIC_TITLE_FALLBACK = "Task";
 /** Title fallback for a textless (image-only) new-agent draft. */
 const NEW_CHAT_TITLE_FALLBACK = "New agent";
 

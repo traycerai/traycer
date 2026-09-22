@@ -182,13 +182,6 @@ function readyStatus(
   };
 }
 
-/** The partial-index caveat: the one status that is not the header's count. */
-function stillIndexingNote(): HTMLElement {
-  const note = screen.getByText(/Still indexing/);
-  expect(note.getAttribute("role")).toBe("status");
-  return note;
-}
-
 function renderSection(overrides: {
   readonly query?: string;
   readonly filtersActive?: boolean;
@@ -844,31 +837,25 @@ describe("HistoryMessageHits: loading and failure", () => {
     expect(screen.queryByText(/Still indexing/)).toBeNull();
   });
 
-  // The regression: an unfinished startup sweep is the likeliest EXPLANATION
-  // for an empty result, and this branch returns before the shared list that
-  // renders the note - so the one case that needs the caveat most was the one
-  // case that lost it.
-  it("keeps the still-indexing caveat on an empty result from a partial index", () => {
+  // History never shows the caveat itself - it names the host in its own
+  // header instead - whether the partial index came back empty or not.
+  it("never shows the still-indexing caveat on an empty result from a partial index", () => {
     testState.status = readyStatus([], "partial");
 
     renderSection({});
 
-    expect(stillIndexingNote().textContent).toBe(
-      "Still indexing chats on this host. Some results may be missing.",
-    );
+    expect(screen.queryByText(/Still indexing/)).toBeNull();
     expect(screen.getByText("No messages match.")).toBeTruthy();
   });
 
-  it("keeps the caveat on a partial index that DID find something", () => {
-    // The other half of the pair, so the note cannot regress to only ever
-    // appearing on the empty branch: here the shared list draws it.
+  it("never shows the still-indexing caveat on a partial index that DID find something", () => {
+    // The other half of the pair, so the omission cannot regress to only
+    // ever holding on the empty branch.
     testState.status = readyStatus([messageMatch("chat-1", 1)], "partial");
 
     renderSection({});
 
-    expect(stillIndexingNote().textContent).toBe(
-      "Still indexing chats on this host. Some results may be missing.",
-    );
+    expect(screen.queryByText(/Still indexing/)).toBeNull();
     expect(screen.queryByText("No messages match.")).toBeNull();
   });
 });
