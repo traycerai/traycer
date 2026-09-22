@@ -91,12 +91,13 @@ interface PendingProviderRateLimitFetch {
   readonly promise: Promise<void>;
 }
 
-// One entry per cache key with a fetch of ours in flight, and only so a forced
-// call can tell an automatic fetch (wait, then ask again) from a forced one
-// (join it). Removed BEFORE the entry's promise resolves, so a forced call
-// chained behind it always finds the slot empty and issues a real request. A
-// newer entry can replace one whose fetch was cancelled, which is why removal
-// checks identity.
+// One entry per cache key with a fetch of ours in flight. It lets a forced call
+// tell an automatic fetch (wait, then ask again) from a forced one (join it),
+// and lets a fetch that was cancelled while waiting to collect see that it no
+// longer owns the key. Removed BEFORE the entry's promise resolves, so a forced
+// call chained behind it always finds the slot empty and issues a real
+// request. A newer entry can replace one whose fetch was cancelled, which is
+// why removal checks identity.
 const pendingFetches = new Map<string, PendingProviderRateLimitFetch>();
 
 function waitFor(delayMs: number): Promise<void> {
@@ -164,6 +165,12 @@ export function fetchProviderRateLimits(
     );
   }
 
+  let resolveSettled = (): void => undefined;
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve;
+  });
+  const entry: PendingProviderRateLimitFetch = { force, promise: settled };
+
   // Named, so the host-scoped key stays the sole cache identity.
   // Boundary-wrapped because this writes the same entry the HostRpcError-typed
   // observers read.
@@ -179,6 +186,14 @@ export function fetchProviderRateLimits(
           // window as an error.
           if (!isRateLimitReadStillRunningOnHost(error)) throw error;
           await waitFor(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+          // Cancelled meanwhile (`cancelQueries`): the fetch has settled and
+          // left the registry, or a newer fetch of this key has taken its
+          // slot. Nobody reads this result, so the host is not asked again.
+          // Cancellation is read from our registry, not TanStack's `signal`:
+          // reading the signal makes TanStack cancel the fetch when its last
+          // observer unmounts, and these observers are passive, so closing
+          // the popover would throw away a refresh the host already ran.
+          if (pendingFetches.get(pendingKey) !== entry) throw error;
           return requestUsage(false);
         },
       );
@@ -190,11 +205,6 @@ export function fetchProviderRateLimits(
     });
   }
 
-  let resolveSettled = (): void => undefined;
-  const settled = new Promise<void>((resolve) => {
-    resolveSettled = resolve;
-  });
-  const entry: PendingProviderRateLimitFetch = { force, promise: settled };
   pendingFetches.set(pendingKey, entry);
   void queryClient
     .fetchQuery({

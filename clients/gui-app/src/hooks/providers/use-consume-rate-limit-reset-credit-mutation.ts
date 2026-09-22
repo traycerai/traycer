@@ -79,7 +79,10 @@ export function useConsumeRateLimitResetCreditMutation(): UseMutationResult<
         };
         // Cancel first: a read already in flight may carry numbers from before
         // the reset. A cancelled fetch is one `fetchProviderRateLimits` never
-        // joins, so the forced read below goes out after the reset.
+        // joins, so the forced request below is sent after the reset. That
+        // alone would not make its ANSWER post-reset - the host could join
+        // the pre-reset probe still running there - so the host drops that
+        // probe from its join map when it redeems the credit.
         await queryClient.cancelQueries(rateLimitQueryFilters);
         await queryClient.invalidateQueries(rateLimitQueryFilters);
         if (context.fetchScope?.hostId !== context.hostId) return;

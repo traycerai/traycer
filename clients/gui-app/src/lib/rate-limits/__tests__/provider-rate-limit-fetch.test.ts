@@ -18,7 +18,10 @@ import type {
   ProviderRateLimitEnvelope,
   RateLimitUsageResponse,
 } from "@/lib/rate-limits/rate-limit-envelope";
-import { RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
+  RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS,
+  RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+} from "@/lib/rate-limits/rate-limit-timing";
 import {
   HostTransportFailureError,
   RetryableTransportError,
@@ -89,16 +92,22 @@ function makeControllableRequest() {
     readonly providerId: ProviderId | undefined;
     readonly profileId: string | null;
     readonly force: boolean | undefined;
+    readonly responseTimeoutMs: number;
   }> = [];
   const settlers: Array<{
     ok: () => void;
     okWith: (payload: RateLimitUsageResponse) => void;
   }> = [];
-  const request: ProviderRateLimitRequestFn = (_method, params) => {
+  const request: ProviderRateLimitRequestFn = (
+    _method,
+    params,
+    responseTimeoutMs,
+  ) => {
     calls.push({
       providerId: params.providerId,
       profileId: params.profileId,
       force: params.force,
+      responseTimeoutMs,
     });
     return new Promise((resolve) => {
       settlers.push({
@@ -195,8 +204,16 @@ describe("fetchProviderRateLimits", () => {
     );
     await flush();
 
+    // The frame budget must be exactly the one the scheduling policy declares
+    // for this method: `HostClient.requestWithResponseTimeout` rejects any
+    // other value before the request is sent.
     expect(calls).toEqual([
-      { providerId: "codex", profileId: "work-profile", force: true },
+      {
+        providerId: "codex",
+        profileId: "work-profile",
+        force: true,
+        responseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+      },
     ]);
 
     settlers[0].ok();
@@ -458,6 +475,60 @@ describe("fetchProviderRateLimits", () => {
       expect(calls).toBe(2);
     });
 
+    it("sends no collection for a fetch cancelled while it waited", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const request: ProviderRateLimitRequestFn = () => {
+        calls += 1;
+        return Promise.reject(transportFailure());
+      };
+      const scope = scopeFor(HOST_ID, queryClient, vi.fn(request));
+
+      void fetchProviderRateLimits(scope, target("codex", null), {
+        force: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      await queryClient.cancelQueries({ queryKey: keyFor("codex", null) });
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 2);
+      // Nobody reads a cancelled fetch's result, so its collection would be a
+      // host request for nothing.
+      expect(calls).toBe(1);
+    });
+
+    it("sends no collection for a fetch cancelled while it waited, even after a newer fetch of the same key has started", async () => {
+      // The reset-credit path: cancel the read in flight, then force a fresh
+      // one. The newer fetch now owns the key, and the cancelled one must
+      // still not send its collection when its delay runs out.
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      const forced: Array<boolean | undefined> = [];
+      const request: ProviderRateLimitRequestFn = (_method, params) => {
+        forced.push(params.force);
+        return forced.length === 1
+          ? Promise.reject(transportFailure())
+          : Promise.resolve(response());
+      };
+      const scope = scopeFor(HOST_ID, queryClient, vi.fn(request));
+
+      void fetchProviderRateLimits(scope, target("codex", null), {
+        force: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(forced).toEqual([true]);
+
+      await queryClient.cancelQueries({ queryKey: keyFor("codex", null) });
+      await fetchProviderRateLimits(scope, target("codex", null), {
+        force: true,
+      });
+      expect(forced).toEqual([true, true]);
+
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 2);
+      expect(forced).toEqual([true, true]);
+    });
+
     it("does not let TanStack's own retry policy re-send a request while a collection is the only recovery that should run", async () => {
       // `newQueryClient()` sets `retry: false` as the DEFAULT, so every other
       // test in this file is blind to what production actually does: the app
@@ -618,6 +689,48 @@ describe("fetchProviderRateLimits", () => {
     expect(
       queryClient.getQueryData<ProviderRateLimitEnvelope>(queryKey)?.latest,
     ).toMatchObject({ reason: "timeout" });
+
+    await Promise.all([stale, fresh]);
+  });
+
+  it("calling fetchProviderRateLimits synchronously right after an un-awaited cancelQueries (registry entry still present) issues a NEW request, not a join", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    const scope = scopeFor(HOST_ID, queryClient, request);
+    const queryKey = keyFor("claude-code", null);
+
+    const stale = fetchProviderRateLimits(scope, target("claude-code", null), {
+      force: true,
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Un-awaited: `cancelQueries` idles the query SYNCHRONOUSLY, but its
+    // caller here never yields, so the `pendingFetches` registry entry this
+    // fetch owns has not had a chance to clear itself yet - unlike every
+    // other cancel-then-fetch test in this file, which awaits the cancel (and
+    // so a few microtasks) before calling again.
+    void queryClient.cancelQueries({ queryKey });
+
+    // Called in the SAME synchronous stretch, before any microtask runs.
+    const fresh = fetchProviderRateLimits(scope, target("claude-code", null), {
+      force: true,
+    });
+    await flush();
+
+    // Expected: a genuinely new request, not a join on the cancelled entry -
+    // the idle check must treat it as absent even while it is still present
+    // in the registry.
+    expect(request).toHaveBeenCalledTimes(2);
+
+    settlers[1]?.okWith(unavailableResponse("timeout"));
+    await flush();
+    expect(
+      queryClient.getQueryData<ProviderRateLimitEnvelope>(queryKey)?.latest,
+    ).toMatchObject({ reason: "timeout" });
+
+    settlers[0]?.okWith(unavailableResponse("connection_failed"));
+    await flush();
 
     await Promise.all([stale, fresh]);
   });
