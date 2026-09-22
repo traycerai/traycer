@@ -74,6 +74,20 @@ import type {
   InlineEditState,
 } from "./chat-tile-session-state";
 
+function canEditMessageDelivery(input: {
+  readonly delivery: ChatMessageDelivery | null;
+  readonly canAct: boolean;
+  readonly deliveryPending: boolean;
+}): boolean {
+  return (
+    input.canAct &&
+    !input.deliveryPending &&
+    input.delivery !== null &&
+    (input.delivery.state.phase === "pending" ||
+      input.delivery.state.phase === "paused")
+  );
+}
+
 function canEditUserMessage(input: {
   readonly message: ChatMessageModel;
   readonly delivery: ChatMessageDelivery | null;
@@ -86,12 +100,7 @@ function canEditUserMessage(input: {
     return (
       input.message.providerHistory !== "excluded" && input.canModifyMessages
     );
-  return (
-    input.canAct &&
-    !input.deliveryPending &&
-    (input.delivery.state.phase === "pending" ||
-      input.delivery.state.phase === "paused")
-  );
+  return canEditMessageDelivery(input);
 }
 
 export interface ChatMessageActionsInput {
@@ -321,6 +330,12 @@ export function useChatMessageActions(
     worktreeBinding,
     getDraftBlobBridgeSupported,
   } = input;
+  const deliveryPending = Object.values(pendingActions).some(
+    (action) =>
+      action.action === "messageDeliveryEdit" ||
+      action.action === "messageDeliveryRetry" ||
+      action.action === "messageDeliveryCancel",
+  );
 
   /**
    * What a revert from the message being edited would touch.
@@ -402,11 +417,11 @@ export function useChatMessageActions(
         messageDelivery?.messageId === message.persistentMessageId
           ? messageDelivery
           : null;
-      const canEditDelivery =
-        canAct &&
-        delivery !== null &&
-        (delivery.state.phase === "pending" ||
-          delivery.state.phase === "paused");
+      const canEditDelivery = canEditMessageDelivery({
+        delivery,
+        canAct,
+        deliveryPending,
+      });
       if (
         message.providerHistory === "excluded"
           ? !canEditDelivery
@@ -445,7 +460,14 @@ export function useChatMessageActions(
         initialContent: content,
       });
     },
-    [activeInlineEdit, canAct, canModifyMessages, dispatchUi, messageDelivery],
+    [
+      activeInlineEdit,
+      canAct,
+      canModifyMessages,
+      deliveryPending,
+      dispatchUi,
+      messageDelivery,
+    ],
   );
 
   const updateInlineEdit = useCallback(
@@ -479,7 +501,12 @@ export function useChatMessageActions(
       revertFileChanges: boolean,
       revertArtifacts: boolean,
     ) => {
-      if (edit.deliveryRevision !== null ? !canAct : !canModifyMessages) return;
+      if (
+        edit.deliveryRevision !== null
+          ? !canAct || deliveryPending
+          : !canModifyMessages
+      )
+        return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
       const content = buildSubmittedChatJSONContent(
@@ -532,6 +559,7 @@ export function useChatMessageActions(
     [
       canModifyMessages,
       canAct,
+      deliveryPending,
       messages,
       chatActions,
       dispatchUi,
@@ -928,12 +956,6 @@ export function useChatMessageActions(
     ],
   );
 
-  const deliveryPending = Object.values(pendingActions).some(
-    (action) =>
-      action.action === "messageDeliveryEdit" ||
-      action.action === "messageDeliveryRetry" ||
-      action.action === "messageDeliveryCancel",
-  );
   const deliveryActions = useMemo(
     () => ({
       pending: deliveryPending,

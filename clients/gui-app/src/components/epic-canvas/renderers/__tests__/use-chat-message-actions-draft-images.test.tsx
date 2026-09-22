@@ -45,6 +45,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 
 const resolveMocks = vi.hoisted(() => ({
   resolveDraftImageBytes: vi.fn<
@@ -273,6 +274,32 @@ function baseInput(
   };
 }
 
+function pendingDeliveryAction(): PendingChatAction {
+  return {
+    clientActionId: "delivery-action-1",
+    action: "messageDeliveryRetry",
+    queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
+    interviewBlockId: null,
+    interviewDeliveryRetry: null,
+    messageId: TARGET_MESSAGE_ID,
+    restore: null,
+    sentContentHashes: null,
+    sender: null,
+    settings: null,
+    accountContext: null,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    messageConfirmedByHost: false,
+    hashOnlyRetry: false,
+    wireContent: null,
+    createdAt: 1,
+    connectionEpoch: 0,
+  };
+}
+
 /**
  * Type into the open inline editor the way the editor itself does - through the
  * `onSnapshot` the hook hands it.
@@ -370,6 +397,61 @@ describe("useChatMessageActions: accepted-message action projection", () => {
       type: "setConfirmingDeleteMessageId",
       confirmingDeleteMessageId: TARGET_MESSAGE_ID,
     });
+  });
+
+  it("does not open a delivery edit while another delivery action is pending", () => {
+    const dispatchUi = vi.fn();
+    const delivery: ChatMessageDelivery = {
+      messageId: TARGET_MESSAGE_ID,
+      revision: 1,
+      state: { phase: "pending" },
+    };
+    const pending = pendingDeliveryAction();
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            dispatchUi,
+            messageDelivery: delivery,
+            pendingActions: { [pending.clientActionId]: pending },
+          }),
+        ),
+      { wrapper },
+    );
+    const actions = result.current.messageActionsFor({
+      ...baseMessage(),
+      providerHistory: "excluded",
+    });
+    if (actions?.type !== "user") throw new Error("expected user actions");
+
+    act(() => actions.onEdit());
+
+    expect(dispatchUi).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "beginInlineEdit" }),
+    );
+  });
+
+  it("does not submit an open delivery edit while another delivery action is pending", () => {
+    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>();
+    const pending = pendingDeliveryAction();
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
+            chatActions: {
+              ...fakeChatActions(() => null),
+              messageDeliveryEdit,
+            },
+            pendingActions: { [pending.clientActionId]: pending },
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => result.current.revertOnEdit.onDontRevert());
+
+    expect(messageDeliveryEdit).not.toHaveBeenCalled();
   });
 });
 
