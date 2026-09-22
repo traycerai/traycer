@@ -361,7 +361,15 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
           return room === undefined ? 0 : room.seatIds.length;
         };
         expect(seatsOf("infirmary")).toBe(bounds.beds);
-        expect(seatsOf("waiting-room")).toBe(bounds.chairs);
+        // Towers and Building share one plaza builder that no longer stands
+        // up a waiting room at all (an awaiting agent keeps its own desk),
+        // so the capacity formula's chair count is not a room either of them
+        // owes - `CIVIC_KINDS_EXPECTED` is the one table that says so.
+        expect(seatsOf("waiting-room")).toBe(
+          CIVIC_KINDS_EXPECTED[viewId].includes("waiting-room")
+            ? bounds.chairs
+            : 0,
+        );
         // C5 and C7: a door with a counter and a counter with a queue. Neither
         // is a room anybody sits down in.
         expect(seatsOf("archive")).toBe(0);
