@@ -9755,7 +9755,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             ...input,
           },
-          pending: basicPending(clientActionId, "messageDeliveryEdit"),
+          pending: {
+            ...basicPending(clientActionId, "messageDeliveryEdit"),
+            sentContentHashes: hashOnlyImageHashes(input.content),
+          },
           pendingUserMessage: null,
         });
         return sent === null
@@ -11423,15 +11426,16 @@ function unrecordedPromptSources(
  * The digests this action asked the host to resolve from its own store - the
  * ones a `MISSING_ATTACHMENT_BYTES` refusal is actually ABOUT.
  *
- * Two shapes, because the two actions that can send bare keep their document in
+ * Two shapes, because actions that can send bare keep their document in
  * different places. A `send` freezes the whole prompt in `restore`, so the set
- * is read off that document. An `editUserMessage` has no `restore` at all - it
- * re-opens its own editor rather than handing anything back - so the hashes are
- * recorded at dispatch instead (`sentContentHashes`), which is the only trace
- * of what that edit put on the wire.
+ * is read off that document. History edits and accepted-message delivery edits
+ * have no `restore` at all - they re-open their own editor rather than handing
+ * anything back - so the hashes are recorded at dispatch instead
+ * (`sentContentHashes`), which is the only trace of what that edit put on the
+ * wire.
  *
  * Empty for everything else, which is what keeps the marking below scoped to
- * the two actions that can earn it.
+ * the actions that can earn it.
  */
 function refusedHashOnlyDigests(
   pending: PendingChatAction,
@@ -11441,7 +11445,10 @@ function refusedHashOnlyDigests(
       ? []
       : hashOnlyImageHashes(pending.restore.content);
   }
-  if (pending.action === "editUserMessage") {
+  if (
+    pending.action === "editUserMessage" ||
+    pending.action === "messageDeliveryEdit"
+  ) {
     return pending.sentContentHashes ?? [];
   }
   return [];
@@ -11462,12 +11469,12 @@ function refusedHashOnlyDigests(
  *
  * ## The two halves divide at the decision, not at the door
  *
- * MARKING runs for `send` AND `editUserMessage`; the silent inline RETRY is
+ * MARKING runs for `send` and both edit actions; the silent inline RETRY is
  * send-only. Gating the whole function on `send` is what made a refused edit
- * permanent: the edit path became hash-only, so an `unsupported-format` refusal
- * of an edit reached nothing that could record the verdict, and every later
- * edit of that message sent the same undecodable digest bare and was refused
- * identically, with no way out but reloading the window.
+ * permanent: the edit path became hash-only, so an `unsupported-format`
+ * refusal of an edit reached nothing that could record the verdict, and every
+ * later edit of that message sent the same undecodable digest bare and was
+ * refused identically, with no way out but reloading the window.
  *
  * The retry stays send-only deliberately, and not for symmetry: re-sending a
  * send's bytes inline replays a message the host never recorded, while

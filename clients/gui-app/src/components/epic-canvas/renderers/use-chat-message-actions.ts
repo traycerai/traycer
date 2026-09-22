@@ -967,8 +967,7 @@ export function useChatMessageActions(
         persistentMessageId,
       );
       const delivery =
-        messageDelivery?.messageId === persistentMessageId &&
-        messageDelivery.state.phase !== "started"
+        messageDelivery?.messageId === persistentMessageId
           ? messageDelivery
           : null;
       const canEdit = canEditUserMessage({
@@ -979,8 +978,6 @@ export function useChatMessageActions(
         canModifyMessages,
       });
       if (!canModifyMessages && editing === null && delivery === null)
-        return null;
-      if (message.providerHistory === "excluded" && delivery === null)
         return null;
       const pending = inlineEditIsPending(editing);
 

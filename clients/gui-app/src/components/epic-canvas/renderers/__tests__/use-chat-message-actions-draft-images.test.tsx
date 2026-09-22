@@ -26,6 +26,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type {
   HostClient,
   HostRequester,
@@ -320,6 +321,56 @@ afterEach(() => {
   vi.restoreAllMocks();
   useAuthStore.setState({ profile: null, contextMetadata: null });
   resetDraftBlobTransportForTests();
+});
+
+describe("useChatMessageActions: accepted-message action projection", () => {
+  it("keeps a started delivery attached so an excluded row cannot render as Not sent", () => {
+    const delivery: ChatMessageDelivery = {
+      messageId: TARGET_MESSAGE_ID,
+      revision: 2,
+      state: {
+        phase: "started",
+        turnId: "turn-1",
+        assistantMessageId: "assistant-1",
+      },
+    };
+    const { result } = renderHook(
+      () => useChatMessageActions(baseInput({ messageDelivery: delivery })),
+      { wrapper },
+    );
+
+    const actions = result.current.messageActionsFor({
+      ...baseMessage(),
+      providerHistory: "excluded",
+    });
+    expect(actions?.type).toBe("user");
+    if (actions?.type !== "user") throw new Error("expected user actions");
+    expect(actions.delivery?.state).toEqual(delivery.state);
+    expect(actions.enabled).toBe(false);
+  });
+
+  it("keeps Delete available for an inherited excluded row with no live delivery", () => {
+    const dispatchUi = vi.fn();
+    const { result } = renderHook(
+      () => useChatMessageActions(baseInput({ dispatchUi })),
+      { wrapper },
+    );
+
+    const actions = result.current.messageActionsFor({
+      ...baseMessage(),
+      providerHistory: "excluded",
+    });
+    expect(actions?.type).toBe("user");
+    if (actions?.type !== "user") throw new Error("expected user actions");
+    expect(actions.delivery).toBeUndefined();
+    expect(actions.enabled).toBe(false);
+
+    act(() => actions.onDeleteRequest());
+    expect(dispatchUi).toHaveBeenCalledWith({
+      type: "setConfirmingDeleteMessageId",
+      confirmingDeleteMessageId: TARGET_MESSAGE_ID,
+    });
+  });
 });
 
 describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
