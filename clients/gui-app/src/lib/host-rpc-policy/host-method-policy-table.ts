@@ -473,10 +473,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
-  // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
-  // queue requests with this extended response budget so a slow-but-successful
-  // probe is not discarded client-side while the host finishes it; the value
-  // is declared once in `rate-limit-timing.ts` and must match exactly.
+  // Claude refresh-safe probe alone is budgeted 90s). `fetchProviderRateLimits`
+  // requests with this extended response budget so a slow-but-successful probe
+  // is not discarded client-side while the host finishes it; the value is
+  // declared once in `rate-limit-timing.ts` and must match exactly.
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,

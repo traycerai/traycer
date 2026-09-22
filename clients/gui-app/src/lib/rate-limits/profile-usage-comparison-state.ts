@@ -19,7 +19,7 @@ import type {
  *  `deriveProfileUsageDetailState`). */
 export type ProfileUsageSemanticWarning = "near_limit" | "hard_limit";
 
-export type ProfileUsageRefreshStatus = "idle" | "queued" | "refreshing";
+export type ProfileUsageRefreshStatus = "idle" | "refreshing";
 type UnavailableProviderRateLimits = Extract<
   ProviderRateLimits,
   { available: false }
@@ -81,16 +81,17 @@ export interface ProfileUsageComparisonEntry {
   readonly fetchEligible: boolean;
   readonly refreshStatus: ProfileUsageRefreshStatus;
   /** Addresses exactly this `(host, provider, profile)` - see
-   *  `useProfileUsageComparison`'s doc comment for routing/serialization. */
+   *  `useProfileUsageComparison`'s doc comment for routing. */
   readonly refresh: () => Promise<void>;
   /** Non-forced sibling of `refresh` for AUTOMATIC callers (the composer
-   *  banner's single unknown-destination check). On the queue-backed
-   *  `ephemeralProcess` lane (claude-code / codex / grok - the providers with
-   *  managed profiles, so the only ones this automatic check ever runs on) it
-   *  passes `force: false`, so it no-ops on still-fresh cache and honors the
-   *  post-`usage_fetch_failed` cool-down instead of re-tripping a server-side
-   *  penalty window. The httpFetch lane (openrouter / kilocode) has no such
-   *  queue and always refetches, but its call is a cheap direct HTTP GET. */
+   *  banner's single unknown-destination check). On the `ephemeralProcess`
+   *  lane (claude-code / codex / grok - the providers with managed profiles,
+   *  so the only ones this automatic check ever runs on) it passes
+   *  `force: false`, so it no-ops on still-fresh cache and lets the host serve
+   *  its gauge inside its floors - including the long one it keeps after a
+   *  Claude `usage_fetch_failed` - instead of re-tripping a server-side penalty
+   *  window. The httpFetch lane (openrouter / kilocode) always refetches, but
+   *  its call is a cheap direct HTTP GET. */
   readonly ensureFresh: () => Promise<void>;
 }
 
@@ -182,20 +183,13 @@ export function deriveProfileUsageDetailState(
 
 /**
  * Pure classifier for the refresh axis, orthogonal to `detail`: whether THIS
- * profile's own query key is actively fetching (`refreshing`), waiting its
- * turn behind another entry in the shared serial queue (`queued` - only a
- * concept for the `ephemeralProcess` lane, which the caller passes as
- * `lane`), or neither (`idle`). Mirrors `useProviderRateLimitRefresh`'s
- * existing `isFetching || (lane === "ephemeralProcess" && draining)` fold,
- * split into three states instead of two booleans so callers can render
- * "queued" and "refreshing" distinctly.
+ * profile's own query key is fetching (`refreshing`) or not (`idle`). Every
+ * read of that key runs through TanStack - whichever trigger started it - so
+ * its own `isFetching` is the whole signal; no other profile's work can hold
+ * this one back on the client.
  */
 export function deriveProfileUsageRefreshStatus(args: {
   readonly isFetchingThisProfile: boolean;
-  readonly queueDraining: boolean;
-  readonly lane: "httpFetch" | "ephemeralProcess" | null;
 }): ProfileUsageRefreshStatus {
-  if (args.isFetchingThisProfile) return "refreshing";
-  if (args.lane === "ephemeralProcess" && args.queueDraining) return "queued";
-  return "idle";
+  return args.isFetchingThisProfile ? "refreshing" : "idle";
 }
