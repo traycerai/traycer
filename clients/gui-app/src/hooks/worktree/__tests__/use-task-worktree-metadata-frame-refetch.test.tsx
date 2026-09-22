@@ -11,10 +11,10 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createAppQueryClient } from "@/lib/query-client";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 import {
   createWorktreeChangedInvalidationScheduler,
@@ -73,17 +73,7 @@ afterEach(() => {
 });
 
 function perPathKey(path: string): QueryKey {
-  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
-    HOST_ID,
-    "worktree.listAllForHost",
-    {
-      includeActivity: true,
-      activityPaths: [path],
-      cursor: null,
-      limit: null,
-      forceRefresh: false,
-    },
-  );
+  return perPathEnrichmentQueryKey(HOST_ID, path);
 }
 
 function entryRow(path: string, epicId: string): WorktreeHostEntryV16 {

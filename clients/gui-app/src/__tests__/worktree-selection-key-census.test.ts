@@ -60,45 +60,6 @@ const ROOTS: readonly ScanRoot[] = [
   { labelPrefix: "clients/shared/", dir: CLIENTS_SHARED_DIR },
 ];
 
-interface AllowlistEntry {
-  readonly file: string;
-  readonly initializer: string;
-  readonly reason: string;
-}
-
-/**
- * Verified via reading the actual source - not a blanket "anything goes"
- * escape hatch. Each entry names the exact file and the exact initializer
- * text a matching site must have, plus why it is legitimately non-null and
- * not itself a multi-path cache key.
- */
-const ACTIVITY_PATHS_ALLOWLIST: readonly AllowlistEntry[] = [
-  {
-    file: "components/settings/panels/worktrees-enrichment-batcher.ts",
-    initializer: "[path]",
-    reason:
-      "the per-path key params shared by every enrichment reader - a single-element array, not a batch",
-  },
-  {
-    file: "components/settings/panels/worktrees-enrichment-batcher.ts",
-    initializer: "[...paths]",
-    reason:
-      "the batched WIRE request the coalescing batcher sends - a transport shape, never a cache key (each row still lands under its own per-path key)",
-  },
-  {
-    file: "hooks/worktree/use-worktree-owner-metadata-query.ts",
-    initializer: "variables.worktreePaths",
-    reason:
-      "the forced Refresh mutation's request - its response is split back into per-path cache entries in onSuccess, never cached as one key",
-  },
-  {
-    file: "hooks/epic/use-epic-sweep-worktree-candidates-query.ts",
-    initializer: "ownedPaths",
-    reason:
-      "the Sweep dialog's act-time forced proof, cached under hostQueryKeys.sweepWorktreeCandidates - deliberately OUTSIDE the worktree.listAllForHost method scope, so it is not a multi-path key under that scope at all",
-  },
-];
-
 interface CountedAllowlistEntry {
   readonly file: string;
   readonly initializer: string;
@@ -110,6 +71,44 @@ interface CountedAllowlistEntry {
   readonly expectedCount: number;
   readonly reason: string;
 }
+
+/**
+ * Verified via reading the actual source - not a blanket "anything goes"
+ * escape hatch. Each entry names the exact file, the exact initializer text,
+ * and the EXACT number of live sites that pair must cover - not a floor - so
+ * a second, unlisted site sharing an already-allowlisted (file, initializer)
+ * pair still fails the count check rather than passing silently.
+ */
+const ACTIVITY_PATHS_ALLOWLIST: readonly CountedAllowlistEntry[] = [
+  {
+    file: "components/settings/panels/worktrees-enrichment-batcher.ts",
+    initializer: "[path]",
+    expectedCount: 1,
+    reason:
+      "the per-path key params shared by every enrichment reader - a single-element array, not a batch",
+  },
+  {
+    file: "components/settings/panels/worktrees-enrichment-batcher.ts",
+    initializer: "[...paths]",
+    expectedCount: 1,
+    reason:
+      "the batched WIRE request the coalescing batcher sends - a transport shape, never a cache key (each row still lands under its own per-path key)",
+  },
+  {
+    file: "hooks/worktree/use-worktree-owner-metadata-query.ts",
+    initializer: "variables.worktreePaths",
+    expectedCount: 1,
+    reason:
+      "the forced Refresh mutation's request - its response is split back into per-path cache entries in onSuccess, never cached as one key",
+  },
+  {
+    file: "hooks/epic/use-epic-sweep-worktree-candidates-query.ts",
+    initializer: "ownedPaths",
+    expectedCount: 1,
+    reason:
+      "the Sweep dialog's act-time forced proof, cached under hostQueryKeys.sweepWorktreeCandidates - deliberately OUTSIDE the worktree.listAllForHost method scope, so it is not a multi-path key under that scope at all",
+  },
+];
 
 /**
  * `includeActivity: true` is legitimate on a selection-mode or forced request
@@ -311,6 +310,73 @@ function includeActivityCensus(): Census {
  */
 const ACTIVITY_PATHS_NULL_SITE_FLOOR = 3;
 
+/**
+ * The one offence check both censuses run: a non-allowed site whose (file,
+ * initializer) pair is either unlisted, or listed but at the WRONG count -
+ * including a count that is TOO HIGH, so a second, unlisted site sharing an
+ * already-allowlisted pair still fails here rather than passing silently.
+ */
+function censusOffences(
+  nonAllowedSites: readonly Site[],
+  allowlist: readonly CountedAllowlistEntry[],
+  propertyName: string,
+): readonly string[] {
+  const linesByPair = new Map<string, number[]>();
+  for (const site of nonAllowedSites) {
+    const key = `${site.relativeFile}\u0000${site.initializerText}`;
+    const lines = linesByPair.get(key);
+    if (lines === undefined) linesByPair.set(key, [site.line]);
+    else lines.push(site.line);
+  }
+
+  const offences: string[] = [];
+  for (const [key, lines] of linesByPair) {
+    const [file, initializer] = key.split("\u0000");
+    const entry = allowlist.find(
+      (candidate) =>
+        candidate.file === file && candidate.initializer === initializer,
+    );
+    // Every site's line, so an offence names where to look, not just which file.
+    const at = `${file}:${lines.join(",")}`;
+    if (entry === undefined) {
+      offences.push(
+        `${at} -> ${propertyName}: ${initializer} (${String(lines.length)} site(s)) is not allowlisted`,
+      );
+    } else if (entry.expectedCount !== lines.length) {
+      offences.push(
+        `${at} -> ${propertyName}: ${initializer} - expected exactly ${String(entry.expectedCount)} site(s), found ${String(lines.length)}`,
+      );
+    }
+  }
+  return offences;
+}
+
+/**
+ * The one stale-entry check both censuses run: an allowlist entry whose live
+ * site count no longer matches `expectedCount` (renamed, refactored away, or
+ * a second site quietly added) - `.length`, not `.some`, so the entry fails
+ * whether the live count went to zero OR grew past what it was verified for.
+ */
+function staleAllowlistEntries(
+  nonAllowedSites: readonly Site[],
+  allowlist: readonly CountedAllowlistEntry[],
+): readonly string[] {
+  const stale: string[] = [];
+  for (const entry of allowlist) {
+    const actualCount = nonAllowedSites.filter(
+      (site) =>
+        site.relativeFile === entry.file &&
+        site.initializerText === entry.initializer,
+    ).length;
+    if (actualCount !== entry.expectedCount) {
+      stale.push(
+        `allowlist entry ${entry.file} -> ${entry.initializer} expected exactly ${String(entry.expectedCount)} site(s), found ${String(actualCount)}`,
+      );
+    }
+  }
+  return stale;
+}
+
 describe("worktree.listAllForHost activityPaths census", () => {
   it("finds a non-empty, non-vacuous population of activityPaths sites", () => {
     const { allSites, allowedSites } = activityPathsCensus();
@@ -321,43 +387,27 @@ describe("worktree.listAllForHost activityPaths census", () => {
     );
   });
 
-  it("every non-null activityPaths site is an explicitly allowlisted single-path or wire-transport shape", () => {
+  it("every non-null activityPaths site matches an allowlisted (file, initializer) at its EXACT expected count", () => {
     const { nonAllowedSites } = activityPathsCensus();
 
-    const offences = nonAllowedSites
-      .filter(
-        (site) =>
-          !ACTIVITY_PATHS_ALLOWLIST.some(
-            (entry) =>
-              entry.file === site.relativeFile &&
-              entry.initializer === site.initializerText,
-          ),
-      )
-      .map(
-        (site) =>
-          `${site.relativeFile}:${String(site.line)} -> activityPaths: ${site.initializerText}`,
-      );
-
-    expect(offences).toEqual([]);
+    expect(
+      censusOffences(
+        nonAllowedSites,
+        ACTIVITY_PATHS_ALLOWLIST,
+        "activityPaths",
+      ),
+    ).toEqual([]);
   });
 
   // A stale allowlist entry (the site was renamed, refactored away, or its
-  // initializer text changed) would silently stop guarding anything - assert
-  // every entry is still hit by a real site.
-  it("every allowlist entry is still matched by a live site", () => {
+  // count drifted - including a SECOND site sharing the pair) would silently
+  // stop guarding anything - assert every entry's exact count is still live.
+  it("every ACTIVITY_PATHS_ALLOWLIST entry still matches its exact expected count", () => {
     const { nonAllowedSites } = activityPathsCensus();
 
-    for (const entry of ACTIVITY_PATHS_ALLOWLIST) {
-      const matched = nonAllowedSites.some(
-        (site) =>
-          site.relativeFile === entry.file &&
-          site.initializerText === entry.initializer,
-      );
-      expect(
-        matched,
-        `allowlist entry ${entry.file} -> ${entry.initializer} has no matching site anymore`,
-      ).toBe(true);
-    }
+    expect(
+      staleAllowlistEntries(nonAllowedSites, ACTIVITY_PATHS_ALLOWLIST),
+    ).toEqual([]);
   });
 });
 
@@ -371,31 +421,13 @@ describe("worktree.listAllForHost includeActivity census", () => {
   it("every non-false includeActivity site matches an allowlisted (file, initializer) at its EXACT expected count", () => {
     const { nonAllowedSites } = includeActivityCensus();
 
-    const counts = new Map<string, number>();
-    for (const site of nonAllowedSites) {
-      const key = `${site.relativeFile}\u0000${site.initializerText}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-
-    const offences: string[] = [];
-    for (const [key, count] of counts) {
-      const [file, initializer] = key.split("\u0000");
-      const entry = INCLUDE_ACTIVITY_ALLOWLIST.find(
-        (candidate) =>
-          candidate.file === file && candidate.initializer === initializer,
-      );
-      if (entry === undefined) {
-        offences.push(
-          `${file} -> includeActivity: ${initializer} (${String(count)} site(s)) is not allowlisted`,
-        );
-      } else if (entry.expectedCount !== count) {
-        offences.push(
-          `${file} -> includeActivity: ${initializer} - expected exactly ${String(entry.expectedCount)} site(s), found ${String(count)}`,
-        );
-      }
-    }
-
-    expect(offences).toEqual([]);
+    expect(
+      censusOffences(
+        nonAllowedSites,
+        INCLUDE_ACTIVITY_ALLOWLIST,
+        "includeActivity",
+      ),
+    ).toEqual([]);
   });
 
   // A stale allowlist entry (renamed, refactored away, or its count drifted)
@@ -404,16 +436,8 @@ describe("worktree.listAllForHost includeActivity census", () => {
   it("every INCLUDE_ACTIVITY_ALLOWLIST entry still matches its exact expected count", () => {
     const { nonAllowedSites } = includeActivityCensus();
 
-    for (const entry of INCLUDE_ACTIVITY_ALLOWLIST) {
-      const actualCount = nonAllowedSites.filter(
-        (site) =>
-          site.relativeFile === entry.file &&
-          site.initializerText === entry.initializer,
-      ).length;
-      expect(
-        actualCount,
-        `allowlist entry ${entry.file} -> ${entry.initializer} expected exactly ${String(entry.expectedCount)} site(s), found ${String(actualCount)}`,
-      ).toBe(entry.expectedCount);
-    }
+    expect(
+      staleAllowlistEntries(nonAllowedSites, INCLUDE_ACTIVITY_ALLOWLIST),
+    ).toEqual([]);
   });
 });
