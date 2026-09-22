@@ -59,9 +59,13 @@ const textFrameFields = {
  * `fetchedAtMs` is the host's own clock at the read that produced these rows,
  * for a viewer that wants to say how old the answer is. `stale` says the most
  * recent read did NOT produce these rows - it failed, or its body did not
- * parse - and the last good rows are being served instead. A stale snapshot is
- * never an empty one: a read that could not be made says nothing about any
- * host, and emptying a fleet on it would report every machine as departed.
+ * parse - and the last good rows are being served instead. A failed read never
+ * turns into an empty fleet: it says nothing about any host, and reporting it
+ * as "no hosts" would show every machine as departed, so a host with no good
+ * rows to serve sends no snapshot at all. The rows of a stale snapshot are
+ * therefore the last GOOD rows, and those may legitimately be empty - an
+ * account with no other host whose next read fails is exactly that frame -
+ * which is why the schema does not demand a non-empty `hosts` on `stale`.
  */
 export const hostInventorySubscribeOpenRequestSchemaV10 = lazySchema(() =>
   z.object({}),
