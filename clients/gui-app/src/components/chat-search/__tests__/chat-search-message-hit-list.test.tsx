@@ -113,6 +113,7 @@ function renderList(overrides: Partial<ChatSearchMessageHitListProps>): {
       renderExpansion={renderExpansion}
       taskTitles={new Map()}
       variant="full"
+      showIndexingNotice
       {...overrides}
       status={status}
     />
@@ -173,7 +174,7 @@ describe("ChatSearchMessageHitList: variant differences", () => {
 });
 
 describe("ChatSearchMessageHitList: the best-hit child row", () => {
-  it("keeps the snippet on one line in both variants and sizes the role column per variant", () => {
+  it("keeps the snippet on one line in both variants and sizes the chat-title badge per variant", () => {
     const snippetText = "the quick brown fox jumps over the lazy dog";
     const match = messageMatch({
       chatId: "c1",
@@ -193,7 +194,7 @@ describe("ChatSearchMessageHitList: the best-hit child row", () => {
     }
     expect(compactSnippet.className).toContain("truncate");
     expect(compactSnippet.className).not.toContain("line-clamp");
-    expect(compactRow.children.item(0)?.className).toContain("w-[7ch]");
+    expect(compactRow.children.item(0)?.className).toContain("max-w-1/3");
     cleanup();
 
     renderList({
@@ -208,7 +209,26 @@ describe("ChatSearchMessageHitList: the best-hit child row", () => {
       throw new Error("expected the row to have a snippet element");
     }
     expect(fullSnippet.className).toContain("truncate");
-    expect(fullRow.children.item(0)?.className).toContain("w-[11ch]");
+    expect(fullRow.children.item(0)?.className).toContain("max-w-2/5");
+  });
+
+  it("shows the chat title as a badge in place of the role label", () => {
+    const match = messageMatch({ chatId: "c1" });
+    renderList({ status: readyStatus({ messages: [match] }) });
+
+    // Scope to the snippet row itself (by its accessible name, which still
+    // carries the role) rather than a bare `getByText`, since the row's
+    // header repeats the same title text. `TooltipTrigger asChild` overwrites
+    // the badge's own `data-slot`, so key off `data-variant`/`data-size`
+    // instead, which are Badge-specific and untouched by that merge.
+    const row = screen.getByRole("button", {
+      name: /^Agent reply, .*: snippet text$/,
+    });
+    const badge = row.querySelector(
+      '[data-variant="secondary"][data-size="xs"]',
+    );
+    expect(badge?.textContent).toBe("title-c1");
+    expect(screen.queryByText("Agent")).toBeNull();
   });
 });
 
@@ -305,6 +325,17 @@ describe("ChatSearchMessageHitList: indexing notice", () => {
     });
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("hides the 'Still indexing' status when showIndexingNotice is false, even while partial", () => {
+    renderList({
+      status: readyStatus({
+        messages: [messageMatch({ chatId: "c1" })],
+        indexState: "partial",
+      }),
+      showIndexingNotice: false,
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
 });
 
 describe("ChatSearchMessageHitList: a new request", () => {
@@ -378,6 +409,7 @@ describe("ChatSearchMessageHitList: expansion", () => {
     await user.click(toggle);
 
     expect(renderExpansion).toHaveBeenCalledWith({
+      chatTitle: match.title,
       epicId: "epic-1",
       chatId: "c1",
       best: match.best,

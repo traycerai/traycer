@@ -30,6 +30,8 @@ export interface ChatSearchMessageHitListProps {
    */
   readonly taskTitles: ReadonlyMap<string, string>;
   readonly variant: ChatSearchRowVariant;
+  /** History omits indexing progress from its message matches. */
+  readonly showIndexingNotice: boolean;
 }
 
 /** A `ready` status, the only one this list draws. */
@@ -39,7 +41,14 @@ type ReadyStatus = Extract<
 >;
 
 export function ChatSearchMessageHitList(props: ChatSearchMessageHitListProps) {
-  const { onOpen, renderExpansion, status, taskTitles, variant } = props;
+  const {
+    onOpen,
+    renderExpansion,
+    status,
+    taskTitles,
+    variant,
+    showIndexingNotice,
+  } = props;
   if (status.kind !== "ready") return null;
   return (
     <ReadyMessageHitList
@@ -57,6 +66,7 @@ export function ChatSearchMessageHitList(props: ChatSearchMessageHitListProps) {
       renderExpansion={renderExpansion}
       taskTitles={taskTitles}
       variant={variant}
+      showIndexingNotice={showIndexingNotice}
     />
   );
 }
@@ -67,8 +77,16 @@ function ReadyMessageHitList(props: {
   readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
   readonly taskTitles: ReadonlyMap<string, string>;
   readonly variant: ChatSearchRowVariant;
+  readonly showIndexingNotice: boolean;
 }) {
-  const { onOpen, renderExpansion, status, taskTitles, variant } = props;
+  const {
+    onOpen,
+    renderExpansion,
+    status,
+    taskTitles,
+    variant,
+    showIndexingNotice,
+  } = props;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -83,7 +101,9 @@ function ReadyMessageHitList(props: {
 
   return (
     <div className="flex flex-col">
-      {status.indexState === "partial" ? <ChatSearchPartialIndexNote /> : null}
+      {showIndexingNotice && status.indexState === "partial" ? (
+        <ChatSearchPartialIndexNote />
+      ) : null}
       <ul className="flex flex-col">
         {status.messages.map((match) => {
           const key = chatSearchGroupKey(match);
