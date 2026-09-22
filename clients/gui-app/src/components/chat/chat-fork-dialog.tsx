@@ -435,20 +435,27 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       chatLineCarriesAutoMode: null,
     },
   );
-  // Cross-host asks the STRONGER question, and only cross-host.
+  // Cross-host asks a DIFFERENT question from same-host, and only cross-host.
   //
   // The toolbar store retains the previous host's slug across a retarget while
   // the new target's harness/model queries load, so a bare slug-length check
   // leaves Fork enabled long enough to submit a model the selected host may not
-  // provide. `selectionCatalogConfirmed` is false until the catalog for this
-  // `catalog.hostId` actually covers the resolved slug.
+  // provide. What cross-host needs is "the catalog for this `catalog.hostId`
+  // has answered", and the store says so through either of its loaded-catalog
+  // verdicts: the catalog covers the slug (`selectionCatalogConfirmed`), or it
+  // does not and the picker presents its first row in the slug's place
+  // (`selectionHealedForDisplay`). The second is submittable on purpose. The
+  // substitute is what the picker shows and what `submit` sends (it reads the
+  // derived selection), so Fork goes by the row on screen rather than by a
+  // model the target never listed - gating on the latter held Fork shut with
+  // nothing on screen to say why. Only a catalog that has not answered blocks.
   //
   // Same-host keeps the length check every sibling surface uses (the composer's
   // own Send, `terminal-agent-fork-dialog`), because there the slug came from
   // THIS host's memory and the memory write gate is itself
   // `selectionCatalogConfirmed` - a persisted slug was catalog-confirmed when it
-  // was recorded. Applying the strong form here too would buy nothing and cost
-  // real availability: the flag also goes false on an UNLOAD (the models query
+  // was recorded. Requiring a loaded catalog here too would buy nothing and
+  // cost real availability: both flags go false on an UNLOAD (the models query
   // detaches, `modelsLoaded: false`), so a transient detach would disable a
   // same-host fork with nothing on screen to explain it and no action that
   // reopens it. Cross-host has a producer for that state - pick another host -
@@ -457,11 +464,17 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selectionCatalogConfirmed,
   );
+  const catalogSubstituted = useStore(
+    toolbarStore,
+    (s) => s.selectionHealedForDisplay,
+  );
   const modelSlugPresent = useStore(
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
-  const modelResolved = isCrossHost ? catalogConfirmed : modelSlugPresent;
+  const modelResolved = isCrossHost
+    ? catalogConfirmed || catalogSubstituted
+    : modelSlugPresent;
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"

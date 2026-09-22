@@ -54,6 +54,7 @@ type ChatForkCreateSource =
 interface ChatForkCreateInput {
   readonly hostId: string;
   readonly title: string;
+  readonly settings: ChatRunSettings;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly forkSource: ChatForkCreateSource;
 }
@@ -115,6 +116,8 @@ const dialogMocks = vi.hoisted(() => ({
   capabilityProbeHostIds: new Set<string>(),
   /** False models the window after a retarget, before the catalog answers. */
   modelsLoaded: true,
+  /** The one row the loaded catalog lists; `SETTINGS_SEED.model` by default. */
+  catalogSlug: "claude-opus-4-7",
   publicationQuery: { data: undefined as PublicationStateResponse | undefined },
   publicationQueryEnabled: false,
   publicationQueryIsError: false,
@@ -399,7 +402,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
           models: [
             {
               harnessId: "claude",
-              slug: "claude-opus-4-7",
+              slug: dialogMocks.catalogSlug,
               label: "Claude Opus",
               description: null,
               contextWindow: null,
@@ -674,6 +677,7 @@ describe("ChatForkDialog cross-host routing", () => {
     });
     dialogMocks.capabilityProbeHostIds.clear();
     dialogMocks.modelsLoaded = true;
+    dialogMocks.catalogSlug = SETTINGS_SEED.model;
     dialogMocks.publicationQuery = { data: undefined };
     dialogMocks.publicationQueryEnabled = false;
     dialogMocks.publicationQueryIsError = false;
@@ -958,6 +962,29 @@ describe("ChatForkDialog cross-host routing", () => {
     }
 
     expect(forkButton().disabled).toBe(true);
+  });
+
+  it("a loaded catalog that lacks the source model does not block a CROSS-HOST fork, and the fork sends the row the picker shows", async () => {
+    // The target host answered with a catalog that never lists the source
+    // chat's model. The picker presents the catalog's first row in its place
+    // without persisting it, and Fork goes by that row: the fork is created
+    // with the model on screen rather than held shut on the delisted one.
+    dialogMocks.catalogSlug = "claude-sonnet-5";
+    renderDialog(forkTarget({}), ignoreOpenChange);
+    fillTitle();
+
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind).toBe("selected");
+    if (scope?.kind === "selected") {
+      act(() => {
+        scope.onSelect(OTHER_HOST_ID);
+      });
+    }
+
+    expect(forkButton().disabled).toBe(false);
+    const input = await submitFork();
+    expect(input.hostId).toBe(OTHER_HOST_ID);
+    expect(input.settings.model).toBe("claude-sonnet-5");
   });
 
   it("a 1.0 refusal flips to selectable after the host is recorded at 1.1, with no interaction", () => {
