@@ -65,6 +65,7 @@ function renderRenderedMessages(patch: Partial<RenderedMessagesInput>) {
     events: [],
     rowContext: {},
     pendingUserMessages: [],
+    withdrawnMessageId: null,
     liveAssistantMessage: null,
     activeTurn: null,
     runStatus: "idle",

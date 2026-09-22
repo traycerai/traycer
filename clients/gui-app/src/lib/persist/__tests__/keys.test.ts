@@ -10,6 +10,7 @@ import {
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
+  deliveryRestoreAckKey,
   epicCanvasKey,
   lastLocalHostIdKey,
   interviewDraftKey,
@@ -192,6 +193,11 @@ describe("persist key builders — output-preserving against current source", ()
     // family, so the builder intentionally ends in a delimiter.
     expect(readingPositionKeyPrefix("u/1")).toBe(
       "traycer-gui-app:reading-position:u%2F1:",
+    );
+    // Source: src/lib/chats/delivery-restore-ack-persistence.ts
+    // (`deliveryRestoreAckKey`) - one marker per chat, percent-encoded.
+    expect(deliveryRestoreAckKey("chat/1")).toBe(
+      "traycer-gui-app:delivery-restore-ack:chat%2F1",
     );
   });
 

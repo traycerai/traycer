@@ -3,6 +3,7 @@ import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   ChatLoadRangeRequest,
   ChatTranscriptDerived,
@@ -40,10 +41,20 @@ const CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
 };
 
+const SETTINGS: ChatRunSettings = {
+  harnessId: "claude",
+  model: "claude-sonnet-4-5",
+  permissionMode: "supervised",
+  reasoningEffort: null,
+  serviceTier: null,
+  agentMode: "epic",
+  profileId: null,
+};
+
 function delivery(
   messageId: string,
   revision: number,
-  phase: "pending" | "preparing" | "cancelled",
+  phase: "pending" | "preparing",
 ): ChatMessageDelivery {
   return { messageId, revision, state: { phase } };
 }
@@ -321,6 +332,74 @@ describe("chat-session-store messageDelivery: deferred-windowed-snapshot superse
 
       completeTail(harness);
       expect(harness.handle.store.getState().messageDelivery).toBeNull();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("drops every local copy of a withdrawn message in the SAME deferred-seat update, before the tail hydrates", () => {
+    // D215's own immediate-seat rule ("the OUTCOME is seated immediately")
+    // extends to the delivery view: `withoutWithdrawnOpeningCopies` runs in
+    // the exact `set()` that seats a held aux's `messageDelivery`, not only
+    // once the tail later hydrates. This is the third of the three seating
+    // paths that apply the gate (`onMessageDeliveryChanged` and the ordinary
+    // `onSnapshot` fold are covered elsewhere) - the windowed/deferred one.
+    const harness = createWindowedHarness();
+    try {
+      const callbacks = harness.callbacks();
+      callbacks.onConnectionStatus("open", null, null);
+      // `sendMessage` gates on `canSendAction` (connectionStatus + canAct);
+      // this harness never folds a snapshot, so `access` needs setting by
+      // hand for the send below to go through at all.
+      harness.handle.store.setState({
+        access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
+      });
+      const sent = harness.handle.store.getState().sendMessage({
+        content: CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: { content: CONTENT, browserAnnotations: [] },
+      });
+      expect(sent).not.toBeNull();
+      if (sent === null) throw new Error("sendMessage was refused");
+
+      const before = harness.handle.store.getState();
+      expect(before.pendingActions[sent.clientActionId]).toBeDefined();
+      expect(
+        before.pendingUserMessages.some(
+          (message) => message.messageId === sent.messageId,
+        ),
+      ).toBe(true);
+
+      const withdrawal: ChatMessageDelivery = {
+        messageId: sent.messageId,
+        revision: 1,
+        state: {
+          phase: "withdrawn",
+          code: "MESSAGE_START_INTERRUPTED",
+          reason: "The opening message was not sent.",
+          missingHashes: [],
+          restore: { content: CONTENT },
+          restoreClaimed: false,
+        },
+      };
+      callbacks.onWindowedSnapshot(deferredWindowedSnapshot(withdrawal));
+
+      // Still deferred (not hydrated): proves this assertion reads the
+      // IMMEDIATE seat, not a fold that only runs once the tail completes.
+      expect(
+        isTailHydrated(harness.handle.store.getState().transcriptWindow),
+      ).toBe(false);
+      const after = harness.handle.store.getState();
+      expect(after.messageDelivery?.messageId).toBe(sent.messageId);
+      expect(after.pendingActions[sent.clientActionId]).toBeUndefined();
+      expect(
+        after.pendingUserMessages.some(
+          (message) => message.messageId === sent.messageId,
+        ),
+      ).toBe(false);
     } finally {
       harness.handle.dispose();
     }

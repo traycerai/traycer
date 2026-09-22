@@ -19,8 +19,8 @@
  * - `1.14` is the port-forward surface, minted above `1.13`: the agent's
  *   forwards on the snapshot, the `portForwardsChanged` frame, and the queue
  *   item that reports one going `interrupted`;
- * - `1.15` is the message-delivery surface, minted above `1.14`: the
- *   `messageDeliveryEdit`/`Retry`/`Cancel` client actions and the
+ * - `1.15` is the message-delivery surface, minted above `1.14`: the one
+ *   `messageDeliveryRestored` client acknowledgement and the
  *   `messageDeliveryChanged` push. Its own shape/freeze coverage lives in
  *   `chat-subscribe-message-delivery-v115.test.ts`; it is listed here only so
  *   the line-count and ceiling assertions below stay truthful.

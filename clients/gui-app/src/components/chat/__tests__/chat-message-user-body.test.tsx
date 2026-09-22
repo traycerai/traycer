@@ -24,6 +24,7 @@ import {
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   ChatMessage,
+  type ChatMessageDeliveryPhase,
   type ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
@@ -513,6 +514,43 @@ describe("<UserMessageBody /> agent messages", () => {
     screen.getByRole("menuitem", { name: "Copy" });
     expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("keeps only Copy in the touch menu while the row's delivery is unresolved", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    screen.getByRole("menuitem", { name: "Copy" });
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("returns Edit and Delete to the touch menu once the row has started", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    screen.getByRole("menuitem", { name: "Copy" });
+    screen.getByRole("menuitem", { name: "Edit" });
+    screen.getByRole("menuitem", { name: "Delete" });
   });
 
   it("hands the corner to the delete confirm chip while it is open", () => {
@@ -1619,6 +1657,7 @@ function displayUserActions(handlers: {
 }): ChatMessageUserActions {
   return {
     type: "user",
+    deliveryPhase: null,
     enabled: true,
     confirmingDelete: false,
     editing: null,
@@ -1632,6 +1671,7 @@ function displayUserActions(handlers: {
 function editingUserActions(content: JsonContent): ChatMessageUserActions {
   return {
     type: "user",
+    deliveryPhase: null,
     enabled: true,
     confirmingDelete: false,
     editing: {
@@ -1882,14 +1922,14 @@ function restoreProperty(
 }
 
 function deliveryUserActions(
-  delivery: NonNullable<ChatMessageUserActions["delivery"]>,
+  phase: ChatMessageDeliveryPhase,
 ): ChatMessageUserActions {
   return {
     type: "user",
-    enabled: true,
+    deliveryPhase: phase,
+    enabled: false,
     confirmingDelete: false,
     editing: null,
-    delivery,
     onEdit: () => undefined,
     onDeleteRequest: () => undefined,
     onDeleteConfirm: () => undefined,
@@ -1897,35 +1937,32 @@ function deliveryUserActions(
   };
 }
 
-function excludedUserMessage(content: string): ChatMessageModel {
-  return { ...plainUserMessage(content), providerHistory: "excluded" };
-}
-
 describe("<UserMessageBody /> message delivery footer", () => {
   afterEach(() => {
     cleanup();
   });
 
-  it("shows an inherited excluded row as Not sent, with no live-delivery controls at all", () => {
-    // No `delivery` on `actions` - the marker survived (a fork, or an old
-    // record this build cannot resolve) but there is nothing live to act on.
+  it("pending: shows a 'Sending' status with a spinner", () => {
     render(
       <UserMessageBody
-        actions={displayUserActions({
-          onEdit: () => undefined,
-          onDeleteRequest: () => undefined,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Fix the copy button")}
       />,
     );
-    screen.getByText("Not sent");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-    // The generic action bar is untouched - a delivery-less row keeps Delete.
-    screen.getByLabelText("Delete message");
+    expect(screen.getByRole("status").textContent).toContain("Sending");
   });
 
-  it("renders nothing for an ordinary sent message with no delivery record and no exclusion marker", () => {
+  it("preparing: shows a 'Setting up' status with a spinner", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("preparing")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Setting up");
+  });
+
+  it("renders no footer once the row has started (an ordinary, resolved actions object)", () => {
     render(
       <UserMessageBody
         actions={displayUserActions({
@@ -1935,150 +1972,44 @@ describe("<UserMessageBody /> message delivery footer", () => {
         message={plainUserMessage("Fix the copy button")}
       />,
     );
-    expect(screen.queryByText("Not sent")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("pending: shows 'Waiting to start' and a Cancel control, but no Retry", () => {
-    const onCancel = vi.fn();
+  it("renders no footer for a row with no delivery view at all (actions: null)", () => {
     render(
       <UserMessageBody
-        actions={deliveryUserActions({
-          state: { phase: "pending" },
-          pending: false,
-          canAct: true,
-          onRetry: () => undefined,
-          onCancel,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
-      />,
-    );
-    screen.getByText("Waiting to start");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it("preparing: shows a 'Preparing' label with neither Retry nor Cancel", () => {
-    render(
-      <UserMessageBody
-        actions={deliveryUserActions({
-          state: { phase: "preparing" },
-          pending: false,
-          canAct: true,
-          onRetry: () => undefined,
-          onCancel: () => undefined,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
-      />,
-    );
-    screen.getByText("Preparing");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-  });
-
-  it("paused: shows the delivery's own reason as the label, with BOTH Retry and Cancel", () => {
-    const onRetry = vi.fn();
-    const onCancel = vi.fn();
-    render(
-      <UserMessageBody
-        actions={deliveryUserActions({
-          state: {
-            phase: "paused",
-            code: "MESSAGE_START_INTERRUPTED",
-            reason: "The opening message was not sent. Retry when ready.",
-            missingHashes: [],
-          },
-          pending: false,
-          canAct: true,
-          onRetry,
-          onCancel,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
-      />,
-    );
-    screen.getByText("The opening message was not sent. Retry when ready.");
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(onRetry).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it("paused: disables both controls when canAct is false, without hiding them", () => {
-    render(
-      <UserMessageBody
-        actions={deliveryUserActions({
-          state: { phase: "paused", code: "x", reason: "x", missingHashes: [] },
-          pending: false,
-          canAct: false,
-          onRetry: () => undefined,
-          onCancel: () => undefined,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
-      />,
-    );
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Retry" }).disabled,
-    ).toBe(true);
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Cancel" })
-        .disabled,
-    ).toBe(true);
-  });
-
-  it("cancelled: shows 'Cancelled · Not sent' with no controls", () => {
-    render(
-      <UserMessageBody
-        actions={deliveryUserActions({
-          state: { phase: "cancelled" },
-          pending: false,
-          canAct: true,
-          onRetry: () => undefined,
-          onCancel: () => undefined,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
-      />,
-    );
-    screen.getByText("Cancelled · Not sent");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-  });
-
-  it("started: the footer disappears entirely - a delivered message reads as ordinary history", () => {
-    render(
-      <UserMessageBody
-        actions={deliveryUserActions({
-          state: {
-            phase: "started",
-            turnId: "turn-1",
-            assistantMessageId: "assistant-1",
-          },
-          pending: false,
-          canAct: true,
-          onRetry: () => undefined,
-          onCancel: () => undefined,
-        })}
+        actions={null}
         message={plainUserMessage("Fix the copy button")}
       />,
     );
     expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.queryByText("Not sent")).toBeNull();
   });
 
-  it("a live delivery record hides the generic Delete action - Cancel is its replacement", () => {
+  it("a delivering row hides Edit/Delete but keeps Copy available", () => {
     render(
       <UserMessageBody
-        actions={deliveryUserActions({
-          state: { phase: "pending" },
-          pending: false,
-          canAct: true,
-          onRetry: () => undefined,
-          onCancel: () => undefined,
-        })}
-        message={excludedUserMessage("Fix the copy button")}
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Fix the copy button")}
       />,
     );
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
     expect(screen.queryByLabelText("Delete message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("Edit and Delete return once the row has started", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    screen.getByLabelText("Edit message");
+    screen.getByLabelText("Delete message");
+    screen.getByLabelText("Copy message");
   });
 });
 

@@ -1,4 +1,3 @@
-import type { ChatMessageDeliveryState } from "@traycer/protocol/host/agent/gui/message-delivery";
 import { memo, type ReactElement } from "react";
 import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -44,7 +43,6 @@ interface ChatMessageProps {
 export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
 
 export interface ChatMessageEditing {
-  readonly submitLabel?: "Save" | "Send";
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
   readonly pending: boolean;
@@ -71,15 +69,20 @@ export interface ChatMessageForkAction {
   ) => void;
 }
 
+/**
+ * Where the host is with a row it has accepted and not yet started - the
+ * chat's opening prompt, while its worktree and session are set up.
+ */
+export type ChatMessageDeliveryPhase = "pending" | "preparing";
+
 export interface ChatMessageUserActions {
   readonly type: "user";
-  readonly delivery?: {
-    readonly state: ChatMessageDeliveryState;
-    readonly pending: boolean;
-    readonly canAct: boolean;
-    readonly onRetry: () => void;
-    readonly onCancel: () => void;
-  };
+  /**
+   * Set while the host is still delivering this row, `null` otherwise. Such a
+   * row shows its phase and offers copy only (`enabled` is false and nothing is
+   * being edited); it becomes an ordinary message when it starts.
+   */
+  readonly deliveryPhase: ChatMessageDeliveryPhase | null;
   readonly enabled: boolean;
   readonly confirmingDelete: boolean;
   readonly editing: ChatMessageEditing | null;

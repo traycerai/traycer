@@ -54,7 +54,6 @@ export interface InlineEditState {
    */
   readonly sessionId: string;
   readonly targetMessageId: string;
-  readonly messageDeliveryRevision?: number;
   readonly originalMessage: ChatMessageModel;
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
@@ -93,7 +92,6 @@ export type ChatTileUiAction =
     }
   | {
       readonly type: "beginInlineEdit";
-      readonly messageDeliveryRevision?: number;
       readonly sessionId: string;
       readonly targetMessageId: string;
       readonly originalMessage: ChatMessageModel;
@@ -151,7 +149,6 @@ export function chatTileUiReducer(
           sessionId: action.sessionId,
           targetMessageId: action.targetMessageId,
           originalMessage: action.originalMessage,
-          messageDeliveryRevision: action.messageDeliveryRevision,
           initialContent: action.initialContent,
           currentContent: action.initialContent,
           revision: 0,
@@ -394,11 +391,7 @@ export function normalizeInlineEditForSession(
   inlineEdit: InlineEditState | null,
   state: Pick<
     ChatSessionState,
-    | "messages"
-    | "pendingActions"
-    | "acceptedActions"
-    | "transcriptWindow"
-    | "messageDelivery"
+    "messages" | "pendingActions" | "acceptedActions" | "transcriptWindow"
   >,
 ): InlineEditState | null {
   if (inlineEdit === null) return null;
@@ -419,21 +412,11 @@ export function normalizeInlineEditForSession(
   // does not expire.
   if (
     inlineEdit.pendingMessageId !== null &&
-    inlineEdit.pendingMessageId !== inlineEdit.targetMessageId &&
     transcriptHasUserRow(state, inlineEdit.pendingMessageId)
   ) {
     return null;
   }
   if (inlineEdit.pendingClientActionId === null) return inlineEdit;
-  // Same-id edits cannot use row existence as proof. The host revision remains
-  // after transient action acknowledgements and window contents are pruned.
-  const delivery = state.messageDelivery;
-  if (
-    inlineEdit.messageDeliveryRevision !== undefined &&
-    delivery?.messageId === inlineEdit.targetMessageId &&
-    delivery.revision > inlineEdit.messageDeliveryRevision
-  )
-    return null;
   if (Object.hasOwn(state.pendingActions, inlineEdit.pendingClientActionId)) {
     return inlineEdit;
   }
@@ -763,8 +746,6 @@ export function chatMessageEditingForInlineEdit(input: {
   const editing = input.editing;
   const pending = inlineEditIsPending(editing);
   return {
-    submitLabel:
-      editing.messageDeliveryRevision === undefined ? "Send" : "Save",
     initialContent: editing.initialContent,
     currentContent: editing.currentContent,
     pending,

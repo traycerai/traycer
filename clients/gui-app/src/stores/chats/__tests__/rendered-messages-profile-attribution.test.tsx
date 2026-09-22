@@ -182,6 +182,7 @@ function profileLabelsWithContext(
     events: [],
     rowContext,
     pendingUserMessages: [],
+    withdrawnMessageId: null,
     liveAssistantMessage: null,
     activeTurn: null,
     runStatus: "idle",

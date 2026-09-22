@@ -112,7 +112,6 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   structuredContent: (a, b) => a.structuredContent === b.structuredContent,
   attachments: (a, b) => a.attachments === b.attachments,
   browserAnnotations: (a, b) => a.browserAnnotations === b.browserAnnotations,
-  providerHistory: (a, b) => a.providerHistory === b.providerHistory,
   settings: (a, b) => a.settings === b.settings,
   createdAt: (a, b) => a.createdAt === b.createdAt,
   sentAt: (a, b) => a.sentAt === b.sentAt,

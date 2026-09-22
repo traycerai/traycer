@@ -40,9 +40,6 @@ type SendChatMessageInput = SendChatSessionMessageInput;
  * remains the single source of truth - these are just typed proxies.
  */
 export interface ChatActions {
-  readonly messageDeliveryEdit: ChatSessionState["messageDeliveryEdit"];
-  readonly messageDeliveryRetry: ChatSessionState["messageDeliveryRetry"];
-  readonly messageDeliveryCancel: ChatSessionState["messageDeliveryCancel"];
   readonly sendMessage: (
     input: SendChatMessageInput,
   ) => SentChatMessageAction | null;
@@ -119,6 +116,7 @@ export interface ChatActions {
   readonly takeSetupFailedRestoration: (
     messageId: string,
   ) => JsonContent | null;
+  readonly messageDeliveryRestored: ChatSessionState["messageDeliveryRestored"];
 }
 
 /**
@@ -138,12 +136,6 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
-      messageDeliveryEdit: (input) =>
-        handle.store.getState().messageDeliveryEdit(input),
-      messageDeliveryRetry: (delivery, settings) =>
-        handle.store.getState().messageDeliveryRetry(delivery, settings),
-      messageDeliveryCancel: (delivery) =>
-        handle.store.getState().messageDeliveryCancel(delivery),
       sendMessage: (input) =>
         tracked(handle.store.getState().sendMessage(input), () => {
           Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
@@ -307,6 +299,8 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
         handle.store.getState().ackAcceptedAction(clientActionId),
       takeSetupFailedRestoration: (messageId) =>
         handle.store.getState().takeSetupFailedRestoration(messageId),
+      messageDeliveryRestored: (input) =>
+        handle.store.getState().messageDeliveryRestored(input),
     }),
     [handle.store],
   );
