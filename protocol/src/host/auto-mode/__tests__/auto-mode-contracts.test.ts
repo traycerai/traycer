@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { validateVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import { validateVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -23,22 +25,15 @@ import { providerCliStateSchema } from "@traycer/protocol/host/provider-schemas"
 /**
  * The auto-mode protocol change, asserted where a compile cannot see it.
  *
- * ## Why the import above is the load-bearing line
- *
- * `@traycer/protocol/host/index` runs `defineVersionedRpcRegistry` and
- * `defineVersionedStreamRpcRegistry` at module load, and those do the FULL
- * structural and schema-compatibility validation - contiguous minors, an
+ * Construction (`define*`) is structural-only and does not walk schemas.
+ * The full structural + schema-compatibility pass - contiguous minors, an
  * installed `latestMinor`, upgrade paths between consecutive minors, downgrades
  * anchored at each major's latest, per-lane additivity, and the
  * `responseGrowthProjectionGated` / `semanticMajorBreakFromPreviousMajor`
- * annotations being both valid AND load-bearing.
- *
- * All of that is a RUNTIME throw. `bun run --cwd traycer compile` returns 0 on
- * a registry that cannot be constructed, and so does the root compile, because
- * a `throw` inside a module-level call is not a type error. The failure surfaces
- * as every RPC in the app dying at startup. So a test whose only job is to
- * import the registry is not ceremony: it is the only cheap gate between a bad
- * annotation and a dead build.
+ * annotations being both valid AND load-bearing - is the explicit
+ * `validateVersionedRpcRegistry` / `validateVersionedStreamRpcRegistry` call
+ * below. A compile cannot see a runtime throw; CI also holds every static
+ * registry to the same pass via `protocol/scripts/compat/static-registries.ts`.
  *
  * `agent.gui.listHarnesses@9.1` is the annotation this guards today. It grows
  * `supportedPermissionModes` by one member over 9.0, which the response lane
@@ -66,8 +61,10 @@ function providerStateFixture(): Record<string, unknown> {
 
 describe("auto-mode protocol change", () => {
   it("constructs both host registries (the annotations parse)", () => {
-    // Reached only if the module-level validation above did not throw. The
-    // assertions restate that rather than adding coverage.
+    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+    ).not.toThrow();
     expect(Object.keys(hostRpcRegistry).length).toBeGreaterThan(0);
     expect(Object.keys(hostStreamRpcRegistry).length).toBeGreaterThan(0);
   });

@@ -15,9 +15,14 @@ import type {
  * sides drifting on what counts as a breaking change.
  *
  * Schemas convert through `z.toJSONSchema` and are normalized into
- * one of four shapes; anything else fails the build at registry-load
- * time. New shapes can be added here when a new schema kind needs
- * registry-level treatment.
+ * one of four shapes; anything else fails the registry's full
+ * validation, which runs at build time and in CI rather than when a
+ * registry module is imported. New shapes can be added here when a new
+ * schema kind needs registry-level treatment.
+ *
+ * Every schema walk a registry validator runs - RPC, record and stream -
+ * goes through an export of this module, so the absence of a walk is
+ * observable at one seam.
  */
 
 /** Object-shaped fingerprint (z.object). */
@@ -188,6 +193,17 @@ function declaredDiscriminator(node: {
  */
 export function toUnknownKeyTree(schema: z.ZodType): unknown {
   return z.toJSONSchema(schema, { unrepresentable: "any", io: "input" });
+}
+
+/**
+ * The stream framework's per-field rendering: one field's JSON Schema with
+ * zod's default options, serialised, so "this field's schema changed" is a
+ * string inequality. The stream walker compares these field maps rather than
+ * normalized fingerprints, so it keeps its own rendering; it lives here only
+ * so that walk goes through the same seam as the others.
+ */
+export function toStreamFieldJsonSchemaText(schema: z.ZodType): string {
+  return JSON.stringify(z.toJSONSchema(schema));
 }
 
 type UnknownKeySchemaNode = {

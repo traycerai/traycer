@@ -37,20 +37,23 @@ import {
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { z } from "zod";
 import { roleAwarenessEventSchema } from "@traycer/protocol/host/agent/roles";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
-export const agentInboxSubscribeOpenRequestSchema = z.object({
-  agentId: z.string(),
-  /**
-   * Epic the agent belongs to. The resolver uses this to open the
-   * caller's epic lease and look up the agent record so it can verify
-   * the agent belongs to the calling user.
-   */
-  epicId: z.string(),
-});
+export const agentInboxSubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({
+    agentId: z.string(),
+    /**
+     * Epic the agent belongs to. The resolver uses this to open the
+     * caller's epic lease and look up the agent record so it can verify
+     * the agent belongs to the calling user.
+     */
+    epicId: z.string(),
+  }),
+);
 export type AgentInboxSubscribeOpenRequest = z.infer<
   typeof agentInboxSubscribeOpenRequestSchema
 >;
@@ -59,37 +62,39 @@ export type AgentInboxSubscribeOpenRequest = z.infer<
  * Single inbox item as delivered to the monitor. Mirrors
  * `MailboxEnvelope` on the host side.
  */
-export const agentInboxMessageSchema = z.object({
-  /**
-   * Reply contract for this inbox delivery. Reply-expected messages always
-   * carry the broker-minted thread id the receiver must echo back.
-   */
-  reply: z.discriminatedUnion("expectsReply", [
-    z.object({
-      expectsReply: z.literal(true),
-      responseId: z.string(),
-    }),
-    z.object({
-      expectsReply: z.literal(false),
-    }),
-  ]),
-  fromAgentId: z.string(),
-  /**
-   * Sender's display title (chat title or TUI agent title). Null when the
-   * sender record didn't expose one — receivers should fall back to
-   * `fromAgentId` in that case.
-   */
-  senderTitle: z.string().nullable(),
-  /**
-   * Sender's harness id (claude/codex/cursor/opencode). Null for senders
-   * without a harness binding.
-   */
-  senderHarnessId: z.string().nullable(),
-  epicId: z.string(),
-  prompt: z.string(),
-  /** Epoch millis the broker received the envelope. */
-  enqueuedAt: z.number().int(),
-});
+export const agentInboxMessageSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Reply contract for this inbox delivery. Reply-expected messages always
+     * carry the broker-minted thread id the receiver must echo back.
+     */
+    reply: z.discriminatedUnion("expectsReply", [
+      z.object({
+        expectsReply: z.literal(true),
+        responseId: z.string(),
+      }),
+      z.object({
+        expectsReply: z.literal(false),
+      }),
+    ]),
+    fromAgentId: z.string(),
+    /**
+     * Sender's display title (chat title or TUI agent title). Null when the
+     * sender record didn't expose one — receivers should fall back to
+     * `fromAgentId` in that case.
+     */
+    senderTitle: z.string().nullable(),
+    /**
+     * Sender's harness id (claude/codex/cursor/opencode). Null for senders
+     * without a harness binding.
+     */
+    senderHarnessId: z.string().nullable(),
+    epicId: z.string(),
+    prompt: z.string(),
+    /** Epoch millis the broker received the envelope. */
+    enqueuedAt: z.number().int(),
+  }),
+);
 export type AgentInboxMessage = z.infer<typeof agentInboxMessageSchema>;
 
 /**
@@ -101,10 +106,12 @@ export type AgentInboxMessage = z.infer<typeof agentInboxMessageSchema>;
  * a `@1.2`-built server frame carries (zod objects are non-strict), so this
  * is safe to send unconditionally regardless of negotiated minor.
  */
-export const agentInboxMessageSchemaV12 = agentInboxMessageSchema.extend({
-  /** Durable inbox row key - see `agent.inbox.ack`. */
-  eventId: z.string(),
-});
+export const agentInboxMessageSchemaV12 = lazySchema(() =>
+  agentInboxMessageSchema.extend({
+    /** Durable inbox row key - see `agent.inbox.ack`. */
+    eventId: z.string(),
+  }),
+);
 export type AgentInboxMessageV12 = z.infer<typeof agentInboxMessageSchemaV12>;
 
 /**
@@ -113,103 +120,109 @@ export type AgentInboxMessageV12 = z.infer<typeof agentInboxMessageSchemaV12>;
  * the monitor as a distinct frame kind so the agent sees a clearly-marked
  * system signal rather than something that looks like a peer message.
  */
-export const agentInboxNoticeSchema = z.object({
-  kind: z.literal("inactivity"),
-  /**
-   * The agent the notice is addressed to — the original sender that asked
-   * for a reply and is being told its counterparty went silent. Stream
-   * subscribers are already scoped to a single agent id, so this is
-   * redundant with the subscription target; it's on the wire so the
-   * receiving agent (or any future fan-out path) can see "this notice is
-   * for me" without consulting subscription metadata.
-   */
-  senderAgentId: z.string(),
-  /** The thread id the original sender owns. */
-  responseId: z.string(),
-  /** The receiver that went idle (the calling agent's counterparty). */
-  receiverAgentId: z.string(),
-  /** Receiver's display title at notice time, when known. */
-  receiverTitle: z.string().nullable(),
-  /** Receiver's harness id at notice time, when known. */
-  receiverHarnessId: z.string().nullable(),
-  epicId: z.string(),
-  /**
-   * Why the notice fired, so the monitor can render accurate copy and the
-   * sender knows how much to trust it and how to proceed:
-   *   - `turn-ended`     - receiver's turn ended (Stop hook) with no reply.
-   *     Accurate, primary signal.
-   *   - `exited`         - receiver's process exited without replying.
-   *     Definitive for this run.
-   *   - `quiet`          - watchdog backstop: long PTY silence. Advisory -
-   *     the receiver may still be mid-turn; check its transcript.
-   *   - `user-stopped`   - the receiver's turn was stopped: by the user, or
-   *     by an agent stop that aborted the same turn. The wire name predates
-   *     the second. It will not resume on its own.
-   *   - `errored`        - the receiver's turn ended on an error (e.g. an
-   *     API usage/rate limit). The raw text is in `detail`.
-   *   - `awaiting-input` - the receiver is mid-turn but blocked on a human
-   *     (asked a question / requested approval); it will not reply until a
-   *     person responds. The prompt summary is in `detail`.
-   *   - `receiver-cancelled` - an authenticated user or agent stopped the
-   *     receiver agent outright, so this message was dropped undelivered and
-   *     the thread is closed. Informational only: the sender must not re-send
-   *     or spawn a replacement (contrast `user-stopped`, where the thread
-   *     stays open).
-   */
-  reason: z.enum([
-    "turn-ended",
-    "exited",
-    "quiet",
-    "user-stopped",
-    "errored",
-    "awaiting-input",
-    "receiver-cancelled",
-  ]),
-  /**
-   * Raw, human-readable detail behind `reason` (the error text for
-   * `errored`, a prompt summary for `awaiting-input`), or null when the
-   * reason needs no elaboration.
-   */
-  detail: z.string().nullable(),
-  /**
-   * For `receiver-cancelled` only: every (receiver, responseId) thread of
-   * this sender that the same `agent.stop` dropped, so the monitor can list
-   * them in a single notice when the sender was waiting on more than one
-   * stopped agent. `receiverAgentId`/`responseId` above mirror the first
-   * entry. Null for every other reason.
-   */
-  droppedReceivers: z
-    .array(
-      z.object({
-        receiverAgentId: z.string(),
-        responseId: z.string(),
-      }),
-    )
-    .nullable(),
-  /** Epoch millis the notice fired. */
-  noticedAt: z.number().int(),
-});
+export const agentInboxNoticeSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("inactivity"),
+    /**
+     * The agent the notice is addressed to — the original sender that asked
+     * for a reply and is being told its counterparty went silent. Stream
+     * subscribers are already scoped to a single agent id, so this is
+     * redundant with the subscription target; it's on the wire so the
+     * receiving agent (or any future fan-out path) can see "this notice is
+     * for me" without consulting subscription metadata.
+     */
+    senderAgentId: z.string(),
+    /** The thread id the original sender owns. */
+    responseId: z.string(),
+    /** The receiver that went idle (the calling agent's counterparty). */
+    receiverAgentId: z.string(),
+    /** Receiver's display title at notice time, when known. */
+    receiverTitle: z.string().nullable(),
+    /** Receiver's harness id at notice time, when known. */
+    receiverHarnessId: z.string().nullable(),
+    epicId: z.string(),
+    /**
+     * Why the notice fired, so the monitor can render accurate copy and the
+     * sender knows how much to trust it and how to proceed:
+     *   - `turn-ended`     - receiver's turn ended (Stop hook) with no reply.
+     *     Accurate, primary signal.
+     *   - `exited`         - receiver's process exited without replying.
+     *     Definitive for this run.
+     *   - `quiet`          - watchdog backstop: long PTY silence. Advisory -
+     *     the receiver may still be mid-turn; check its transcript.
+     *   - `user-stopped`   - the receiver's turn was stopped: by the user, or
+     *     by an agent stop that aborted the same turn. The wire name predates
+     *     the second. It will not resume on its own.
+     *   - `errored`        - the receiver's turn ended on an error (e.g. an
+     *     API usage/rate limit). The raw text is in `detail`.
+     *   - `awaiting-input` - the receiver is mid-turn but blocked on a human
+     *     (asked a question / requested approval); it will not reply until a
+     *     person responds. The prompt summary is in `detail`.
+     *   - `receiver-cancelled` - an authenticated user or agent stopped the
+     *     receiver agent outright, so this message was dropped undelivered and
+     *     the thread is closed. Informational only: the sender must not re-send
+     *     or spawn a replacement (contrast `user-stopped`, where the thread
+     *     stays open).
+     */
+    reason: z.enum([
+      "turn-ended",
+      "exited",
+      "quiet",
+      "user-stopped",
+      "errored",
+      "awaiting-input",
+      "receiver-cancelled",
+    ]),
+    /**
+     * Raw, human-readable detail behind `reason` (the error text for
+     * `errored`, a prompt summary for `awaiting-input`), or null when the
+     * reason needs no elaboration.
+     */
+    detail: z.string().nullable(),
+    /**
+     * For `receiver-cancelled` only: every (receiver, responseId) thread of
+     * this sender that the same `agent.stop` dropped, so the monitor can list
+     * them in a single notice when the sender was waiting on more than one
+     * stopped agent. `receiverAgentId`/`responseId` above mirror the first
+     * entry. Null for every other reason.
+     */
+    droppedReceivers: z
+      .array(
+        z.object({
+          receiverAgentId: z.string(),
+          responseId: z.string(),
+        }),
+      )
+      .nullable(),
+    /** Epoch millis the notice fired. */
+    noticedAt: z.number().int(),
+  }),
+);
 export type AgentInboxNoticeV12 = z.infer<typeof agentInboxNoticeSchema>;
 
 /** Authenticated actor that initiated an `agent.stop` cancellation. */
-export const agentStopInitiatorSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("user") }),
-  z.object({
-    type: z.literal("agent"),
-    agentId: z.string(),
-    agentTitle: z.string().nullable(),
-  }),
-]);
+export const agentStopInitiatorSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("user") }),
+    z.object({
+      type: z.literal("agent"),
+      agentId: z.string(),
+      agentTitle: z.string().nullable(),
+    }),
+  ]),
+);
 
 /**
  * `@1.3` notice shape: adds structured stop provenance. A distinct schema
  * preserves the frozen @1.0-@1.2 trees; older monitors ignore the additive
  * field while current renderers can name the responsible agent.
  */
-export const agentInboxNoticeSchemaV13 = agentInboxNoticeSchema.extend({
-  /** Non-null only for `receiver-cancelled`. */
-  stopInitiator: agentStopInitiatorSchema.nullable(),
-});
+export const agentInboxNoticeSchemaV13 = lazySchema(() =>
+  agentInboxNoticeSchema.extend({
+    /** Non-null only for `receiver-cancelled`. */
+    stopInitiator: agentStopInitiatorSchema.nullable(),
+  }),
+);
 export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchemaV13>;
 
 // ─── Frozen agent.inbox.subscribe@1.0 shape (as shipped) ──────────────────
@@ -218,9 +231,8 @@ export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchemaV13>;
 // frame kinds, so this union must never learn a new one - sending a peer a
 // frame it did not negotiate is the host breaking the contract, not a
 // "graceful" degrade the peer happens to drop.
-export const agentInboxSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const agentInboxSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("message"),
       ...textFrameFields,
@@ -235,7 +247,7 @@ export const agentInboxSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ],
+  ]),
 );
 
 // ─── agent.inbox.subscribe@1.1 - additive: role awareness ─────────────────
@@ -249,9 +261,8 @@ export const agentInboxSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
 //
 // Eligibility is gated on the NEGOTIATED minor: a @1.0 monitor is `unreachable`
 // for awareness and is never sent this frame.
-export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
-  "kind",
-  [
+export const agentInboxSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("message"),
       ...textFrameFields,
@@ -271,7 +282,7 @@ export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
       ...textFrameFields,
       event: roleAwarenessEventSchema,
     }),
-  ],
+  ]),
 );
 
 // ─── agent.inbox.subscribe@1.2 - additive: durable inbox eventId ──────────
@@ -287,9 +298,8 @@ export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
 // This mirrors the pre-durable-inbox at-most-once behavior those older
 // monitors were always built against - no regression for them - while a
 // `@1.2`+ monitor keeps the stronger at-least-once guarantee via its own ack.
-export const agentInboxSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
-  "kind",
-  [
+export const agentInboxSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("message"),
       ...textFrameFields,
@@ -309,14 +319,13 @@ export const agentInboxSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
       ...textFrameFields,
       event: roleAwarenessEventSchema,
     }),
-  ],
+  ]),
 );
 
 // ─── agent.inbox.subscribe@1.3 - additive: stop initiator provenance ──────
 
-export const agentInboxSubscribeServerFrameSchemaV13 = z.discriminatedUnion(
-  "kind",
-  [
+export const agentInboxSubscribeServerFrameSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("message"),
       ...textFrameFields,
@@ -336,7 +345,7 @@ export const agentInboxSubscribeServerFrameSchemaV13 = z.discriminatedUnion(
       ...textFrameFields,
       event: roleAwarenessEventSchema,
     }),
-  ],
+  ]),
 );
 
 /** The latest installed shape. Host code builds frames against this. */
@@ -346,14 +355,13 @@ export type AgentInboxSubscribeServerFrame = z.infer<
   typeof agentInboxSubscribeServerFrameSchema
 >;
 
-export const agentInboxSubscribeClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const agentInboxSubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...textFrameFields,
     }),
-  ],
+  ]),
 );
 export type AgentInboxSubscribeClientFrame = z.infer<
   typeof agentInboxSubscribeClientFrameSchema
@@ -403,17 +411,21 @@ export const agentInboxSubscribeV13 = defineStreamRpcContract({
 // and never route through the durable TUI inbox, so this is a TUI-only
 // recovery path.
 
-export const agentInboxReadRequestSchema = z.object({
-  epicId: z.string(),
-  /** The calling agent reading its own inbox (defaults to $TRAYCER_AGENT_ID). */
-  agentId: z.string(),
-});
+export const agentInboxReadRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    /** The calling agent reading its own inbox (defaults to $TRAYCER_AGENT_ID). */
+    agentId: z.string(),
+  }),
+);
 export type AgentInboxReadRequest = z.infer<typeof agentInboxReadRequestSchema>;
 
-export const agentInboxReadResponseSchema = z.object({
-  /** Recently-delivered messages, oldest first (bounded by the broker ring). */
-  messages: z.array(agentInboxMessageSchema),
-});
+export const agentInboxReadResponseSchema = lazySchema(() =>
+  z.object({
+    /** Recently-delivered messages, oldest first (bounded by the broker ring). */
+    messages: z.array(agentInboxMessageSchema),
+  }),
+);
 export type AgentInboxReadResponse = z.infer<
   typeof agentInboxReadResponseSchema
 >;
@@ -431,26 +443,30 @@ export const agentInboxReadV10 = defineRpcContract({
 // disconnected. Keep @1.0 frozen for existing clients, but make the canonical
 // read a single-row cursor page so a recovery read never allocates an entire
 // backlog in the host RPC process.
-export const agentInboxReadCursorSchema = z.object({
-  createdAt: z.number().int(),
-  eventId: z.string(),
-});
+export const agentInboxReadCursorSchema = lazySchema(() =>
+  z.object({
+    createdAt: z.number().int(),
+    eventId: z.string(),
+  }),
+);
 export type AgentInboxReadCursor = z.infer<typeof agentInboxReadCursorSchema>;
 
-export const agentInboxReadRequestSchemaV20 =
+export const agentInboxReadRequestSchemaV20 = lazySchema(() =>
   agentInboxReadRequestSchema.extend({
     /** Resume after this oldest-first durable inbox row, or start at the head. */
     after: agentInboxReadCursorSchema.nullable(),
-  });
+  }),
+);
 export type AgentInboxReadRequestV20 = z.infer<
   typeof agentInboxReadRequestSchemaV20
 >;
 
-export const agentInboxReadResponseSchemaV20 =
+export const agentInboxReadResponseSchemaV20 = lazySchema(() =>
   agentInboxReadResponseSchema.extend({
     /** Cursor for the following page, or null when this page reached the end. */
     nextCursor: agentInboxReadCursorSchema.nullable(),
-  });
+  }),
+);
 export type AgentInboxReadResponseV20 = z.infer<
   typeof agentInboxReadResponseSchemaV20
 >;
@@ -521,16 +537,18 @@ export const agentInboxReadDowngradeV20ToV10 = defineDowngradePath<
 // once more, so a monitor should ack promptly after it has safely surfaced a
 // message to the agent (e.g. after printing it).
 
-export const agentInboxAckRequestSchema = z.object({
-  epicId: z.string(),
-  /** The calling agent acknowledging its own inbox. */
-  agentId: z.string(),
-  /** Durable inbox row keys to retire. Empty is a no-op. */
-  eventIds: z.array(z.string()).max(500),
-});
+export const agentInboxAckRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    /** The calling agent acknowledging its own inbox. */
+    agentId: z.string(),
+    /** Durable inbox row keys to retire. Empty is a no-op. */
+    eventIds: z.array(z.string()).max(500),
+  }),
+);
 export type AgentInboxAckRequest = z.infer<typeof agentInboxAckRequestSchema>;
 
-export const agentInboxAckResponseSchema = z.object({});
+export const agentInboxAckResponseSchema = lazySchema(() => z.object({}));
 export type AgentInboxAckResponse = z.infer<typeof agentInboxAckResponseSchema>;
 
 export const agentInboxAckV10 = defineRpcContract({

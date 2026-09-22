@@ -316,6 +316,7 @@ export type AnalyticsSetting =
   | "defaultServiceTier"
   | "diffViewerPreferences"
   | "homeTabEnabled"
+  | "taskTabLayout"
   // The Layout page's own controls. Dotted rather than camel-cased because
   // they name a path into one persisted store's slice, not a flat
   // `settings-store` key: the surface is the middle segment, so a second
@@ -1302,6 +1303,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     defaultServiceTier: true,
     diffViewerPreferences: true,
     homeTabEnabled: true,
+    taskTabLayout: true,
     "layout.preset.compact": true,
     "layout.preset.default": true,
     "layout.preset.detailed": true,

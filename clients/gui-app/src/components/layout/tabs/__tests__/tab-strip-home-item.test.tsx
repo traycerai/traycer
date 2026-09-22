@@ -111,7 +111,9 @@ describe("<TabStripHomeItem />", () => {
     const sizing = epicTab.filter(
       (token) => token.startsWith("h-") || token.startsWith("px-"),
     );
-    expect(sizing).toEqual(["h-9", "px-6"]);
+    // The padding is a responsive variable so Shrink can compress it, with
+    // the former px-6 (1.5rem) kept as the explicit fallback.
+    expect(sizing).toEqual(["h-9", "px-[var(--header-tab-padding,1.5rem)]"]);
     for (const token of sizing) expect(home).toContain(token);
     expect(home).toContain("w-auto");
     expect(home).not.toContain("w-full");

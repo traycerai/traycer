@@ -3,6 +3,7 @@ import {
   collaboratorRolesSchema,
   teamRolesSchema,
 } from "@traycer/protocol/persistence/epic/room-metadata-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Private Zod value for the `room-metadata` record.
@@ -20,19 +21,21 @@ import {
  * schema through
  * `getRecordSchema(persistenceRecordRegistry, "room-metadata")`.
  */
-export const roomMetadataSchema = z.object({
-  schemaVersion: z.string(),
-  sealed: z.boolean(),
-  deleted: z.boolean(),
-  deletedByTraycerUserId: z.string().nullable(),
-  deletedByDisplayName: z.string().nullable(),
-  collaboratorRoles: collaboratorRolesSchema,
-  teamRoles: teamRolesSchema,
-  createdBy: z.string(),
-  // Ordered list of artifact-body artifact-room IDs hosted under this Epic root.
-  // Defaults to `[]` so existing room-metadata payloads written before the
-  // artifact-room cutover still parse. The host appends a artifact-room ID here
-  // when allocating a new artifactRoom; this is the easy "open all artifactRooms" list for
-  // an Epic session.
-  artifactRoomIds: z.array(z.string()).default([]),
-});
+export const roomMetadataSchema = lazySchema(() =>
+  z.object({
+    schemaVersion: z.string(),
+    sealed: z.boolean(),
+    deleted: z.boolean(),
+    deletedByTraycerUserId: z.string().nullable(),
+    deletedByDisplayName: z.string().nullable(),
+    collaboratorRoles: collaboratorRolesSchema,
+    teamRoles: teamRolesSchema,
+    createdBy: z.string(),
+    // Ordered list of artifact-body artifact-room IDs hosted under this Epic root.
+    // Defaults to `[]` so existing room-metadata payloads written before the
+    // artifact-room cutover still parse. The host appends a artifact-room ID here
+    // when allocating a new artifactRoom; this is the easy "open all artifactRooms" list for
+    // an Epic session.
+    artifactRoomIds: z.array(z.string()).default([]),
+  }),
+);

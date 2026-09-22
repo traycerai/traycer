@@ -26,24 +26,31 @@ import {
   assetStreamServerFrameSchemaV11,
   assetStreamServerFrameSchemaV12,
 } from "@traycer/protocol/host/asset-stream-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const gitStreamFileAssetSideSchema = z.enum(["old", "new"]);
+export const gitStreamFileAssetSideSchema = lazySchema(() =>
+  z.enum(["old", "new"]),
+);
 export type GitStreamFileAssetSide = z.infer<
   typeof gitStreamFileAssetSideSchema
 >;
 
-export const gitStreamFileAssetStageSchema = z.enum(["staged", "unstaged"]);
+export const gitStreamFileAssetStageSchema = lazySchema(() =>
+  z.enum(["staged", "unstaged"]),
+);
 export type GitStreamFileAssetStage = z.infer<
   typeof gitStreamFileAssetStageSchema
 >;
 
-export const gitStreamFileAssetOpenRequestSchema = z.object({
-  runningDir: z.string(),
-  filePath: z.string(),
-  previousPath: z.string().nullable(),
-  side: gitStreamFileAssetSideSchema,
-  stage: gitStreamFileAssetStageSchema,
-});
+export const gitStreamFileAssetOpenRequestSchema = lazySchema(() =>
+  z.object({
+    runningDir: z.string(),
+    filePath: z.string(),
+    previousPath: z.string().nullable(),
+    side: gitStreamFileAssetSideSchema,
+    stage: gitStreamFileAssetStageSchema,
+  }),
+);
 export type GitStreamFileAssetOpenRequest = z.infer<
   typeof gitStreamFileAssetOpenRequestSchema
 >;

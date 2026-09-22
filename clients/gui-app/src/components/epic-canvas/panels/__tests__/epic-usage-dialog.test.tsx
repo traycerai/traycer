@@ -26,6 +26,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
 import type { UsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
 import { getEChartsMockInstances } from "../../../../../__tests__/test-browser-apis";
@@ -283,6 +284,7 @@ function renderDialog(
 } {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: { invalidateHostScope: () => undefined },
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

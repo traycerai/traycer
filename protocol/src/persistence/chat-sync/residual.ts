@@ -270,18 +270,55 @@ export type CapturedLevelRegistration = {
  * completeness guard has something to check ITSELF against, without reaching
  * into Zod's private internals to go hunting for preprocess nodes.
  *
- * Populated at module-load time, so a reader must have imported the record
- * schema (which transitively builds every level reachable from it) before the
- * list is meaningful.
+ * Populated at module-load time: every level registers its id when its module
+ * is imported, whether its schema is built then (`withResidualCapture`) or on
+ * first use (`declareResidualCapture` behind a `lazySchema`). A reader must
+ * have imported the record schema's modules before the list is meaningful;
+ * importing builds none of the lazily declared levels.
+ *
+ * Each level's declared keys are read when the list is read, not at
+ * registration, because a level's shape can itself be a lazy schema's
+ * `.shape`: reading it at import would build that schema at import.
  */
-const capturedLevelRegistrations: CapturedLevelRegistration[] = [];
+const capturedLevelRegistrations: {
+  readonly id: string;
+  readonly readDeclaredKeys: () => readonly string[];
+}[] = [];
 
 export function listCapturedLevelRegistrations(): readonly CapturedLevelRegistration[] {
-  return capturedLevelRegistrations;
+  return capturedLevelRegistrations.map((registration) => ({
+    id: registration.id,
+    declaredKeys: registration.readDeclaredKeys(),
+  }));
 }
 
 /**
- * Wraps a modeled object schema so it captures unmodeled keys.
+ * Registers a captured level NOW and returns the builder of its schema.
+ *
+ * For a level whose schema is built on first use:
+ * `export const x = lazySchema(declareResidualCapture("id", () => shape))`.
+ * Registration is a module-load side effect and must stay one: a registration
+ * made inside a `lazySchema` thunk would run only when something first reads
+ * the schema, and the manifest guard would see a partial list. `readShape` is
+ * called only by the builder and by `listCapturedLevelRegistrations`, never at
+ * registration.
+ */
+export function declareResidualCapture<Shape extends z.ZodRawShape>(
+  id: string,
+  readShape: () => Shape,
+) {
+  capturedLevelRegistrations.push({
+    id,
+    readDeclaredKeys: () => Object.keys(readShape()),
+  });
+  return () => reprojectResidualCapture(readShape());
+}
+
+/**
+ * Wraps a modeled object schema so it captures unmodeled keys, registering the
+ * level and building the schema immediately. Never call it inside a
+ * `lazySchema` thunk; use `declareResidualCapture` for a level built on first
+ * use.
  *
  * Pass the shape (not the built object) so the declared key list and the
  * schema can never disagree about what "unmodeled" means.
@@ -296,9 +333,7 @@ export function withResidualCapture<Shape extends z.ZodRawShape>(
   id: string,
   shape: Shape,
 ) {
-  const declaredKeys = Object.keys(shape);
-  capturedLevelRegistrations.push({ id, declaredKeys });
-  return reprojectResidualCapture(shape);
+  return declareResidualCapture(id, () => shape)();
 }
 
 /**

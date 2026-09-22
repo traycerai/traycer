@@ -1217,10 +1217,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     the mode/preset fields, because a custom theme repaints the cascade
     without changing either.
     Shared menu, dialog and composer surfaces use solid theme fills.
-    Background opacity and backdrop blur were retired after reproduced
-    renderer flickering; old saved opacity values are ignored when the theme
-    library is read. Theme mode and the light/dark selectors retain their
-    settings search anchors.
+    Background opacity remains retired after reproduced renderer flickering;
+    old saved opacity values are ignored when the theme library is read.
+    Modal backdrops use shadcn Radix Nova's default blur without a setting;
+    reduced-transparency preferences disable the filter. Theme mode and the
+    light/dark selectors retain their settings search anchors.
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
     itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose

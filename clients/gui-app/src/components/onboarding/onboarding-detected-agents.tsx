@@ -3,7 +3,7 @@ import {
   type ProviderId,
   type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
-import { Check, Copy, ExternalLink, Info } from "lucide-react";
+import { ExternalLink, Info } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { OnboardingProviderDiscovery } from "@/components/onboarding/onboarding-provider-discovery";
 import { OnboardingProviderGrid } from "@/components/onboarding/onboarding-provider-grid";
@@ -16,7 +16,7 @@ import {
   providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
 import { CodePasteField } from "@/components/settings/panels/code-paste-field";
-import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
 import {
   openBrowserLabel,
@@ -30,7 +30,6 @@ import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-lo
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useOpenLink } from "@/lib/links/open-link";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -461,7 +460,6 @@ function resolveAttemptAuthPhase(input: {
 }
 
 const ONBOARDING_CODE_PASTE_KEEPALIVE_MS = 60_000;
-const ONBOARDING_COPY_RESET_MS = 1600;
 
 function useOnboardingWaitingCodePaste(args: {
   readonly providerId: ProviderId;
@@ -534,11 +532,6 @@ function OnboardingLoginWaiting(props: {
       void openLink(url, "auth", null);
     },
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: ONBOARDING_COPY_RESET_MS,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
   const codePaste = useOnboardingWaitingCodePaste({
     providerId,
     loginCapability,
@@ -563,19 +556,11 @@ function OnboardingLoginWaiting(props: {
           <code className="rounded-md border border-foreground/20 bg-foreground/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-foreground">
             {userCode}
           </code>
-          <Button
-            type="button"
-            size="icon-sm"
+          <SignInCopyIconButton
+            value={userCode}
+            kind="code"
             variant="outline"
-            aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
-            onClick={() => copy(userCode)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          />
         </div>
       ) : null}
       {!processingCode && loginUrl !== null ? (
@@ -591,19 +576,11 @@ function OnboardingLoginWaiting(props: {
             <ExternalLink className="size-3.5" />
             {openBrowserLabel(autoOpen)}
           </Button>
-          <Button
-            type="button"
-            size="icon-sm"
+          <SignInCopyIconButton
+            value={loginUrl}
+            kind="link"
             variant="outline"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          />
         </div>
       ) : null}
       {codePaste.enabled && userCode === null ? (

@@ -856,6 +856,36 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       expect(useAuthStore.getState().status).toBe("unverified");
     });
 
+    it("records the loss as ended-elsewhere: the revoke names a bearer, not a verdict", async () => {
+      // FIXTURE STATE: a verified window with no `lastError` of its own, which
+      // is exactly the sibling's production state - the refusal (an expiry OR
+      // a refused account) was observed in the OTHER window. Classifying this
+      // `session-rejected` told a user whose account was refused to sign in
+      // again.
+      const { service, host } = makeService();
+      trackedServices.push(service);
+      await service.start();
+      await deviceSignIn(service, host, "sibling-token");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+      expect(service.getLastError()).toBeNull();
+
+      service.ingestCloudAuthorizationRevoked("sibling-token");
+
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("ended-elsewhere");
+    });
+
+    it("control: a revoke naming a stale bearer leaves the recorded loss alone", async () => {
+      const { service, host } = makeService();
+      trackedServices.push(service);
+      await service.start();
+      await deviceSignIn(service, host, "current-token");
+
+      service.ingestCloudAuthorizationRevoked("a-bearer-this-window-replaced");
+
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+    });
+
     it("leaves a window holding a DIFFERENT bearer alone", async () => {
       // The fence, and it is not theoretical: windows' IPC is unordered, so a
       // revoke raised before a sibling's fresh sign-in can arrive after it. An

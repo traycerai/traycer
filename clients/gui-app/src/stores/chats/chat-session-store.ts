@@ -63,6 +63,7 @@ import {
   type ImageWitnessStore,
 } from "@/stores/chats/image-witness-store";
 import { createRecoveryLedger } from "@/stores/chats/recovery-ledger";
+import { nextTurnLifecycleRevision } from "@/stores/chats/chat-turn-lifecycle";
 import {
   applyIndexChange,
   applyRangeResponse,
@@ -1114,6 +1115,8 @@ export interface ChatSessionState {
    */
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
+  /** Counts observed turn boundaries, including separate ID-less activations. */
+  readonly turnLifecycleRevision: number;
   /**
    * Whether the tab's negotiated `chat.subscribe` protocol version understands
    * the `after_safe_point` explicit-steer delivery policy (host handshake
@@ -3759,6 +3762,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
           turnInProgress: frame.snapshot.turnInProgress,
+          turnLifecycleRevision: nextTurnLifecycleRevision(state, {
+            activeTurn: frame.snapshot.activeTurn,
+            turnInProgress: frame.snapshot.turnInProgress,
+            runStatus: frame.snapshot.runStatus,
+          }),
           pendingApprovals: frame.snapshot.pendingApprovals,
           pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
           pendingInterviews: frame.snapshot.pendingInterviews,
@@ -7832,6 +7840,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
+            turnLifecycleRevision: nextTurnLifecycleRevision(state, {
+              activeTurn: frame.activeTurn,
+              turnInProgress: frame.turnInProgress ?? state.turnInProgress,
+              runStatus: frame.runStatus,
+            }),
             backgroundItems: nextBackgroundItems,
             // No `??` here, unlike the two lines above, and the difference is
             // the point: those fields are omitted by an older host and
@@ -8494,6 +8507,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
+            turnLifecycleRevision: nextTurnLifecycleRevision(state, {
+              activeTurn: status === "closed" ? null : state.activeTurn,
+              turnInProgress: state.turnInProgress,
+              runStatus: status === "closed" ? "idle" : state.runStatus,
+            }),
             steerProtocolSupported: resolveSteerProtocolSupported(),
             draftBlobBridgeSupported:
               status === "open" &&
@@ -8735,6 +8753,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       queue: EMPTY_QUEUE,
       runStatus: "idle",
       activeTurn: null,
+      turnLifecycleRevision: 0,
       steerProtocolSupported: false,
       draftBlobBridgeSupported: false,
       interviewDeliveryRetryProtocolSupported: false,

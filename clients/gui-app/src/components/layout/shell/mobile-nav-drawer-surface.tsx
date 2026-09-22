@@ -389,6 +389,7 @@ export function MobileNavDrawerSurface(
           moved from a flick that outran a frame. Leaving it on `onClick` would
           have fired a second dismissal after every drag that ended here. */}
       <m.div
+        data-slot="mobile-nav-overlay"
         aria-hidden
         className={cn(
           "absolute inset-0 bg-black/40",
@@ -396,7 +397,7 @@ export function MobileNavDrawerSurface(
           // includes a settle still in flight - otherwise a drawer caught
           // mid-open could not be pushed back from the side it is uncovering.
           settledOpen || inFlight
-            ? "pointer-events-auto"
+            ? "pointer-events-auto supports-backdrop-filter:backdrop-blur-xs"
             : "pointer-events-none",
         )}
         style={{ opacity: scrimOpacity }}

@@ -73,3 +73,34 @@ describe("auth-store boundary shape", () => {
     after.setSignedOut();
   });
 });
+
+// ── E10: cloudVerdictLoss ─────────────────────────────────────────────────
+//
+// Why an `unverified` session holds no cloud verdict, so the share-refusal
+// toast can pick copy the host itself cannot know.
+describe("auth-store: cloudVerdictLoss", () => {
+  it("defaults to unreachable, the network fact rather than a rejected credential", () => {
+    // A fresh store (module init, before AuthService ever runs) has not yet
+    // latched a credential rejection, so the safe default is the transient,
+    // self-clearing cause.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+  });
+
+  it("setCloudVerdictLoss writes the field and nothing else", () => {
+    const before = useAuthStore.getState();
+    try {
+      before.setCloudVerdictLoss("session-rejected");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
+
+      before.setCloudVerdictLoss("account-unavailable");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe(
+        "account-unavailable",
+      );
+
+      before.setCloudVerdictLoss("unreachable");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+    } finally {
+      before.setCloudVerdictLoss("unreachable");
+    }
+  });
+});

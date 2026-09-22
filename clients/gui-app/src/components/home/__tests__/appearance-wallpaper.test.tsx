@@ -12,6 +12,11 @@ vi.mock("@/lib/appearance/appearance-image-processing", () => ({
 }));
 
 import { AppearanceWallpaper } from "@/components/home/appearance-wallpaper";
+import {
+  resetRetainedWallpaperFramesForTests,
+  restoreWallpaperFrame,
+  retainWallpaperFrame,
+} from "@/components/home/appearance-wallpaper-frame";
 
 interface TestImage {
   onload: (() => void) | null;
@@ -46,6 +51,7 @@ describe("AppearanceWallpaper", () => {
   });
 
   afterEach(() => {
+    resetRetainedWallpaperFramesForTests();
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -120,6 +126,212 @@ describe("AppearanceWallpaper", () => {
     expect(firstSignal.aborted).toBe(true);
     expect(secondSignal).not.toBe(firstSignal);
     expect(secondSignal.aborted).toBe(false);
+  });
+
+  it("puts the last dither frame on a remounted canvas before the image reloads", async () => {
+    resetRetainedWallpaperFramesForTests();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(
+      100,
+    );
+    vi.spyOn(
+      HTMLCanvasElement.prototype,
+      "clientHeight",
+      "get",
+    ).mockReturnValue(100);
+    const context: Partial<CanvasRenderingContext2D> = {
+      drawImage: () => undefined,
+      getImageData: (): ImageData => ({
+        data: new Uint8ClampedArray(50 * 50 * 4),
+        width: 50,
+        height: 50,
+        colorSpace: "srgb",
+      }),
+      putImageData: () => undefined,
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context as CanvasRenderingContext2D,
+    );
+
+    const wallpaper = {
+      style: "dither" as const,
+      intensity: 0.6,
+      tintWithAccent: false,
+      name: "wallpaper.png",
+      curatedId: null,
+    };
+    const first = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(first.container.querySelector("canvas")?.width).toBe(50);
+    first.unmount();
+
+    // The reload never arrives. The frame on screen is the one restored in
+    // the layout effect, not a second dither pass.
+    vi.stubGlobal(
+      "Image",
+      class {
+        onload: (() => void) | null = null;
+        readonly naturalWidth = 2000;
+        readonly naturalHeight = 2000;
+        src = "";
+      },
+    );
+    const second = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    expect(second.container.querySelector("canvas")?.width).toBe(50);
+  });
+
+  it("keeps only the latest wallpaper raster", () => {
+    resetRetainedWallpaperFramesForTests();
+    const context: Partial<CanvasRenderingContext2D> = {
+      drawImage: () => undefined,
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context as CanvasRenderingContext2D,
+    );
+    const small = document.createElement("canvas");
+    small.width = 10;
+    small.height = 8;
+    retainWallpaperFrame("page", "dither", small);
+    const large = document.createElement("canvas");
+    large.width = 40;
+    large.height = 20;
+    retainWallpaperFrame("page", "dither", large);
+    const sidebar = document.createElement("canvas");
+    sidebar.width = 12;
+    sidebar.height = 6;
+    retainWallpaperFrame("sidebar", "dither", sidebar);
+
+    const restored = document.createElement("canvas");
+    expect(
+      restoreWallpaperFrame("page", "dither", restored, {
+        width: 10,
+        height: 8,
+      }),
+    ).toBe(false);
+    expect(
+      restoreWallpaperFrame("page", "dither", restored, {
+        width: 40,
+        height: 20,
+      }),
+    ).toBe(true);
+    expect(
+      restoreWallpaperFrame("sidebar", "dither", restored, {
+        width: 12,
+        height: 6,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the landing frame when a settings preview finishes", async () => {
+    resetRetainedWallpaperFramesForTests();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    const width = vi
+      .spyOn(HTMLCanvasElement.prototype, "clientWidth", "get")
+      .mockReturnValue(1000);
+    const height = vi
+      .spyOn(HTMLCanvasElement.prototype, "clientHeight", "get")
+      .mockReturnValue(800);
+    const context: Partial<CanvasRenderingContext2D> = {
+      drawImage: () => undefined,
+      getImageData: (): ImageData => ({
+        data: new Uint8ClampedArray(500 * 400 * 4),
+        width: 500,
+        height: 400,
+        colorSpace: "srgb",
+      }),
+      putImageData: () => undefined,
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context as CanvasRenderingContext2D,
+    );
+    const wallpaper = {
+      style: "dither" as const,
+      intensity: 0.6,
+      tintWithAccent: false,
+      name: "wallpaper.png",
+      curatedId: null,
+    };
+    const page = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:page-wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(page.container.querySelector("canvas")?.width).toBe(500);
+
+    width.mockReturnValue(200);
+    height.mockReturnValue(160);
+    const preview = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="https://assets.traycer.ai/another-thumb.webp"
+        tint={null}
+        surface="preview"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(preview.container.querySelector("canvas")?.width).toBe(100);
+    preview.unmount();
+    page.unmount();
+
+    width.mockReturnValue(1000);
+    height.mockReturnValue(800);
+    vi.stubGlobal(
+      "Image",
+      class {
+        onload: (() => void) | null = null;
+        readonly naturalWidth = 2000;
+        readonly naturalHeight = 2000;
+        src = "";
+      },
+    );
+    const remount = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper}
+        url="blob:page-wallpaper"
+        tint={null}
+        surface="page"
+      />,
+    );
+    expect(remount.container.querySelector("canvas")?.width).toBe(500);
   });
 
   describe("live canvas stability while dithering", () => {

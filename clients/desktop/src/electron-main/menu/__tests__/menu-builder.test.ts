@@ -23,6 +23,10 @@ vi.mock("electron", () => ({
   },
 }));
 
+const reloadFocusedPage = vi.hoisted(() => vi.fn());
+
+vi.mock("../reload-focused-page", () => ({ reloadFocusedPage }));
+
 import { buildApplicationMenu } from "../menu-builder";
 import {
   TRAYCER_DOCUMENTATION_URL,
@@ -100,6 +104,7 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
 
@@ -123,6 +128,7 @@ describe("buildApplicationMenu", () => {
       command: (command: MenuCommandId) => commands.push(command),
       focusWindow: () => undefined,
       openExternal: () => undefined,
+      toggleAppDevTools: () => undefined,
     };
     const appMenu =
       menuByLabel(
@@ -154,6 +160,7 @@ describe("buildApplicationMenu", () => {
         openExternal: (url) => {
           externalUrls.push(url);
         },
+        toggleAppDevTools: () => undefined,
       }),
     );
 
@@ -185,6 +192,7 @@ describe("buildApplicationMenu", () => {
           },
           focusWindow: () => undefined,
           openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
         }),
       );
       const helpMenu = menuByLabel(items, "Help").submenu ?? [];
@@ -203,6 +211,7 @@ describe("buildApplicationMenu", () => {
         },
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -221,6 +230,7 @@ describe("buildApplicationMenu", () => {
         },
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -236,6 +246,7 @@ describe("buildApplicationMenu", () => {
       command: () => undefined,
       focusWindow: () => undefined,
       openExternal: () => undefined,
+      toggleAppDevTools: () => undefined,
     };
     const macEditMenu =
       menuByLabel(
@@ -268,6 +279,7 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -283,6 +295,7 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const viewMenu = menuByLabel(items, "View").submenu ?? [];
@@ -300,6 +313,7 @@ describe("buildApplicationMenu", () => {
           command: () => undefined,
           focusWindow: () => undefined,
           openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
         }),
       );
       const viewMenu = menuByLabel(items, "View").submenu ?? [];
@@ -319,6 +333,7 @@ describe("buildApplicationMenu", () => {
         },
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const viewMenu = menuByLabel(items, "View").submenu ?? [];
@@ -348,6 +363,7 @@ describe("buildApplicationMenu", () => {
         },
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -399,6 +415,7 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -424,6 +441,7 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const windowMenu = menuByLabel(items, "Window").submenu ?? [];
@@ -443,6 +461,7 @@ describe("buildApplicationMenu", () => {
         },
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const windowMenu = menuByLabel(items, "Window").submenu ?? [];
@@ -461,6 +480,7 @@ describe("buildApplicationMenu", () => {
           command: () => undefined,
           focusWindow: () => undefined,
           openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
         }),
       );
       const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -489,6 +509,7 @@ describe("buildApplicationMenu", () => {
           command: () => undefined,
           focusWindow: () => undefined,
           openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
         }),
       );
       const fileMenu = menuByLabel(items, "File").submenu ?? [];
@@ -516,7 +537,9 @@ describe("buildApplicationMenu", () => {
       expect(findPrevious.registerAccelerator).toBeUndefined();
       expect(menuByRole(fileMenu, "quit").registerAccelerator).toBe(false);
       expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(false);
-      expect(menuByRole(viewMenu, "reload").registerAccelerator).toBe(false);
+      const reload = menuByLabel(viewMenu, "Reload");
+      expect(reload.accelerator).toBe("CmdOrCtrl+R");
+      expect(reload.registerAccelerator).toBe(false);
       expect(menuByRole(windowMenu, "close").registerAccelerator).toBe(false);
     });
   });
@@ -527,6 +550,7 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
@@ -541,7 +565,44 @@ describe("buildApplicationMenu", () => {
     expect(menuByLabel(editMenu, "Find Next").registerAccelerator).toBe(true);
     expect(menuByLabel(windowMenu, "Minimize").registerAccelerator).toBe(true);
     expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(true);
-    expect(menuByRole(viewMenu, "reload").registerAccelerator).toBe(true);
+    expect(menuByLabel(viewMenu, "Reload").registerAccelerator).toBe(true);
+  });
+
+  it("routes View Reload and Force Reload to the focused page instead of native roles", () => {
+    reloadFocusedPage.mockClear();
+    const senderWindow = { id: 7 };
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: () => undefined,
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
+        }),
+      );
+      const viewMenu = menuByLabel(items, "View").submenu ?? [];
+      const reload = menuByLabel(viewMenu, "Reload");
+      const forceReload = menuByLabel(viewMenu, "Force Reload");
+
+      expect(viewMenu.some((item) => item.role === "reload")).toBe(false);
+      expect(viewMenu.some((item) => item.role === "forceReload")).toBe(false);
+      expect(reload.accelerator).toBe("CmdOrCtrl+R");
+      expect(forceReload.accelerator).toBe("Shift+CmdOrCtrl+R");
+
+      reloadFocusedPage.mockClear();
+      reload.click?.(null, senderWindow);
+      expect(reloadFocusedPage).toHaveBeenCalledExactlyOnceWith(
+        senderWindow,
+        false,
+      );
+
+      reloadFocusedPage.mockClear();
+      forceReload.click?.(null, senderWindow);
+      expect(reloadFocusedPage).toHaveBeenCalledExactlyOnceWith(
+        senderWindow,
+        true,
+      );
+    }
   });
 
   it("disables File Close Tab when no target window tab is closable", () => {
@@ -551,41 +612,73 @@ describe("buildApplicationMenu", () => {
         command: () => undefined,
         focusWindow: () => undefined,
         openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
       }),
     );
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
     expect(menuByLabel(fileMenu, "Close Tab").enabled).toBe(false);
   });
 
-  it("exposes DevTools when the non-production policy allows it", () => {
-    const items = template(
-      buildApplicationMenu(
-        { ...buildState("darwin"), canOpenDevTools: true },
-        {
-          command: () => undefined,
-          focusWindow: () => undefined,
-          openExternal: () => undefined,
-        },
-      ),
-    );
-    const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+  it("installs an app-only Toggle Developer Tools item instead of the native role", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const commands: MenuCommandId[] = [];
+      const toggled: unknown[] = [];
+      const senderWindow = { id: 3 };
+      const items = template(
+        buildApplicationMenu(
+          { ...buildState(platform), canOpenDevTools: true },
+          {
+            command: (command) => {
+              commands.push(command);
+            },
+            focusWindow: () => undefined,
+            openExternal: () => undefined,
+            toggleAppDevTools: (window) => {
+              toggled.push(window);
+            },
+          },
+        ),
+      );
+      const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+      const devTools = menuByLabel(helpMenu, "Toggle Developer Tools");
 
-    expect(helpMenu.some((item) => item.role === "toggleDevTools")).toBe(true);
+      expect(devTools.role).toBeUndefined();
+      expect(helpMenu.some((item) => item.role === "toggleDevTools")).toBe(
+        false,
+      );
+      expect(devTools.accelerator).toBe(
+        platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
+      );
+
+      devTools.click?.(null, senderWindow);
+      devTools.click?.(null, undefined);
+
+      expect(toggled).toEqual([senderWindow, undefined]);
+      expect(commands).toEqual([]);
+    }
   });
 
-  it("omits DevTools when the production policy disables it", () => {
-    const items = template(
-      buildApplicationMenu(
-        { ...buildState("darwin"), canOpenDevTools: false },
-        {
-          command: () => undefined,
-          focusWindow: () => undefined,
-          openExternal: () => undefined,
-        },
-      ),
-    );
-    const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+  it("omits Toggle Developer Tools entirely when the production policy disables it", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const items = template(
+        buildApplicationMenu(
+          { ...buildState(platform), canOpenDevTools: false },
+          {
+            command: () => undefined,
+            focusWindow: () => undefined,
+            openExternal: () => undefined,
+            toggleAppDevTools: () => undefined,
+          },
+        ),
+      );
+      const helpMenu = menuByLabel(items, "Help").submenu ?? [];
 
-    expect(helpMenu.some((item) => item.role === "toggleDevTools")).toBe(false);
+      expect(
+        helpMenu.some((item) => item.label === "Toggle Developer Tools"),
+      ).toBe(false);
+      expect(helpMenu.some((item) => item.role === "toggleDevTools")).toBe(
+        false,
+      );
+    }
   });
 });

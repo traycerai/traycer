@@ -1492,7 +1492,13 @@ function EvidenceStrip({
   }
 
   return (
-    <div className="grid max-h-64 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
+    // `grid-cols-1`, here and on the `<dl>` below: a bare `grid` column is
+    // `auto`, which grows to the widest unbreakable line inside it - and a
+    // stack frame's bundle URL is one. That widened the track past this box,
+    // and since `overflow-y-auto` also enables horizontal scrolling, the panel
+    // grew a horizontal scrollbar instead of letting the `<pre>` scroll itself.
+    // `minmax(0, 1fr)` pins the track to the box.
+    <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
       <div className="flex items-center justify-between">
         <span className="font-medium text-success-foreground">✓ Captured</span>
         <button
@@ -1554,7 +1560,7 @@ function EvidenceReviewDetails({
 }): ReactNode {
   const messageFirstLine = cause?.message.split("\n")[0] ?? null;
   return (
-    <dl className="grid gap-1.5">
+    <dl className="grid grid-cols-1 gap-1.5">
       {cause !== null ? (
         <div className="flex flex-col gap-1">
           <dt className="text-muted-foreground">Error</dt>

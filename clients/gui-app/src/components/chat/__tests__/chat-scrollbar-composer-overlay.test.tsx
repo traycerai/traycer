@@ -522,6 +522,12 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     autoPermissionModeProtocolSupported: null,
     getDraftBlobBridgeSupported: () => false,
     getActiveTurnForSteer: () => null,
+    // Unused by this suite - it covers composer/overlay layout, not Stop.
+    getStopConfirmationTarget: () => ({
+      turnId: null,
+      revision: 0,
+      connectionEpoch: 0,
+    }),
   };
   const interview: ChatLowerInterviewState = {
     pending: null,

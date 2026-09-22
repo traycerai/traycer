@@ -330,6 +330,7 @@ export function publishedChatSessionState(
     portForwards: [],
     runStatus: "idle",
     activeTurn: null,
+    turnLifecycleRevision: 0,
     steerProtocolSupported: false,
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
