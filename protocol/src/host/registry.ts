@@ -418,6 +418,10 @@ import {
   hostFileTransferReadChunkV10,
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
+  browserReplReleaseRealmV10,
+  browserReplRequestApprovalV10,
+  browserReplRunCellV10,
+  browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
@@ -8831,6 +8835,65 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostOneOffShellRunV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Dial-only, like every other host-agent verb: a host that predates the
+  // routed browser realm simply lacks these, and the agent's host answers the
+  // typed guidance and keeps the realm on its own machine rather than failing
+  // the cell.
+  "browser.repl.runCell": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplRunCellV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "browser.repl.releaseRealm": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplReleaseRealmV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "browser.repl.stopCell": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplStopCellV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The dial back, from the browser's host to the agent's host. An agent's
+  // host that predates it lacks it, and the browser's host answers the cell
+  // with a typed "could not ask" rather than a fabricated decision.
+  "browser.repl.requestApproval": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplRequestApprovalV10,
           upgradeFromPreviousVersion: null,
         },
       },
