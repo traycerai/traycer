@@ -1825,20 +1825,14 @@ export function updateCommGraphTileView(
         ref.view.officeCameraView === view.officeCameraView &&
         // And the EIGHTH, by the same argument one field over. Since D68 the
         // office's framing lives here rather than in `x`/`y`/`zoom`, so every
-        // writer that neutralises it - a view pick, Auto's first measurement,
-        // a Settings default that moved - now changes THIS and often nothing
+        // writer that neutralises it - a view pick or a Settings default
+        // that moved - now changes THIS and often nothing
         // else. Compared by value, not by identity: these writers build a
         // fresh object each time, and an identity compare would call every
         // one of them a change even when the numbers are the ones already
         // stored.
         sameOfficeCamera(ref.view.officeCamera, view.officeCamera) &&
-        // And the NINTH: the default GENERATION the Auto outcome was measured
-        // under. A re-measurement that lands on the same view and camera but
-        // under a newer default MUST still persist - it refreshes the stamp the
-        // Auto effect reads to decide whether to re-measure. Omitted, that
-        // stamp-only write reads as a no-op and is dropped, so the stored
-        // generation never catches up and a default-following tile re-measures
-        // on every remount instead of settling on the refreshed outcome.
+        // Preserve equality for legacy metadata still present in stored tiles.
         ref.view.officeAutoGeneration === view.officeAutoGeneration
       ) {
         return ref;
@@ -1872,7 +1866,7 @@ export function updateCommGraphTileOfficeCamera(
 ): EpicCanvasState {
   // The NEUTRAL camera is the armed/auto-fit state, and `officeCamera: null` is
   // its one canonical spelling - the value every `officeCamera !== null` check,
-  // the witness arm and both Auto keep arms already read as "nobody has framed
+  // and the camera witness already read as "nobody has framed
   // this, fit it". The office canvas re-arms auto-fit by persisting the neutral
   // camera (its `onCameraChange` patch has no vocabulary for `null`), so it is
   // collapsed to that one sentinel here rather than becoming a SECOND neutral

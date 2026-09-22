@@ -34,7 +34,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { Maximize, Minus, PanelLeft, Plus } from "lucide-react";
+import { Maximize, Minus, Plus } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -54,15 +54,10 @@ import {
   useCommGraphCursor,
   useCommGraphSpeed,
 } from "@/stores/epics/comm-graph-timeline-store";
-import {
-  useCommGraphDirectoryOpen,
-  useCommGraphPanelStore,
-} from "@/stores/epics/comm-graph-panel-store";
 import type { CommGraphCanvasProps } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import {
   aggregateCommGraphEdges,
   type CommGraphAgentNode,
-  type CommGraphAggregatedEdge,
 } from "@/lib/comm-graph/comm-graph-model";
 import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -86,7 +81,6 @@ import {
 } from "@/components/epic-canvas/comm-graph/office/office-hover-follow";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
-import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import {
   createOfficeStaticSurface,
   officeBakesIntoStaticFloor,
@@ -141,7 +135,6 @@ import type {
   OfficeProjector,
   OfficeView,
 } from "@/lib/comm-graph/office/views/office-view";
-import type { OfficeAutoProbe } from "@/lib/comm-graph/office/office-auto";
 import { useOfficeEligibility } from "@/components/epic-canvas/comm-graph/office/use-office-eligibility";
 import {
   officeAgentStatuses,
@@ -223,11 +216,7 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
 /** As far in as a fit is ever allowed to go: past this a fitted floor is a desk. */
 const MAX_FIT_ZOOM = 6;
-/**
- * Screen-pixel margin left around the floor when fitting. Exported so Auto
- * measures each candidate at the zoom the camera will open it at - see
- * `decideOfficeView`.
- */
+/** Screen-pixel margin left around the floor when fitting. */
 export const FIT_PADDING = 24;
 const ZOOM_BUTTON_FACTOR = 1.25;
 /** Screen pixels an arrow key moves the floor. */
@@ -917,8 +906,6 @@ function claimsOf(
 const EMPTY_VIEWPORT: OfficeSize = { width: 0, height: 0 };
 
 /** A fresh office's seat book: nobody seated, nobody waiting for a seat. */
-const NO_OCCUPANCY: ReadonlyMap<string, string> = new Map();
-const NO_CAPACITY_NEEDED: ReadonlyArray<string> = [];
 
 /** Stand-ins for a floor with no layout yet. Frozen, so no frame allocates one. */
 const NO_SIGNS: ReadonlyArray<OfficeSign> = [];
@@ -2727,8 +2714,6 @@ function usePrefersReducedMotion(): boolean {
  * knows.
  */
 function OfficeChromeRow(props: {
-  readonly directoryOpen: boolean;
-  readonly onToggleDirectory: () => void;
   readonly viewPicker: ReactNode;
   readonly modeToggle: ReactNode;
 }) {
@@ -2751,19 +2736,6 @@ function OfficeChromeRow(props: {
           "border border-border bg-popover p-0.5 shadow-xs",
         )}
       >
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-pressed={props.directoryOpen}
-          aria-label={
-            props.directoryOpen ? "Hide the directory" : "Show the directory"
-          }
-          data-testid="comm-graph-office-directory-toggle"
-          onClick={props.onToggleDirectory}
-        >
-          <PanelLeft aria-hidden />
-        </Button>
         {props.viewPicker}
       </div>
       <div className="pointer-events-auto">{props.modeToggle}</div>
@@ -2786,46 +2758,8 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * its canvas ends and a detail panel begins.
    */
   readonly viewPicker: ReactNode;
-  /**
-   * Whether the tile has settled what this canvas is supposed to draw.
-   *
-   * False while Auto is still measuring: the derivations below keep running
-   * (they are what make the probe possible, and they are cheap), but nothing
-   * is PLANNED - a floor planned for a view that is about to be replaced is a
-   * whole layout thrown away a moment later.
-   *
-   * It does NOT mean the event feed has caught up. An explicit view - picked
-   * on the tile, or resolved from the Settings default - is ready as soon as
-   * the agent snapshot and the box are there, because that is everything a
-   * plan reads; `initialHistoryCaughtUp` arrives separately and says who among
-   * those agents is busy. Three rules still hold the feed as an input: Auto's
-   * measurement (in the tile, which owns it), the partition commit below, and
-   * the one-shot re-plan the scene owes when the feed finally settles under a
-   * floor planned without it.
-   */
+  /** The agent snapshot is ready to draw; feed history may still be loading. */
   readonly ready: boolean;
-  /**
-   * TRUE while this canvas is the Auto MEASURING surface (the tile has no
-   * resolved view yet). A transient agent/thread DETAIL panel takes width from
-   * the flex row, and it is LOCAL state that resets when the resolved view
-   * remounts this canvas - so a detail opened while measuring would shrink the
-   * box Auto measures, then vanish, leaving the office wider than the width its
-   * view was decided against. The persistent directory is measured (it survives
-   * the remount); the transient detail panel is withheld while measuring so Auto
-   * decides against the width the resolved office actually gets.
-   */
-  readonly measuring: boolean;
-  /**
-   * What Auto would need to decide, pushed up as the inputs change.
-   *
-   * The measurement belongs to the TILE - a mode toggle or an LRU remount
-   * re-creates this component, and a decision taken here would be re-taken
-   * every time - but the two things a decision needs are both known here: the
-   * population this canvas derives anyway, and the box the office is left
-   * once the directory and any panel have taken their width.
-   */
-  /** The current measurement, or `null` when this canvas no longer has one. */
-  readonly onAutoProbe: (probe: OfficeAutoProbe | null) => void;
   /**
    * Hands the tile a way to TAKE this canvas's pending, debounced office
    * framing before it is switched away from.
@@ -2846,59 +2780,6 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
   ) => void;
 }
 
-/**
- * The detail selection to SHOW, or `null` while Auto is still measuring. The
- * detail panel is transient - it resets on the resolved view's remount - and it
- * takes width from the flex row, so a measurement taken with it open would
- * decide the office view against a width the office never keeps once it
- * resolves. The persistent directory keeps its own width and is measured.
- */
-function detailToShow(
-  measuring: boolean,
-  detail: OfficeSelectedDetail | null,
-): OfficeSelectedDetail | null {
-  return measuring ? null : detail;
-}
-
-/**
- * The directory shows only when it is open AND no detail panel is actually on
- * screen claiming width - together they would crush the floor at the 240px
- * minimum split. Extracted so its condition does not count against the
- * component's complexity ceiling.
- *
- * KEYED ON THE RESOLVED SUBJECT rather than on `shownDetail`, which says only
- * that a panel was ASKED for. A selection outlives a scrub that takes its
- * subject off the as-of floor, and BOTH panels render nothing for a subject
- * they cannot resolve - the thread panel because `selectedEdge` is not in the
- * aggregation, the agent surface because its own `agents.find` misses. Asking
- * the request rather than the result therefore hid the directory behind a
- * panel that was not there, and left no way back: the chrome toggle flips
- * `directoryOpen`, which this suppression does not consult, so pressing it
- * twice returns to a directory still suppressed by the stale selection. What
- * the directory yields to is the width, so the width is what this asks about.
- */
-function shouldShowDirectory(
-  directoryOpen: boolean,
-  selectedAgent: CommGraphAgentNode | null,
-  selectedEdge: CommGraphAggregatedEdge | null,
-): boolean {
-  return directoryOpen && selectedAgent === null && selectedEdge === null;
-}
-
-/**
- * The shown agent detail's subject, resolved against the VISIBLE set exactly as
- * `CommGraphAgentDetailSurface` resolves it internally. The canvas has to know
- * whether that panel will render anything before it decides the directory's
- * fate, and it already resolves `selectedEdge` this way for the thread panel.
- */
-function resolveSelectedAgent(
-  selectedAgentId: string | null,
-  visibleAgents: ReadonlyArray<CommGraphAgentNode>,
-): CommGraphAgentNode | null {
-  if (selectedAgentId === null) return null;
-  return visibleAgents.find((agent) => agent.id === selectedAgentId) ?? null;
-}
-
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const {
     agentIds,
@@ -2910,10 +2791,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     epicId,
     events,
     initialHistoryCaughtUp,
-    measuring,
     modeToggle,
     officeView,
-    onAutoProbe,
     onJump,
     onJumpToCreated,
     onJumpToSender,
@@ -2991,30 +2870,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // never has two competing explanations beside it.
   const [selectedDetail, setSelectedDetail] =
     useState<OfficeSelectedDetail | null>(null);
-  // The detail selection to SHOW. Withheld while Auto is still measuring: the
-  // panel takes width from the flex row and is local state that resets when the
-  // resolved view remounts this canvas, so letting it shrink the box Auto
-  // measures would decide the view against a width the office never keeps.
-  // Gated here so the panel, the floor highlight and the directory highlight
-  // clear together; the persistent directory keeps its width and stays measured.
-  const shownDetail = detailToShow(measuring, selectedDetail);
+  const shownDetail = selectedDetail;
   const selectedAgentId =
     shownDetail?.kind === "agent" ? shownDetail.agentId : null;
   const selectedEdgeId =
     shownDetail?.kind === "pair" ? shownDetail.edgeId : null;
-  const setSelectedAgentId = useCallback(
-    (agentId: string | null) => {
-      // Selecting an agent while Auto is still measuring stages a detail the
-      // measuring->resolved remount discards, so the activation silently does
-      // nothing. Every agent-selection route funnels through here - the floor
-      // click, the directory, Find and the sr-only agent list - so gating the
-      // choke point covers them all rather than each caller. Clearing (null)
-      // stays allowed so closePanel and deselect keep working while measuring.
-      if (agentId !== null && measuring) return;
-      setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
-    },
-    [measuring],
-  );
+  const setSelectedAgentId = useCallback((agentId: string | null) => {
+    setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
+  }, []);
   // What the pointer is over, in container-relative screen pixels. State
   // rather than a ref because the card is React, and it only moves when the
   // hover target changes - not every frame.
@@ -3026,14 +2889,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // camera is in, and the loop reads it off the live camera every frame
   // (`officeLodForZoom(camera.zoom)`). A second copy in state would be a
   // re-render of this whole component with no reader on the other end.
-
-  /** The canvas box as last measured; `EMPTY_VIEWPORT` before the first pass. */
-  const [measuredBox, setMeasuredBox] = useState<OfficeSize>(EMPTY_VIEWPORT);
-
-  const directoryOpen = useCommGraphDirectoryOpen();
-  const setDirectoryOpen = useCommGraphPanelStore(
-    (state) => state.setDirectoryOpen,
-  );
 
   const { resolvedTheme } = useResolvedTheme();
   const themeRevision = useThemeRevision();
@@ -3060,7 +2915,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   //
   // The KEY that guarantees that is the tile's: it renders this canvas under
   // `key={resolvedViewId}:{autoRevision}` (`comm-graph-tile.tsx`), so a picked
-  // view - or a re-measured Auto - is a remount here and never a scene left
+  // view is a remount here and never a scene left
   // over from the view before it.
   const sceneRef = useRef<{
     readonly epicId: string;
@@ -3283,57 +3138,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (!ready || !initialHistoryCaughtUp) return;
     runtime.setPartition(partition);
   }, [initialHistoryCaughtUp, partition, ready, runtime]);
-
-  // WHAT AUTO WOULD MEASURE, pushed up whenever it changes. Reported even
-  // while `ready` is false - it is the thing that MAKES the tile ready - but
-  // never before this canvas is eligible and has a box, because a measurement
-  // against a tile nobody can see would decide the office by the size of
-  // nothing.
-  useEffect(() => {
-    // WITHDRAWN, not merely unsaid. A tile that stops being eligible - hidden,
-    // switched to Graph, unmounted by a re-pick - leaves its last measurement
-    // standing unless it says so, and a decision taken from it is a decision
-    // about a box that is no longer on screen.
-    if (!eligible || measuredBox.width <= 0 || measuredBox.height <= 0) {
-      onAutoProbe(null);
-      return;
-    }
-    onAutoProbe({
-      input: {
-        agents: officeAgents,
-        partition,
-        // A measurement is of a FRESH office: nobody is seated yet, nobody is
-        // owed a seat, and there is no previous layout to keep stable.
-        occupancy: NO_OCCUPANCY,
-        needsCapacity: NO_CAPACITY_NEEDED,
-        activityById,
-        viewport: measuredBox,
-        previous: null,
-      },
-      canvas: measuredBox,
-    });
-  }, [
-    activityById,
-    eligible,
-    measuredBox,
-    officeAgents,
-    onAutoProbe,
-    partition,
-  ]);
-
-  /**
-   * The last word from a canvas on its way out.
-   *
-   * Its OWN effect, keyed on nothing that changes, so it fires on unmount and
-   * only on unmount - folded into the reporting effect above it would withdraw
-   * and re-report on every batch of rows. An unmount is exactly the case where
-   * nothing else can speak for this canvas.
-   */
-  useEffect(() => {
-    return () => {
-      onAutoProbe(null);
-    };
-  }, [onAutoProbe]);
 
   const sceneInput = useMemo<OfficeSceneInput>(
     () => ({
@@ -3653,14 +3457,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const dpr = window.devicePixelRatio || 1;
     appliedDprRef.current = dpr;
     runtime.setViewport({ width: rect.width, height: rect.height });
-    // Mirrored into React as well as the runtime: the runtime's copy is for
-    // the frame loop, and this one is what lets the Auto probe below be a
-    // reaction to the tile changing size rather than a poll.
-    setMeasuredBox((current) =>
-      current.width === rect.width && current.height === rect.height
-        ? current
-        : { width: rect.width, height: rect.height },
-    );
     const width = Math.max(1, Math.round(rect.width * dpr));
     const height = Math.max(1, Math.round(rect.height * dpr));
     if (canvas.width === width && canvas.height === height) return;
@@ -4331,13 +4127,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     (event: ReactPointerEvent<HTMLElement>) => {
       const canvas = canvasRef.current;
       if (canvas === null) return;
-      // No camera gesture on the throwaway measuring mount: a drag would pan a
-      // runtime the measuring->resolved remount discards. Selection is gated in
-      // handlePointerUp; this gates the pan. (`measuring` is mount-constant.)
-      if (measuring) return;
-      // Manual control is claimed when the drag actually MOVES, not here. A
-      // plain click on an agent is not a statement about the camera, and
-      // taking control on every press disabled auto-fit for the session.
       const camera = runtime.getCamera();
       dragRef.current = {
         pointerId: event.pointerId,
@@ -4349,7 +4138,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       };
       canvas.setPointerCapture(event.pointerId);
     },
-    [measuring, runtime],
+    [runtime],
   );
 
   const handlePointerMove = useCallback(
@@ -4463,11 +4252,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         persistView();
         return;
       }
-      // A click that SELECTS is disabled while Auto is still measuring: the
-      // selection lives only in local state the resolve-remount throws away,
-      // like the directory and Find paths (see handleDirectorySelect). The drag
-      // above is a camera gesture, not a selection, so it is left alone.
-      if (measuring) return;
       const point = toSpritePoint(event.clientX, event.clientY);
       if (point === null) return;
       // Envelopes first: a message in flight over a desk is drawn on top of
@@ -4488,14 +4272,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         : scene.hitTest(point);
       if (agentId !== null) setSelectedAgentId(agentId);
     },
-    [
-      measuring,
-      peekScene,
-      persistView,
-      runtime,
-      setSelectedAgentId,
-      toSpritePoint,
-    ],
+    [peekScene, persistView, runtime, setSelectedAgentId, toSpritePoint],
   );
 
   // A cancelled gesture is not a click: the browser took the pointer (a touch
@@ -4535,10 +4312,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
-    // The wheel pans and zooms the camera - a no-op on the throwaway measuring
-    // mount whose runtime the remount discards, so it is not wired up while Auto
-    // measures. (`measuring` is mount-constant.)
-    if (measuring) return;
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       runtime.takeManualControl();
@@ -4579,7 +4352,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     return () => {
       container.removeEventListener("wheel", onWheel);
     };
-  }, [measuring, panBy, runtime, zoomAbout]);
+  }, [panBy, runtime, zoomAbout]);
 
   // A double-click is the one gesture that reads as "closer, here" in every
   // map surface; the floor had no answer to it at all.
@@ -4590,16 +4363,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // element it came from does not matter.
   const handleDoubleClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
-      // No camera gesture on the throwaway measuring mount; the zoom would move
-      // a runtime the measuring->resolved remount discards. (`measuring` is
-      // mount-constant.)
-      if (measuring) return;
       const screen = toScreenPoint(event.clientX, event.clientY);
       if (screen === null) return;
       runtime.takeManualControl();
       zoomAbout(ZOOM_BUTTON_FACTOR, screen.x, screen.y);
     },
-    [measuring, runtime, toScreenPoint, zoomAbout],
+    [runtime, toScreenPoint, zoomAbout],
   );
 
   /**
@@ -4611,17 +4380,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    */
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-      // No camera gesture on the throwaway measuring mount; the keys move a
-      // runtime the remount discards, so they stay with whatever owns the floor
-      // while Auto measures. (`measuring` is mount-constant.)
-      if (measuring) return;
-      // Bare viewer keys only. A modified chord - Cmd/Ctrl+F, Cmd/Ctrl+Minus,
-      // Cmd/Ctrl+0 - belongs to the global keybinding provider, which runs it
-      // during the capture phase BEFORE this target handler; matching it here
-      // by `event.key` alone would fire the office action on top of the global
-      // command, and the `preventDefault` below cannot undo a command already
-      // run in capture. Shift is deliberately left alone: `Shift+=` is how many
-      // keyboards produce `+`.
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       const viewport = runtime.getViewport();
       const center = { x: viewport.width / 2, y: viewport.height / 2 };
@@ -4672,7 +4430,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // so typing anywhere over the floor still reaches whatever owns it.
       event.preventDefault();
     },
-    [fitToFloor, measuring, panBy, runtime, zoomAbout],
+    [fitToFloor, panBy, runtime, zoomAbout],
   );
 
   const visibleAgents = useMemo(
@@ -4692,10 +4450,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     selectedEdgeId === null
       ? null
       : (aggregated.find((edge) => edge.id === selectedEdgeId) ?? null);
-
-  // The agent-detail twin of `selectedEdge` above: what the surface will
-  // actually resolve, which is what decides whether the directory yields.
-  const selectedAgent = resolveSelectedAgent(selectedAgentId, visibleAgents);
 
   // Resolved against the VISIBLE set, not every agent the epic ever had: the
   // floor is drawn as of the cursor, and finding a card's subject among agents
@@ -4726,9 +4480,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             runtime.setSearchMatchIds(agentIdsToShow);
           },
           frameMatches: (agentIdsToFrame) => {
-            // Nothing to frame on the throwaway measuring mount; see
-            // handleDirectorySelect.
-            if (measuring) return;
             const scene = runtime.getScene();
             if (scene === null) return;
             const bounds = seatBoundsFor(scene, agentIdsToFrame);
@@ -4750,10 +4501,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             });
           },
           focusMatch: (agentId) => {
-            // A match focused on the throwaway measuring mount is selected only
-            // in local state that the resolve-remount discards; see
-            // handleDirectorySelect.
-            if (measuring) return;
             const scene = runtime.getScene();
             // Selecting is half the answer: the panel is where a match stops
             // being a name on a floor and becomes something you can read.
@@ -4774,99 +4521,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           },
         },
       }),
-    [measuring, runtime, setSelectedAgentId, tileInstanceId],
+    [runtime, setSelectedAgentId, tileInstanceId],
   );
   useRegisterTileFindAdapter(findAdapter);
 
   const openAgentById = useCommGraphOpenAgentById(agents, onOpenAgent);
   const closePanel = useCallback(() => setSelectedDetail(null), []);
 
-  /**
-   * A directory row names somebody who may be nowhere near the viewport, so
-   * the camera is aimed from the SEAT BOOK (`scene.locate`) rather than from
-   * the last frame, which only knows what it drew.
-   */
-  const handleDirectorySelect = useCallback(
-    (agentId: string) => {
-      // Disabled while Auto is still measuring. This mount is a throwaway - the
-      // tile's key remounts the canvas the instant Auto resolves - so a
-      // selection made now is withheld from the view and then discarded on that
-      // remount, and a pan aims the measuring surface nobody keeps. The office
-      // is a beat from ready; the same click lands for good once it is.
-      // (`measuring` is constant for the life of this mount.)
-      if (measuring) return;
-      setSelectedAgentId(agentId);
-      const scene = peekScene();
-      if (scene === null) return;
-      const box = scene.locate(agentId);
-      if (box === null) return;
-      // Aiming the camera by hand is a statement about where it should be, the
-      // same as a drag - Find's own row does exactly this, and like a drag it
-      // is persisted (on arrival) so it survives a remount.
-      runtime.takeManualControl();
-      runtime.requestPan({
-        focus: rectCenter(box),
-        zoom: null,
-        persistOnArrival: true,
-      });
-    },
-    [measuring, peekScene, runtime, setSelectedAgentId],
-  );
-
-  const handleDirectoryHover = useCallback(
-    (agentId: string | null) => {
-      // The draw keeps an away agent's name tag while it is hovered, so a row
-      // under the pointer lights its character up on the floor.
-      runtime.setHoveredAgentId(agentId);
-    },
-    [runtime],
-  );
-
-  const hideDirectory = useCallback(() => {
-    setDirectoryOpen(false);
-  }, [setDirectoryOpen]);
-
-  const toggleDirectory = useCallback(() => {
-    setDirectoryOpen(!directoryOpen);
-  }, [directoryOpen, setDirectoryOpen]);
-
   return (
     <div className="flex h-full min-h-0 w-full min-w-0">
-      {/*
-        RESERVED SPACE, before the canvas and before any panel: the directory
-        is read WHILE the floor is, so it takes width rather than covering it -
-        and taking width is also what makes the canvas box Auto measures the
-        box the office really gets.
-
-        But it YIELDS to a detail panel that is actually THERE. The directory
-        (30%) and a detail (up to 50%) together leave the floor ~20% - unusable
-        at the 240px minimum split, where the canvas is overflow-hidden - so a
-        rendered detail hides the directory rather than crushing the office
-        between two panels. The open state is kept, so closing the detail brings
-        the directory back. A selection whose subject is off the as-of floor
-        renders no panel and so takes no width, and yields nothing.
-      */}
-      {!shouldShowDirectory(
-        directoryOpen,
-        selectedAgent,
-        selectedEdge,
-      ) ? null : (
-        <OfficeDirectoryPanel
-          partition={partition}
-          visibleAgentIds={agentIds}
-          statusById={statusById}
-          nameById={nameById}
-          hostNameById={hostNameById}
-          selectedAgentId={selectedAgentId}
-          onSelectAgent={handleDirectorySelect}
-          onHoverAgent={handleDirectoryHover}
-          onClose={hideDirectory}
-          // Selection is gated while Auto measures (handleDirectorySelect
-          // early-returns then), so the panel disables its row, pip and team
-          // buttons rather than presenting controls that silently do nothing.
-          disabled={measuring}
-        />
-      )}
       <div
         ref={containerRef}
         className="relative h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden"
@@ -4903,12 +4566,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           tile - it pins itself to the corner in the node graph, which has no
           row to sit in.
         */}
-        <OfficeChromeRow
-          directoryOpen={directoryOpen}
-          onToggleDirectory={toggleDirectory}
-          viewPicker={viewPicker}
-          modeToggle={modeToggle}
-        />
+        <OfficeChromeRow viewPicker={viewPicker} modeToggle={modeToggle} />
         {hoverCard === null || hoveredAgent === null ? null : (
           <OfficeAgentHover
             epicId={epicId}
@@ -4945,11 +4603,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
                 type="button"
                 data-testid={`comm-graph-office-agent-${agent.id}`}
                 aria-label={`Open ${agent.name}`}
-                // Disabled while Auto measures so assistive tech hears the seat
-                // is not selectable yet, rather than activating a button whose
-                // selection the measuring->resolved remount would discard. The
-                // setSelectedAgentId guard is the backstop for every route.
-                disabled={measuring}
                 onClick={() => setSelectedAgentId(agent.id)}
               >
                 {agent.name}
@@ -4982,10 +4635,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             variant="outline"
             aria-label="Zoom in"
             data-testid="comm-graph-office-zoom-in"
-            // Disabled while Auto measures: this mount's runtime is a throwaway
-            // the measuring->resolved remount discards, so a zoom would mutate
-            // a camera nobody keeps and silently do nothing.
-            disabled={measuring}
             onClick={handleZoomIn}
           >
             <Plus aria-hidden />
@@ -4996,7 +4645,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             variant="outline"
             aria-label="Zoom out"
             data-testid="comm-graph-office-zoom-out"
-            disabled={measuring}
             onClick={handleZoomOut}
           >
             <Minus aria-hidden />
@@ -5007,7 +4655,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             variant="outline"
             aria-label="Fit the office floor"
             data-testid="comm-graph-office-fit"
-            disabled={measuring}
             onClick={handleFit}
           >
             <Maximize aria-hidden />

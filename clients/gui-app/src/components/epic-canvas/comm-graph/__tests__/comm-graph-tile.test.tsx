@@ -50,9 +50,9 @@ vi.mock("@/lib/host", () => ({
 // failed every test here.
 //
 // The comm-graph half still holds, and by construction rather than by this
-// stub: `use-comm-graph-snapshot.ts` builds its opener as
-// `localOpenerOverride ?? createCommGraphSubscriptionOpener(openTransport)`, and
-// `??` short-circuits - with `__setCommGraphSubscriptionOpenerForTests`
+// stub: `use-comm-graph-snapshot.ts` builds its cloud opener as
+// `cloudOpenerOverride ?? createCommGraphCloudSubscriptionOpener(openTransport)`,
+// and `??` short-circuits - with `__setCommGraphCloudSubscriptionOpenerForTests`
 // installed the wrapped opener is never even constructed, let alone invoked.
 // What the throw added on top of that was redundancy, and it is what is lost
 // here; the primary guarantee is the override, which this file still installs.
@@ -125,7 +125,6 @@ import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-til
 import * as commGraphCanvasModule from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import * as officeCanvasModule from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
-import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type {
@@ -142,14 +141,20 @@ import {
 
 import {
   OFFICE_VIEWS,
-  OFFICE_VIEW_IDS,
   type OfficePlanInput,
 } from "@/lib/comm-graph/office/views/office-view";
-import { __setCommGraphSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
+import { OFFICE_VIEW_CHOICES } from "@/lib/comm-graph/office/office-view-vocabulary";
+import { __setCommGraphCloudSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
+import type { CommGraphSubscriptionHandlers } from "@/lib/comm-graph/comm-graph-subscription";
 import type {
-  CommGraphSubscriptionHandlers,
-  CommGraphSubscriptionRequest,
-} from "@/lib/comm-graph/comm-graph-subscription";
+  CommGraphCloudSubscriptionHandlers,
+  CommGraphCloudSubscriptionRequest,
+} from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import type {
+  EpicCommunicationGraphEvent,
+  HostCommunicationGraphCloudFeedEvent,
+} from "@traycer/protocol/host/epic/communication-graph";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   commGraphTileId,
   DEFAULT_COMM_GRAPH_VIEW,
@@ -179,7 +184,7 @@ import type {
   OfficeRect,
 } from "@/lib/comm-graph/office/office-types";
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
-import { __resetCommGraphRegistryForTests } from "@/lib/comm-graph/comm-graph-registry";
+import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
 
 /**
  * The Building's REAL planner, captured at import before any spy can replace
@@ -195,11 +200,103 @@ const LEGACY_CHAT_ID = "chat-legacy";
 const TUI_ID = "tui-1";
 const HOST_A = "host-a";
 const HOST_B = "host-b";
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 const harness = createEpicSessionTestHarness(EPIC_ID);
 let queryClient: QueryClient;
+
+/**
+ * There is ONE relay per epic now, not one dial per origin host. This stays a
+ * `Map` keyed by origin host id - the seam every case below drives - but each
+ * entry is a thin adapter matching the OLD per-host handler shape, forwarding
+ * to the single live relay and stamping its own key on as `originHostId`. The
+ * map is populated for BOTH origin hosts at once, the moment the one relay
+ * opens (see `beforeEach`), which is what keeps every existing
+ * `Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B])`
+ * readiness check meaningful unchanged - it now reads "the relay opened",
+ * which happens once for both hosts together rather than twice independently.
+ */
+const relayHandlers: { current: CommGraphCloudSubscriptionHandlers | null } = {
+  current: null,
+};
 const openedByHost = new Map<string, CommGraphSubscriptionHandlers>();
-const openRequests: CommGraphSubscriptionRequest[] = [];
+const openRequests: CommGraphCloudSubscriptionRequest[] = [];
+let nextIngestVersion = 0;
+
+function toCloudEvent(
+  hostId: string,
+  event: EpicCommunicationGraphEvent,
+): HostCommunicationGraphCloudFeedEvent {
+  nextIngestVersion += 1;
+  return {
+    // Matches the OLD local convention exactly (`commGraphEventKey` prefers
+    // `eventId` when present) so every existing `${hostId}:${id}`-shaped test
+    // id keeps meaning the same row.
+    eventId: `${hostId}:${event.id}`,
+    originHostId: hostId,
+    originSequence: event.id,
+    ingestVersion: nextIngestVersion,
+    kind: event.kind,
+    capturedAt: event.timestamp,
+    senderAgentId: event.senderAgentId,
+    receiverAgentId: event.receiverAgentId,
+    responseId: event.responseId,
+    inReplyTo: event.inReplyTo,
+    expectReply: event.expectReply,
+    messageText: event.messageText,
+    noticeReason: event.noticeReason,
+    originKind: event.originKind,
+    originChatId: event.originChatId,
+    originRefId: event.originRefId,
+    historicalUpload: false,
+  };
+}
+
+function adapterFor(hostId: string): CommGraphSubscriptionHandlers {
+  return {
+    onSnapshot: (events, headId) => {
+      const cloudEvents = events.map((event) => toCloudEvent(hostId, event));
+      // The old wire's `null` meant "empty log, no boundary row". The cloud
+      // feed's ingest-version counter has no such sentinel - a fresh, empty
+      // feed legitimately hands back its current (zero) head - so an empty
+      // delivery still stamps a real, present boundary.
+      void headId;
+      const headVersion =
+        cloudEvents.length === 0
+          ? nextIngestVersion
+          : Math.max(
+              ...cloudEvents.map((cloudEvent) => cloudEvent.ingestVersion),
+            );
+      relayHandlers.current?.onSnapshot(cloudEvents, headVersion, null);
+      // The old per-host boundary considered a delivered snapshot immediately
+      // caught up (`initialHistoryCaughtUp` in the local manager derives this
+      // from boundary+cursor alone - no separate signal). The cloud manager
+      // instead needs an explicit "caught up" wire frame, distinct from the
+      // snapshot itself - so this adapter fires it right behind the
+      // snapshot, preserving what every existing call site already means:
+      // "this host handed over its history, in full, in one shot".
+      const caughtUpEvent = cloudEvents.find(
+        (cloudEvent) => cloudEvent.ingestVersion === headVersion,
+      );
+      relayHandlers.current?.onCaughtUp(
+        caughtUpEvent === undefined
+          ? null
+          : {
+              ingestVersion: caughtUpEvent.ingestVersion,
+              eventId: caughtUpEvent.eventId,
+            },
+        headVersion,
+      );
+    },
+    onEvent: (event) => {
+      relayHandlers.current?.onEvent(toCloudEvent(hostId, event));
+    },
+    onStatus: (status) => {
+      relayHandlers.current?.onStatus(status);
+    },
+  };
+}
 
 function seedDoc(doc: Y.Doc): void {
   const epic = doc.getMap("epic");
@@ -432,57 +529,6 @@ const PERSISTED_CAMERA_FRAME = {
   height: OFFICE_CANVAS.height / 4,
 };
 
-/**
- * Auto-fit's padding, RESTATED rather than imported. `FIT_PADDING` is private
- * to `comm-graph-office-canvas`, and importing it would make the assertion
- * below unfalsifiable: production and test would move together and no change
- * to the padding could ever redden anything. 24 is a claim this file makes
- * about the runtime, and the three cases below are what tests it.
- */
-const FIT_PADDING = 24;
-
-/**
- * The frame a fitted office lands on - auto-fit's model, restated as a
- * FUNCTION of the world box and the tile rather than as three measured
- * numbers. This is what `fitCamera` does: pad the tile by `FIT_PADDING` on
- * every side, take the zoom at which the world fits inside what is left,
- * centre the world in the tile, and read the visible world rect as the tile
- * over that zoom.
- *
- * Live, not measured, and that is the point. These cases assert an EXACT rect
- * - strictly stronger than "the centre is somewhere inside it", and enough to
- * fail on the persisted camera's rect, on a Towers rect, or on a Floor rect at
- * the wrong zoom - but the rect is now recomputed from the Floor the scene
- * actually laid out, so a plan change moves it instead of reddening three
- * cases whose claim has nothing to do with how big the Floor is. Twice now
- * these three have been re-measured by hand for a Floor that grew; this is
- * what stops there being a third time.
- *
- * The world box comes from the scene (`OfficeScene.worldSize()`, the same
- * value `applyAutoFit` consumes) so the INPUT is live while the MODEL is the
- * claim. Note it is the projector's `bounds` (its width and height, read at
- * `office-scene.ts` `worldSize`), not the plan's box: the two-agent Floor
- * measures 576x1264 here, where the plan box is 704 wide.
- *
- * `fitCamera` also clamps - `MAX_FIT_ZOOM` 6, and zoom into [0.05, 8]. Nothing
- * is within reach at this fixture's 0.753, so the clamps are deliberately left
- * out of the restatement rather than copied in unexercised. A plan change that
- * saturated one would redden these cases, which is the correct outcome: the
- * model would then be incomplete and would need the clamp added.
- */
-function fittedFrame(world: OfficeSize, tile: OfficeSize): OfficeRect {
-  const zoom = Math.min(
-    (tile.width - FIT_PADDING * 2) / world.width,
-    (tile.height - FIT_PADDING * 2) / world.height,
-  );
-  return {
-    x: -((tile.width - world.width * zoom) / 2 / zoom),
-    y: -((tile.height - world.height * zoom) / 2 / zoom),
-    width: tile.width / zoom,
-    height: tile.height / zoom,
-  };
-}
-
 const AUTO_TAB_ID = "tab-comm-graph-auto";
 
 /**
@@ -521,22 +567,24 @@ function openPicker(): void {
 }
 
 /**
- * Reaches Auto's resolved Floor, through the real store and the real canvas:
- * the state every pick below starts from.
+ * Reaches the office resolved to Floor - the app's default - through the
+ * real store and the real canvas: the state every pick below starts from.
+ *
+ * There is no measurement step to wait on any more: `resolvedViewId` is
+ * `officeView ?? settingsDefaultView`, decided at render, so the picker
+ * already shows "Floor" the instant the canvas mounts and subscribes.
  */
-async function reachAutoFloor(): Promise<void> {
+async function reachFloor(): Promise<void> {
   await renderOfficeTile();
   await waitFor(() => {
     expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
   });
   setIntersecting(true);
   setOfficeCanvasSize(OFFICE_CANVAS);
-  act(() => {
-    openedByHost.get(HOST_A)?.onSnapshot([], null);
-    openedByHost.get(HOST_B)?.onSnapshot([], null);
-  });
   await waitFor(() => {
-    expect(storedView()?.officeAutoView).toBe("floor");
+    expect(
+      screen.getByTestId("comm-graph-office-view-picker").textContent,
+    ).toBe("Floor");
   });
 }
 
@@ -545,9 +593,9 @@ async function reachAutoFloor(): Promise<void> {
  * radio item they click - and settles the canvas that results.
  *
  * Shared by the switch cases and the bench, which both need a scene in hand:
- * a pick is what puts one there, the view Auto already chose included.
+ * a pick is what puts one there.
  */
-async function pickView(viewId: OfficeViewId): Promise<void> {
+async function pickView(viewId: OfficeViewChoice): Promise<void> {
   openPicker();
   await act(async () => {
     fireEvent.click(screen.getByTestId(`comm-graph-office-view-${viewId}`));
@@ -563,9 +611,7 @@ async function pickView(viewId: OfficeViewId): Promise<void> {
 /**
  * Picks a choice through the REAL picker without settling a scene afterwards
  * - the synchronous half of `pickView` above, for cases that need to inspect
- * what the pick's own write did BEFORE anything else runs. Takes the full
- * `OfficeViewChoice` (Auto included) because the picker's Auto row shares the
- * same `comm-graph-office-view-<id>` naming as a concrete view's row.
+ * what the pick's own write did BEFORE anything else runs.
  */
 function chooseView(choice: OfficeViewChoice): void {
   openPicker();
@@ -575,7 +621,7 @@ function chooseView(choice: OfficeViewChoice): void {
 /**
  * Opens the comm-graph tile through the REAL canvas store, on its own
  * default view (office mode, `officeView: null`, so the effective choice is
- * Settings' default of `"auto"`) - Auto only ever runs in office mode.
+ * Settings' default of `"floor"`).
  */
 async function renderOfficeTile(): Promise<void> {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -597,24 +643,35 @@ async function renderOfficeTile(): Promise<void> {
 beforeEach(() => {
   openedByHost.clear();
   openRequests.length = 0;
+  relayHandlers.current = null;
+  nextIngestVersion = 0;
+  useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
   activeObserverCallbacks = [];
   vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   harness.install(seedDoc, "owner");
-  __setCommGraphSubscriptionOpenerForTests((request) => {
+  __setCommGraphCloudSubscriptionOpenerForTests((request) => {
     openRequests.push(request);
-    openedByHost.set(request.hostId, request.handlers);
+    relayHandlers.current = request.handlers;
+    // ONE relay serves every origin host at once - both keys populate
+    // together, the instant it opens.
+    openedByHost.set(HOST_A, adapterFor(HOST_A));
+    openedByHost.set(HOST_B, adapterFor(HOST_B));
     return { close: () => undefined };
   });
 });
 
 afterEach(() => {
-  __setCommGraphSubscriptionOpenerForTests(null);
+  // Unmount BEFORE the auth store flips: a tile left mounted while auth
+  // changes re-renders and re-claims the relay through the change, redialing
+  // for no assertion left to see it.
+  cleanup();
+  __setCommGraphCloudSubscriptionOpenerForTests(null);
+  useAuthStore.getState().setSignedOut();
   harness.teardown();
   queryClient.clear();
-  cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -908,7 +965,7 @@ async function renderSeededOfficeInLoadedSession(
 
 /**
  * Integrated: real epic projection + real canvas store, with only the stream
- * boundary faked (`__setCommGraphSubscriptionOpenerForTests`).
+ * boundary faked (`__setCommGraphCloudSubscriptionOpenerForTests`).
  *
  * KNOWN jsdom GAP: React Flow renders an edge only after BOTH endpoint nodes
  * have been measured, and jsdom reports every element as 0x0 with a
@@ -957,15 +1014,16 @@ describe("CommGraphTile", () => {
     });
   });
 
-  it("subscribes once per host referenced by the epic's agents", async () => {
+  it("opens one relay subscription covering every host the epic's agents reference", async () => {
     await renderTile();
 
     await waitFor(() => {
       expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
     });
+    expect(openRequests).toHaveLength(1);
     for (const request of openRequests) {
       expect(request.epicId).toBe(EPIC_ID);
-      expect(request.sinceCursor).toBeNull();
+      expect(request.readSinceCursor()).toBeNull();
     }
   });
 
@@ -1011,64 +1069,62 @@ describe("CommGraphTile", () => {
     expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
   });
 
-  it("marks agents on a host with no stream method via data-host-status, without captioning the node", async () => {
-    await renderTile();
-    await waitFor(() => {
-      expect(openedByHost.has(HOST_B)).toBe(true);
-    });
+  // ONE relay serves every origin host now, so a degraded transport status
+  // is never independent per host - the manager stamps it onto every origin
+  // host's snapshot uniformly (`CommGraphCloudSubscriptionManager.publish`).
+  // This replaces two prior cases, one per status, that each asserted a
+  // status landing on ONLY one origin host's agents while the other host's
+  // agents stayed unaffected ("degrade is per subscription") - that per-host
+  // independence no longer exists to assert.
+  it.each(["unsupported", "unreachable"] as const)(
+    "stamps a uniform %s status on agents from every origin host via data-host-status, without captioning either node",
+    async (status) => {
+      await renderTile();
+      await waitFor(() => {
+        expect(openedByHost.has(HOST_B)).toBe(true);
+      });
 
-    act(() => {
-      openedByHost.get(HOST_A)?.onStatus("live");
-      openedByHost.get(HOST_B)?.onStatus("unsupported");
-    });
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId(`comm-graph-node-${TUI_ID}`)
-          .getAttribute("data-host-status"),
-      ).toBe("unsupported");
-    });
-    expect(screen.queryByTestId(`comm-graph-node-notice-${TUI_ID}`)).toBeNull();
-    // The other host is unaffected - degrade is per subscription.
-    expect(
-      screen
-        .getByTestId(`comm-graph-node-${CHAT_ID}`)
-        .getAttribute("data-host-status"),
-    ).not.toBe("unsupported");
-  });
-
-  it("marks agents on an unreachable host via data-host-status, without captioning the node", async () => {
-    await renderTile();
-    await waitFor(() => {
-      expect(openedByHost.has(HOST_B)).toBe(true);
-    });
-
-    act(() => {
-      openedByHost.get(HOST_B)?.onStatus("unreachable");
-    });
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId(`comm-graph-node-${TUI_ID}`)
-          .getAttribute("data-host-status"),
-      ).toBe("unreachable");
-    });
-    expect(screen.queryByTestId(`comm-graph-node-notice-${TUI_ID}`)).toBeNull();
-  });
-
-  describe("Auto", () => {
-    /** Every subscribed host's initial replay done, with no backlog. */
-    function markHistoryCaughtUp(): void {
       act(() => {
-        openedByHost.get(HOST_A)?.onSnapshot([], null);
-        openedByHost.get(HOST_B)?.onSnapshot([], null);
+        openedByHost.get(HOST_A)?.onStatus(status);
+        // Two origin hosts fall back to two relay CANDIDATES here (no
+        // directory is mocked in this file), and the manager fails over
+        // through them one at a time on rejection - synchronously, within
+        // this same call. The failover redial's fresh dial starts back at
+        // "connecting", so the second candidate needs driving too, or the
+        // status reverts to "connecting" instead of sticking.
+        relayHandlers.current?.onStatus(status);
       });
-    }
 
-    it("does not run while the snapshot is a partial one", async () => {
-      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId(`comm-graph-node-${TUI_ID}`)
+            .getAttribute("data-host-status"),
+        ).toBe(status);
+      });
+      // Feed degradation is feed health, not agent state - no caption on the
+      // node either host's agent renders through.
+      expect(
+        screen.queryByTestId(`comm-graph-node-notice-${TUI_ID}`),
+      ).toBeNull();
+      expect(
+        screen
+          .getByTestId(`comm-graph-node-${CHAT_ID}`)
+          .getAttribute("data-host-status"),
+      ).toBe(status);
+      expect(
+        screen.queryByTestId(`comm-graph-node-notice-${CHAT_ID}`),
+      ).toBeNull();
+    },
+  );
+
+  describe("immediate office rendering (no measurement step)", () => {
+    // Auto's decision arithmetic and its persisted outcome (`officeAutoView`)
+    // are gone: `resolvedViewId` is `officeView ?? settingsDefaultView`,
+    // decided synchronously at render, so the office renders the resolved
+    // view the instant the canvas mounts - there is no "measuring..." stage
+    // to gate on, and no feed catch-up to wait for either.
+    it("resolves and draws Floor - the app's default - before the tile is even intersecting or sized", async () => {
       await renderOfficeTile();
       await waitFor(() => {
         expect(Array.from(openedByHost.keys()).sort()).toEqual([
@@ -1077,24 +1133,17 @@ describe("CommGraphTile", () => {
         ]);
       });
 
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      // Give Auto the same chance to write that the positive case gets - an
-      // assertion made the instant after `setOfficeCanvasSize` would pass
-      // even if Auto ran on a later tick, since nothing was ever given a
-      // chance to prove otherwise.
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // Eligible and measured, but `initialHistoryCaughtUp` is still false -
-      // neither host's snapshot has been marked complete - so Auto must not
-      // have written an outcome, and must not even have MEASURED one.
-      expect(storedView()?.officeAutoView).toBeNull();
-      expect(decideSpy).not.toHaveBeenCalled();
+      // No `setIntersecting`, no `setOfficeCanvasSize`, no snapshot delivered
+      // yet - the old Auto gate needed every one of those before it would
+      // even measure. The resolved view is a fact about `officeView` and the
+      // Settings default alone, so the picker already names it.
+      expect(
+        screen.getByTestId("comm-graph-office-view-picker").textContent,
+      ).toBe("Floor");
+      expect(storedView()?.officeView).toBeNull();
     });
 
-    it("runs once the inputs are ready, and writes the outcome", async () => {
+    it("draws the office before the feed has caught up - readiness never waited on Auto's measurement", async () => {
       await renderOfficeTile();
       await waitFor(() => {
         expect(Array.from(openedByHost.keys()).sort()).toEqual([
@@ -1104,156 +1153,43 @@ describe("CommGraphTile", () => {
       });
       setIntersecting(true);
       setOfficeCanvasSize(OFFICE_CANVAS);
-      expect(storedView()?.officeAutoView).toBeNull();
 
-      markHistoryCaughtUp();
-
+      // No `onSnapshot` for either host - the feed is deliberately left
+      // uncaught-up - yet the canvas is already up and the picker already
+      // resolved, because `ready` is `agents.length > 0 && mode === "office"`
+      // now, independent of `initialHistoryCaughtUp`.
       await waitFor(() => {
-        expect(storedView()?.officeAutoView).not.toBeNull();
+        expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
       });
-      // This fixture's handful of agents fits the Floor on an `OFFICE_CANVAS`
-      // tile - comfortably now, at 0.791x against a 0.7 threshold, which it
-      // was not when that box was 1040x700. See `OFFICE_CANVAS`.
-      expect(storedView()?.officeAutoView).toBe("floor");
+      expect(
+        screen.getByTestId("comm-graph-office-view-picker").textContent,
+      ).toBe("Floor");
     });
 
-    // Finding 38: a hostless epic (every agent predates `hostId`) has no
-    // feed to catch up from at all - `useCommGraphAgents` reports an empty
-    // `hostIds`, so the subscription's `hosts.length > 0 && ...every(...)`
-    // gate can never flip true. Without `isFeedSettled` treating an empty
-    // host set as already settled, Auto would sit on "measuring..." forever.
-    // The contrast this needs - a HOST-attributed epic that has not caught
-    // up must still withhold measurement - is already proven above by "does
-    // not run while the snapshot is a partial one": that fixture has hosts,
-    // so it takes the `snapshot.initialHistoryCaughtUp` branch of
-    // `isFeedSettled`, not the `hostIds.length === 0` one this test covers.
-    it("measures a hostless epic without ever seeing a catch-up signal (Finding 38)", async () => {
+    it("resolves a hostless epic the same way - there is no host-emptiness special case left to prove (Finding 38, superseded)", async () => {
+      // The old `isFeedSettled` short-circuit that treated an empty host set
+      // as pre-settled existed only to unblock Auto's measurement gate on a
+      // fully legacy epic. That gate is gone, so a hostless epic needs no
+      // special case at all: it resolves and draws exactly like any other.
       harness.teardown();
       harness.install(seedAllHostlessDoc, "owner");
-      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
 
       await renderOfficeTile();
       await waitFor(() => {
         expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
       });
-
-      // A fully legacy epic subscribes to zero hosts - there is nothing to
-      // wait for here, unlike the two-host default fixture.
       expect(Array.from(openedByHost.keys())).toEqual([]);
 
       setIntersecting(true);
       setOfficeCanvasSize(OFFICE_CANVAS);
 
-      // No `onSnapshot` call for any host - none exist to call it for - yet
-      // Auto must still measure and write a real outcome.
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).not.toBeNull();
-      });
-      expect(decideSpy).toHaveBeenCalled();
-      expect(storedView()?.officeAutoView).toBe("floor");
+      expect(
+        screen.getByTestId("comm-graph-office-view-picker").textContent,
+      ).toBe("Floor");
     });
 
-    it("keeps the saved camera when Auto's first outcome is Floor", async () => {
-      // A tile that predates this choice carries a camera framed for the
-      // Floor - the view that has always existed - so a first outcome OF
-      // Floor is the view that camera already addresses and must survive.
-      //
-      // D68: seeded through the OFFICE's own writer, exactly as the
-      // neutralising case below is. Seeding the graph's `x`/`y`/`zoom` here
-      // would pass without proving anything - Auto's write never touches
-      // those fields now, so the "keeps it" arm it is meant to pin
-      // (`decision.view === "floor" ? node.view.officeCamera : null`) would
-      // go untested while the test still went green.
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      act(() => {
-        useEpicCanvasStore.getState().updateCommGraphTileOfficeCameraInTab(
-          AUTO_TAB_ID,
-          commGraphTileId(EPIC_ID),
-          {
-            x: 111,
-            y: 222,
-            zoom: 2,
-          },
-          "floor",
-        );
-      });
-
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      markHistoryCaughtUp();
-
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-      expect(storedView()?.officeCamera).toEqual({ x: 111, y: 222, zoom: 2 });
-    });
-
-    it("neutralises the camera when Auto's first outcome is not Floor", async () => {
-      // The saved camera was framed for a Floor. Landing on a different view
-      // through those same numbers would be a view of empty space, so the
-      // patch that writes the outcome resets the camera in the same write.
-      //
-      // D68: the OFFICE's own camera path is what seeds this, now that it is
-      // a field of its own rather than the shared x/y/zoom - the graph's
-      // writer (`updateCommGraphTileCameraInTab`) cannot reach it any more.
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      act(() => {
-        useEpicCanvasStore.getState().updateCommGraphTileOfficeCameraInTab(
-          AUTO_TAB_ID,
-          commGraphTileId(EPIC_ID),
-          {
-            x: 111,
-            y: 222,
-            zoom: 2,
-          },
-          "floor",
-        );
-      });
-
-      setIntersecting(true);
-      // Small enough that neither Floor nor Towers reaches office detail on
-      // this fixture's agents.
-      setOfficeCanvasSize({ width: 120, height: 90 });
-      markHistoryCaughtUp();
-
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).not.toBeNull();
-      });
-      // Asserted directly rather than assumed: if this tiny box lands
-      // somewhere other than Building, that is a fact to report, not a box
-      // to keep shrinking until it agrees.
-      expect(storedView()?.officeAutoView).toBe("building");
-      expect(storedView()?.officeCamera).toBeNull();
-    });
-
-    it("does not re-measure on a mode toggle", async () => {
-      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      markHistoryCaughtUp();
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-      expect(decideSpy).toHaveBeenCalledTimes(1);
+    it("still resolves to Floor after a mode round trip - there is no measurement pass left to repeat or skip", async () => {
+      await reachFloor();
 
       await act(async () => {
         fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
@@ -1264,151 +1200,9 @@ describe("CommGraphTile", () => {
         await Promise.resolve();
       });
 
-      // The measured outcome rides through the round trip untouched, and the
-      // gate that guards Auto (`officeAutoView === null`) never opened again -
-      // an LRU remount or a mode toggle must not re-decide a floor the user's
-      // saved camera already addresses.
-      expect(storedView()?.officeAutoView).toBe("floor");
-      expect(decideSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("re-measures once officeAutoView is cleared, as a re-pick of Auto clears it", async () => {
-      // Driving the picker's own Radix dropdown in jsdom is the less direct
-      // route to the same claim: the picker's re-pick writes exactly this -
-      // `officeAutoView: null` while `officeView` stays `"auto"` - and this
-      // pins the tile's reaction to that write, which is the mechanism the
-      // ticket names ("it clears officeAutoView and the next measurement
-      // writes it again"), not the dropdown interaction itself.
-      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      markHistoryCaughtUp();
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-      expect(decideSpy).toHaveBeenCalledTimes(1);
-
-      const current = storedView();
-      if (current === null) throw new Error("expected a stored view");
-      act(() => {
-        useEpicCanvasStore
-          .getState()
-          .updateCommGraphTileViewInTab(AUTO_TAB_ID, commGraphTileId(EPIC_ID), {
-            ...current,
-            officeAutoView: null,
-          });
-      });
-
-      // The cleared outcome resolves `resolvedViewId` to null, which changes
-      // the office canvas's `key` and remounts it - a fresh instance with no
-      // measured box of its own, so the probe needs feeding again.
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-      expect(decideSpy).toHaveBeenCalledTimes(2);
-    });
-
-    it("writes nothing when replay finishes after the tile became hidden mid-measurement", async () => {
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize({ width: 120, height: 90 });
-      expect(decide).not.toHaveBeenCalled();
-
-      // Hidden BEFORE the replay that would have completed the inputs -
-      // the probe the canvas reported is withdrawn, so a decision has
-      // nothing to measure with even once history catches up.
-      setIntersecting(false);
-      markHistoryCaughtUp();
-
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()?.officeAutoView).toBeNull();
-    });
-
-    it("does not decide or touch the graph camera when replay finishes after leaving office", async () => {
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize({ width: 120, height: 90 });
-      fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
-      act(() => {
-        useEpicCanvasStore
-          .getState()
-          .updateCommGraphTileCameraInTab(
-            AUTO_TAB_ID,
-            commGraphTileId(EPIC_ID),
-            { x: 155, y: 266, zoom: 2 },
-          );
-      });
-      expect(storedView()?.mode).toBe("graph");
-
-      markHistoryCaughtUp();
-
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()).toMatchObject({
-        mode: "graph",
-        x: 155,
-        y: 266,
-        zoom: 2,
-        officeAutoView: null,
-      });
-    });
-
-    it("waits for the new canvas box when Auto is re-picked while the tile has shrunk", async () => {
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      markHistoryCaughtUp();
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-
-      // The tile shrinks (a detail panel opened, say) before Auto is asked
-      // again - this stale box must never be the one a re-pick decides from.
-      setOfficeCanvasSize({ width: 120, height: 90 });
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      fireEvent.pointerDown(
-        screen.getByTestId("comm-graph-office-view-picker"),
-        { button: 0, ctrlKey: false, pointerType: "mouse" },
-      );
-      fireEvent.click(screen.getByTestId("comm-graph-office-view-auto"));
-
-      expect(decide).not.toHaveBeenCalled();
-
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-
-      await waitFor(() => expect(decide).toHaveBeenCalled());
-      expect(decide.mock.calls[0]?.[1]).toEqual(OFFICE_CANVAS);
-      expect(storedView()?.officeAutoView).toBe("floor");
+      expect(
+        screen.getByTestId("comm-graph-office-view-picker").textContent,
+      ).toBe("Floor");
     });
   });
 
@@ -1427,12 +1221,12 @@ describe("CommGraphTile", () => {
       ).toBe("Floor");
 
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
 
       expect(
         screen.getByTestId("comm-graph-office-view-picker").textContent,
-      ).toBe("Towers");
+      ).toBe("Building");
       expect(storedView()).toMatchObject({
         officeCamera: null,
         officeView: null,
@@ -1442,119 +1236,28 @@ describe("CommGraphTile", () => {
     it("leaves an explicitly picked tile unchanged when Settings default changes", async () => {
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "city",
+        officeView: "campus",
         x: 25,
         y: 40,
         zoom: 2,
       });
       expect(
         screen.getByTestId("comm-graph-office-view-picker").textContent,
-      ).toBe("City");
+      ).toBe("Campus");
 
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
 
       expect(
         screen.getByTestId("comm-graph-office-view-picker").textContent,
-      ).toBe("City");
+      ).toBe("Campus");
       expect(storedView()).toMatchObject({
-        officeView: "city",
+        officeView: "campus",
         x: 25,
         y: 40,
         zoom: 2,
       });
-    });
-
-    it("moves nothing when a default change resolves to the same view", async () => {
-      // Started on Auto with a restored Floor outcome, so the default's
-      // OWN change - from "auto" to the concrete "floor" - still resolves
-      // to the same view the camera was framed for.
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      await renderSeededOffice({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        x: 5,
-        y: 6,
-        zoom: 2,
-        officeAutoView: "floor",
-      });
-
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("floor"));
-
-      expect(storedView()).toMatchObject({ x: 5, y: 6, zoom: 2 });
-    });
-
-    it("re-measures Auto when a followed default returns to it, instead of reopening on the dormant outcome from before it went concrete", async () => {
-      // Codex 4011701263: a tile following the Settings default measured Auto
-      // once to "floor" - `officeAutoView`. The default then goes concrete
-      // (Towers here); that branch retires the CAMERA but never touches the
-      // dormant `officeAutoView` record, which is the whole finding - it is
-      // still "floor" when the default later returns to Auto. Leaving it in
-      // place would let the Auto effect's `officeAutoView !== null` guard skip
-      // re-measurement and reopen on that stale pick even if the epic or the
-      // tile's box changed shape in between.
-      //
-      // 21dfd8a6a: the first cut of this fix (45693c4af alone) cleared the
-      // dormant record but was itself defeated by the record-disagreement
-      // effect, which fires in the SAME commit and used to spread this
-      // render's stale `node.view` back over the clear - resurrecting
-      // `officeAutoView: "floor"` verbatim. Only fixed once that arm retired
-      // through the office-camera reducer (a targeted two-field patch)
-      // instead of a whole-view replace.
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      await renderSeededOffice({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeAutoView: "floor",
-      });
-      expect(storedView()?.officeAutoView).toBe("floor");
-
-      act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
-      );
-      expect(storedView()).toMatchObject({ officeCameraView: "towers" });
-      // The dormant record survives the trip through Towers untouched - this
-      // is what makes the case non-vacuous instead of already null going in.
-      expect(storedView()?.officeAutoView).toBe("floor");
-
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-
-      // THE gate: Auto's own measurement effect only runs while
-      // `officeAutoView === null` - this is what actually re-arms
-      // measurement, and is the assertion 45693c4af alone could not pass.
-      expect(storedView()?.officeAutoView).toBeNull();
-      expect(storedView()?.officeCamera).toBeNull();
-      // NOT asserted null: the record-disagreement arm's retire also
-      // re-stamps `officeCameraView` to the `resolvedViewId` it computed in
-      // this same stale-but-harmless render (here, still "floor") - Auto's
-      // own effect unconditionally overwrites it the moment real measurement
-      // lands, so this leftover is transient and not part of the finding's
-      // contract (only the re-measurement gate is).
-    });
-
-    it("clears the dormant Auto outcome when the default returns to Auto even while the tile is in Graph mode", async () => {
-      // CodeRabbit (Major): 45693c4af's clear was gated behind
-      // `node.view.mode !== "office"`, so a default returning to Auto while
-      // the tile is on the GRAPH never touched the dormant `officeAutoView` -
-      // no office canvas is mounted to remeasure, and the witness arm below
-      // only retires the office CAMERA, not the outcome. Switching back to
-      // Office later would then hit the Auto effect's
-      // `officeAutoView !== null` guard and skip the required re-measurement.
-      // Asserted with no office switch and no Auto measurement at all - the
-      // claim is about the STORE write the default flip itself makes, kept
-      // off the flakier measurement path entirely.
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-      await renderSeededOffice({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        mode: "graph",
-        officeAutoView: "floor",
-      });
-      expect(storedView()?.mode).toBe("graph");
-      expect(storedView()?.officeAutoView).toBe("floor");
-
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-
-      expect(storedView()?.mode).toBe("graph");
-      expect(storedView()?.officeAutoView).toBeNull();
     });
   });
 
@@ -1567,7 +1270,7 @@ describe("CommGraphTile", () => {
       // D68: the camera under test is the office's own, seeded through
       // `officeCamera` rather than the top-level fields, which are the
       // graph's now and would sit unread by anything in office mode.
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
@@ -1577,11 +1280,11 @@ describe("CommGraphTile", () => {
       await waitFor(() =>
         expect(
           screen.getByTestId("comm-graph-office-view-picker").textContent,
-        ).toBe("Towers"),
+        ).toBe("Building"),
       );
       expect(storedView()).toMatchObject({
         officeCamera: null,
-        officeCameraView: "towers",
+        officeCameraView: "building",
       });
     });
 
@@ -1608,22 +1311,7 @@ describe("CommGraphTile", () => {
       // fires a non-null value - this is the one that makes the field real:
       // a pan through the office's OWN camera path must land the view it
       // panned, not merely leave whatever was already there.
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      act(() => {
-        openedByHost.get(HOST_A)?.onSnapshot([], null);
-        openedByHost.get(HOST_B)?.onSnapshot([], null);
-      });
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
+      await reachFloor();
 
       fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
         deltaX: 80,
@@ -1636,69 +1324,6 @@ describe("CommGraphTile", () => {
       });
 
       expect(storedView()?.officeCameraView).toBe("floor");
-    });
-  });
-
-  describe("office camera writes while Auto is unresolved (F5)", () => {
-    it("ignores an office camera pan while Auto has not resolved a view yet", async () => {
-      // Before the first `onSnapshot`, `officeAutoView` is still `null` -
-      // Auto's choice is "auto" but nothing has answered it, so the canvas
-      // mounted here is the blank MEASURING surface. A pan on it frames no
-      // real view.
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      expect(storedView()?.officeAutoView).toBeNull();
-
-      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
-        deltaX: 80,
-        deltaY: 90,
-      });
-      await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
-      });
-
-      // Nothing was written: a persisted camera here would carry a null
-      // `framedView`, which Auto's keep arm would later adopt on a Floor
-      // outcome, opening the resolved office at an arbitrary framing instead
-      // of auto-fitting.
-      expect(storedView()?.officeCamera).toBeNull();
-    });
-
-    it("persists an office camera pan once Auto has resolved a view", async () => {
-      // The positive control: the same gesture, after Auto has answered,
-      // still lands - the guard above must not have gone blanket-silent.
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      act(() => {
-        openedByHost.get(HOST_A)?.onSnapshot([], null);
-        openedByHost.get(HOST_B)?.onSnapshot([], null);
-      });
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-
-      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
-        deltaX: 80,
-        deltaY: 90,
-      });
-      await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
-      });
-
       expect(storedView()?.officeCamera).not.toBeNull();
     });
   });
@@ -1719,7 +1344,7 @@ describe("CommGraphTile", () => {
         const sync = vi.spyOn(OfficeScene.prototype, "sync");
         useSettingsStore
           .getState()
-          .setAgentOfficeDefaultView(kind === "mounted" ? "floor" : "towers");
+          .setAgentOfficeDefaultView(kind === "mounted" ? "floor" : "building");
         // D68: the camera the office runtime actually reads is
         // `officeCamera`, not the top-level fields (the graph's now) -
         // seeded there so this is a real test of the runtime this ticket is
@@ -1737,7 +1362,7 @@ describe("CommGraphTile", () => {
           // The default moves WHILE this tile watches - the case the effect
           // itself witnesses.
           act(() =>
-            useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+            useSettingsStore.getState().setAgentOfficeDefaultView("building"),
           );
           setOfficeCanvasSize(OFFICE_CANVAS);
           setIntersecting(true);
@@ -1750,12 +1375,12 @@ describe("CommGraphTile", () => {
         const cameraBeforePan = storedView();
         expect(cameraBeforePan).toMatchObject({
           officeCamera: null,
-          officeCameraView: "towers",
+          officeCameraView: "building",
         });
         // The ACTUAL claim: the runtime's own frame, built from whatever
         // camera the replacement canvas actually started with, has to
-        // contain the Towers world it is supposedly showing - not a Floor
-        // camera's numbers reinterpreted as Towers.
+        // contain the Building world it is supposedly showing - not a Floor
+        // camera's numbers reinterpreted as Building.
         const state = lastFrameAndBounds(frames, sync);
         const center = {
           x: state.bounds.x + state.bounds.width / 2,
@@ -1779,7 +1404,7 @@ describe("CommGraphTile", () => {
         await act(async () => {
           await new Promise((resolve) => window.setTimeout(resolve, 180));
         });
-        expect(storedView()?.officeCameraView).toBe("towers");
+        expect(storedView()?.officeCameraView).toBe("building");
       },
     );
 
@@ -1852,7 +1477,7 @@ describe("CommGraphTile", () => {
       // The default moves WHILE this tile watches - the one signal the
       // record alone could never carry.
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
       setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
@@ -1865,11 +1490,11 @@ describe("CommGraphTile", () => {
       );
       expect(storedView()).toMatchObject({
         officeCamera: null,
-        officeCameraView: "towers",
+        officeCameraView: "building",
       });
       // The ACTUAL claim: the runtime's own frame has to contain the
-      // Towers world it is supposedly showing - not a Floor camera's
-      // numbers reinterpreted as Towers, which is exactly what a witness
+      // Building world it is supposedly showing - not a Floor camera's
+      // numbers reinterpreted as Building, which is exactly what a witness
       // that never fired would have let through.
       const state = lastFrameAndBounds(frames, sync);
       const center = {
@@ -1883,7 +1508,7 @@ describe("CommGraphTile", () => {
 
       // And the write side agrees: a wheel from here persists coordinates
       // relative to the NEUTRAL camera the runtime actually started from,
-      // not the stale Floor framing carried forward and re-stamped Towers.
+      // not the stale Floor framing carried forward and re-stamped Building.
       fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
         deltaX: 20,
         deltaY: 30,
@@ -1892,7 +1517,7 @@ describe("CommGraphTile", () => {
       await act(async () => {
         await new Promise((resolve) => window.setTimeout(resolve, 180));
       });
-      expect(storedView()).toMatchObject({ officeCameraView: "towers" });
+      expect(storedView()).toMatchObject({ officeCameraView: "building" });
       // D68: the persisted-relative-to-neutral claim reads `officeCamera`
       // now, not the top-level fields.
       expect(storedView()?.officeCamera?.x).not.toBe(-10020);
@@ -1929,7 +1554,7 @@ describe("CommGraphTile", () => {
     });
 
     it("keeps a legacy camera when the default already moved before the tile ever mounted (accepted gap, D52)", async () => {
-      // Nothing witnessed this move - the default was already `towers` by
+      // Nothing witnessed this move - the default was already `building` by
       // the time this tile opened, so there is no live change for
       // `useWitnessedOfficeViewMove` to catch, and no record to catch it at
       // render either. Resetting here would throw away the framing of
@@ -1942,7 +1567,7 @@ describe("CommGraphTile", () => {
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
@@ -1995,7 +1620,7 @@ describe("CommGraphTile", () => {
       step();
 
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
       setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
@@ -2031,311 +1656,6 @@ describe("CommGraphTile", () => {
         x: storedOfficeCamera.x,
         y: storedOfficeCamera.y,
         zoom: storedOfficeCamera.zoom,
-      });
-    });
-  });
-
-  describe("a Settings change under an unresolved Auto (fixup 4, R1)", () => {
-    // Fixup 3's witness armed on the SHAPE of the move: any `null` on
-    // either side, or a record that already disagreed with the arriving
-    // view. Both readings were wrong about the one writer that matters
-    // here. `resolvedViewId` is also `null` when the Settings default is
-    // Auto and replay has not produced a measurement yet - and from
-    // there, a Settings change to a CONCRETE view moves the resolved view
-    // with no atomic write behind it at all, exactly like a live default
-    // change moves it. The witness sat that transition out because it
-    // starts and ends on `null` on one side, so the reset only happened in
-    // the later default-change effect, a frame after the replacement
-    // runtime had already captured the stale camera.
-    //
-    // It also failed when the record ALREADY named the arriving view - a
-    // tile saved under a Settings default of Towers, reopened while the
-    // default is Auto, then Settings -> Towers again - because a record
-    // can name a view for reasons that have nothing to do with a writer
-    // having just run. So the rule cannot read the VALUE at all; it has
-    // to read WHICH WRITER moved the resolved view. What arms the witness
-    // now is the Settings default changing between one render and the
-    // next; Auto's answer, a re-pick of Auto and an explicit pick each
-    // write their own camera in the same store write, so none of them
-    // arm it.
-
-    // The per-epic comm-graph subscription manager is retained (a bounded
-    // MRU, not per-test) across every case in this file, keyed on
-    // `EPIC_ID` - so a manager an EARLIER case already caught up for this
-    // epic survives into a later one and answers `initialHistoryCaughtUp`
-    // before this describe's own `caughtUp()` ever runs. Every case here
-    // depends on catching that transition mid-flight, so each gets a fresh
-    // manager rather than inheriting whatever state the file's run order
-    // left behind.
-    beforeEach(() => {
-      __resetCommGraphRegistryForTests();
-    });
-
-    it.each(["towers", "campus"] as const)(
-      "resets the runtime camera when Settings moves from an unresolved Auto to %s",
-      async (target) => {
-        // D68: seeded through `officeCamera` - the top-level fields are the
-        // graph's now and would never move regardless of the office's story.
-        const { step } = installCanvas();
-        const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-        const frames = vi.spyOn(OfficeScene.prototype, "frame");
-        const sync = vi.spyOn(OfficeScene.prototype, "sync");
-        useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-        await renderSeededOfficeInLoadedSession({
-          ...DEFAULT_COMM_GRAPH_VIEW,
-          officeCamera: { x: -10000, y: -20000, zoom: 4 },
-          officeCameraView: null,
-        });
-        setOfficeCanvasSize(OFFICE_CANVAS);
-        setIntersecting(true);
-        // Replay still pending - Auto has nothing to decide from, which is
-        // what keeps the resolved view at `null` here.
-        expect(decide).not.toHaveBeenCalled();
-        expect(storedView()).toMatchObject({
-          officeCamera: { x: -10000, y: -20000, zoom: 4 },
-          officeCameraView: null,
-        });
-
-        act(() =>
-          useSettingsStore.getState().setAgentOfficeDefaultView(target),
-        );
-        setOfficeCanvasSize(OFFICE_CANVAS);
-        setIntersecting(true);
-        caughtUp();
-        step();
-
-        // The default is concrete now, so Auto still never runs - there was
-        // never a measurement for it to make.
-        expect(decide).not.toHaveBeenCalled();
-        expect(storedView()).toMatchObject({
-          officeCamera: null,
-          officeCameraView: target,
-        });
-        const state = lastFrameAndBounds(frames, sync);
-        const center = {
-          x: state.bounds.x + state.bounds.width / 2,
-          y: state.bounds.y + state.bounds.height / 2,
-        };
-        expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
-        expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
-        expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
-        expect(center.y).toBeLessThanOrEqual(
-          state.frame.y + state.frame.height,
-        );
-
-        fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
-          deltaX: 20,
-          deltaY: 30,
-        });
-        step();
-        await act(async () => {
-          await new Promise((resolve) => window.setTimeout(resolve, 180));
-        });
-        expect(storedView()).toMatchObject({ officeCameraView: target });
-        expect(storedView()?.officeCamera?.x).not.toBe(-10020);
-        expect(storedView()?.officeCamera?.y).not.toBe(-20030);
-      },
-    );
-
-    it("resets the runtime camera even when the record already names the arriving view", async () => {
-      // The record alone was never enough to answer this: it can already
-      // read "towers" from before the tile was ever reopened, over a
-      // camera nothing has reframed since. The record describes where the
-      // camera has BEEN; only the witness can say a writer has framed it
-      // FOR the view arriving now. This is the case that rules out "record
-      // !== resolvedView" as the trigger - a rule keyed on the value alone
-      // would have waved this one through.
-      // D68: seeded through `officeCamera`, same reasoning as the case above.
-      const { step } = installCanvas();
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      const frames = vi.spyOn(OfficeScene.prototype, "frame");
-      const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      await renderSeededOfficeInLoadedSession({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: "towers",
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()).toMatchObject({
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: "towers",
-      });
-
-      act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
-      );
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()).toMatchObject({
-        officeCamera: null,
-        officeCameraView: "towers",
-      });
-      const state = lastFrameAndBounds(frames, sync);
-      const center = {
-        x: state.bounds.x + state.bounds.width / 2,
-        y: state.bounds.y + state.bounds.height / 2,
-      };
-      expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
-      expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
-      expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
-      expect(center.y).toBeLessThanOrEqual(state.frame.y + state.frame.height);
-
-      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
-        deltaX: 20,
-        deltaY: 30,
-      });
-      step();
-      await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
-      });
-      expect(storedView()).toMatchObject({ officeCameraView: "towers" });
-      expect(storedView()?.officeCamera?.x).not.toBe(-10020);
-      expect(storedView()?.officeCamera?.y).not.toBe(-20030);
-    });
-
-    it("leaves an explicit pick's own reset alone - the pick's write did it, not the witness", async () => {
-      // D68: seeded through `officeCamera`, same reasoning as the rest of
-      // this describe block.
-      const { step } = installCanvas();
-      const frames = vi.spyOn(OfficeScene.prototype, "frame");
-      const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      await renderSeededOfficeInLoadedSession({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: null,
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      expect(storedView()).toMatchObject({
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: null,
-      });
-
-      chooseView("towers");
-
-      // The pick's own write already reset the camera the store holds -
-      // this is a fact about `handleOfficeViewChange`, nothing the witness
-      // is even eligible to touch (an explicit pick never arms it).
-      expect(storedView()).toMatchObject({
-        officeView: "towers",
-        officeCameraView: "towers",
-        officeCamera: null,
-      });
-
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-      const state = lastFrameAndBounds(frames, sync);
-      const center = {
-        x: state.bounds.x + state.bounds.width / 2,
-        y: state.bounds.y + state.bounds.height / 2,
-      };
-      expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
-      expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
-      expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
-      expect(center.y).toBeLessThanOrEqual(state.frame.y + state.frame.height);
-    });
-
-    it("keeps a resolved Floor camera when Auto answers - the witness must not overrule a preserved camera", async () => {
-      // Same "no measurement yet" seed as the two defect cases above, but
-      // replay is let finish here instead of held back, so Auto answers
-      // Floor on its own atomic write. If the witness ever armed on a
-      // plain `null -> concrete` move - the over-broad fix this case
-      // exists to catch - it would have already thrown this camera away by
-      // the time the assertions below run, and the frame would land on the
-      // neutral camera's numbers instead of these.
-      // D68: seeded through `officeCamera`, same reasoning as the rest of
-      // this describe block.
-      const { step } = installCanvas();
-      const frames = vi.spyOn(OfficeScene.prototype, "frame");
-      const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      await renderSeededOfficeInLoadedSession({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: null,
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-
-      expect(storedView()).toMatchObject({
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeAutoView: "floor",
-        officeCameraView: "floor",
-      });
-      // Auto's decision remounts the canvas (measuring -> floor), and that
-      // remount only reports its own eligibility on the frame this `step()`
-      // drives - the sync loop it then starts needs one more of its own.
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      step();
-      const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual(PERSISTED_CAMERA_FRAME);
-    });
-
-    it("neutralises the camera on a re-pick of Auto - the re-pick's own write did it, not the witness", async () => {
-      // D68: seeded through `officeCamera`, same reasoning as the rest of
-      // this describe block.
-      const { step } = installCanvas();
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      await renderSeededOfficeInLoadedSession({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "floor",
-        officeCameraView: "floor",
-        officeCamera: { x: 155, y: 266, zoom: 2 },
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-      expect(storedView()).toMatchObject({
-        officeView: "floor",
-        officeCameraView: "floor",
-        officeCamera: { x: 155, y: 266, zoom: 2 },
-      });
-
-      chooseView("auto");
-
-      // The re-pick's own synchronous write neutralised the camera - the
-      // decisive, load-bearing claim this case exists to pin. `officeCamera`
-      // survives ONLY through the witness's `keep` arm (fixup-4's own
-      // `officeCameraForView`, ~:253: `!witnessedMove` reuses
-      // `node.view.officeCamera`), and an explicit re-pick never arms the
-      // witness - so a camera that came back `null` here did so because the
-      // re-pick itself wrote `null`, not because nothing else had a chance
-      // to restore it.
-      expect(storedView()?.officeCamera).toBeNull();
-
-      // `officeAutoView`/`officeCameraView` reading "floor" (not a lingering
-      // `null`) is the OTHER half of this fix, F4: the seed now asks
-      // viewport intersection (`isElementInViewport`) instead of mere layout
-      // participation (`isElementVisible`), and this harness's canvas is
-      // laid out on screen (`installCanvas`'s stubbed on-screen rect) - so
-      // the remounted canvas is ELIGIBLE the instant it mounts, exactly like
-      // a real visible tile. That lets Auto's decision effect re-measure and
-      // re-decide "floor" inside the very same `chooseView("auto")` act,
-      // before this assertion ever runs. The old, now-corrected expectation
-      // of a persistent `null` here was an artifact of jsdom's
-      // `isElementVisible` always reading false (no `checkVisibility`, no
-      // laid-out `getClientRects`), which held the canvas ineligible at
-      // mount and left Auto's re-decision to a later tick this test never
-      // reached.
-      expect(storedView()).toMatchObject({
-        officeView: "auto",
-        officeAutoView: "floor",
-        officeCameraView: "floor",
-        officeCamera: null,
       });
     });
   });
@@ -2383,7 +1703,7 @@ describe("CommGraphTile", () => {
       // canvas mounted to reset, and the record disagreeing afterwards must
       // not spill onto the graph's own camera.
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
 
       expect(storedView()).toMatchObject({
@@ -2438,7 +1758,7 @@ describe("CommGraphTile", () => {
      */
     it("hands the Graph canvas its own stored camera untouched, even when the office record is stale", async () => {
       const canvasSpy = vi.spyOn(commGraphCanvasModule, "CommGraphCanvas");
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
         mode: "graph",
@@ -2446,7 +1766,7 @@ describe("CommGraphTile", () => {
         y: 266,
         zoom: 2,
         // Stale: framed under Floor while Office (unseen, since Graph is
-        // active) now resolves to Towers via the changed default.
+        // active) now resolves to Building via the changed default.
         officeCameraView: "floor",
       });
 
@@ -2472,7 +1792,7 @@ describe("CommGraphTile", () => {
       // GRAPH's own camera, and back - the office must mount on the camera
       // it had, untouched by anything the graph did while it was away.
       const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
-      await reachAutoFloor();
+      await reachFloor();
 
       // The office camera change.
       act(() => {
@@ -2584,7 +1904,7 @@ describe("CommGraphTile", () => {
       // keeps each renderer's camera. No `await`/timer advance between the
       // wheel and the click: the claim is about catching the write BEFORE
       // the debounce has any chance to fire on its own.
-      await reachAutoFloor();
+      await reachFloor();
       expect(storedView()?.officeCamera).toBeNull();
 
       fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
@@ -2608,16 +1928,16 @@ describe("CommGraphTile", () => {
       // `onRegisterFlush` is never consulted by a view pick, so this
       // pre-existing drop (a pan on the OLD view has no business landing on
       // the new one) must survive untouched.
-      await reachAutoFloor();
+      await reachFloor();
 
       fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
         deltaX: 80,
         deltaY: 90,
       });
-      await pickView("towers");
+      await pickView("building");
 
-      expect(storedView()?.officeView).toBe("towers");
-      expect(storedView()?.officeCameraView).toBe("towers");
+      expect(storedView()?.officeView).toBe("building");
+      expect(storedView()?.officeCameraView).toBe("building");
       expect(storedView()?.officeCamera).toBeNull();
     });
   });
@@ -2634,45 +1954,44 @@ describe("CommGraphTile", () => {
     // write that is not itself the office's camera settling.
     //
     // Every case below seeds the same tile: GRAPH mode (the mode switch
-    // that matters is the one still ahead), `officeView: null` and
-    // `officeAutoView: null` (a followed default, nothing pinned), a
-    // camera that has never addressed "towers" at all
-    // (`{ x: -10000, y: -20000, zoom: 4 }`), and - the detail that makes
-    // this the Graph-mode variant of the finding - `officeCameraView:
-    // "towers"` ALREADY on the record, for reasons that have nothing to do
-    // with the move about to happen (the tile could have been saved under
-    // a Settings default of Towers long before Auto was ever picked).
+    // that matters is the one still ahead), `officeView: null` (a followed
+    // default, nothing pinned), a camera that has never addressed
+    // "building" at all (`{ x: -10000, y: -20000, zoom: 4 }`), and - the
+    // detail that makes this the Graph-mode variant of the finding -
+    // `officeCameraView: "building"` ALREADY on the record, for reasons
+    // that have nothing to do with the move about to happen (the tile
+    // could have been saved under a Settings default of Building long
+    // before this move ever happened).
     function seededTile(): CommGraphTileViewState {
       return {
         ...DEFAULT_COMM_GRAPH_VIEW,
         mode: "graph",
         officeView: null,
-        officeAutoView: null,
-        officeCameraView: "towers",
+        officeCameraView: "building",
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
       };
     }
 
     it("keeps the witness armed through a mode switch when the record already names the arriving view", async () => {
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOffice(seededTile());
       expect(storedView()?.mode).toBe("graph");
 
-      // THE ARMING MOVE: the default moves auto -> towers while Graph is
+      // THE ARMING MOVE: the default moves floor -> building while Graph is
       // still up. Both reset effects return early outside office mode, so
       // this writes NOTHING to the store - the only trace it leaves is the
       // witness, which arms on the stored view object as it stands right
-      // now (`officeCameraView: "towers"` already, camera still the stale
+      // now (`officeCameraView: "building"` already, camera still the stale
       // one seeded above).
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
 
       const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
       // THE RELEASING WRITE: a plain mode switch. `handleModeChange` writes
-      // a new view object carrying the SAME `officeCameraView: "towers"` it
+      // a new view object carrying the SAME `officeCameraView: "building"` it
       // already had - which is exactly the pre-existing match the release
-      // predicate mistakes for a writer that has just spoken FOR "towers".
+      // predicate mistakes for a writer that has just spoken FOR "building".
       await act(async () => {
         fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
         await Promise.resolve();
@@ -2681,7 +2000,7 @@ describe("CommGraphTile", () => {
       // ASSERTION 1: the office runtime has to be BUILT neutral. A released
       // witness hands the canvas the stale `{-10000, -20000, 4}` on its
       // very first render - the camera never had anything to do with
-      // Towers, and `createOfficeRuntime` only ever reads this once.
+      // Building, and `createOfficeRuntime` only ever reads this once.
       expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
 
       await act(async () => {
@@ -2689,14 +2008,14 @@ describe("CommGraphTile", () => {
       });
 
       // ASSERTION 2: THE STORE IS SETTLED TOO. Reset effect 1 declines to
-      // fire because the record already names "towers" - so today the
+      // fire because the record already names "building" - so today the
       // projection would be neutral (once assertion 1 holds) while the
       // STORE keeps the stale camera, and a reload before the office
       // happens to pan hands it straight back with the record still
       // vouching for it.
       expect(storedView()).toMatchObject({
         officeCamera: null,
-        officeCameraView: "towers",
+        officeCameraView: "building",
       });
     });
 
@@ -2708,12 +2027,12 @@ describe("CommGraphTile", () => {
       // read - and must not be read as a writer having spoken FOR the
       // arriving office view, any more than the mode switch above should
       // have been.
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOffice(seededTile());
       expect(storedView()?.mode).toBe("graph");
 
       act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+        useSettingsStore.getState().setAgentOfficeDefaultView("building"),
       );
 
       // THE GRAPH PAN, between the arming move and the mode switch.
@@ -2748,7 +2067,7 @@ describe("CommGraphTile", () => {
 
       expect(storedView()).toMatchObject({
         officeCamera: null,
-        officeCameraView: "towers",
+        officeCameraView: "building",
         // ...plus the Graph's own camera has to have survived the whole
         // detour untouched - it is a different field entirely since D68,
         // and the office's own settling write touches only `officeCamera`
@@ -2761,14 +2080,14 @@ describe("CommGraphTile", () => {
 
     it("a mode switch with no default move keeps the office camera exactly (N10 guard - what D68 exists for)", async () => {
       // THE GUARD. No Settings default move happens anywhere in this case:
-      // the resolved view is already "towers" when the tile mounts and
-      // stays "towers" throughout, so the witness never arms in the first
+      // the resolved view is already "building" when the tile mounts and
+      // stays "building" throughout, so the witness never arms in the first
       // place - there is nothing here for the fix above to release
       // wrongly, or to hold rightly. This is exactly the case D68 added a
       // per-renderer camera to protect (a mode switch is not a camera
       // event), and the fix for the finding above must leave it alone:
       // expected GREEN both before this fixup and after it.
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
       await renderSeededOffice(seededTile());
       expect(storedView()?.mode).toBe("graph");
 
@@ -2790,259 +2109,37 @@ describe("CommGraphTile", () => {
 
       expect(storedView()).toMatchObject({
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: "towers",
+        officeCameraView: "building",
       });
     });
   });
 
-  describe("the reverse default move hands Auto's keep arm a camera the witness distrusts (fixup 12, Finding D)", () => {
-    // THE MIRROR of the headline above. There the default moved between two
-    // CONCRETE views while Graph was up, and the record already named the
-    // arriving one - the store's own effects had nothing to say and only the
-    // witness caught it. Here the default moves CONCRETE -> "auto" while
-    // Graph is up, so `resolvedViewId` goes "towers" -> `null` (Auto has not
-    // answered yet). That `null` is the one shape BOTH store-side effects
-    // decline at (the followed-default effect returns on Graph mode at
-    // `:518`; the record/witness effect returns on `resolvedViewId === null`
-    // at `:575`), so the stale Towers camera survives in the store with
-    // nothing but the witness left to remember that anything moved.
+  describe("an explicit pick sees nothing left to preserve once the default resolves to something concrete (fixup 12, pick-arm timing)", () => {
+    // The pick sibling has its own preservation arm: `next ===
+    // resolvedViewId ? node.view.officeCamera : null`. To exercise it with a
+    // witnessed move actually held, `resolvedViewId` has to stay CONCRETE
+    // the whole time (there is no unresolved state left to route through
+    // now that every choice is a real view), so this arms the witness on
+    // building -> campus, both concrete.
     //
-    // Then Office mounts and REAL Auto answers Floor. The D52 keep arm at
-    // `:631-640` (`decision.view === "floor" ? node.view.officeCamera :
-    // null`) was written for a TRUSTED camera - a tile that predates the
-    // choice, carrying a Floor-framed camera nothing has touched since. A
-    // held witness is exactly the statement that this camera is not that:
-    // a writer promised to speak for the arriving view and never has. The
-    // keep arm preserves it anyway, unconditionally, and stamps `floor` -
-    // vouching for Towers coordinates it was never told to distrust.
-    //
-    // THE RULING mid-fixup: declining only at the keep arm is not enough by
-    // itself. It protects the runtime THIS mount builds, but a tile closed
-    // and reopened in the window between the default move and Auto's
-    // answer has no mount alive to decline anything - it gets the stale
-    // camera handed straight back on parse, with the record still naming
-    // "towers" (or, in the unstamped case below, naming nothing at all).
-    // That is exactly requirement 3's gap. So the store has to retire the
-    // camera WHILE THE VIEW IS STILL UNRESOLVED, on the witness alone -
-    // before Auto, before a reload, before anything else gets a say.
-    function seededTowersToAutoTile(
-      officeCameraView: OfficeViewId | null,
-    ): CommGraphTileViewState {
-      return {
+    // The reason this is expected to come back GREEN rather than red:
+    // whenever `resolvedViewId` is concrete, the record/witness reset
+    // effect is never blocked, and - since D68/fixup 12 - it carries NO
+    // mode gate either. So it retires the stale camera and releases the
+    // witness the moment the default move resolves, whether Graph or
+    // Office is on screen, well before any pick could ever see an armed
+    // witness sitting over a non-null camera. The pick arm is unreachable
+    // by TIMING here - the other effect always wins the race - not because
+    // the arm itself knows to decline a witnessed camera.
+    it("an explicit pick of the already-resolved view finds nothing left to preserve (pick sibling) - green by timing, not by rule", async () => {
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
+      await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
         mode: "graph",
         officeView: null,
-        officeAutoView: null,
-        officeCameraView,
+        officeCameraView: "building",
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
-      };
-    }
-
-    it("retires the stale camera while still unresolved, and builds the first resolved Floor runtime neutral (Settings towers -> auto, stamped record)", async () => {
-      const { step } = installCanvas();
-      const frames = vi.spyOn(OfficeScene.prototype, "frame");
-      const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-      // Seeded at Finding B's own non-neutral numbers, not the default -
-      // zeroing an already-zero Graph camera would pass whether or not the
-      // newly-enabled unresolved-reset path also (wrongly) neutralised the
-      // GRAPH's fields, which is exactly the blind spot that hid Finding B.
-      // Asserted immediately below, before the Settings move, so a mis-seed
-      // fails loudly here instead of laundering into a false pass later.
-      await renderSeededOffice({
-        ...seededTowersToAutoTile("towers"),
-        x: 155,
-        y: 266,
-        zoom: 2,
       });
-      expect(storedView()?.mode).toBe("graph");
-      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
-
-      // THE ARMING MOVE, reversed from the headline: Settings towers ->
-      // auto while Graph is still up. `resolvedViewId` goes "towers" ->
-      // `null` - Auto has not measured anything yet - which is the one
-      // shape neither store-side effect will touch.
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-
-      // ASSERTION 1, and the reviewer's mid-fixup ruling: the store must
-      // retire the camera HERE, before Auto ever runs and while Graph is
-      // still the mode on screen - a reload in this exact window has only
-      // the record to go on, and the record still names "towers" over a
-      // camera nothing has framed for the arriving (unresolved) view.
-      // RED today: both effects decline on `resolvedViewId === null` /
-      // the Graph-mode gate, so nothing retires it - the camera and its
-      // stale stamp both survive untouched.
-      expect(storedView()).toMatchObject({
-        mode: "graph",
-        officeCamera: null,
-        officeCameraView: null,
-      });
-
-      // Switch to Office. `resolvedViewId` is still `null` - Auto has
-      // nothing to decide from yet - so this mounts on the measuring view
-      // first, exactly as every other "Auto has not answered" case in
-      // this file does.
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
-        await Promise.resolve();
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-
-      // REAL Auto, not a stub: this fixture's handful of agents fits the
-      // Floor on an `OFFICE_CANVAS` tile, the same fixture and the same box
-      // every other Auto case in this file relies on. Sized by that constant
-      // rather than by hand: at the 1040x700 these cases were written against
-      // the civic rooms now push the fit to 0.554 and Auto answers TOWERS, so
-      // a hand-written box turns this into a Towers case that still claims to
-      // be about a Floor. See `OFFICE_CANVAS`.
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-
-      // The Auto answer remounts the canvas (measuring -> floor), and that
-      // remount only reports its own eligibility on the frame this next
-      // `step()` drives - same two-step pattern as "keeps a resolved Floor
-      // camera when Auto answers" above.
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      step();
-
-      // ASSERTION 2: the FIRST resolved Floor runtime is read off the
-      // ACTUAL scene it painted, not off `lastCanvasCamera`'s last-render
-      // props (which answers a different, weaker question and never
-      // installs a canvas or steps a frame at all). With `officeCamera`
-      // retired to `null`, `isDefaultCommGraphView` is true and auto-fit
-      // arms, so the Floor frame lands on `fittedFrame`'s rect; the keep
-      // arm's unconditional preservation of the stale Towers camera would
-      // instead have produced the far-off-screen `PERSISTED_CAMERA_FRAME`
-      // that the sibling "keeps a resolved Floor camera" case pins - not
-      // close to this one. Both rects are named constants derived from the
-      // same `OFFICE_CANVAS`, so the contrast this asserts survives the next
-      // change to the tile box instead of decaying into two stale literals.
-      const state = lastFrameAndBounds(frames, sync);
-      // The view the scene actually PAINTED, asserted before the frame is
-      // derived from it: `fittedFrame(state.world, ...)` reads the world of
-      // whatever got laid out, so a run that wrongly landed on Towers would
-      // compare a Towers frame against a fitted TOWERS frame and agree with
-      // itself. This is the line that stops the live derivation from being
-      // able to pass for the wrong view.
-      expect(state.view).toBe("floor");
-      expect(state.frame).toEqual(fittedFrame(state.world, OFFICE_CANVAS));
-
-      // ASSERTION 3: the Graph's own camera was never anyone's business in
-      // this sequence and has to read exactly as seeded throughout - not
-      // merely "still the default", which a wrongly-broadened reset could
-      // satisfy by coincidence, but the actual non-neutral numbers seeded
-      // above. This whole detour is about the OFFICE's `officeCamera`, a
-      // different field since D68.
-      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
-    });
-
-    it("retires the stale camera while still unresolved even with no stamp at all - the legacy variant with the same store-settlement gap", async () => {
-      // Identical to the case above except `officeCameraView: null` - a
-      // camera persisted before the stamp field ever existed. This is the
-      // case that separates the two kinds of evidence `officeViewForCanvas`
-      // reads as an OR: the RECORD (a name the camera was saved under) and
-      // the WITNESS (a mount that watched the default move). A fix that
-      // only consults the record - "does `officeCameraView` disagree with
-      // where we are headed" - has nothing to read here: the record has
-      // always said "nobody framed this" and will keep saying so no matter
-      // what the default does. Only the witness knows a default move
-      // happened at all, so if store settlement is wired through the
-      // record alone, this case still fails while the stamped case above
-      // passes.
-      const { step } = installCanvas();
-      const frames = vi.spyOn(OfficeScene.prototype, "frame");
-      const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-      // Same Finding-B seed as the stamped case above, for the same reason:
-      // the default camera can't tell a wrongly-broad neutralisation of the
-      // GRAPH's fields from a correct no-op, and asserted immediately so a
-      // mis-seed is caught here rather than mistaken for a pass later.
-      await renderSeededOffice({
-        ...seededTowersToAutoTile(null),
-        x: 155,
-        y: 266,
-        zoom: 2,
-      });
-      expect(storedView()?.mode).toBe("graph");
-      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
-
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-
-      // ASSERTION 1, same ruling as the stamped case: the store must
-      // retire the camera while still unresolved and Graph is up. RED
-      // today, and for the same reason - `resolvedViewId === null` blocks
-      // both effects regardless of what the record does or does not say.
-      expect(storedView()).toMatchObject({
-        mode: "graph",
-        officeCamera: null,
-        officeCameraView: null,
-      });
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
-        await Promise.resolve();
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      step();
-
-      // ASSERTION 2: same as the stamped case - read off the actual scene
-      // the first resolved Floor runtime painted, not `lastCanvasCamera`'s
-      // last-render props. Neutral retirement here means auto-fit arms and
-      // this lands on the same fitted frame as the stamped case; a
-      // record-only fix has no evidence to distrust in this legacy variant
-      // (no stamp at all) and would leave the stale Towers camera in place,
-      // producing the far-off-screen frame instead.
-      const state = lastFrameAndBounds(frames, sync);
-      // The view the scene actually PAINTED, asserted before the frame is
-      // derived from it: `fittedFrame(state.world, ...)` reads the world of
-      // whatever got laid out, so a run that wrongly landed on Towers would
-      // compare a Towers frame against a fitted TOWERS frame and agree with
-      // itself. This is the line that stops the live derivation from being
-      // able to pass for the wrong view.
-      expect(state.view).toBe("floor");
-      expect(state.frame).toEqual(fittedFrame(state.world, OFFICE_CANVAS));
-
-      // ASSERTION 3: the Graph's camera, untouched throughout - the actual
-      // seeded numbers, not merely "still the default".
-      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
-    });
-
-    it("an explicit pick of the already-resolved view finds nothing left to preserve (pick sibling, ~687) - green by timing, not by rule", async () => {
-      // The pick sibling has its own preservation arm: `next ===
-      // resolvedViewId ? node.view.officeCamera : null`. To exercise it
-      // with a witnessed move actually held, `resolvedViewId` has to stay
-      // CONCRETE the whole time - unlike the two cases above, which route
-      // through Auto's `null`. So this arms the witness on towers ->
-      // campus instead, both concrete.
-      //
-      // The reason this is expected to come back GREEN rather than red:
-      // whenever `resolvedViewId` is concrete, the record/witness reset
-      // effect (`:566`) is not blocked by the `resolvedViewId === null`
-      // guard at all, and - since D68/fixup 12 - it carries NO mode gate
-      // either. So it retires the stale camera and releases the witness
-      // the moment the default move resolves to something concrete,
-      // whether Graph or Office is on screen, well before any pick could
-      // ever see an armed witness sitting over a non-null camera. The pick
-      // arm is unreachable by TIMING here - the other effect always wins
-      // the race - not because the arm itself knows to decline a
-      // witnessed camera the way Finding D's fix teaches the keep arm to.
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-      await renderSeededOffice(seededTowersToAutoTile("towers"));
       expect(storedView()?.mode).toBe("graph");
 
       act(() =>
@@ -3064,8 +2161,7 @@ describe("CommGraphTile", () => {
       });
 
       // An explicit pick of "campus" - the view already resolved and
-      // already showing - exercises the pick sibling's own keep arm at
-      // `:687`.
+      // already showing - exercises the pick sibling's own keep arm.
       chooseView("campus");
 
       // GREEN: there was never a non-null camera left for this arm to
@@ -3076,470 +2172,6 @@ describe("CommGraphTile", () => {
         officeCamera: null,
       });
     });
-  });
-
-  describe("Auto's keep arm trusts a camera the record itself contradicts (Finding E)", () => {
-    // THE OTHER GAP the keep arm at `:661-664` leaves open, and unlike
-    // Finding D there is NO WITNESS anywhere in this one - which is exactly
-    // what makes it a different defect, not a repeat. Finding D was about a
-    // move witnessed live, with the store settlement effect (`:573-631`)
-    // failing to retire the camera before Auto could see it. Here nothing
-    // moves live at all:
-    //
-    // 1. A tile with `officeCameraView: "towers"` and a non-null Towers
-    //    camera is LRU-evicted; the Settings default moves to `auto` while it
-    //    is gone. Nothing witnesses this - there is no mount to arm on.
-    // 2. It reopens cold: `officeView: null`, `officeAutoView: null`, the
-    //    stamp still says `"towers"`, the camera is still non-null. A fresh
-    //    mount arms no witness, and the record/witness settlement effect
-    //    waits for a CONCRETE `resolvedViewId` to compare the stamp against -
-    //    which is `null`, since Auto has not measured anything yet. So the
-    //    stale camera and its contradicting stamp both ride straight through
-    //    to Auto.
-    // 3. Real Auto answers Floor. The keep arm asks only "is the outcome
-    //    Floor?" - not "does the record already say this camera is for a
-    //    DIFFERENT view?" - so it preserves the Towers camera anyway and
-    //    overwrites the one piece of evidence against it (`officeCameraView`
-    //    becomes `"floor"`), same as Finding D's ending but reached with no
-    //    live move and no witness at all.
-    //
-    // D52's actual exception is a camera with NO record (`officeCameraView:
-    // null` - "nobody framed this, trust it"). A record naming ANOTHER view
-    // is the opposite of that: it is the tile's own history vouching AGAINST
-    // the camera, and the keep arm has to read it before deciding whether to
-    // preserve.
-    it("neutralises a record-contradicted camera on Auto's first Floor outcome, cold reopen, no live move (Finding E)", async () => {
-      const { step } = installCanvas();
-      const frames = vi.spyOn(OfficeScene.prototype, "frame");
-      const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      // The default is ALREADY "auto" before this tile ever mounts - no
-      // Settings move happens on this tile's watch. Moving the default here
-      // would rearm the witness and this would just be Finding D again.
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      // A cold reopen: `officeView`/`officeAutoView` both `null` (following
-      // Auto, unmeasured), the record still naming the view this camera was
-      // actually framed for before the default moved out from under it while
-      // it sat evicted. Graph seeded at Finding B's own non-neutral numbers,
-      // same reasoning as the fixup 12 cases above - a neutral seed could not
-      // tell a correct no-op from a wrongly-broadened reset touching the
-      // GRAPH's fields.
-      await renderSeededOfficeInLoadedSession({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        x: 155,
-        y: 266,
-        zoom: 2,
-        officeCameraView: "towers",
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-      });
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      caughtUp();
-      step();
-
-      // REAL Auto, not a stub: this fixture's handful of agents fits the
-      // Floor on an `OFFICE_CANVAS` tile, the same fixture and the same box
-      // every other Auto case in this file relies on. Sized by that constant
-      // rather than by hand: at the 1040x700 these cases were written against
-      // the civic rooms now push the fit to 0.554 and Auto answers TOWERS, so
-      // a hand-written box turns this into a Towers case that still claims to
-      // be about a Floor. See `OFFICE_CANVAS`.
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-
-      // The Auto answer remounts the canvas (measuring -> floor), and that
-      // remount only reports its own eligibility on the frame this next
-      // `step()` drives - same two-step pattern as every other real-Auto
-      // frame read in this file.
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      setIntersecting(true);
-      step();
-
-      // ASSERTION 1, the strong route: the first resolved Floor runtime read
-      // off the ACTUAL scene it painted. RED before Finding E's fix - the
-      // keep arm handed the canvas the stale Towers camera unconditionally on
-      // a Floor outcome, so the runtime framed the far-off-screen
-      // `PERSISTED_CAMERA_FRAME` the sibling "keeps a resolved Floor camera"
-      // case pins, not the fitted rect below.
-      const state = lastFrameAndBounds(frames, sync);
-      // The view the scene actually PAINTED, asserted before the frame is
-      // derived from it: `fittedFrame(state.world, ...)` reads the world of
-      // whatever got laid out, so a run that wrongly landed on Towers would
-      // compare a Towers frame against a fitted TOWERS frame and agree with
-      // itself. This is the line that stops the live derivation from being
-      // able to pass for the wrong view.
-      expect(state.view).toBe("floor");
-      expect(state.frame).toEqual(fittedFrame(state.world, OFFICE_CANVAS));
-
-      // ASSERTION 2: the STORE agrees. RED today for the same reason -
-      // `node.view.officeCamera` rides through unconditionally and the stamp
-      // that would have named the contradiction is overwritten with
-      // `"floor"` in the very same write.
-      expect(storedView()).toMatchObject({
-        officeCamera: null,
-        officeCameraView: "floor",
-      });
-
-      // ASSERTION 3: the Graph's own camera was never anyone's business here
-      // either - the actual seeded numbers, not merely "still the default".
-      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
-    });
-
-    // GUARD 1 (pre-existing): the record with NO stamp at all - D52's actual
-    // exception, a legacy camera that has never addressed any view. Finding
-    // E's fix reads the record before trusting the camera, and this is the
-    // case that proves it does not turn into a blanket refusal: `null` must
-    // still mean "nobody framed this, trust it" and let the camera through.
-    // "keeps a resolved Floor camera when Auto answers - the witness must
-    // not overrule a preserved camera" (above, in "a Settings change under
-    // an unresolved Auto (fixup 4, R1)") already seeds exactly this
-    // (`officeCameraView: null`) and asserts the stale-but-unstamped camera
-    // survives Auto's Floor outcome - confirmed by re-reading it rather than
-    // duplicated here.
-
-    // GUARD 2: the record AGREEING with the outcome - the other shape the
-    // fix must not over-refuse. "keeps the saved camera when Auto's first
-    // outcome is Floor" (above, in the "Auto" describe block) already covers
-    // this: it stamps the camera `"floor"` through
-    // `updateCommGraphTileOfficeCameraInTab`'s own `framedView` argument
-    // before Auto ever runs, and Auto's first outcome IS Floor - record and
-    // outcome agree - so it asserts the camera survives untouched
-    // (`{ x: 111, y: 222, zoom: 2 }`). A fix that reads the record correctly
-    // keeps this GREEN; a fix that over-refuses (declining to preserve
-    // whenever ANY stamp exists, agreeing or not) would redden it instead -
-    // which is exactly the failure mode a record-agreement guard exists to
-    // catch. Confirmed by re-reading it; no new case needed for this shape.
-  });
-
-  describe("restored Auto outcome (persisted, no re-measurement)", () => {
-    it("reads a restored Building outcome from persistence without deciding again", async () => {
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      await renderSeededOffice({
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "auto",
-        officeAutoView: "building",
-        // Matches the Settings store's default generation (0, untouched by
-        // this test) - a stamp from a build that predates this field would
-        // parse to `null` and no longer match, which is exactly the
-        // re-measure this case means to rule OUT.
-        officeAutoGeneration: 0,
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      caughtUp();
-
-      expect(decide).not.toHaveBeenCalled();
-      // The auto chip that used to restate this ("Auto · Building · measured
-      // earlier") is gone (feedback round 1); the trigger already proves the
-      // restored outcome resolved without a fresh decision.
-      expect(
-        screen.getByTestId("comm-graph-office-view-picker").textContent,
-      ).toBe("Auto · Building");
-    });
-
-    it("re-measures a restored outcome once the Settings default has round-tripped since it was measured, even on a quiet remount", async () => {
-      // Codex: a FOLLOWING tile (officeView: null) LRU-evicted while the
-      // Settings default left Auto and returned keeps its stale
-      // `officeAutoView` outcome, because only a MOUNTED tile witnesses the
-      // transition and re-picks Auto - an evicted tile sees none of it. The
-      // generation is what catches this: it bumps on every real default
-      // change, so a remount whose stamped generation no longer matches the
-      // current one re-measures instead of trusting a pick made against an
-      // epic that may have changed shape in the meantime.
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      const persisted: CommGraphTileViewState = {
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeAutoView: "floor",
-        officeAutoGeneration: 0,
-      };
-
-      // First mount: generation matches (0 === 0) - no re-measure, exactly
-      // the sibling case above. Establishes the seed is a real "trusted"
-      // outcome, not one that was already going to redecide regardless.
-      await renderSeededOffice(persisted);
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      caughtUp();
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()?.officeAutoView).toBe("floor");
-
-      // The tile closes (LRU eviction) - simulated by tearing the render
-      // down without writing anything back, so `persisted` is exactly what
-      // is still on disk. While it is closed, the default round-trips
-      // through a concrete view and back to Auto - the generation this
-      // outcome was stamped under (0) is now stale.
-      cleanup();
-      act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
-      );
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-      // The generation is a collision-free random stamp, not a counter, so the
-      // round-trip's value is READ rather than predicted; all that matters is
-      // that it no longer matches the outcome's own stamp (0).
-      const rolledGeneration =
-        useSettingsStore.getState().agentOfficeDefaultViewGeneration;
-      expect(rolledGeneration).not.toBe(0);
-
-      // The tile reopens - a fresh mount reading exactly the same persisted
-      // record (the generation mismatch is the ONLY thing that changed).
-      decide.mockClear();
-      await renderSeededOffice(persisted);
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      caughtUp();
-
-      // Real Auto measurement, same fixture/box every other case in this
-      // file relies on for a Floor outcome.
-      await waitFor(() => {
-        expect(decide).toHaveBeenCalled();
-      });
-      await waitFor(() => {
-        expect(storedView()?.officeAutoGeneration).toBe(rolledGeneration);
-      });
-      expect(storedView()?.officeAutoView).toBe("floor");
-    });
-
-    it("does not re-measure an EXPLICIT Auto pick on a default generation mismatch, keeping its manual camera (Finding 4)", async () => {
-      // Codex: the generation invalidation above is Finding D68's - it only
-      // makes sense for a tile that INHERITS the default (`officeView: null`).
-      // A tile that explicitly PICKED Auto (`officeView: "auto"`) does not
-      // follow the global default at all, so an unrelated Appearance-default
-      // change bumping the generation must not re-decide it: re-running a
-      // non-Floor outcome would discard the manually framed camera the
-      // outcome re-selects unchanged.
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      const persisted: CommGraphTileViewState = {
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "auto",
-        officeAutoView: "towers",
-        officeCamera: { x: -10000, y: -20000, zoom: 4 },
-        officeCameraView: "towers",
-        officeAutoGeneration: 0,
-      };
-      await renderSeededOffice(persisted);
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      caughtUp();
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()?.officeCamera).toEqual({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
-      });
-
-      // The default round-trips while this tile stays mounted, bumping the
-      // generation past what this outcome was stamped with - the ONLY thing
-      // an inheriting tile would react to.
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("floor"));
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-      // A collision-free random stamp, not a counter: it only has to differ
-      // from the stamp this outcome carries (0).
-      expect(
-        useSettingsStore.getState().agentOfficeDefaultViewGeneration,
-      ).not.toBe(0);
-
-      // Give the effect a tick to have run again if it were going to.
-      caughtUp();
-      expect(decide).not.toHaveBeenCalled();
-      expect(storedView()?.officeAutoView).toBe("towers");
-      expect(storedView()?.officeCamera).toEqual({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
-      });
-    });
-
-    it("withholds a stale inherited Auto outcome at RENDER too, not only in the re-measure effect (Finding 6)", async () => {
-      // Codex: Finding 1's freshness check lived only in the effect (when to
-      // re-measure). The render-time view resolution still trusted the stale
-      // `officeAutoView` unconditionally, so a default-following tile mounts
-      // with the OLD view resolved and handed to the canvas - which can plan
-      // and draw it - in the window before the effect re-measures and
-      // corrects it. The chip is not the right witness here (it reads
-      // `officeAutoView` straight off the record, restored-outcome label and
-      // all, regardless of trust); what the CANVAS is actually handed is.
-      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-      act(() =>
-        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
-      );
-      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-      // A collision-free random stamp, not a counter - read it rather than
-      // predict it; it only has to differ from this outcome's stamp (0).
-      const rolledGeneration =
-        useSettingsStore.getState().agentOfficeDefaultViewGeneration;
-      expect(rolledGeneration).not.toBe(0);
-
-      const persisted: CommGraphTileViewState = {
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeAutoView: "towers",
-        officeAutoGeneration: 0,
-      };
-      await renderSeededOffice(persisted);
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // Before the feed catches up and Auto gets a chance to re-measure, the
-      // canvas must be handed the MEASURING surface, not the stale Towers -
-      // a real drawable "ready" canvas already resolved to the wrong office
-      // is exactly the flash-and-discard Finding 6 is about.
-      expect(office.mock.calls.at(-1)?.[0]?.officeView.id).toBe("floor");
-      expect(lastCanvasReady(office)).toBe(false);
-      expect(decide).not.toHaveBeenCalled();
-
-      caughtUp();
-      await waitFor(() => {
-        expect(decide).toHaveBeenCalled();
-      });
-      await waitFor(() => {
-        expect(storedView()?.officeAutoGeneration).toBe(rolledGeneration);
-      });
-      // Real Auto measurement, same fixture/box every other case in this file
-      // relies on for a Floor outcome - the point here is only that it is a
-      // FRESH decision (the stale "towers" seed is gone), not which view wins.
-      expect(storedView()?.officeAutoView).toBe("floor");
-    });
-  });
-
-  it("withholds the stale Auto DECISION from the picker's Auto row once the office starts measuring again, not just the canvas (Finding 10)", async () => {
-    // Codex: `autoDecision` is local state that outlives the persisted
-    // outcome it was measured for. When a live default round-trip makes the
-    // stamped generation stale, `resolvedViewId` goes null at render (Finding
-    // 6) a beat before the new canvas reports a probe and the effect
-    // re-measures - `autoDecision` still holds the OLD decision across that
-    // gap. `shownAutoDecision` is what the picker's Auto row reads (the chip
-    // this finding was written against is gone - feedback round 1 - but the
-    // withholding it proved is the SAME `shownDecisionFor` gate the row reads
-    // today), so the row's fallback to the generic reason is what proves the
-    // DETAILED decision (the per-view fit text) was withheld, not merely that
-    // the trigger's view name still shows.
-    const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-    useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-
-    await renderOfficeTile();
-    await waitFor(() => {
-      expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
-    });
-    setIntersecting(true);
-    setOfficeCanvasSize(OFFICE_CANVAS);
-    caughtUp();
-    await waitFor(() => {
-      expect(storedView()?.officeAutoView).not.toBeNull();
-    });
-    const measuredGeneration = storedView()?.officeAutoGeneration;
-    // Sanity: the FIRST measurement really does show the detailed reason -
-    // otherwise the assertion below would pass even if nothing ever showed
-    // decision detail at all. "Choose Auto again to re-measure." only ever
-    // appears in `autoReason`'s decision-present branch (`office-view-picker.tsx`).
-    openPicker();
-    expect(
-      screen.getByTestId("comm-graph-office-view-auto").textContent,
-    ).toContain("Choose Auto again to re-measure.");
-
-    // The default round-trips twice more while the tile stays mounted,
-    // leaving the stamped generation stale relative to the current one - the
-    // same move Finding 6's test drives, but this time with a REAL decision
-    // already in local state rather than a seeded persisted one.
-    decide.mockClear();
-    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("towers"));
-    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-    expect(
-      useSettingsStore.getState().agentOfficeDefaultViewGeneration,
-    ).not.toBe(measuredGeneration);
-
-    // No fresh signals for the new (measuring) canvas key yet, so nothing has
-    // re-measured - this is exactly the gap where the OLD `autoDecision`
-    // would otherwise still be showing. The default round-trip also clears
-    // the PERSISTED outcome outright (a separate, already-fixed effect), so
-    // `trustedAutoView` is null too by now - the row's fallback all the way
-    // to "Measuring this tile…" is what proves the local `autoDecision` state
-    // (which that clear never touches) was withheld, not merely that the
-    // persisted record was.
-    expect(decide).not.toHaveBeenCalled();
-    expect(storedView()?.officeAutoView).toBeNull();
-    // The measuring surface remounted the canvas (and with it the picker),
-    // so its Auto row has to be reopened rather than reread from the old one.
-    openPicker();
-    const withheldText = screen.getByTestId(
-      "comm-graph-office-view-auto",
-    ).textContent;
-    expect(withheldText).not.toContain("Choose Auto again to re-measure.");
-    expect(withheldText).toBe("AutoMeasuring this tile…");
-  });
-
-  it("withholds a stale inherited Auto outcome's picker reason too, not only the canvas (Finding 19)", async () => {
-    // Codex: Finding 6 withheld the CANVAS from a stale inherited Auto
-    // outcome at render, but the (now-removed) chip's `restoredView` prop
-    // still read `node.view.officeAutoView` straight off the record
-    // regardless of trust - so a tile whose generation went stale kept
-    // showing "measured earlier" for a view the canvas itself had already
-    // stopped trusting. `restoredView` became `trustedAutoView`, the same
-    // predicate the canvas resolves through and `shownAutoDecision` still
-    // gates today (`comm-graph-tile.tsx`) - so an untrusted outcome
-    // withholds the picker's trigger and Auto row too, not only the canvas.
-    useSettingsStore.getState().setAgentOfficeDefaultView("auto");
-    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("towers"));
-    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-    // A collision-free random stamp, not a counter: it only has to differ from
-    // the stamp this outcome carries (0).
-    expect(
-      useSettingsStore.getState().agentOfficeDefaultViewGeneration,
-    ).not.toBe(0);
-
-    const persisted: CommGraphTileViewState = {
-      ...DEFAULT_COMM_GRAPH_VIEW,
-      officeAutoView: "towers",
-      officeAutoGeneration: 0,
-    };
-    await renderSeededOffice(persisted);
-    setIntersecting(true);
-    setOfficeCanvasSize(OFFICE_CANVAS);
-
-    // Stale generation (0 is not the rolled stamp, an INHERITED tile) -
-    // untrusted, so both surfaces must fall all the way to measuring, never
-    // "Auto · Towers".
-    expect(
-      screen.getByTestId("comm-graph-office-view-picker").textContent,
-    ).toBe("Auto");
-    openPicker();
-    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
-      "AutoMeasuring this tile…",
-    );
-  });
-
-  it("shows a TRUSTED inherited Auto outcome's picker reason, contrasting the stale case above (Finding 19)", async () => {
-    const persisted: CommGraphTileViewState = {
-      ...DEFAULT_COMM_GRAPH_VIEW,
-      officeAutoView: "towers",
-      officeAutoGeneration: 0,
-    };
-    await renderSeededOffice(persisted);
-    setIntersecting(true);
-    setOfficeCanvasSize(OFFICE_CANVAS);
-    caughtUp();
-
-    // The Settings default generation is untouched (0) here, so it matches
-    // the stamp - trusted, and the picker shows the restored view rather
-    // than withholding it. Non-vacuous proof that the withholding above is
-    // about the STALE generation, not the row having stopped reading the
-    // outcome at all. No live decision ever ran (a trusted outcome is read
-    // from persistence, not re-measured), so the Auto row falls to its
-    // generic reason rather than a `fits` breakdown - `shownAutoDecision`
-    // is `null` here on purpose, not merely unobserved.
-    expect(
-      screen.getByTestId("comm-graph-office-view-picker").textContent,
-    ).toBe("Auto · Towers");
-    openPicker();
-    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
-      "AutoPicks by how much of the office fits this tile.",
-    );
   });
 
   describe("readiness classification (F3, revised by fixup 8/H1)", () => {
@@ -3720,76 +2352,27 @@ describe("CommGraphTile", () => {
   });
 
   describe("an explicit view draws while the feed is behind (fixup 8, H1)", () => {
-    it("hands the canvas ready:true and lets the real Towers planner run before the feed catches up", async () => {
+    it("hands the canvas ready:true and lets the real Building planner run before the feed catches up", async () => {
       const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
-      const plan = vi.spyOn(OFFICE_VIEWS.towers, "plan");
+      const plan = vi.spyOn(OFFICE_VIEWS.building, "plan");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "towers",
+        officeView: "building",
       });
       setIntersecting(true);
       setOfficeCanvasSize(OFFICE_CANVAS);
       // Deliberately no `caughtUp()` here - this IS the H1 reproduction: the
       // local server lost its database mid-sitting and the feed never
-      // caught up, and an explicit Towers tile drew nothing for 25 minutes
+      // caught up, and an explicit Building tile drew nothing for 25 minutes
       // while the Graph beside it drew every node from the same snapshot.
       // This is a standalone assertion on purpose, reachable only through
       // the prop the canvas was actually HANDED - a suite that only checked
       // the planner ran (below) could still be fooled by a `ready` wired to
       // something other than what fixup 8 changed.
       expect(lastCanvasReady(office)).toBe(true);
-      // And the canvas acted on it for real: the actual Towers planner ran
+      // And the canvas acted on it for real: the actual Building planner ran
       // against the loaded snapshot, not merely a prop nobody consumed.
       expect(plan).toHaveBeenCalled();
-    });
-
-    it("still waits for Auto: ready stays false and no decision runs until the feed catches up, and the picker keeps reading measuring", async () => {
-      // The tile's OWN gate for a drawable office loosened in fixup 8, but
-      // Auto's gate is a different one and the plan explicitly keeps it: a
-      // partition measured off a half-replayed feed could pick the wrong
-      // view and PERSIST that choice, so nothing here is meant to change
-      // for Auto. This is the `ready` half of that guarantee - the existing
-      // "does not run while the snapshot is a partial one" case only ever
-      // read the store's `officeAutoView` and the decide spy, never what
-      // the canvas itself was handed.
-      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
-      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(lastCanvasReady(office)).toBe(false);
-      expect(decide).not.toHaveBeenCalled();
-      // The auto chip this used to read is gone (feedback round 1); the
-      // picker's own Auto row is fed the same `shownAutoDecision` and shows
-      // the same "still measuring" state.
-      openPicker();
-      expect(
-        screen.getByTestId("comm-graph-office-view-auto").textContent,
-      ).toBe("AutoMeasuring this tile…");
-
-      caughtUp();
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).not.toBeNull();
-      });
-      // The decision remounts the canvas onto its now-resolved view - a NEW
-      // container element with no measurement of its own yet, same as any
-      // other view change in this file (see `pickView`) - so it needs the
-      // same eligibility and size signals given again before it can report
-      // a probe and become ready.
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      await waitFor(() => {
-        expect(lastCanvasReady(office)).toBe(true);
-      });
     });
 
     it("letters a drawn office that is still behind its feed with no status line at all", async () => {
@@ -3802,12 +2385,12 @@ describe("CommGraphTile", () => {
       // and already settling.
       //
       // Kept as a case rather than deleted with the chip, from the state that
-      // WOULD have shown it (a drawn Towers tile, feed still replaying): the
+      // WOULD have shown it (a drawn Building tile, feed still replaying): the
       // absence is the decision, and an absence nothing asserts is an
       // invitation to put it back.
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "towers",
+        officeView: "building",
       });
       setIntersecting(true);
       setOfficeCanvasSize(OFFICE_CANVAS);
@@ -3827,32 +2410,13 @@ describe("CommGraphTile", () => {
   });
 
   describe("picking a view", () => {
-    it("removes the auto announcer once a view is picked explicitly - a person who chose it has nothing to be told", async () => {
-      // `OfficeAutoAnnouncer` replaced a deleted visible chip and is
-      // `sr-only`, so its own text/roles are pinned directly in
-      // `office-auto-announcer.test.tsx`. What that focused test cannot see
-      // is the WIRING - the tile only renders it `choice === "auto"` - so
-      // this drives the real picker to flip `choice` away from Auto and
-      // checks the announcer actually leaves with it.
-      await reachAutoFloor();
-      expect(
-        screen.getByTestId("comm-graph-office-auto-announcer"),
-      ).toBeDefined();
-
-      await pickView("towers");
-
-      expect(
-        screen.queryByTestId("comm-graph-office-auto-announcer"),
-      ).toBeNull();
-    });
-
     it("picking the already-resolved view records the choice without moving the camera", async () => {
       // `handleOfficeViewChange` used to compare `next` against the STORED
-      // `officeView`, which is null on a tile still following Auto - so
-      // picking the view already on screen fell through to the camera reset
-      // and threw the person's framing away. It now compares against the
-      // RESOLVED view.
-      await reachAutoFloor();
+      // `officeView`, which is null on a tile still following the Settings
+      // default - so picking the view already on screen fell through to the
+      // camera reset and threw the person's framing away. It now compares
+      // against the RESOLVED view.
+      await reachFloor();
       act(() => {
         useEpicCanvasStore
           .getState()
@@ -3882,7 +2446,7 @@ describe("CommGraphTile", () => {
       // D68: the camera under test is the office's own - seeded through
       // `updateCommGraphTileOfficeCameraInTab`, the writer that reaches
       // `officeCamera`, since the graph's writer can no longer touch it.
-      await reachAutoFloor();
+      await reachFloor();
       act(() => {
         useEpicCanvasStore.getState().updateCommGraphTileOfficeCameraInTab(
           AUTO_TAB_ID,
@@ -3897,39 +2461,17 @@ describe("CommGraphTile", () => {
       });
 
       openPicker();
-      fireEvent.click(screen.getByTestId("comm-graph-office-view-towers"));
+      fireEvent.click(screen.getByTestId("comm-graph-office-view-building"));
 
-      expect(storedView()?.officeView).toBe("towers");
+      expect(storedView()?.officeView).toBe("building");
       expect(storedView()?.officeCamera).toBeNull();
     });
 
-    it("re-measures through the real Auto row, not by clearing the outcome directly", async () => {
-      // The existing "re-measures once officeAutoView is cleared" case pins
-      // the tile's REACTION to that write; this one drives the actual
-      // gesture that produces it - the picker's own Auto row - so a
-      // regression in the wiring between the two is not invisible to both.
-      await reachAutoFloor();
-      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
-
-      openPicker();
-      fireEvent.click(screen.getByTestId("comm-graph-office-view-auto"));
-
-      // Remounted with no box of its own yet - nothing to decide from.
-      expect(decideSpy).not.toHaveBeenCalled();
-
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-
-      await waitFor(() => expect(decideSpy).toHaveBeenCalledTimes(1));
-      expect(storedView()?.officeAutoView).toBe("floor");
-    });
-
-    it("adopts every registered view with exactly one canvas, never a stale second one (F7)", async () => {
+    it("adopts every offered view with exactly one canvas, never a stale second one (F7)", async () => {
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      await reachAutoFloor();
-      for (const id of OFFICE_VIEW_IDS) {
-        const beforeId =
-          storedView()?.officeView ?? storedView()?.officeAutoView;
+      await reachFloor();
+      let beforeId: OfficeViewChoice = "floor";
+      for (const id of OFFICE_VIEW_CHOICES) {
         const beforeElement = screen.getByTestId("comm-graph-office-canvas");
         // A gesture in flight on the OLD canvas - a removed key would let its
         // pending write land on the NEW one instead of being torn down with it.
@@ -3969,6 +2511,7 @@ describe("CommGraphTile", () => {
             name: "Office view of the communication graph",
           }),
         ).toHaveLength(1);
+        beforeId = id;
       }
     });
   });
@@ -3994,9 +2537,9 @@ describe("CommGraphTile", () => {
    */
   describe("switching views", () => {
     /** One round of the rule's own cycle. */
-    const VIEW_CYCLE: ReadonlyArray<OfficeViewId> = [
+    const VIEW_CYCLE: ReadonlyArray<OfficeViewChoice> = [
       "building",
-      "city",
+      "campus",
       "floor",
     ];
     const SWITCH_ROUNDS = 10;
@@ -4011,10 +2554,10 @@ describe("CommGraphTile", () => {
       return new Set(spy.mock.contexts).size;
     }
 
-    it("reaches every registered view, and the picker says which one it is on", async () => {
-      await reachAutoFloor();
+    it("reaches every offered view, and the picker says which one it is on", async () => {
+      await reachFloor();
 
-      for (const viewId of OFFICE_VIEW_IDS) {
+      for (const viewId of OFFICE_VIEW_CHOICES) {
         await pickView(viewId);
 
         expect(storedView()?.officeView).toBe(viewId);
@@ -4030,23 +2573,25 @@ describe("CommGraphTile", () => {
     });
 
     it("builds one scene per real change and none for a pick that changes nothing", async () => {
-      await reachAutoFloor();
       const syncSpy = vi.spyOn(OfficeScene.prototype, "sync");
-      // The Floor is already on screen, resolved by Auto; pinning it writes
+      await reachFloor();
+      expect(scenesSeen(syncSpy)).toBe(1);
+
+      // Floor is already on screen (the app's default); pinning it writes
       // the choice without changing the view, so the canvas's key does not
       // move and the scene in hand is the one that stays.
       await pickView("floor");
       expect(scenesSeen(syncSpy)).toBe(1);
 
-      await pickView("towers");
+      await pickView("building");
 
       // A different view is a different office: a new canvas, and with it a
-      // new scene, rather than the Floor's scene handed a Towers layout.
+      // new scene, rather than the Floor's scene handed a Building layout.
       expect(scenesSeen(syncSpy)).toBe(2);
     });
 
-    it("leaves exactly one scene alive after ten Floor, Building, City rounds", async () => {
-      await reachAutoFloor();
+    it("leaves exactly one scene alive after ten Floor, Building, Campus rounds", async () => {
+      await reachFloor();
       const built = vi.spyOn(OfficeScene.prototype, "sync");
       for (let round = 0; round < SWITCH_ROUNDS; round += 1) {
         for (const viewId of VIEW_CYCLE) {
@@ -4138,11 +2683,11 @@ describe("CommGraphTile", () => {
       const restore = benchAt("?officeBench=12");
       const synced = vi.spyOn(OfficeScene.prototype, "sync");
       try {
-        await reachAutoFloor();
-        // Pinning the view Auto already chose is what puts a scene in hand
-        // here: it writes the choice without moving the canvas's key, and the
-        // scene syncs on the input that follows. The same step the switch
-        // cases above take for the same reason.
+        await reachFloor();
+        // Pinning the view already resolved (the app's default) is what puts
+        // a scene in hand here: it writes the choice without moving the
+        // canvas's key, and the scene syncs on the input that follows. The
+        // same step the switch cases above take for the same reason.
         await pickView("floor");
 
         await waitFor(() => {
@@ -4172,7 +2717,7 @@ describe("CommGraphTile", () => {
       const restore = benchAt("?officeBench=40&officeBenchScript=outbreak");
       const synced = vi.spyOn(OfficeScene.prototype, "sync");
       try {
-        await reachAutoFloor();
+        await reachFloor();
         await pickView("floor");
         await waitFor(() => {
           expect(synced.mock.calls.length).toBeGreaterThan(0);

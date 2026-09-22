@@ -315,8 +315,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     group: "agentOffice",
     search: { anchor: "appearance-agent-office-default-view" },
     label: "Default view",
-    description:
-      "For epics you have not chosen a view in. Auto picks by how much fits the tile.",
+    description: "For epics you have not chosen a view in.",
     availableWhen: alwaysAvailable,
     // The view NAMES are deliberately not listed: they come from the office
     // view registry, and a second copy here would drift from it the moment a

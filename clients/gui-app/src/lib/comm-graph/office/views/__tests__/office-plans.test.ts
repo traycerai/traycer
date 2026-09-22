@@ -189,7 +189,7 @@ function sceneInputFor(args: {
 }
 
 import {
-  CIVIC_KINDS,
+  CIVIC_KINDS_EXPECTED,
   CIVIC_ROADS_EXPECTED,
   CIVIC_ROOMS_EXPECTED,
 } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
@@ -331,7 +331,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       const wantsRoad = CIVIC_ROADS_EXPECTED[viewId];
       for (const floor of withRooms) {
         expect([...floor.civic].map((room) => room.kind).sort()).toEqual(
-          [...CIVIC_KINDS].sort(),
+          [...CIVIC_KINDS_EXPECTED[viewId]].sort(),
         );
         hostsWithRooms.add(floor.hostId);
         // A street where the second table says so, and NO street where it does

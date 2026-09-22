@@ -26,7 +26,7 @@ import {
 } from "@/lib/artifacts/node-display";
 import { DEFAULT_THEME_PRESET, type ThemePreset } from "@/lib/theme-presets";
 import {
-  OFFICE_VIEW_IDS,
+  OFFICE_VIEW_CHOICES,
   type OfficeViewChoice,
 } from "@/lib/comm-graph/office/office-view-vocabulary";
 import {
@@ -119,7 +119,7 @@ export const DEFAULT_MINIMAP_SIDE: MinimapPlacement = "right";
  * Auto, so a first-ever office opens on the view that actually fits the tile
  * it is in rather than on whichever one this build happens to list first.
  */
-export const DEFAULT_AGENT_OFFICE_VIEW: OfficeViewChoice = "auto";
+export const DEFAULT_AGENT_OFFICE_VIEW: OfficeViewChoice = "floor";
 
 // Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
 // which never blinks). Bar/underline mirror the chosen shape so the cursor
@@ -1201,18 +1201,12 @@ function resolvePersistedTilePlacement(
   };
 }
 
-/**
- * A persisted office view choice this build can still honour.
- *
- * The registry is the vocabulary, exactly as it is for the tile's own choice:
- * a value naming a view a newer build shipped degrades to Auto, which measures
- * and always has an answer, rather than to a view id nothing can plan.
- */
+/** Normalize retired choices; unknown defaults use Floor. */
 function resolvePersistedAgentOfficeView(value: unknown): OfficeViewChoice {
-  if (value === "auto") return "auto";
+  if (value === "towers" || value === "city") return "building";
   if (typeof value !== "string") return DEFAULT_AGENT_OFFICE_VIEW;
   return (
-    OFFICE_VIEW_IDS.find((id) => id === value) ?? DEFAULT_AGENT_OFFICE_VIEW
+    OFFICE_VIEW_CHOICES.find((id) => id === value) ?? DEFAULT_AGENT_OFFICE_VIEW
   );
 }
 

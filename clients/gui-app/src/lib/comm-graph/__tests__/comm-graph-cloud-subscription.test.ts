@@ -2,11 +2,9 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import {
   CommGraphCloudSubscriptionManager,
-  selectCommGraphAuthoritativeSnapshot,
   type CommGraphCloudSubscriptionOpener,
   type CommGraphCloudSubscriptionRequest,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
-import type { CommGraphSnapshot } from "@/lib/comm-graph/comm-graph-events";
 import {
   commGraphEventKey,
   commGraphEventsAsOfCursor,
@@ -198,40 +196,33 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(manager.getSnapshot().lastArrival?.eventId).toBe("live");
   });
 
-  it("keeps cloud authority and rows through transient relay failure", () => {
-    const localRow = cloudEvent({ eventId: "local-only" });
-    const cloudRow = cloudEvent({ eventId: "cloud-only" });
-    const local = {
-      events: [{ ...localRow, id: 1, timestamp: 1, hostId: "local" }],
-      hosts: [],
-      initialHistoryCaughtUp: false,
-      lastArrival: null,
-    } satisfies CommGraphSnapshot;
-    const cloud = {
-      events: [{ ...cloudRow, id: 2, timestamp: 2, hostId: "origin" }],
-      hosts: [
-        {
-          hostId: "relay",
-          status: "reconnecting",
-          cursor: 2,
-          snapshotBoundary: null,
-        },
-      ],
-      initialHistoryCaughtUp: true,
-      lastArrival: null,
-    } satisfies CommGraphSnapshot;
-
-    const selected = selectCommGraphAuthoritativeSnapshot(
-      "available",
-      cloud,
-      local,
+  it("keeps cloud rows through a transient relay failure - never clears events on a reconnecting status", () => {
+    const recorded = recordedOpener();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      recorded.opener,
+      () => undefined,
     );
-    expect(selected.events.map((event) => event.eventId)).toEqual([
+    manager.setRelayHostIds(["relay-a"]);
+    manager.attach();
+    const handlers = recorded.requests[0].handlers;
+
+    handlers.onAvailability("available");
+    handlers.onSnapshot([cloudEvent({ eventId: "cloud-only" })], 10, null);
+    expect(manager.getSnapshot().events.map((event) => event.eventId)).toEqual([
       "cloud-only",
     ]);
-    expect(selected.events).not.toContainEqual(
-      expect.objectContaining({ eventId: "local-only" }),
-    );
+
+    handlers.onStatus("reconnecting");
+
+    // The manager holds no local plane to fall back to, and never has since
+    // `selectCommGraphAuthoritativeSnapshot` was removed - the retained cloud
+    // rows are the only history there is, and a transient relay status must
+    // not touch them.
+    expect(manager.getAvailability()).toBe("available");
+    expect(manager.getSnapshot().events.map((event) => event.eventId)).toEqual([
+      "cloud-only",
+    ]);
   });
 
   it("fails over when the preferred relay throws synchronously while dialing", () => {
