@@ -54,7 +54,7 @@ import {
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -1364,6 +1364,8 @@ describe("DraftMirrorSession", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -1511,6 +1513,8 @@ describe("DraftMirrorSession", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -2242,12 +2246,11 @@ describe("DraftMirrorSession", () => {
     const gate = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    const client: DraftBlobClient = {
-      request: (async (_method, _params) => {
-        await gate;
-        return { ok: true as const };
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const uploadPromise = putDraftBlobs(BLOB_HOST, client, [hash], BLOB_OWNER);
     // The request has dispatched (it is parked on `gate`, inside the
@@ -2293,14 +2296,13 @@ describe("DraftMirrorSession", () => {
 
     // The host answers "I do not have these methods" once.
     let withholds = true;
-    const client: DraftBlobClient = {
-      request: ((_method, _params) =>
-        withholds
-          ? Promise.reject(unsupportedError("drafts.putBlob"))
-          : Promise.resolve({
-              ok: true as const,
-            })) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) =>
+      withholds
+        ? Promise.reject(unsupportedError("drafts.putBlob"))
+        : Promise.resolve({
+            ok: true as const,
+          })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     expect(await putDraftBlobs(host, client, [hash], BLOB_OWNER)).toEqual([]);
     expect(hostWithholdsDraftBlobs(host)).toBe(true);
 
@@ -2347,12 +2349,11 @@ describe("DraftMirrorSession", () => {
     const gate = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    const client: DraftBlobClient = {
-      request: (async (_method, _params) => {
-        await gate;
-        return { ok: true as const };
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     const host = "host-close-fence-eviction";
 
     const uploadPromise = putDraftBlobs(host, client, [hash], BLOB_OWNER);
@@ -2390,12 +2391,11 @@ describe("DraftMirrorSession", () => {
     const gate = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    const client: DraftBlobClient = {
-      request: (async (_method, _params) => {
-        await gate;
-        return { ok: true as const };
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const uploadPromise = putDraftBlobs(
       "host-close-fence-control",

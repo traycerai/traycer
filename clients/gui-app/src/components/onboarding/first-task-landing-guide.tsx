@@ -1,9 +1,13 @@
-import { useMemo, type RefObject } from "react";
+import { useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { FirstTaskCoachmark } from "./first-task-coachmark";
 import { SessionImportOpenTaskButton } from "@/components/session-import/session-import-open-task-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
+import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
@@ -19,6 +23,11 @@ export function FirstTaskLandingGuide(props: {
   readonly workspaceFolders: readonly string[] | null;
 }) {
   const hostId = useComposerSurfaceHostPin().resolvedHostId;
+  // Mounted by form factor, matching the shell: `AppShell` renders the
+  // navigation drawer this branch is about on the mobile VIEWPORT, so a narrow
+  // desktop window is on this branch too, and the installed app is not a
+  // separate case.
+  const isMobile = useIsMobileViewport();
   const globalFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
   );
@@ -57,7 +66,7 @@ export function FirstTaskLandingGuide(props: {
             className="mt-2 flex items-center gap-2 text-ui-xs text-muted-foreground"
           >
             <MutedAgentSpinner />
-            Importing your tasks…
+            Importing your sessions…
           </p>
         ) : null}
         <FirstTaskCoachmark
@@ -73,7 +82,7 @@ export function FirstTaskLandingGuide(props: {
       <div className="mt-5 flex items-center justify-between gap-3 text-ui-sm text-muted-foreground">
         <p role="status" className="flex items-center gap-2">
           <MutedAgentSpinner />
-          Importing your tasks…
+          Importing your sessions…
         </p>
         <Button
           variant="ghost"
@@ -97,11 +106,71 @@ export function FirstTaskLandingGuide(props: {
     workspace: '[data-testid="workspace-summary-trigger"]',
     prompt: "[data-composer-shell]",
   }[step];
-  return (
+  const folderFlow = (
     <FirstTaskCoachmark
       step={step}
       rootRef={props.rootRef}
       selector={selector}
+    />
+  );
+  if (!isMobile) return folderFlow;
+  return <MobileTasksGuide fallback={folderFlow} />;
+}
+
+const TASKS_SELECTORS = {
+  "tasks-menu": '[data-testid="mobile-nav-trigger"]',
+  // The first row rather than the list around it: the list's own first
+  // focusable control is its sticky header's "View all" link, and "Show me"
+  // has to put a TASK under the finger.
+  "tasks-pick": '[data-testid="mobile-nav-task-row"]',
+} as const;
+
+/**
+ * The mobile branch for an account that already has tasks: the phone's landing
+ * page has no task list on it, so the first thing to teach is where they went -
+ * the hamburger drawer - rather than how to start another one.
+ *
+ * Both steps are derived from the drawer's open state, so opening it by any
+ * route advances and closing it without picking returns to step 1. Opening a
+ * task from the drawer is what ends the guide.
+ *
+ * The count comes from the drawer's own query, not a second one: the same key,
+ * so this is a cache read wherever the drawer has already asked. While it is
+ * still outstanding this renders NOTHING rather than the folder flow - a guide
+ * that starts teaching "add a folder" and swaps mid-sentence is worse than one
+ * that arrives a beat late. An error or an empty list falls through to the
+ * folder flow, which is what a user with no tasks needs either way.
+ */
+function MobileTasksGuide(props: { readonly fallback: ReactNode }) {
+  const { search } = useAmbientHistorySearchState();
+  const history = useHistoryQuery({ search, nowMs: null });
+  const drawerOpen = useMobileNavStore((state) => state.open);
+  // The hamburger lives in the app header and the drawer portals to the body,
+  // so neither target is under the landing surface the rest of this guide is
+  // scoped to.
+  const documentRef = useRef<HTMLElement | null>(document.body);
+  const loading = history.isPending || history.cloudPagePending;
+  // Optimistic while the list loads: on a fresh install the history query
+  // waits on cloud authorization and then on the first page, which is many
+  // seconds, and a guide that draws nothing for that long is one the user has
+  // already walked past by opening the menu themselves. Nearly everyone on
+  // this branch has tasks (they ran the desktop app first), so the menu step
+  // shows at once and only a settled answer of "none" or an error falls back
+  // to the add-folder flow.
+  // "Could not list" is not "has none": a host that needs the cloud to list
+  // returns no items because nothing was fetched, and that user may well have
+  // tasks, so it stays on the menu step rather than being told to add a folder.
+  const settledEmpty =
+    !loading &&
+    history.data?.hostRequiresCloudToList !== true &&
+    (history.data?.items.length ?? 0) === 0;
+  if (history.error !== null || settledEmpty) return props.fallback;
+  const step = drawerOpen ? "tasks-pick" : "tasks-menu";
+  return (
+    <FirstTaskCoachmark
+      step={step}
+      rootRef={documentRef}
+      selector={TASKS_SELECTORS[step]}
     />
   );
 }

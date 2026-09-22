@@ -209,6 +209,9 @@ vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
 vi.mock("@/components/epics/epics-list-panel", () => ({
   EpicsListPanel: () => null,
 }));
+vi.mock("@/components/home/current-tasks-section", () => ({
+  CurrentTasksSection: () => null,
+}));
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({ HostWorkspaceSelector: () => null }),

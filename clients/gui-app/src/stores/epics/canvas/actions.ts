@@ -1512,17 +1512,19 @@ function updateTilesWhere(
 }
 
 /**
- * Rename an artifact in every tab that holds it (by content id). Returns
+ * Rename matching tiles; null host scope is reserved for shared document edits. Returns
  * unchanged state if no tab matches.
  */
 export function renameArtifact(
   state: EpicCanvasState,
   artifactId: string,
   name: string,
+  hostId: string | null,
 ): EpicCanvasState {
   return updateTilesWhere(
     state,
-    (ref) => ref.id === artifactId,
+    (ref) =>
+      ref.id === artifactId && (hostId === null || tileHostId(ref) === hostId),
     (ref) => {
       if (ref.type !== "terminal") {
         return ref.name === name ? ref : { ...ref, name };

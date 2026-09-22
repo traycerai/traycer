@@ -640,6 +640,7 @@ function imageAttrs(id: string): ImageAttachmentAttrs {
     b64content: id,
     mimeType: "image/png",
     size: id.length,
+    byHashEligible: true,
   };
 }
 

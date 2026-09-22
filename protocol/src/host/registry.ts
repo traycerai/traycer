@@ -89,6 +89,7 @@ import {
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
+import { agentResolveMessagePeerV10 } from "@traycer/protocol/host/agent/message-peer";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -425,8 +426,12 @@ import { chatSearchV10 } from "@traycer/protocol/host/chat-search/contracts";
 import {
   draftsDeleteV10,
   draftsListV10,
+  draftsPutBlobUpgradeV10ToV11,
   draftsPutBlobV10,
+  draftsPutBlobV11,
+  draftsReadBlobUpgradeV10ToV11,
   draftsReadBlobV10,
+  draftsReadBlobV11,
   draftsRetractV10,
   draftsSubscribeV10,
   draftsUpsertV10,
@@ -474,14 +479,18 @@ import {
   epicBatchUpdateRolesV10,
   epicCreateArtifactV10,
   epicCreateChatUpgradeV10ToV11,
+  epicCreateChatUpgradeV11ToV12,
   epicCreateChatV10,
   epicCreateChatV11,
+  epicCreateChatV12,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
   epicCreateV10,
   epicCreateV11,
+  epicCreateV12,
   epicCreateUpgradeV10ToV11,
+  epicCreateUpgradeV11ToV12,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
   epicDeleteCommentThreadV10,
@@ -1019,6 +1028,7 @@ import {
   downgradeProviderCliStateListToV60,
   downgradeProviderCliStateListToV70,
   downgradeProviderCliStateListToV80,
+  parseProvidersListResponseForFrozenLine,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
   providersRemovePackVersionRequestSchema,
@@ -1103,9 +1113,10 @@ export { hostUsageSummaryV10, hostUsageSummaryV20 };
  *    `downgradePathsFromLatest` bridge back to every older major the
  *    host still accepts from older clients.
  *
- * `validateVersionedRpcRegistry()` - which
- * `defineVersionedRpcRegistry()` runs automatically at module load - is
- * the single contract future growth has to keep passing.
+ * `validateVersionedRpcRegistry()` is the single contract future growth has
+ * to keep passing. Construction below runs only its structural pass, so that
+ * importing this module walks no schema; the full pass runs at build time and
+ * in CI over every static registry (`protocol/scripts/compat/static-registries.ts`).
  */
 // `snapshots.*@1.0` - local-only snapshot storage management. Contracts land
 // inline here pending a per-domain contracts file. Schemas live in
@@ -2848,10 +2859,13 @@ export const providersListDowngradeV9ToV8 = defineDowngradePath<
   // Drops Antigravity rows and strips `profiles[].apiKey` - see the helper.
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV80.parse({
-      ...response,
-      providers: downgradeProviderCliStateListToV80(response.providers),
-    }),
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV80,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV80(response.providers),
+      },
+    ),
   }),
 });
 
@@ -2867,10 +2881,13 @@ export const providersListDowngradeV9ToV7 = defineDowngradePath<
   }),
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV70.parse({
-      ...response,
-      providers: downgradeProviderCliStateListToV70(response.providers),
-    }),
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV70,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV70(response.providers),
+      },
+    ),
   }),
 });
 
@@ -3009,10 +3026,13 @@ export const providersListDowngradeV8ToV7 = defineDowngradePath<
   }),
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV70.parse({
-      ...response,
-      providers: downgradeProviderCliStateListToV70(response.providers),
-    }),
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV70,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV70(response.providers),
+      },
+    ),
   }),
 });
 
@@ -6634,6 +6654,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
   },
+  "agent.resolveMessagePeer": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentResolveMessagePeerV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "agent.sendMessage": {
     1: {
       latestMinor: 0,
@@ -6917,9 +6950,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // response schema strips it - and because a stripped refusal would read as
   // a successful create with a null room, the host gates EMISSION on the
   // negotiated minor and still throws below `@1.1`.
+  // `@1.2` carries images BY REFERENCE and the worktree off the response path:
+  // two optional request fields on new instances forked down to the
+  // initial-message leaf (`attachmentsByHash`, `deferWorktreeProvisioning`),
+  // and a refusal enum widened by `missing-attachment-bytes` on this minor's
+  // own response instance. A `@1.1` peer's frozen request schema STRIPS both
+  // fields - which is why the host resolves hashes only on
+  // `(negotiated minor >= 2 AND the flag)`, never on the content alone - and
+  // its frozen response enum is the reason the new kind could not be added in
+  // place: an unknown `kind` fails that peer's whole response parse.
   "epic.create": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicCreateV10,
@@ -6928,6 +6970,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: epicCreateV11,
           upgradeFromPreviousVersion: epicCreateUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicCreateV12,
+          upgradeFromPreviousVersion: epicCreateUpgradeV11ToV12,
+          // The refusal enum GROWS on the response (`missing-attachment-bytes`),
+          // which the validator rejects by default because a `@1.1` peer's
+          // frozen enum refuses the value and fails the whole response parse.
+          // The claim this flag makes is about the EMITTER and it is the same
+          // one `@1.1`'s own refusal already lives under: the resolver emits a
+          // refusal only when `ctx.schemaVersion.minor` can carry it
+          // (`CREATE_ATTACHMENT_REFUSAL_MINOR = 2` for this kind) and throws
+          // for every older peer.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -7305,7 +7360,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createChat": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicCreateChatV10,
@@ -7320,6 +7375,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: epicCreateChatV11,
           upgradeFromPreviousVersion: epicCreateChatUpgradeV10ToV11,
+        },
+        // v1.2: the `epic.create@1.2` pair of request fields
+        // (`initialMessage.attachmentsByHash`, `deferWorktreeProvisioning`) and
+        // the first `refusal` this method has carried, over the same `@1.2`
+        // refusal instance. `@1.0`/`@1.1` have NO refusal key, so a stripped
+        // one would read as a created chat - the host emits it only at a
+        // negotiated minor that can carry it.
+        2: {
+          contract: epicCreateChatV12,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -10688,14 +10753,26 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // `@1.1` declares the 5 MiB decoded ceiling as a wire cap on `bytesBase64` -
+  // on the request here, on the response for `readBlob` below. NARROWING, so
+  // each takes its own instance and the `@1.0` pair stays byte-identical: a
+  // released peer keeps sending and accepting exactly what it does today, and
+  // the cap only binds where both sides negotiate `>= 1.1`. It is a
+  // declaration, not the enforcement - the upgrade path does not re-parse, so
+  // an over-cap `@1.0` body still reaches the resolver and is refused by the
+  // host store's own version-independent decoded cap.
   "drafts.putBlob": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: draftsPutBlobV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: draftsPutBlobV11,
+          upgradeFromPreviousVersion: draftsPutBlobUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10704,11 +10781,15 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
   "drafts.readBlob": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: draftsReadBlobV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: draftsReadBlobV11,
+          upgradeFromPreviousVersion: draftsReadBlobUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10906,7 +10987,8 @@ type DuplicateHostRpcMethodNames =
  * contracts and bridges, so callers keep resolver/query checking against the
  * latest request and response shapes - and the precise literal is still
  * statically checked against this annotation and dynamically validated by
- * `defineFloorAwareVersionedRpcRegistry` below.
+ * `defineFloorAwareVersionedRpcRegistry` below (its structural pass; the
+ * schema-compatibility pass runs at build time and in CI).
  *
  * `Record<never, never>` is `{}` while the key sets stay disjoint, so the
  * duplicate intersection is a no-op in the healthy case.
@@ -11858,8 +11940,10 @@ export type HostStreamRpcRegistry =
 // Annotated with `HostStreamRpcRegistry` itself (not `typeof
 // HOST_STREAM_RPC_REGISTRY_DEFINITION`, which is more precise but exceeds
 // TS7056's declaration-emit ceiling once `chat.subscribe` alone carries this
-// many minors): `defineVersionedStreamRpcRegistry` still validates the full
-// precise literal at this call site (nothing here weakens that check), and
+// many minors): `defineVersionedStreamRpcRegistry` still runs its structural
+// pass over the full precise literal at this call site, and the static-registry
+// check validates it in full at build time and in CI (nothing here weakens
+// either), and
 // its precise return type remains assignable to this narrower annotation
 // (the only difference is `chat.subscribe`'s widened value slot, and a
 // branded, more precise value is always assignable into an unbranded,

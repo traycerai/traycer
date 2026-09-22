@@ -143,10 +143,11 @@ interface EpicTerminalRefBase {
    * cannot sign them in and no error saying why. It renders a retry affordance
    * that re-runs the RPC instead.
    *
-   * `"setup"` means the HOST created it for worktree setup. It is not an
-   * import candidate (import would persist the setup command as durable
-   * launch evidence). Unlike provider-login it may still recreate as an
-   * ordinary shell on the legacy tile path.
+   * `"setup"` means the HOST created it for worktree setup. Origin-only
+   * refs are not import candidates; explicit registry ownership below can
+   * override that exemption. The legacy tile may attach to a live setup
+   * terminal but must never recreate it. Another setup run belongs to the
+   * agent's setup controls, not a terminal recovery attempt.
    *
    * Optional rather than required: making it required would force every
    * existing terminal-ref construction site to state `origin: "shell"` for no

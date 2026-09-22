@@ -14,8 +14,13 @@ lists inherit a transparent background, while standalone command lists retain
 their normal fill. Fixed menu headers and footers remain transparent. Sticky
 rows retain their fill to cover scrolling content, and compact inverted tooltips
 and theme-editor recovery controls retain their dedicated styling.
-Backdrop blur and the background-opacity preference are retired; existing
-saved theme libraries keep their themes and other preferences.
+Modal backdrops use the configured shadcn Radix Nova treatment:
+`supports-backdrop-filter:backdrop-blur-xs`, with no application preference.
+The retained mobile navigation scrim applies it only while open or moving.
+Reduced-transparency preferences disable backdrop filtering. Chat controls,
+composers, menus, and modal contents remain solid. The background-opacity
+preference remains retired; existing saved theme libraries keep their themes
+and other preferences.
 
 | Responsibility                                                       | Owner                                                                             |
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |

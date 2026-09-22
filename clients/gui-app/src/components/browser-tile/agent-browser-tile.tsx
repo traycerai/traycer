@@ -17,6 +17,7 @@ import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers
 import { BrowserTileCertificateInterstitial } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "./browser-start-page";
+import { useBrowserAddressShortcut } from "@/lib/browser-view/tiles/browser-address-shortcut";
 import {
   browserTileBindingId,
   browserTileEpicId,
@@ -209,6 +210,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const visible = props.visible;
   const browserView = runnerHost.browserView;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const tileRef = useRef<HTMLDivElement | null>(null);
   // The last status reading accepted from the desktop, tagged with the
   // binding registration it was reported for. The directory can replace the
   // binding under a mounted surface (a re-ensured tab is a fresh guest at
@@ -474,6 +476,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     proceedCertificate,
   } = chrome;
   const focusAddress = chromeController.focusAddress;
+  useBrowserAddressShortcut({ enabled: visible, tileRef, focusAddress });
   const retryNavigation = useCallback(() => {
     // Bump the episode so the derived stall clears immediately on click,
     // before the re-driven navigation's own attempt echoes back.
@@ -597,6 +600,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       onPointerDownCapture={viewport.onInteraction}
       onFocusCapture={viewport.onInteraction}
       data-testid={`agent-browser-tile-${props.node.instanceId}`}
+      ref={tileRef}
     >
       <BrowserTileFindAdapterBridge
         browserView={attachedBrowserView}

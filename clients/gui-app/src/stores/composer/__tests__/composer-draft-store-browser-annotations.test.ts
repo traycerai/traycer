@@ -403,11 +403,11 @@ describe("composer draft store browserAnnotations", () => {
     expect(draftOf("chat-epoch").content).toEqual(before.content);
   });
 
-  it("Sidecar mutations DO bump revision (the prompt-stash clear-if-unchanged token)", async () => {
-    // A stash captures {content, revision}, saves to IndexedDB, then clears
-    // the draft only if the revision still matches - and `clearDraft` wipes
-    // the sidecar the stash never captured. Without a bump here, an
-    // annotation attached during that save is destroyed with nothing holding
+  it("Sidecar mutations DO bump revision (the clear-if-unchanged token)", async () => {
+    // A compare-and-swap writer captures {content, revision}, persists, then
+    // clears the draft only if the revision still matches - and `clearDraft`
+    // wipes the sidecar such a writer never captured. Without a bump here, an
+    // annotation attached during that write is destroyed with nothing holding
     // it.
     useComposerDraftStore
       .getState()
@@ -418,7 +418,7 @@ describe("composer draft store browserAnnotations", () => {
       annotationId: "ann-cas",
       tabId: "tab-cas",
       sessionId: "session-cas",
-      comment: "attached while the stash was saving",
+      comment: "attached while the write was in flight",
     });
     expect(draftOf("chat-cas").revision).toBe(captured + 1);
 
@@ -542,6 +542,7 @@ describe("composer draft store browserAnnotations", () => {
           settings: null,
           restoreWorktreeIntent: null,
           displayWorktreeIntent: null,
+          sentContentHashes: null,
           messageConfirmedByHost: false,
           accountContext: null,
           deliveryPolicy: null,

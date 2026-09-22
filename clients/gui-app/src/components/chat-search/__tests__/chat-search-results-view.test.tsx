@@ -9,6 +9,7 @@ import type {
 } from "@traycer/protocol/host/chat-search/schemas";
 import {
   ChatSearchResultsView,
+  MessageMatchRow,
   type ChatSearchExpansionTarget,
   type ChatSearchOpenTarget,
 } from "@/components/chat-search/chat-search-results-view";
@@ -199,7 +200,7 @@ describe("ChatSearchResultsView: highlighting", () => {
 });
 
 describe("ChatSearchResultsView: expansion", () => {
-  it("shows an 'also N matches in messages' toggle that expands on click", async () => {
+  it("shows an 'N matches' disclosure on a title match that expands on click", async () => {
     const user = userEvent.setup();
     const { renderExpansion } = renderView({
       results: results({
@@ -207,9 +208,7 @@ describe("ChatSearchResultsView: expansion", () => {
       }),
     });
 
-    const toggle = screen.getByRole("button", {
-      name: "also 6 matches in messages",
-    });
+    const toggle = screen.getByRole("button", { name: "6 matches" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(renderExpansion).not.toHaveBeenCalled();
 
@@ -218,6 +217,10 @@ describe("ChatSearchResultsView: expansion", () => {
     expect(renderExpansion).toHaveBeenCalledWith({
       epicId: "epic-1",
       chatId: "c1",
+      best: null,
+      matchCount: 6,
+      expanded: true,
+      variant: "full",
     });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
@@ -232,10 +235,214 @@ describe("ChatSearchResultsView: expansion", () => {
     });
 
     expect(screen.queryByTestId("expansion-output")).toBeNull();
-    await user.click(
-      screen.getByRole("button", { name: "also 2 matches in messages" }),
-    );
+    await user.click(screen.getByRole("button", { name: "2 matches" }));
     expect(screen.getByTestId("expansion-output")).not.toBeNull();
+  });
+
+  it("says '1 match' and offers no disclosure for a title match without message matches", () => {
+    renderView({
+      results: results({
+        chatMatches: [
+          chatMatch({ chatId: "c1", messageMatchCount: 1 }),
+          chatMatch({ chatId: "c2", messageMatchCount: 0 }),
+        ],
+      }),
+    });
+
+    expect(screen.getAllByRole("button", { expanded: false })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "1 match" })).toBeTruthy();
+  });
+});
+
+describe("ChatSearchResultsView: a message-hit row", () => {
+  const best = {
+    ...messageHit({ messageId: "best-id", text: "the needle is here" }),
+    createdAt: new Date(2026, 8, 8, 12).getTime(),
+  };
+
+  it("draws the chat as a header, a sibling disclosure and the best hit once", () => {
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 13, best })],
+      }),
+      taskTitles: new Map([["epic-1", "My Task"]]),
+    });
+
+    const header = screen.getByRole("button", {
+      name: "Open chat title-c1 at its best match",
+    });
+    const disclosure = screen.getByRole("button", { name: "13 matches" });
+    expect(header.contains(disclosure)).toBe(false);
+    expect(header.textContent).toContain("title-c1");
+    expect(header.textContent).toContain("My Task");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    const controlled = disclosure.getAttribute("aria-controls");
+    expect(controlled).not.toBeNull();
+    const region = document.getElementById(controlled ?? "");
+    expect(region).not.toBeNull();
+    // The best hit is a real child row, present exactly once, with no ×N until
+    // the expansion has answered.
+    expect(screen.getAllByText("the needle is here")).toHaveLength(1);
+    expect(region?.textContent).not.toContain("×");
+    expect(
+      screen.getByRole("button", {
+        name: "Agent reply, Sep 8: the needle is here",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("offers no disclosure for a chat with a single match", () => {
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 1 })],
+      }),
+    });
+
+    expect(screen.queryByRole("button", { expanded: false })).toBeNull();
+    expect(screen.queryByRole("button", { name: /matches?$/ })).toBeNull();
+  });
+
+  it("opens the chat at the best hit from the header and from the child row", async () => {
+    const user = userEvent.setup();
+    const { onOpen } = renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 3, best })],
+      }),
+    });
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open chat title-c1 at its best match",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /^Agent reply, Sep 8:/ }),
+    );
+
+    expect(onOpen.mock.calls).toEqual([
+      [{ epicId: "epic-1", chatId: "c1", messageId: "best-id" }],
+      [{ epicId: "epic-1", chatId: "c1", messageId: "best-id" }],
+    ]);
+  });
+
+  it("does not ask for the expansion until the disclosure opens, then passes the best hit and count", async () => {
+    const user = userEvent.setup();
+    const { renderExpansion } = renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 25, best })],
+      }),
+    });
+    expect(renderExpansion).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "25 matches" }));
+
+    expect(renderExpansion).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      chatId: "c1",
+      best,
+      matchCount: 25,
+      expanded: true,
+      variant: "full",
+    });
+  });
+
+  it("keeps the expansion mounted, flagged collapsed, so it can close smoothly", async () => {
+    const user = userEvent.setup();
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 4, best })],
+      }),
+      renderExpansion: (target) => (
+        <div data-testid="expansion" data-expanded={String(target.expanded)} />
+      ),
+    });
+    const disclosure = screen.getByRole("button", { name: "4 matches" });
+
+    await user.click(disclosure);
+    expect(screen.getByTestId("expansion").getAttribute("data-expanded")).toBe(
+      "true",
+    );
+    await user.click(disclosure);
+
+    expect(screen.getByTestId("expansion").getAttribute("data-expanded")).toBe(
+      "false",
+    );
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("ArrowRight and ArrowLeft on the header expand and collapse without moving focus", async () => {
+    const user = userEvent.setup();
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 4, best })],
+      }),
+    });
+    const header = screen.getByRole("button", {
+      name: "Open chat title-c1 at its best match",
+    });
+    const disclosure = screen.getByRole("button", { name: "4 matches" });
+    header.focus();
+
+    await user.keyboard("{ArrowRight}");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(header);
+
+    // Right again is idempotent: the row stays open.
+    await user.keyboard("{ArrowRight}");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+
+    await user.keyboard("{ArrowLeft}");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(header);
+
+    await user.keyboard("{ArrowLeft}");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("ArrowRight and ArrowLeft on the disclosure itself set the state too", async () => {
+    const user = userEvent.setup();
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 4, best })],
+      }),
+    });
+    const disclosure = screen.getByRole("button", { name: "4 matches" });
+    disclosure.focus();
+
+    await user.keyboard("{ArrowRight}");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    await user.keyboard("{ArrowLeft}");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(disclosure);
+  });
+
+  it("leaves Left and Right alone on a chat with nothing to expand", async () => {
+    const user = userEvent.setup();
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1", matchCount: 1, best })],
+      }),
+    });
+    screen
+      .getByRole("button", { name: "Open chat title-c1 at its best match" })
+      .focus();
+
+    await user.keyboard("{ArrowRight}");
+
+    expect(screen.queryByRole("button", { expanded: true })).toBeNull();
+  });
+
+  it("uses the generic 'Show more matches' label for the message continuation", () => {
+    renderView({
+      results: results({
+        messageMatches: [messageMatch({ chatId: "c1" })],
+        messageNextCursor: "cursor-messages",
+      }),
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Show more matches" }),
+    ).toBeTruthy();
   });
 });
 
@@ -314,13 +521,11 @@ describe("ChatSearchResultsView: show more", () => {
       }),
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Show more message matches" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Show more matches" }));
     expect(onShowMoreMessages).toHaveBeenCalledWith("cursor-messages");
   });
 
-  it("hides 'Show more message matches' when messageNextCursor is null", () => {
+  it("hides 'Show more matches' when messageNextCursor is null", () => {
     renderView({
       results: results({
         messageMatches: [messageMatch({ chatId: "c1" })],
@@ -329,7 +534,7 @@ describe("ChatSearchResultsView: show more", () => {
     });
 
     expect(
-      screen.queryByRole("button", { name: "Show more message matches" }),
+      screen.queryByRole("button", { name: "Show more matches" }),
     ).toBeNull();
   });
 });
@@ -476,7 +681,7 @@ describe("ChatSearchResultsView: an empty page that still has a cursor", () => {
     ).toBeTruthy();
     expect(screen.getByText("No matches on this page.")).toBeTruthy();
     await userEvent.click(
-      screen.getByRole("button", { name: "Show more message matches" }),
+      screen.getByRole("button", { name: "Show more matches" }),
     );
 
     expect(onShowMoreMessages.mock.calls).toEqual([["20"]]);
@@ -495,5 +700,87 @@ describe("ChatSearchResultsView: an empty page that still has a cursor", () => {
     expect(screen.getByText("No chats match.")).toBeTruthy();
     expect(screen.queryByText("No matches on this page.")).toBeNull();
     expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
+  });
+});
+
+describe("MessageMatchRow: group separation", () => {
+  function groupOf(chatId: string): HTMLElement {
+    const group = screen
+      .getByRole("button", {
+        name: `Open chat title-${chatId} at its best match`,
+      })
+      .closest("li");
+    if (group === null) throw new Error(`no group for ${chatId}`);
+    return group;
+  }
+
+  it("full: every group is a bordered row, only the last drops its divider, and an expansion stays inside its own group", async () => {
+    const user = userEvent.setup();
+    renderView({
+      results: results({
+        messageMatches: [
+          messageMatch({ chatId: "c1" }),
+          messageMatch({ chatId: "c2", matchCount: 3 }),
+          messageMatch({ chatId: "c3" }),
+        ],
+      }),
+      renderExpansion: () => <p>expanded-children</p>,
+    });
+    await user.click(screen.getByRole("button", { name: "3 matches" }));
+
+    const groups = ["c1", "c2", "c3"].map(groupOf);
+    expect(new Set(groups.map((group) => group.parentElement)).size).toBe(1);
+    for (const group of groups) {
+      expect(group.classList.contains("flex-col")).toBe(true);
+      expect(group.classList.contains("gap-1")).toBe(true);
+      expect(group.classList.contains("px-2")).toBe(true);
+      expect(group.classList.contains("py-3")).toBe(true);
+      expect(group.classList.contains("py-1")).toBe(false);
+      expect(group.classList.contains("border-b")).toBe(true);
+      expect(group.classList.contains("border-border")).toBe(true);
+      expect(group.classList.contains("last:border-b-0")).toBe(true);
+    }
+    // The expanded children belong to the middle group only, so the divider
+    // still falls between whole groups rather than inside one.
+    const expanded = screen.getByText("expanded-children");
+    expect(groups[1]?.contains(expanded)).toBe(true);
+    expect(groups[0]?.contains(expanded)).toBe(false);
+    expect(groups[2]?.contains(expanded)).toBe(false);
+    expect(groups[2]?.nextElementSibling).toBeNull();
+  });
+
+  it("full: the chat title is semibold", () => {
+    renderView({
+      results: results({ messageMatches: [messageMatch({ chatId: "c1" })] }),
+    });
+
+    const title = screen.getByText("title-c1");
+    expect(title.classList.contains("font-semibold")).toBe(true);
+    expect(title.classList.contains("font-medium")).toBe(false);
+  });
+
+  it("compact: keeps the tight one-line density, a medium title and no divider", () => {
+    render(
+      <ul>
+        <MessageMatchRow
+          match={messageMatch({ chatId: "c1" })}
+          expanded={false}
+          onOpen={vi.fn<(target: ChatSearchOpenTarget) => void>()}
+          onToggleExpanded={vi.fn<() => void>()}
+          renderExpansion={() => null}
+          taskTitle={null}
+          variant="compact"
+        />
+      </ul>,
+    );
+
+    const group = groupOf("c1");
+    expect(group.classList.contains("py-1")).toBe(true);
+    expect(group.classList.contains("py-3")).toBe(false);
+    expect(group.classList.contains("border-b")).toBe(false);
+    expect(group.classList.contains("last:border-b-0")).toBe(false);
+    const title = screen.getByText("title-c1");
+    expect(title.classList.contains("font-medium")).toBe(true);
+    expect(title.classList.contains("font-semibold")).toBe(false);
   });
 });

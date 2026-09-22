@@ -14,7 +14,6 @@ import {
   useActiveEpicArtifactId,
   useEpicCanvas,
   useEpicCanvasStore,
-  useEpicTab,
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -36,7 +35,6 @@ import {
   useEpicChatRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
   useEpicSnapshotLoaded,
-  useEpicTitle,
 } from "@/lib/epic-selectors";
 import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -96,7 +94,6 @@ export function useEpicRouteSynchronization(
   const navigate = useNavigate();
   const handle = useOpenEpicHandle();
   const snapshotLoaded = useEpicSnapshotLoaded();
-  const liveTitle = useEpicTitle();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
   // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
@@ -119,8 +116,6 @@ export function useEpicRouteSynchronization(
   // second opinion about authorization, it is the one answer travelling to both
   // halves of a read/destroy pair that must not disagree.
   const cloudChatsCloudAuthorized = useCloudChatHasCloudAuthorization();
-  const currentTab = useEpicTab(tabId);
-  const renameTab = useEpicCanvasStore((s) => s.renameTab);
   const applyNestedRouteFocus = useEpicCanvasStore(
     (s) => s.applyNestedRouteFocus,
   );
@@ -162,14 +157,6 @@ export function useEpicRouteSynchronization(
     (focusArtifactId !== undefined &&
       nestedRouteTargetApplied &&
       activeArtifactId === focusArtifactId);
-
-  const currentTabName = currentTab?.name ?? null;
-  useEffect(() => {
-    const nextTitle = liveTitle.trim();
-    if (nextTitle.length === 0) return;
-    if (currentTabName === nextTitle) return;
-    renameTab(tabId, nextTitle);
-  }, [currentTabName, tabId, liveTitle, renameTab]);
 
   useEffect(() => {
     if (!snapshotLoaded) {

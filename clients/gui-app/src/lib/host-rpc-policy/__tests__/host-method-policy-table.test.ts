@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import {
   CHAT_PUBLICATION_WAIT_POLL_LANE,
   GIT_DIRTY_SUBMODULE_POLL_LANE,
@@ -42,6 +50,7 @@ import type {
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -141,6 +150,20 @@ describe("host method poll policy table", () => {
         entry.joinResponseTimeoutMs === null || entry.joinResponseTimeoutMs > 0,
       ).toBe(true);
     }
+  });
+
+  it("keeps usage summary above the host and server response budgets", () => {
+    expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBe(90_000);
+    expect(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS).toBeGreaterThan(75_000);
+    expect(HOST_METHOD_POLL_TABLE["host.usage.summary"]).toMatchObject({
+      joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("host.usage.summary"),
+    ).toBe(USAGE_SUMMARY_RESPONSE_TIMEOUT_MS);
+    expect(HOST_METHOD_POLL_TABLE["host.status"].joinResponseTimeoutMs).toBe(
+      null,
+    );
   });
 
   it("keeps ambiguous verbs on their declared side of the command/read boundary", () => {
@@ -897,5 +920,135 @@ describe("epic.chatPublicationState poll lane terminates on `definitive`", () =>
         definitive: null,
       }),
     ).toBe(false);
+  });
+});
+
+const PUT_BLOB_PARAMS: RequestOfMethod<HostRpcRegistry, "drafts.putBlob"> = {
+  sha256: "ab".repeat(32),
+  bytesBase64: "AQID",
+};
+
+function buildPutBlobHostClient(): {
+  readonly requester: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "put-blob-req",
+    handlers: {
+      "drafts.putBlob": () => ({ ok: true as const }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    messenger,
+    invalidator: { invalidateHostScope: () => undefined },
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-put-blob",
+    }),
+  );
+  return {
+    requester: spine.createRequester(mockLocalHostEntry),
+    messenger,
+  };
+}
+
+describe("drafts.putBlob declared budget", () => {
+  it("declares fifo, the shared 120s join timeout, and no poll", () => {
+    expect(HOST_METHOD_POLL_TABLE["drafts.putBlob"]).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+      poll: null,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("drafts.putBlob"),
+    ).toBe(120_000);
+  });
+
+  it("HostClient dispatches only the declared 120s budget and refuses any other before the messenger", async () => {
+    const declared = buildPutBlobHostClient();
+    const declaredTimeoutSpy = vi.spyOn(
+      declared.messenger,
+      "requestWithResponseTimeout",
+    );
+
+    await expect(
+      declared.requester.requestWithOptions("drafts.putBlob", PUT_BLOB_PARAMS, {
+        idempotencyKey: PUT_BLOB_PARAMS.sha256,
+        responseTimeoutMs: 120_000,
+        requiredHostMethodVersion: null,
+        signal: undefined,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(declaredTimeoutSpy).toHaveBeenCalledTimes(1);
+    expect(declaredTimeoutSpy).toHaveBeenCalledWith(
+      "drafts.putBlob",
+      PUT_BLOB_PARAMS,
+      120_000,
+      expect.objectContaining({
+        idempotencyKey: PUT_BLOB_PARAMS.sha256,
+      }),
+    );
+    expect(declared.messenger.calls).toHaveLength(1);
+
+    const refused = buildPutBlobHostClient();
+    const refusedTimeoutSpy = vi.spyOn(
+      refused.messenger,
+      "requestWithResponseTimeout",
+    );
+    const refusedRequestSpy = vi.spyOn(refused.messenger, "request");
+
+    await expect(
+      refused.requester.requestWithOptions("drafts.putBlob", PUT_BLOB_PARAMS, {
+        idempotencyKey: PUT_BLOB_PARAMS.sha256,
+        responseTimeoutMs: 60_000,
+        requiredHostMethodVersion: null,
+        signal: undefined,
+      }),
+    ).rejects.toThrow("does not permit response timeout 60000");
+
+    expect(refusedRequestSpy).not.toHaveBeenCalled();
+    expect(refusedTimeoutSpy).not.toHaveBeenCalled();
+    expect(refused.messenger.calls).toHaveLength(0);
+  });
+});
+
+describe("agent.resolveMessagePeer poll policy", () => {
+  const policy = HOST_METHOD_POLL_TABLE["agent.resolveMessagePeer"].poll;
+  const peer = {
+    epicId: "epic-2",
+    agentId: "agent-2",
+    hostId: "host-2",
+    title: "Peer",
+    surface: "gui",
+  } as const;
+
+  it("backs off from 2s to 5min while the peer is unresolved", () => {
+    for (const pending of [undefined, { peer: null }]) {
+      expect(policy.classify(pending)).toMatchObject({
+        id: "a2a-peer-pending",
+        initialDelayMs: 2_000,
+        maxDelayMs: 5 * 60_000,
+      });
+    }
+  });
+
+  it("keeps backing off for a resolved peer whose title has not been generated yet", () => {
+    expect(policy.classify({ peer: { ...peer, title: null } })).toMatchObject({
+      id: "a2a-peer-pending",
+      initialDelayMs: 2_000,
+      maxDelayMs: 5 * 60_000,
+    });
+  });
+
+  it("stops polling once a named peer resolves, so the other task can be reclaimed", () => {
+    expect(policy.classify({ peer })).toBe(false);
   });
 });

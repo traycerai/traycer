@@ -17,6 +17,10 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  tryReserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   BrowserSessionsContext,
@@ -783,6 +787,81 @@ function hostUserMessage(): Message {
   };
 }
 
+const EDIT_IMAGE_HASH = "e".repeat(64);
+const EDIT_IMAGE_BYTES = 3 * 1024 * 1024;
+
+/**
+ * The fixture message, carrying one hash-only image the edit will inherit.
+ *
+ * Spelled out rather than spread over {@link hostUserMessage}: `Message` is a
+ * union discriminated on `role`, and a spread-then-override object literal is
+ * checked against the whole union at once, which resolves to the assistant
+ * member and rejects `message`. The discriminant has to be written here.
+ */
+function hostUserMessageWithImage(): Message {
+  return {
+    role: "user",
+    messageId: "message-1",
+    sender: { type: "user", userId: "owner-1" },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "edit-img-1",
+                  fileName: "shot.png",
+                  hash: EDIT_IMAGE_HASH,
+                  b64content: null,
+                  mimeType: "image/png",
+                  size: EDIT_IMAGE_BYTES,
+                  byHashEligible: true,
+                },
+              },
+              { type: "text", text: "Host chat content" },
+            ],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+}
+
+/**
+ * Free space in the image byte budget, to the byte.
+ *
+ * Binary-searched through the only observable the module exposes - what it
+ * will and will not admit - because the answer has to be a DELTA here: this
+ * tile mounts a real composer, and asserting an absolute figure would pin
+ * whatever else that composer happens to be holding. Every probe releases, so
+ * measuring never changes the thing measured.
+ */
+function measureFreeImageBytes(): number {
+  let admissible = 0;
+  let refused = LANDING_IMAGE_BUDGET_BYTES + 1;
+  while (refused - admissible > 1) {
+    const mid = Math.floor((admissible + refused) / 2);
+    const reservation = tryReserveLandingImageBudget([
+      { hash: null, bytes: mid },
+    ]);
+    if (reservation === null) {
+      refused = mid;
+      continue;
+    }
+    reservation.release();
+    admissible = mid;
+  }
+  return admissible;
+}
+
 // Neither this suite's remembered pair (Claude) nor its default provider
 // (Codex), so a settings tuple that names it can only have come from the
 // import provenance.
@@ -1355,6 +1434,8 @@ describe("<ChatTile />", () => {
           origin: null,
           publication: null,
           supersedes: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -1800,6 +1881,49 @@ describe("<ChatTile />", () => {
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.deliveryPolicy).toBe("auto");
+  });
+
+  // W-10. The helper-level cases in `landing-image-gc-holder-roots` and
+  // `composer-holder-image-bytes` drive `useImageContentRoot` directly and
+  // release it by UNMOUNTING, which is the park. That is not what Escape or
+  // Cancel does: this tile stays mounted and its `currentContent` goes to null,
+  // so those cases stayed green with the tile's hook call deleted and with the
+  // ref's content update broken. This one goes through the real wiring - the
+  // tile's own call, the reducer's begin and clear - and asserts the DELTA, so
+  // it fails if the charge is wrong in either direction.
+  it("charges an open inline edit's images and releases them on Cancel, without unmounting", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessageWithImage()],
+        activeTurn: null,
+      });
+    });
+    await waitForChatTileLoaded();
+
+    // Before the edit exists, the message's own image is the transcript's, not
+    // a holder's: nothing in this renderer is keeping those bytes alive.
+    const beforeEdit = measureFreeImageBytes();
+
+    fireEvent.click(getButtonByAriaLabel("Edit message"));
+
+    // `beginInlineEdit` seeds `currentContent` from the saved message, so the
+    // edit is now the holder and the image is charged.
+    const duringEdit = measureFreeImageBytes();
+    expect(beforeEdit - duringEdit).toBe(EDIT_IMAGE_BYTES);
+
+    fireEvent.click(getButtonByAriaLabel("Cancel edit"));
+
+    // Cancel clears the reducer's inline edit. The tile is STILL MOUNTED and
+    // the hook is still registered - it is the content that went to null - and
+    // the bytes have to come back anyway.
+    expect(measureFreeImageBytes()).toBe(beforeEdit);
   });
 
   it("sends delete-message-suffix after inline confirmation", async () => {
@@ -3522,6 +3646,7 @@ describe("<ChatTile />", () => {
             b64content: "zzz",
             mimeType: "image/png",
             size: 64,
+            byHashEligible: true,
           },
         },
       ],
@@ -3788,7 +3913,7 @@ describe("<ChatTile />", () => {
       Array.from({ length: 8 }, (_, index) => ({
         kind: "prompt" as const,
         queueItemId: `queue-${index}`,
-        messageId: `message-${index}`,
+        messageId: `scroll-message-${index}`,
         message: {
           kind: "user",
           content: QUEUED_CONTENT,

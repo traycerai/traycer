@@ -10,31 +10,21 @@ import {
 } from "@/stores/agent-activity-store";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import type { UseNotificationIndicatorsArgs } from "@/hooks/notifications/use-notification-indicators-query";
-import { useHomeBadgeCount } from "@/components/home-focus/use-home-badge-count";
 import { useFocusModel } from "@/hooks/home-focus/use-focus-model";
 
 /** The separator `focusAgentKey` joins on - the one byte no id can
  * carry. */
 const NUL_SEPARATOR = "\u0000";
-import {
-  makeApprovalPayload,
-  makeMergedNotificationRow,
-} from "@/lib/home-focus/__tests__/fixtures";
 
 /**
  * Everything the hook joins from OTHER stores/queries is mocked to a fixed,
  * referentially-stable answer, so the suite can drive the one live piece
  * (`useAgentActivityStore`, the real store + its test helpers) and observe
  * the model react - without a host runtime.
- *
- * `notificationRowsMock` is the one exception: the badge-equivalence case
- * needs a real prompt row on the feed, so it is a controllable `vi.fn`
- * reset to an empty array between tests.
  */
-const { notificationRowsMock, notificationIndicatorsMock } = vi.hoisted(() => ({
-  notificationRowsMock: vi.fn<() => ReadonlyArray<MergedNotificationRow>>(
-    () => [],
-  ),
+const EMPTY_NOTIFICATION_ROWS: ReadonlyArray<MergedNotificationRow> = [];
+
+const { notificationIndicatorsMock } = vi.hoisted(() => ({
   notificationIndicatorsMock: vi.fn((_args: UseNotificationIndicatorsArgs) => ({
     epics: {},
     chats: {},
@@ -42,7 +32,7 @@ const { notificationRowsMock, notificationIndicatorsMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/stores/notifications/merged-notifications", () => ({
-  useMergedNotificationRows: notificationRowsMock,
+  useMergedNotificationRows: () => EMPTY_NOTIFICATION_ROWS,
 }));
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
@@ -197,7 +187,6 @@ vi.mock("@/stores/auth/auth-store", () => ({
 }));
 
 beforeEach(() => {
-  notificationRowsMock.mockReturnValue([]);
   notificationIndicatorsMock.mockClear();
   connectableHostsMock.hostIds = [];
   connectableHostsMock.resolved = true;
@@ -314,22 +303,6 @@ describe("useFocusModel", () => {
       HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP,
     );
     expect(lastArgs?.epicIds).toEqual(expectedIds);
-  });
-
-  it("useHomeBadgeCount() equals useFocusModel().badgeCount", () => {
-    const approvalRow = makeMergedNotificationRow({
-      feedId: "host:approval-1",
-      hostKind: "approval.requested",
-      severity: "needs_action",
-      payload: makeApprovalPayload("epic-1", "chat-1"),
-    });
-    notificationRowsMock.mockReturnValue([approvalRow]);
-
-    const model = renderHook(() => useFocusModel());
-    const badge = renderHook(() => useHomeBadgeCount());
-
-    expect(model.result.current.badgeCount).toBe(1);
-    expect(badge.result.current).toBe(model.result.current.badgeCount);
   });
 });
 

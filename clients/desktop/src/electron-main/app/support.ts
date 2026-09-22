@@ -15,10 +15,21 @@ import { arch, platform } from "node:process";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import * as Sentry from "@sentry/electron/main";
+// A runtime import: the transport's own rate-limit helper, which
+// `@sentry/electron/main` does not re-export. `@sentry/core` is a direct
+// dependency of this workspace for that reason (an exact transitive pin of
+// `@sentry/electron` either way).
+import { parseRetryAfterHeader } from "@sentry/core";
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "../host/host-paths";
 import { readHostLayer0Record } from "../host/host-state";
 import { log, resolveDesktopLogPath } from "./logger";
+import {
+  sentryFeedbackInclusion,
+  sentryOfflineQueuePath,
+  sentryReportRateLimitWindow,
+  wasEventQueuedOffline,
+} from "./sentry-delivery-observer";
 import { handleGetMetrics } from "./diagnostics";
 import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
@@ -605,18 +616,18 @@ export class DesktopSupportService {
       // Resolve the actual per-event outcome the `afterSendEvent` hook
       // captured before trusting "delivered".
       const outcome = await sendOutcome.awaitOutcome();
-      if (outcome !== null && outcome.status === "failed") {
-        log.error("[support] sentry rejected the report", {
-          reportId: frozen.reportId,
-          statusCode: outcome.statusCode,
-        });
-        return { status: "failed", reason: "error" };
-      }
+      const delivery = await resolveDeliveryOutcome(
+        outcome,
+        eventId,
+        frozen.reportId,
+      );
+      if (delivery.status !== "delivered") return delivery;
       // Only confirmed deliveries land in the filed-report half of the
-      // ledger. unconfirmed/failed/unavailable must not - a phantom entry
-      // would inflate later router counts and fixed-in work. Fire-and-
-      // forget: ledger failure must not turn a successful upload into a
-      // failed submit result.
+      // ledger. queued/unconfirmed/failed/unavailable must not - a phantom
+      // entry would inflate later router counts and fixed-in work, and a
+      // queued envelope is in particular one that has not been filed
+      // anywhere yet. Fire-and-forget: ledger failure must not turn a
+      // successful upload into a failed submit result.
       const deliveredFingerprint = privateDiagnostics?.fingerprint;
       if (
         deliveredFingerprint !== null &&
@@ -1186,12 +1197,135 @@ function sentryEventIdFromReportId(reportId: string): string {
   return reportId.slice(REPORT_ID_PREFIX.length);
 }
 
+/**
+ * What the transport actually reported for one event - RAW, with no verdict
+ * attached.
+ *
+ * The hook used to collapse this to `delivered`/`failed` itself, and both
+ * halves of that were wrong. An undefined `statusCode` became `failed`,
+ * which is the one thing it definitely is not: the offline transport
+ * returns `{}` after QUEUEING an envelope it will deliver later, and the
+ * SDK returns `{}` after dropping one client-side under a rate limit it
+ * will lift. And the response's two rate-limit headers - the only place the
+ * "when to retry" a 429 carries is written down - were discarded
+ * unexamined. Recording the facts and mapping them at one place in
+ * `submitReport` is what makes the difference expressible.
+ */
 interface SentrySendOutcome {
-  readonly status: "delivered" | "failed";
-  // Undefined on a network-level failure (e.g. a destroyed connection) -
-  // there was no HTTP response to read a code off, but the send still
-  // definitively did not reach the store, so it is still `"failed"`.
+  readonly feedbackIncluded: boolean | null;
+  /** Undefined when there was no HTTP response at all: a network failure, a queued envelope, a client-side rate-limit drop, or a transport that threw. */
   readonly statusCode: number | undefined;
+  readonly retryAfterHeader: string | null;
+  readonly rateLimitsHeader: string | null;
+}
+
+/**
+ * A 2xx confirms the report only when its feedback item survived the SDK's
+ * transport filter. Attachments-only responses are not report delivery.
+ * Inclusion is recorded at the synchronous filter boundary, after async
+ * event preparation and before response headers can open a new limit.
+ *
+ * With no HTTP response, an observed feedback drop is rate-limited; an
+ * exact persisted envelope is queued; anything else is unconfirmed. A live
+ * rate limit supplies a retry hint, never proof that this item was dropped.
+ */
+async function resolveDeliveryOutcome(
+  outcome: SentrySendOutcome | null,
+  eventId: string,
+  reportId: string,
+): Promise<SupportSubmitReportResult> {
+  const statusCode = outcome?.statusCode;
+  if (statusCode !== undefined) {
+    if (statusCode >= 200 && statusCode < 300) {
+      if (outcome?.feedbackIncluded === true) {
+        return { status: "delivered", reportId };
+      }
+      if (outcome?.feedbackIncluded === false) {
+        return filteredFeedbackOutcome(reportId);
+      }
+      log.warn("[support] sentry response has no report inclusion evidence", {
+        reportId,
+      });
+      return { status: "unconfirmed", reportId };
+    }
+    if (statusCode === 429) {
+      const retryAfterSeconds = retryAfterSecondsFromHeader(
+        outcome?.retryAfterHeader ?? null,
+      );
+      log.warn("[support] sentry rate-limited the report", {
+        reportId,
+        retryAfterSeconds,
+        rateLimitsHeader: outcome?.rateLimitsHeader,
+      });
+      return { status: "failed", reason: "rate-limited", retryAfterSeconds };
+    }
+    log.error("[support] sentry rejected the report", {
+      reportId,
+      statusCode,
+    });
+    return { status: "failed", reason: "error" };
+  }
+
+  if (outcome?.feedbackIncluded === false) {
+    return filteredFeedbackOutcome(reportId);
+  }
+
+  if (outcome !== null && (await wasReportQueuedOffline(eventId, reportId))) {
+    log.info("[support] report queued offline for later delivery", {
+      reportId,
+    });
+    return { status: "queued", reportId };
+  }
+
+  log.warn("[support] report upload could not be confirmed", { reportId });
+  return { status: "unconfirmed", reportId };
+}
+
+function filteredFeedbackOutcome(reportId: string): SupportSubmitReportResult {
+  const { retryAfterSeconds } = sentryReportRateLimitWindow.current(Date.now());
+  log.warn("[support] report item filtered out under a sentry rate limit", {
+    reportId,
+    retryAfterSeconds,
+  });
+  return { status: "failed", reason: "rate-limited", retryAfterSeconds };
+}
+
+/**
+ * `retry-after` in whole seconds, or `null` when the header was absent.
+ *
+ * Absent is reported as absent rather than as core's 60-second default:
+ * "try again in a minute" that the server never said is a worse answer than
+ * "try again later", and the dialog phrases the two differently.
+ */
+function retryAfterSecondsFromHeader(header: string | null): number | null {
+  if (header === null || header.length === 0) return null;
+  const delayMs = parseRetryAfterHeader(header);
+  return delayMs > 0 ? Math.ceil(delayMs / 1000) : null;
+}
+
+/**
+ * Never throws: an unreadable queue is simply not a confirmation - see
+ * `wasEventQueuedOffline`. The path is derived the same way
+ * `crash-reporter.ts` derives the `queuePath` it hands the transport, from
+ * the one helper, so the reader and the writer cannot end up looking at two
+ * directories.
+ */
+async function wasReportQueuedOffline(
+  eventId: string,
+  reportId: string,
+): Promise<boolean> {
+  try {
+    return await wasEventQueuedOffline(
+      sentryOfflineQueuePath(app.getPath("userData")),
+      eventId,
+    );
+  } catch (err) {
+    log.warn("[support] could not read the sentry offline queue", {
+      reportId,
+      err,
+    });
+    return false;
+  }
 }
 
 /**
@@ -1206,9 +1340,11 @@ interface SentrySendOutcome {
  * reported the queue drained; before that point the outcome legitimately has
  * not happened yet, and `flush`'s own timeout remains the source of truth for
  * `unconfirmed`. `SEND_OUTCOME_GRACE_MS` bounds the case where the hook never
- * fires despite `flush` saying the queue is empty - it resolves `null`, and
- * the caller falls back to `flush`'s own "delivered" determination rather
- * than guessing.
+ * fires despite `flush` saying the queue is empty - it resolves `null`, which
+ * `resolveDeliveryOutcome` maps to `unconfirmed`. It used to fall back to
+ * `flush`'s own "delivered" determination there, and that was the fallthrough
+ * that let an undelivered report be reported as sent: a drained queue says
+ * the envelope left the transport, never that Sentry took it.
  *
  * Callers must call `unsubscribe` exactly once, on every exit path, whether
  * or not `awaitOutcome` was ever called - otherwise every `submitReport` call
@@ -1228,13 +1364,15 @@ function watchSentrySendOutcome(eventId: string): {
   });
   const unsubscribe = client.on("afterSendEvent", (event, sendResponse) => {
     if (event.event_id !== eventId) return;
-    const statusCode = sendResponse.statusCode;
+    // Recorded, not judged. `statusCode === undefined` used to settle
+    // `failed` here, which reported a queued-for-retry envelope as lost;
+    // the verdict now lives in `resolveDeliveryOutcome`, which can also see
+    // the rate-limit window and the offline queue.
     settleOutcome({
-      status:
-        statusCode !== undefined && statusCode >= 200 && statusCode < 300
-          ? "delivered"
-          : "failed",
-      statusCode,
+      feedbackIncluded: sentryFeedbackInclusion(sendResponse, eventId),
+      statusCode: sendResponse.statusCode,
+      retryAfterHeader: sendResponse.headers?.["retry-after"] ?? null,
+      rateLimitsHeader: sendResponse.headers?.["x-sentry-rate-limits"] ?? null,
     });
   });
   return {

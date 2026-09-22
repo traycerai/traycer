@@ -228,6 +228,8 @@ export const DEFAULT_CONTEXT_INDICATOR_STYLE: ContextIndicatorStyle = "text";
  */
 export const DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN = false;
 
+export type TaskTabLayout = "scroll" | "shrink";
+
 export interface SettingsState {
   startPageWallpaper: StartPageWallpaper | null;
   showGreeting: boolean;
@@ -307,8 +309,10 @@ export interface SettingsState {
    */
   defaultEditor: DefaultOpenTarget | null;
   /**
-   * Voice input (on-device dictation). Opt-in: enabling it surfaces the mic
-   * button in the composer and prompts the host to download the STT model.
+   * Voice input (on-device dictation). Enabling it surfaces the mic button
+   * and the dictation shortcut, and lets the host download the STT model.
+   * The microphone stays closed until the user starts a dictation, and
+   * `false` refuses capture even if a caller invokes start.
    */
   voiceInputEnabled: boolean;
   /** BCP-47-ish dictation language hint, or "auto". */
@@ -373,6 +377,8 @@ export interface SettingsState {
    * drawer behave exactly as they did before Home existed.
    */
   homeTabEnabled: boolean;
+  /** How task tabs share space when the header fills up. */
+  taskTabLayout: TaskTabLayout;
   /**
    * Which breakdown rows the pinned context strip draws, in the strip's own
    * order. Never empty: the strip with no fields is what unpinning is for, so
@@ -450,6 +456,7 @@ export interface SettingsState {
     value: NotificationChimeSound,
   ) => void;
   setHomeTabEnabled: (value: boolean) => void;
+  setTaskTabLayout: (value: TaskTabLayout) => void;
   togglePinnedContextBreakdownField: (field: ContextBreakdownField) => void;
   /**
    * The whole field list at once, same caller as
@@ -508,6 +515,7 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "notificationChimeSounds"
   | "homeTabEnabled"
+  | "taskTabLayout"
   | "pinnedContextBreakdownFields"
   | "contextIndicatorStyle"
 >;
@@ -591,6 +599,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     notificationChimeSounds: state.notificationChimeSounds,
     homeTabEnabled: state.homeTabEnabled,
+    taskTabLayout: state.taskTabLayout,
     pinnedContextBreakdownFields: state.pinnedContextBreakdownFields,
     contextIndicatorStyle: state.contextIndicatorStyle,
   };
@@ -645,6 +654,7 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
       homeTabEnabled: false,
+      taskTabLayout: "scroll",
       pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
       contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
       setTheme: makeSetter(set, "theme"),
@@ -800,6 +810,7 @@ export const useSettingsStore = create<SettingsState>()(
         );
       },
       setHomeTabEnabled: makeSetter(set, "homeTabEnabled"),
+      setTaskTabLayout: makeSetter(set, "taskTabLayout"),
       togglePinnedContextBreakdownField: (field) => {
         set((s) => {
           const selected = new Set(s.pinnedContextBreakdownFields);
@@ -922,6 +933,8 @@ export const useSettingsStore = create<SettingsState>()(
           // `workspaceFileWordWrap` is: this flag gates a tab kind, a route
           // guard and a chord, so a truthy non-boolean rehydrating as-is would
           // switch Home on for a user who never asked for it.
+          taskTabLayout:
+            persisted.taskTabLayout === "shrink" ? "shrink" : "scroll",
           homeTabEnabled:
             typeof merged.homeTabEnabled === "boolean"
               ? merged.homeTabEnabled

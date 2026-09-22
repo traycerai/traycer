@@ -9,7 +9,9 @@
 @import "./styles/theme-surfaces.css";
 @import "./styles/window-chrome.css";
 
-@custom-variant dark (&:is(.dark *));
+/* `theme-base-dark` (theme-fallback.css) re-declares the dark palette on a
+   subtree, so the variant has to follow it there too. */
+@custom-variant dark (&:is(.dark *, .theme-base-dark *));
 /* Window Controls Overlay: active only when Chromium reports the
    native title-bar controls are visible (toggled by
    `syncDocumentWindowControlsOverlayClass`). Mac fullscreen autohide
@@ -137,31 +139,6 @@
   }
 }
 
-@keyframes prompt-stash-count-flash {
-  0%,
-  72% {
-    background-color: var(--color-primary);
-    color: var(--color-primary-foreground);
-    box-shadow: 0 0 0 3px
-      color-mix(in srgb, var(--color-primary) 18%, transparent);
-  }
-  /* The animation is `both`, so this frame is not a hand-off back to the
-     class - it is the element's permanent background from 700ms on. It must
-     therefore restate the pill's own `bg-foreground/8`, not `--muted`: every
-     preset dark defines `--muted` as its `--popover`/`--card` value, so a
-     muted terminal frame silently re-collapsed the count pill into the
-     composer surface the moment the first stash landed. */
-  100% {
-    background-color: color-mix(
-      in oklab,
-      var(--color-foreground) 8%,
-      transparent
-    );
-    color: inherit;
-    box-shadow: none;
-  }
-}
-
 /* A graph find result keeps its static ring after this finite attention cue.
    Box-shadow is intentionally the only animated property: timeline playback
    may be pulsing the same node's opacity at the same time. */
@@ -189,16 +166,13 @@
   }
 }
 
-.prompt-stash-count-flash {
-  animation: prompt-stash-count-flash 700ms ease-out both;
-}
-
 /* A compact dock chip acknowledging the thing it stands for changing - the
    first agent starting, the line counts moving. A ring radiating out of the
    chip and nothing else: `box-shadow` alone, so the chip's own background
-   survives the animation (see the note on `prompt-stash-count-flash` above for
-   what a `both` background frame does to it), and the end frame is transparent
-   so a finished pulse leaves no residue.
+   survives the animation (an `animation: ... both` background frame is not a
+   hand-off back to the class - it is the element's permanent fill from then
+   on), and the end frame is transparent so a finished pulse leaves no
+   residue.
 
    Deliberately no reduced-motion override. The base layer already collapses
    every animation to 0.01ms, which still fires `animationend` - and that event
@@ -388,12 +362,6 @@
 
 [data-composer-attachment-strip]::-webkit-scrollbar {
   display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .prompt-stash-count-flash {
-    animation-duration: 1ms;
-  }
 }
 
 .working-text-shimmer {
@@ -1314,6 +1282,11 @@
  * for the composer's contenteditable root.
  */
 @layer components {
+  /* Shrinking tabs spend less room on padding as their own frame narrows. */
+  [data-tab-layout="shrink"] .group\/tab {
+    --header-tab-padding: min(10cqw, 1.25rem);
+  }
+
   .header-tab-trailing-slot {
     width: 0;
     opacity: 0;

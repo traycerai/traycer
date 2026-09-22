@@ -47,7 +47,7 @@ import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   settleDetachedEpicTitleCommit,
   settleEpicTitleWrite,
@@ -79,6 +79,7 @@ import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { tabRefKey } from "@/stores/tabs/layout";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
@@ -331,7 +332,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
           onCommitted: () => {
             if (userId === null) return;
-            updateEpicTitleInCloudTaskCaches(
+            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
               queryClient,
               { hostId, userId },
               epicId,
@@ -369,7 +370,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         .then(
           () => {
             if (userId === null) return;
-            updateEpicTitleInCloudTaskCaches(
+            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
               queryClient,
               { hostId, userId },
               epicId,
@@ -485,6 +486,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           tabIndex={0}
           aria-selected={isActive}
           data-testid={`tab-${tab.kind}-${tab.id}`}
+          data-header-tab-key={tabRefKey(tab)}
           data-tab-kind={tab.kind}
           data-tab-index={index}
           onClick={activateTab}
@@ -710,7 +712,7 @@ function HeaderTabMotionFrame(props: {
       data-strip-item-mergeable="true"
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
-      className="relative flex w-56 min-w-[min(40vw,12rem)] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
+      className="relative flex w-56 min-w-[min(40vw,12rem)] group-data-[tab-layout=shrink]/strip:min-w-12 max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}
     </m.div>

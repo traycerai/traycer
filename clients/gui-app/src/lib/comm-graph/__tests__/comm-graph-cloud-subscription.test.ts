@@ -40,6 +40,7 @@ function cloudEvent(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     historicalUpload: false,
     ...overrides,
   };
@@ -134,6 +135,23 @@ describe("CommGraphCloudSubscriptionManager", () => {
       null,
     );
     expect(manager.getSnapshot().lastArrival).toBeNull();
+  });
+
+  it("carries a cross-task row's peerEpicId through onto the normalized event", () => {
+    const recorded = recordedOpener();
+    const manager = new CommGraphCloudSubscriptionManager(
+      "epic-1",
+      recorded.opener,
+      () => undefined,
+    );
+    manager.setRelayHostIds(["relay-b"]);
+    manager.attach();
+    const handlers = recorded.requests[0].handlers;
+
+    handlers.onAvailability("available");
+    handlers.onSnapshot([cloudEvent({ peerEpicId: "epic-peer-1" })], 10, null);
+
+    expect(manager.getSnapshot().events[0]?.peerEpicId).toBe("epic-peer-1");
   });
 
   it("advances resume progress through a caught-up skipped terminal row", () => {

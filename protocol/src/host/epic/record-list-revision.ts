@@ -35,6 +35,7 @@
  * Allowed dependencies: `zod` only.
  */
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Opaque identity of the STATE the revision counts changes to, for one viewer
@@ -45,7 +46,7 @@ import { z } from "zod";
  * field exists to prevent. A host with nothing to say sends no revision at
  * all (the nullable stamp below), never an empty epoch.
  */
-export const recordListEpochSchema = z.string().min(1);
+export const recordListEpochSchema = lazySchema(() => z.string().min(1));
 export type RecordListEpoch = z.infer<typeof recordListEpochSchema>;
 
 /**
@@ -62,10 +63,12 @@ export type RecordListEpoch = z.infer<typeof recordListEpochSchema>;
  * "the very next change" - which is what the delta stream's `listRevision`
  * stamp is for. Across epochs it means nothing.
  */
-export const recordListRevisionSchema = z.object({
-  epoch: recordListEpochSchema,
-  revision: z.number().int().nonnegative(),
-});
+export const recordListRevisionSchema = lazySchema(() =>
+  z.object({
+    epoch: recordListEpochSchema,
+    revision: z.number().int().nonnegative(),
+  }),
+);
 export type RecordListRevision = z.infer<typeof recordListRevisionSchema>;
 
 /**
@@ -92,9 +95,11 @@ export type RecordListRevision = z.infer<typeof recordListRevisionSchema>;
  * to hold now. Nesting makes "all three or none" STRUCTURAL, so there is no
  * cross-field runtime check for a later reader to overlook.
  */
-export const recordListStampSchema = recordListRevisionSchema.extend({
-  touchRevision: z.number().int().nonnegative(),
-});
+export const recordListStampSchema = lazySchema(() =>
+  recordListRevisionSchema.extend({
+    touchRevision: z.number().int().nonnegative(),
+  }),
+);
 export type RecordListStamp = z.infer<typeof recordListStampSchema>;
 
 /**
@@ -117,12 +122,14 @@ export type RecordListStamp = z.infer<typeof recordListStampSchema>;
  * changed. A patch is not a partial row update; it is the recency pair, and a
  * host that wants to report anything else must ship a snapshot.
  */
-export const recordListRecencyPatchSchema = z.object({
-  id: z.string().min(1),
-  ownerUserId: z.string().min(1),
-  updatedAt: z.number().int().nonnegative(),
-  revision: z.number().int().nonnegative(),
-});
+export const recordListRecencyPatchSchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    ownerUserId: z.string().min(1),
+    updatedAt: z.number().int().nonnegative(),
+    revision: z.number().int().nonnegative(),
+  }),
+);
 export type RecordListRecencyPatch = z.infer<
   typeof recordListRecencyPatchSchema
 >;

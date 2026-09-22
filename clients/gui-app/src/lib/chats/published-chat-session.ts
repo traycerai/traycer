@@ -329,6 +329,7 @@ export function publishedChatSessionState(
     heldUpdates: [],
     runStatus: "idle",
     activeTurn: null,
+    turnLifecycleRevision: 0,
     steerProtocolSupported: false,
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
@@ -393,6 +394,9 @@ export function publishedChatSessionState(
     // but the field is part of the state shape and a second construction site
     // that forgets one is how these two drift.
     openedSubagentCardBlockIds: new Set<string>(),
+    // Nothing to hold: this surface has no wire, so it dispatches no
+    // `queueCancel` and never has a cancel's ack to answer.
+    pendingCancelRestorations: {},
     failedSendRestoration: null,
     hashOnlyRecoveries: {},
     currentComposerSettings: null,

@@ -680,6 +680,7 @@ function normalizeCloudEvent(
     originKind: event.originKind,
     originChatId: event.originChatId,
     originRefId: event.originRefId,
+    peerEpicId: event.peerEpicId,
   };
 }
 

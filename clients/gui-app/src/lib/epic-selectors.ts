@@ -1824,7 +1824,15 @@ export function useEpicTabDisplayTitle(
   epicId: string,
   terminalHostClient: HostClient<HostRpcRegistry> | null,
 ): string {
-  const liveArtifactTitle = useEpicLiveArtifactTitle(node.id);
+  const projectedHostId = useEpicNodeHostId(node.id);
+  const matchesProjection =
+    (node.type !== "chat" && node.type !== "terminal-agent") ||
+    node.hostId === null ||
+    projectedHostId === null ||
+    node.hostId === projectedHostId;
+  const liveArtifactTitle = useEpicLiveArtifactTitle(
+    matchesProjection ? node.id : null,
+  );
   const isTerminal = node.type === "terminal";
   const liveTerminalTitle = useTerminalDisplayTitle({
     client: isTerminal ? terminalHostClient : null,

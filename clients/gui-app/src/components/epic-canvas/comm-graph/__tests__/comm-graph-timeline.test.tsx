@@ -197,6 +197,7 @@ function toCloudEvent(
     originKind: event.originKind,
     originChatId: event.originChatId,
     originRefId: event.originRefId,
+    peerEpicId: event.peerEpicId,
     historicalUpload: false,
   };
 }
@@ -325,6 +326,7 @@ function message(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }
@@ -347,6 +349,7 @@ function created(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }

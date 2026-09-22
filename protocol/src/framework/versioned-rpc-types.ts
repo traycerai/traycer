@@ -127,6 +127,17 @@ export const RPC_ERROR_CODES = [
   "E_SHARE_PENDING_BUSY",
   "E_SHARE_PENDING_OFFLINE",
   "E_SHARE_PENDING_FAILED",
+  // The caller's session holds no cloud verdict, so the host made no cloud
+  // call for it. Split from E_SHARE_PENDING_OFFLINE, which it used to ride:
+  // that code's advice is "check your connection", and it is wrong whenever
+  // the verdict was lost to an expired or revoked session rather than to an
+  // unreachable authn. The host cannot tell those apart (the verdict is a
+  // boolean the client asserts) and the client can, so the code says only what
+  // the host knows and the client picks the copy. Additive: a GUI that does
+  // not know it renders its generic share failure and drops the host's
+  // message (vague, not wrong); the message is what a CLI, an agent or a log
+  // reader gets, and is written to stand alone for them.
+  "E_SHARE_PENDING_UNVERIFIED",
   "E_SHARE_REFUSED",
   // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:
   // "latest"}`, and the A2A `agent.fork`/`forkAgent` tool that shares the same
@@ -157,6 +168,26 @@ export const RPC_ERROR_CODES = [
   // story as E_INVALID_ARGUMENT - the code carries the whole meaning, so no
   // typed details channel is widened for it.
   "AUTO_CLEANUP_POLICY_REVISION_CONFLICT",
+  // The host's idempotency cache refused a key it has already seen under a
+  // different RPC contract or different params - its `keyReuseConflict`,
+  // answered with status 409. A precondition failure on the CALLER's key
+  // choice, and never a blind retry: the same key with the same params
+  // REPLAYS the cached outcome instead, which is the whole point of the
+  // cache; reaching this code means the two calls genuinely differ.
+  //
+  // Minted to replace a PROSE coupling. Before this code, the only thing
+  // distinguishing a key-reuse conflict from every other 409 on the wire was
+  // the English sentence the host wrote, which the renderer matched by
+  // substring - two definitions of one fact, in two repos, with nothing that
+  // fails when they drift. The message fragment survives as
+  // `IDEMPOTENCY_KEY_REUSE_MESSAGE_FRAGMENT` (`ws-protocol.ts`) for hosts
+  // that predate this code, but it is now the FALLBACK, not the contract.
+  //
+  // Same additive degrade story as E_INVALID_ARGUMENT, and here the degrade
+  // is the compatibility story in full: a client that predates this code
+  // narrows it to RPC_ERROR (`isRpcErrorCode`) while keeping the 409 and the
+  // message, which is exactly what it does today.
+  "IDEMPOTENCY_KEY_REUSE",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

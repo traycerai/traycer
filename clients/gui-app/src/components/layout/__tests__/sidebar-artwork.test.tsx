@@ -87,7 +87,7 @@ describe("SidebarArtwork", () => {
     vi.unstubAllGlobals();
   });
 
-  it("forwards the configured treatments and hides when the theme or surface is inactive", () => {
+  it("forwards the configured treatments and hides only when the theme turns it off", () => {
     const { container, rerender } = renderArtwork();
     const grain = container.querySelector(".appearance-wallpaper");
     expect(grain).not.toBeNull();
@@ -122,25 +122,25 @@ describe("SidebarArtwork", () => {
     expect(container.querySelector(".appearance-wallpaper img")).not.toBe(null);
     expect(container.querySelector(".appearance-wallpaper-texture")).toBeNull();
 
-    act(() => useThemeLibraryStore.setState({ draft: null }));
-    act(() =>
-      rerender(
-        <TabSurfaceActivityContext.Provider value={activityMocks}>
-          <SidebarArtwork />
-        </TabSurfaceActivityContext.Provider>,
-      ),
-    );
-    expect(container.querySelector(".sidebar-artwork")).toBeNull();
+    // A retained surface going hidden and back keeps the very same artwork
+    // DOM: a remount would re-read the blob and repaint (visible flash).
+    const artwork = container.querySelector(".sidebar-artwork");
+    const image = container.querySelector(".appearance-wallpaper img");
+    expect(artwork).not.toBeNull();
+    for (const visible of [false, true]) {
+      activityMocks.visible = visible;
+      act(() =>
+        rerender(
+          <TabSurfaceActivityContext.Provider value={activityMocks}>
+            <SidebarArtwork />
+          </TabSurfaceActivityContext.Provider>,
+        ),
+      );
+      expect(container.querySelector(".sidebar-artwork")).toBe(artwork);
+      expect(container.querySelector(".appearance-wallpaper img")).toBe(image);
+    }
 
-    act(() =>
-      useThemeLibraryStore.setState({
-        draft: {
-          ...createThemeFromPreset("neutral", "dark"),
-          sidebarArtwork: true,
-        },
-      }),
-    );
-    activityMocks.visible = false;
+    act(() => useThemeLibraryStore.setState({ draft: null }));
     act(() =>
       rerender(
         <TabSurfaceActivityContext.Provider value={activityMocks}>

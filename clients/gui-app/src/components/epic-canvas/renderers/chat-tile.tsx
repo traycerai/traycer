@@ -33,6 +33,10 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
+import {
+  queuedPromptMessageIds,
+  queueWithoutPersistedPrompts,
+} from "@/components/chat/chat-queue-utils";
 import { ChatMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import {
   ChatForkDialog,
@@ -134,6 +138,7 @@ import {
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
+import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -197,6 +202,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
@@ -207,6 +213,7 @@ import {
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import { useEpicCreateSeedHoldDriver } from "@/hooks/chats/use-epic-create-seed-hold-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -294,8 +301,6 @@ import {
   chatTileCanAct,
   findPendingInterview,
   findUnanswerableInterviews,
-  forkableAssistantMessageIdAfter,
-  latestForkableAssistantMessageId,
   selectContextUsage,
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
@@ -1868,12 +1873,21 @@ function useChatTileSessionViewModel(
   );
   const projectedQueue = useMemo(
     () =>
-      projectQueueWithPendingCancellations(
-        state.queue,
-        state.pendingActions,
-        state.acceptedActions,
+      queueWithoutPersistedPrompts(
+        projectQueueWithPendingCancellations(
+          state.queue,
+          state.pendingActions,
+          state.acceptedActions,
+        ),
+        state.messages,
       ),
-    [state.queue, state.pendingActions, state.acceptedActions],
+    [state.acceptedActions, state.messages, state.pendingActions, state.queue],
+  );
+  // The raw queue, including a row a pending cancel has hidden from the panel.
+  // The optimistic chat row yields to any host queue item for the same prompt.
+  const queuedPromptIds = useMemo(
+    () => queuedPromptMessageIds(state.queue.items),
+    [state.queue],
   );
   const chatWorktreeStagingKeyId = useMemo(
     () =>
@@ -2048,6 +2062,7 @@ function useChatTileSessionViewModel(
       setupCardWindows:
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
+      queuedPromptMessageIds: queuedPromptIds,
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,
@@ -2107,16 +2122,37 @@ function useChatTileSessionViewModel(
   // detection, failed-send restoration, sending→consumed transitions
   // (via acceptedActions or via persisted messages), and the
   // waitingChat→sendMessage→markSending hop.
+  // Read from the STORE at submit time, not from the projected boolean below.
+  // The projection is a value from the last committed render and a ref of it is
+  // the last committed effect; a stream transition to a non-bridging session
+  // can be queued in the store while an image preparation is mid-flight, and
+  // neither copy knows it yet. The send gate's whole job is to answer "can this
+  // session resolve a bare hash", and only the store can answer it at the
+  // moment it is asked.
+  const getDraftBlobBridgeSupported = useCallback(
+    () => handle.store.getState().draftBlobBridgeSupported,
+    [handle.store],
+  );
+  // Declared HERE rather than beside its other readers further down: the
+  // initial-chat handoff driver below consumes it too, and a `const` used above
+  // its declaration is a TDZ error rather than a hoist. Nothing about the
+  // reasoning above changes with the position - it is still read at submit
+  // time, from the store.
   useInitialChatHandoffDriver({
     handle,
     nodeId: node.id,
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
+    getDraftBlobBridgeSupported,
   });
   useChatSetupFailureRestoreDriver({
     handle,
     nodeId: node.id,
   });
+  // Ends the create-time binding-seed hold once THIS chat's worktree
+  // provisioning has an outcome. A no-op for every tile whose (epic, chat) pair
+  // did not register one, which is every chat but a just-created one.
+  useEpicCreateSeedHoldDriver({ handle });
   // Surface the server-spawned setup terminal in the Terminals sidebar while it
   // runs - its PTY isn't created via the renderer, so nothing else refetches
   // `terminal.list`.
@@ -2150,6 +2186,23 @@ function useChatTileSessionViewModel(
   const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
   const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
+  // The queued-drain missing-hash arm. Mounted here because this is where the
+  // three things it needs already meet: the chat's durable `events`, its
+  // `queue`, and `resumeQueue`. Scoped to the TAB's host - the chat is bound to
+  // it for life, and the blob tier the re-upload has to land in is that host's.
+  const repairHostId = useTabHostId();
+  const repairHostClient = useTabHostClient();
+  useQueuedPromptBlobRepair({
+    hostId: repairHostId,
+    client: repairHostClient,
+    events: state.events,
+    queue: state.queue,
+    // The tile's own eligibility. Repairing is an OWNER action - it uploads
+    // into the author's staging tier and resumes the queue - so a read-only
+    // collaborator viewing this chat must not start one.
+    canAct,
+    resumeQueue: chatActions.resumeQueue,
+  });
   const restoreActionPending = useMemo(
     () =>
       Object.values(state.pendingActions).some(
@@ -2559,61 +2612,19 @@ function useChatTileSessionViewModel(
       worktreeBinding: state.worktreeBinding,
       revertOnEditOpen: uiState.revertOnEditOpen,
       queuedCount: state.queue.items.length,
+      // The same getter the composer's submit and the handoff driver take, and
+      // for the same reason: an edit's image preparation is asynchronous, so the
+      // capability has to be read where it is used rather than captured here.
+      getDraftBlobBridgeSupported,
     });
 
-  // A primitive on purpose: `renderedMessages` takes a fresh identity every
-  // stream flush, so a callback closing over it would churn the memoized
-  // composer selector below once per flush. The latest completed boundary ID
-  // is stable across flushes (a streaming row is never forkable), so the
-  // gesture handler hanging off this stays quiet while a turn streams.
-  //
-  // On the windowed line the scan cannot run here - `renderedMessages` is the
-  // hydrated subset, and the latest completed boundary is routinely outside
-  // it (scrolled cold, or evicted). The host derives it from the whole
-  // transcript and ships it on every snapshot; `null` from it is the real
-  // "no boundary yet", never "not hydrated".
-  //
-  // But "on every snapshot" is the whole problem, because the GATE in front of
-  // the gesture below is cleared by a live `turnStateChanged` frame. A turn
-  // completes, the gate opens immediately, and the derived boundary still names
-  // the previous turn until a snapshot lands - so the fork the user asks for
-  // omits the turn they just watched finish, silently and plausibly. Two
-  // clocks. `forkableAssistantMessageIdAfter` is the second hand: it looks only
-  // PAST the host's answer, in the live tail where a just-completed turn always
-  // is, so it can move the boundary forward and never backward.
-  const latestForkBoundaryId = useMemo(() => {
-    if (state.transcriptDerived === null) {
-      return latestForkableAssistantMessageId(renderedMessages);
-    }
-    const derived = state.transcriptDerived.latestForkableAssistantMessageId;
-    return (
-      forkableAssistantMessageIdAfter(renderedMessages, derived) ?? derived
-    );
-  }, [state.transcriptDerived, renderedMessages]);
-  // The composer host picker's "switch host" gesture. Chats are host-bound for
-  // life (clone-not-migrate), so switching means FORKING onto the picked
-  // machine — through the same dialog the per-message fork buttons open,
-  // anchored at the chat's latest completed turn and preselected on the picked
-  // host. A chat mid-turn has no boundary that includes the turn the user is
-  // watching, and one that has never replied has no boundary at all; both say
-  // so instead of opening a dialog pointed at something else.
+  // Switching hosts clones the chat from the latest checkpoint available to
+  // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
     (targetHostId: string): void => {
-      if (composerActiveTurnStatus !== null) {
-        toast(
-          "This agent is still working — it can be forked to another host once the turn ends.",
-        );
-        return;
-      }
-      if (latestForkBoundaryId === null) {
-        toast(
-          "This agent hasn't replied yet — it can be forked to another host after its first reply.",
-        );
-        return;
-      }
-      forkAtAssistantMessage(latestForkBoundaryId, "plain", null, targetHostId);
+      forkAtAssistantMessage(null, "plain", null, targetHostId);
     },
-    [composerActiveTurnStatus, forkAtAssistantMessage, latestForkBoundaryId],
+    [forkAtAssistantMessage],
   );
 
   const snapshotTeardownHolders = useOwnerTeardownSnapshot({
@@ -3309,17 +3320,15 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().activeTurn,
     [handle.store],
   );
-  // Read from the STORE at submit time, not from the projected boolean below.
-  // The projection is a value from the last committed render and a ref of it is
-  // the last committed effect; a stream transition to a non-bridging session
-  // can be queued in the store while an image preparation is mid-flight, and
-  // neither copy knows it yet. The send gate's whole job is to answer "can this
-  // session resolve a bare hash", and only the store can answer it at the
-  // moment it is asked.
-  const getDraftBlobBridgeSupported = useCallback(
-    () => handle.store.getState().draftBlobBridgeSupported,
-    [handle.store],
-  );
+  const getStopConfirmationTarget =
+    useCallback((): ChatStopConfirmationTarget => {
+      const live = handle.store.getState();
+      return {
+        turnId: live.activeTurn?.turnId ?? null,
+        revision: live.turnLifecycleRevision,
+        connectionEpoch: live.connectionEpoch,
+      };
+    }, [handle.store]);
   const lowerTurn = useMemo(
     () => ({
       activeTurnStatus: composerActiveTurnStatus,
@@ -3328,6 +3337,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
@@ -3338,6 +3348,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       chatActions.stopTurn,
     ],

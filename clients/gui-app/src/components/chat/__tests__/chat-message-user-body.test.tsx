@@ -41,7 +41,7 @@ import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // T4: the inline edit composer now runs `reingestPendingImages` on mount and
 // a real file paste through `putImage` - both write to the window's image
@@ -137,8 +137,52 @@ function render(ui: ReactNode) {
   );
 }
 
+// Cross-task opens go through the top-level task navigation seam
+// (`activateTabIntent`), not the current task's tile navigation.
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  activateTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useNavigate: () => navigationMocks.navigate };
+});
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+});
+
+function expectCrossTaskActivation(node: {
+  readonly id: string;
+  readonly type: "chat" | "terminal-agent";
+  readonly hostId: string;
+}): void {
+  expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+  const call = navigationMocks.activateTabIntent.mock.calls.at(0);
+  if (call === undefined) throw new Error("activateTabIntent was not called");
+  const [navigate, intent] = call;
+  expect(navigate).toBe(navigationMocks.navigate);
+  expect(intent).toMatchObject({
+    kind: "open-epic",
+    epicId: "epic-2",
+    includeNestedFocus: true,
+    preparation: { kind: "open-tile", gesture: "explicit", node },
+  });
+  // No double open through the current task's tile navigation.
+  expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+}
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined }),
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: (artifactId: string | null) => {
+  useRegisteredEpicLiveAgents: () => [],
+  useEpicAgentReference: (artifactId: string | null) => {
     if (artifactId === "agent-sender-1") {
       return {
         id: "agent-sender-1",
@@ -166,6 +210,42 @@ vi.mock("@/lib/epic-selectors", () => ({
 const tileNavigationMocks = vi.hoisted(() => ({
   openTile: vi.fn(() => null),
 }));
+
+// Cross-task senders come from the shared `useA2AMessagePeer` hook. An id with
+// no entry falls through to the real hook so same-task tests are unchanged.
+const peerMocks = vi.hoisted(() => ({
+  /** Every (agentId, origin) the card asked the hook about. */
+  origins: [] as { agentId: string; origin: unknown }[],
+  byId: {} as Record<
+    string,
+    {
+      epicId: string;
+      agentId: string;
+      hostId: string;
+      title: string | null;
+      surface: "gui" | "tui";
+    } | null
+  >,
+}));
+
+vi.mock(
+  import("@/hooks/agent/use-a2a-message-peer"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useA2AMessagePeer: (
+        agentId: string,
+        origin: Parameters<typeof actual.useA2AMessagePeer>[1],
+      ) => {
+        peerMocks.origins.push({ agentId, origin });
+        return agentId in peerMocks.byId
+          ? peerMocks.byId[agentId]
+          : actual.useA2AMessagePeer(agentId, origin);
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: tileNavigationMocks.openTile }),
@@ -785,11 +865,20 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   // T4 format fallback: a declared MIME type outside the host's storable set
-  // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes today's inline path,
-  // for that file alone, which is exactly what still routes through
-  // `FileReader.readAsDataURL` rather than `arrayBuffer()`/`putImage`.
+  // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes the inline path for that
+  // file alone, and still arrives as `b64content` with a null `hash`.
+  //
+  // The MECHANISM under that contract changed and this test moved with it:
+  // every paste now reads `file.arrayBuffer()`, and the inline-vs-hash verdict
+  // is made AFTER the read by `prepareComposerImageBytesOrRefuse` - a format it
+  // cannot model (BMP is named in its own docblock) lands in the catch and is
+  // the only producer of `byHashEligible: false`. `FileReader.readAsDataURL`
+  // has no production call site left anywhere in the app, so injecting the
+  // delay there pinned a path that no longer exists: the read never started,
+  // and the test failed at its own harness rather than at an assertion. What is
+  // asserted below - inline bytes, no hash - is unchanged.
   it("keeps a declared-BMP paste inline on the edit composer (format fallback)", async () => {
-    const delayedReader = installDelayedFileReader();
+    const delayedRead = installDelayedArrayBufferRead();
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
@@ -798,7 +887,7 @@ describe("<UserMessageBody /> agent messages", () => {
     });
 
     fireEvent.paste(editor, { clipboardData: clipboardWithFiles([bmp]) });
-    delayedReader.resolveNext("data:image/bmp;base64,AQID");
+    delayedRead.resolveNext(new Uint8Array([1, 2, 3]));
     await screen.findByRole("button", { name: "Open Image#1: legacy.bmp" });
     // Wait for the GATE, not the chip - the same two-state-updates gap the
     // storable-PNG sibling below documents. The fallback path takes it too:
@@ -822,10 +911,10 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
-  // T4: a storable PNG paste no longer reads through `FileReader` at all - it
-  // reads `file.arrayBuffer()` and `putImage`s the bytes. The "blocked until
-  // it finishes" contract still holds; only the mechanism under it changed,
-  // so the delay is now injected at `arrayBuffer()`, not `readAsDataURL`.
+  // T4: a storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
+  // bytes; `FileReader` is not involved on any paste path any more. The
+  // "blocked until it finishes" contract still holds; only the mechanism under
+  // it changed, so the delay is injected at `arrayBuffer()`.
   it("blocks edit submission until a pasted image finishes reading", async () => {
     const delayedRead = installDelayedArrayBufferRead();
     const onSubmit = vi.fn<(content: JsonContent) => void>();
@@ -1084,6 +1173,107 @@ describe("<UserMessageBody /> agent messages", () => {
 
     expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
     expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
+  });
+
+  describe("cross-task senders", () => {
+    const CROSS_ID = "agent-sender-cross";
+
+    afterEach(() => {
+      navigationMocks.activateTabIntent.mockClear();
+      peerMocks.byId = {};
+      peerMocks.origins = [];
+    });
+
+    function crossMessage(fromTitle: string | null): ChatMessageModel {
+      const base = agentMessage("Reply from the other task.");
+      return {
+        ...base,
+        agentSenderInfo: {
+          agentId: CROSS_ID,
+          senderTitle: fromTitle,
+          expectReply: true,
+          responseId: "response-1",
+        },
+        agentMessage: {
+          kind: "agent",
+          content: AGENT_CONTENT,
+          fromAgentId: CROSS_ID,
+          senderTitle: fromTitle,
+          senderHarnessId: "codex",
+          reply: { expectsReply: true, responseId: "response-1" },
+        },
+      };
+    }
+
+    it("shows the resolved title and opens the OTHER task on its host, parking a receipt jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Task Sender",
+        surface: "gui",
+      };
+      const message = crossMessage(null);
+      render(<UserMessageBody actions={null} message={message} />);
+
+      // The received card anchors a fork lookup to its own message id.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: { direction: "received", messageId: message.id },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Cross Task Sender" }),
+      );
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CROSS_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "receipt", messageId: message.id });
+    });
+
+    it("opens a cross-task terminal sender without parking a jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Terminal",
+        surface: "tui",
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Cross Terminal" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "terminal-agent",
+        hostId: "host-2",
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+    });
+
+    it("renders the stamped title as plain text when the peer cannot be resolved", () => {
+      peerMocks.byId[CROSS_ID] = null;
+      render(
+        <UserMessageBody
+          actions={null}
+          message={crossMessage("Stamped Title")}
+        />,
+      );
+
+      expect(screen.getByText("Stamped Title")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Stamped Title" }),
+      ).toBeNull();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
+    });
   });
 
   it("opens received A2A cards through the provider store", () => {
@@ -1599,40 +1789,19 @@ function dataTransferWithFiles(files: ReadonlyArray<File>) {
   };
 }
 
-interface DelayedFileReaderControl {
-  readonly resolveNext: (dataUrl: string) => void;
-}
-
-function installDelayedFileReader(): DelayedFileReaderControl {
-  const pending: FileReader[] = [];
-  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
-    this: FileReader,
-    _blob: Blob,
-  ) {
-    pending.push(this);
-  });
-  return {
-    resolveNext: (dataUrl) => {
-      const reader = pending.shift();
-      if (reader === undefined) throw new Error("expected pending file read");
-      Object.defineProperty(reader, "result", {
-        configurable: true,
-        value: dataUrl,
-      });
-      reader.dispatchEvent(new ProgressEvent("load"));
-    },
-  };
-}
-
 interface DelayedArrayBufferReadControl {
   readonly resolveNext: (bytes: Uint8Array) => void;
 }
 
 /**
- * T4's twin of {@link installDelayedFileReader}: a storable-format paste
- * (PNG/JPEG/GIF/WebP/SVG) reads `file.arrayBuffer()` directly, never
- * `FileReader.readAsDataURL` - that FileReader path survives only for the
- * format FALLBACK (a declared MIME type outside the host's storable set).
+ * Hold a paste's byte read open so the gate it arms can be observed.
+ *
+ * This is now the ONLY read seam in the composer: every paste reads
+ * `file.arrayBuffer()`, whatever its declared type, and the hash-vs-inline
+ * verdict is taken afterwards from what the preparer could actually encode.
+ * Its former twin injected at `FileReader.readAsDataURL` for the format
+ * fallback; that was retired with the last production call site of
+ * `FileReader`, so the fallback test drives this seam too.
  */
 function installDelayedArrayBufferRead(): DelayedArrayBufferReadControl {
   const pending: Array<(value: ArrayBuffer) => void> = [];

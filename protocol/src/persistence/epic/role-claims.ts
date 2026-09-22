@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Task-local agent role claims.
@@ -77,22 +78,25 @@ function roleTextSchema(maxCodePoints: number, label: string) {
 // Planner/Reviewer/QA enum is explicitly the wrong shape here). Case is
 // preserved as the claimant typed it; only the derived identity key folds case.
 // Parsing RETURNS the normalized text - callers may send raw input.
-export const roleNameSchema = roleTextSchema(ROLE_NAME_MAX_CODE_POINTS, "role");
-export const roleScopeSchema = roleTextSchema(
-  ROLE_SCOPE_MAX_CODE_POINTS,
-  "scope",
+export const roleNameSchema = lazySchema(() =>
+  roleTextSchema(ROLE_NAME_MAX_CODE_POINTS, "role"),
+);
+export const roleScopeSchema = lazySchema(() =>
+  roleTextSchema(ROLE_SCOPE_MAX_CODE_POINTS, "scope"),
 );
 
-export const roleClaimSchema = z.object({
-  claimId: z.uuid(),
-  agentId: z.string().min(1),
-  // Account scope, mirroring chat.userId / tuiAgent.userId. The visibility
-  // projection filters on this first.
-  userId: z.string().min(1),
-  role: roleNameSchema,
-  scope: roleScopeSchema,
-  claimedAt: z.number().int().nonnegative(),
-});
+export const roleClaimSchema = lazySchema(() =>
+  z.object({
+    claimId: z.uuid(),
+    agentId: z.string().min(1),
+    // Account scope, mirroring chat.userId / tuiAgent.userId. The visibility
+    // projection filters on this first.
+    userId: z.string().min(1),
+    role: roleNameSchema,
+    scope: roleScopeSchema,
+    claimedAt: z.number().int().nonnegative(),
+  }),
+);
 
 export type RoleClaim = z.infer<typeof roleClaimSchema>;
 
@@ -102,13 +106,15 @@ export type RoleClaim = z.infer<typeof roleClaimSchema>;
  * the id from the key on write, so a mismatch should be unconstructible, and
  * if one ever appears it is corruption worth failing on.
  */
-export const roleClaimsSchema = z
-  .record(z.uuid(), roleClaimSchema)
-  .refine(
-    (claims) =>
-      Object.entries(claims).every(([key, claim]) => key === claim.claimId),
-    { message: "roleClaims key must equal claim.claimId" },
-  );
+export const roleClaimsSchema = lazySchema(() =>
+  z
+    .record(z.uuid(), roleClaimSchema)
+    .refine(
+      (claims) =>
+        Object.entries(claims).every(([key, claim]) => key === claim.claimId),
+      { message: "roleClaims key must equal claim.claimId" },
+    ),
+);
 
 export type RoleClaims = z.infer<typeof roleClaimsSchema>;
 

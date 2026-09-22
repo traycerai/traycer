@@ -3,7 +3,7 @@ import {
   type ProviderId,
   type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
-import { Check, Copy, ExternalLink, Info } from "lucide-react";
+import { ExternalLink, Info } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { OnboardingProviderDiscovery } from "@/components/onboarding/onboarding-provider-discovery";
 import { OnboardingProviderGrid } from "@/components/onboarding/onboarding-provider-grid";
@@ -16,7 +16,7 @@ import {
   providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
 import { CodePasteField } from "@/components/settings/panels/code-paste-field";
-import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
 import {
   openBrowserLabel,
@@ -30,7 +30,6 @@ import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-lo
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useOpenLink } from "@/lib/links/open-link";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -73,6 +72,77 @@ interface AccountLine {
 
 const TERMINAL_LOGIN_DISABLED_SUBTEXT =
   "Turn it on now. The first time you pick it, the model picker will walk you through its terminal setup.";
+
+/**
+ * Every word a PHONE row's second line can carry, in one table.
+ *
+ * One table rather than a second `accountLineFor`, because a phone row's line
+ * is a different kind of thing: 13pt, one line, no tooltip, no dot, and it
+ * shares the line with the discovery counts. The card's own copy is unchanged -
+ * it has two lines and a hover affordance to spend on a sentence, and the
+ * sentence above is the one this list cannot take (measured: it truncated to
+ * "Turn it on now. The first time y…" on a 393pt screen, which is a status the
+ * user cannot read and cannot open).
+ *
+ * The keys are the STATES, not the providers, so the copy review has one place
+ * to read and change. Add a state here before you add a branch below.
+ */
+const PHONE_STATUS = {
+  unreachable: "Unavailable",
+  missing: "Not installed",
+  pending: "Checking…",
+  traycerOn: "Ready to use",
+  traycerOff: "Included in your plan",
+  terminalLoginOff: "Turn on, set up later",
+  authenticated: "Signed in",
+  configured: "Set up, unverified",
+  statusUnavailable: "Couldn’t check status",
+  apiKey: "API key added",
+  unauthenticated: "Sign in to use",
+  unknown: "Status unknown",
+} as const;
+
+/**
+ * Which of those words this row gets.
+ *
+ * The ladder is `accountLineFor`'s, in the same order and for the same reasons
+ * - including the terminal-login branch sitting ABOVE the auth ladder, which is
+ * what stops a disabled terminal-login provider landing on a status whose
+ * remedy cannot be performed anywhere on this screen. What differs is only the
+ * words, and the two install states the card spells in a separate slot.
+ */
+function phoneStatusFor(input: {
+  readonly state: ProviderCliState | undefined;
+  readonly installDetected: boolean;
+  readonly installState: InstallState;
+  readonly hostUnavailable: boolean;
+}): string {
+  const { state, installDetected, installState, hostUnavailable } = input;
+  if (hostUnavailable) return PHONE_STATUS.unreachable;
+  if (state === undefined || !installDetected)
+    return installState === "pending"
+      ? PHONE_STATUS.pending
+      : PHONE_STATUS.missing;
+  if (state.providerId === "traycer")
+    return state.enabled ? PHONE_STATUS.traycerOn : PHONE_STATUS.traycerOff;
+  if (state.authPending) return PHONE_STATUS.pending;
+  if (
+    !state.enabled &&
+    providerSupportsTerminalLogin(state.loginCapability) &&
+    !isProviderAmbientAuthenticated(state)
+  )
+    return PHONE_STATUS.terminalLoginOff;
+  const { auth } = state;
+  // The shared predicate, not `auth.status` alone: an ambient profile can be
+  // authenticated while the top-level status still reads "configured", and
+  // that row is signed in, not "Set up, unverified".
+  if (isProviderAmbientAuthenticated(state)) return PHONE_STATUS.authenticated;
+  if (auth.status === "configured") return PHONE_STATUS.configured;
+  if (auth.status === "unavailable") return PHONE_STATUS.statusUnavailable;
+  if (state.apiKey.configured) return PHONE_STATUS.apiKey;
+  if (auth.status === "unauthenticated") return PHONE_STATUS.unauthenticated;
+  return PHONE_STATUS.unknown;
+}
 
 /** Mirrors `ProviderAuthLine`, restyled for the cinematic copy column. */
 function accountLineFor(state: ProviderCliState): AccountLine {
@@ -390,7 +460,6 @@ function resolveAttemptAuthPhase(input: {
 }
 
 const ONBOARDING_CODE_PASTE_KEEPALIVE_MS = 60_000;
-const ONBOARDING_COPY_RESET_MS = 1600;
 
 function useOnboardingWaitingCodePaste(args: {
   readonly providerId: ProviderId;
@@ -463,11 +532,6 @@ function OnboardingLoginWaiting(props: {
       void openLink(url, "auth", null);
     },
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: ONBOARDING_COPY_RESET_MS,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
   const codePaste = useOnboardingWaitingCodePaste({
     providerId,
     loginCapability,
@@ -492,19 +556,11 @@ function OnboardingLoginWaiting(props: {
           <code className="rounded-md border border-foreground/20 bg-foreground/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-foreground">
             {userCode}
           </code>
-          <Button
-            type="button"
-            size="icon-sm"
+          <SignInCopyIconButton
+            value={userCode}
+            kind="code"
             variant="outline"
-            aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
-            onClick={() => copy(userCode)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          />
         </div>
       ) : null}
       {!processingCode && loginUrl !== null ? (
@@ -520,19 +576,11 @@ function OnboardingLoginWaiting(props: {
             <ExternalLink className="size-3.5" />
             {openBrowserLabel(autoOpen)}
           </Button>
-          <Button
-            type="button"
-            size="icon-sm"
+          <SignInCopyIconButton
+            value={loginUrl}
+            kind="link"
             variant="outline"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          />
         </div>
       ) : null}
       {codePaste.enabled && userCode === null ? (
@@ -902,6 +950,41 @@ function SignInToEnableButton(props: {
 }
 
 /**
+ * The phone row's one line: the status word, then the discovery counts when
+ * this provider reports any. Built for every row on every viewport and
+ * rendered only in the phone shape, which costs nothing - an element that is
+ * not rendered mounts no query.
+ *
+ * A component rather than an expression in the row mapper so the mapper keeps
+ * one branch fewer; it owns the `state === undefined` case itself.
+ */
+function ProviderPhoneDescription(props: {
+  readonly state: ProviderCliState | undefined;
+  readonly installDetected: boolean;
+  readonly installState: InstallState;
+  readonly hostUnavailable: boolean;
+}) {
+  const { state, installDetected, installState, hostUnavailable } = props;
+  return (
+    <>
+      {phoneStatusFor({
+        state,
+        installDetected,
+        installState,
+        hostUnavailable,
+      })}
+      {state === undefined ? null : (
+        <OnboardingProviderDiscovery
+          state={state}
+          visible
+          presentation="text"
+        />
+      )}
+    </>
+  );
+}
+
+/**
  * The agents act's provider panel. Once past sign-in the host's
  * `providers.list` returns real state, so each row shows the CLI, its
  * one-liner, install + account status, and an enable/disable toggle. When no
@@ -994,13 +1077,25 @@ export function OnboardingDetectedAgents() {
         installLabel,
         signInHint,
       ),
+      phoneDescription: (
+        <ProviderPhoneDescription
+          state={state}
+          installDetected={installDetected}
+          installState={installState}
+          hostUnavailable={hostUnavailable}
+        />
+      ),
       // A FRAGMENT, not a wrapper: both children render nothing on a card with
       // no discoveries and no sign-in to offer, and the list's footer hides
       // itself only while it is genuinely empty.
       trailing:
         state === undefined ? null : (
           <>
-            <OnboardingProviderDiscovery state={state} visible />
+            <OnboardingProviderDiscovery
+              state={state}
+              visible
+              presentation="popover"
+            />
             {providerNeedsSignInToEnable(state, installDetected) ? (
               <SignInToEnableButton
                 state={state}

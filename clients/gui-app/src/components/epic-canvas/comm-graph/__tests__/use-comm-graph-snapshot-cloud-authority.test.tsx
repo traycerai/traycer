@@ -77,6 +77,7 @@ function cloudEvent(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     historicalUpload: false,
     ...overrides,
   };
@@ -178,6 +179,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
               originKind: null,
               originChatId: null,
               originRefId: null,
+              peerEpicId: null,
             },
           ],
           1,
@@ -342,6 +344,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
       originKind: null,
       originChatId: null,
       originRefId: null,
+      peerEpicId: null,
     };
     act(() => {
       useCommGraphTimelineStore
@@ -393,6 +396,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
       originKind: null,
       originChatId: null,
       originRefId: null,
+      peerEpicId: null,
     };
     const localCursor = commGraphCursorForEvent(localEvent);
     act(() => {

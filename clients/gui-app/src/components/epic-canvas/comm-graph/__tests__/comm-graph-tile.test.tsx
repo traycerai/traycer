@@ -249,6 +249,7 @@ function toCloudEvent(
     originKind: event.originKind,
     originChatId: event.originChatId,
     originRefId: event.originRefId,
+    peerEpicId: event.peerEpicId,
     historicalUpload: false,
   };
 }
@@ -2206,6 +2207,7 @@ describe("CommGraphTile", () => {
         originKind: null,
         originChatId: null,
         originRefId: null,
+        peerEpicId: null,
       };
       act(() => {
         openedByHost.get(HOST_A)?.onSnapshot([event], 1);
@@ -2300,6 +2302,7 @@ describe("CommGraphTile", () => {
         originKind: null,
         originChatId: null,
         originRefId: null,
+        peerEpicId: null,
       };
       act(() => {
         openedByHost.get(HOST_A)?.onSnapshot([event], 1);

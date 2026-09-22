@@ -62,6 +62,16 @@ export type AnalyticsBlocker =
    * kind costs a minor.
    */
   | "refused:local-store-unavailable"
+  /**
+   * `epic.create@1.2` / `epic.createChat@1.2`: the host could not find bytes
+   * for an image hash the request referenced, in the epic store or in the
+   * requester's draft tier. Its own member rather than a re-use of the one
+   * above, exactly as the rule there says: the `refused:` prefix carries the
+   * KIND, so the funnel keeps telling "no usable local store" from "the bytes
+   * were not where we said they were" - two refusals with different remedies
+   * (a rebind the person performs, versus a re-upload the client performs).
+   */
+  | "refused:missing-attachment-bytes"
   | "unknown";
 
 export type AnalyticsCommand =
@@ -209,6 +219,16 @@ export function analyticsCountBucket(
   return "21+";
 }
 
+export type AnalyticsDraftSurface = "start_page" | "avatar_menu";
+export type AnalyticsDraftInput = "keyboard" | "pointer";
+export type AnalyticsDraftEntryPoint =
+  | "button"
+  | "shortcut"
+  | "palette"
+  | "menu";
+export type AnalyticsDraftKind = "start_page" | "chat" | "new_agent";
+export type AnalyticsDraftAge = "under_1h" | "1h_24h" | "1d_7d" | "over_7d";
+
 /** Session age of the renderer process at sample time. Resource retention
  * bugs show up as heap correlating with this bucket, so it is the axis every
  * resource sample must carry. */
@@ -235,7 +255,10 @@ export type AnalyticsOnboardingStep =
   | "providers"
   | "session-import"
   | "task-context"
-  | "task-tabs";
+  | "task-tabs"
+  // The installed mobile app's whole tour is the welcome screen, so that is
+  // the step it finishes on. No act follows it there.
+  | "welcome";
 
 /** Which surface opened the import wizard - onboarding act or Settings. */
 export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
@@ -293,6 +316,7 @@ export type AnalyticsSetting =
   | "defaultServiceTier"
   | "diffViewerPreferences"
   | "homeTabEnabled"
+  | "taskTabLayout"
   // The Layout page's own controls. Dotted rather than camel-cased because
   // they name a path into one persisted store's slice, not a flat
   // `settings-store` key: the surface is the middle segment, so a second
@@ -492,6 +516,12 @@ export enum AnalyticsEvent {
   ShareInviteSent = "share_invite_sent",
   ShareRoleChanged = "share_role_changed",
   ShareAccessRevoked = "share_access_revoked",
+  DraftsListOpened = "drafts_list_opened",
+  DraftOpened = "draft_opened",
+  DraftsFilterChanged = "drafts_filter_changed",
+  DraftCopied = "draft_copied",
+  DraftDeleted = "draft_deleted",
+  DraftDeleteUndone = "draft_delete_undone",
   NotificationCenterOpened = "notification_center_opened",
   NotificationFilterChanged = "notification_filter_changed",
   NotificationActivationCompleted = "notification_activation_completed",
@@ -873,6 +903,43 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ShareAccessRevoked]: {
     readonly target: "person" | "team";
   };
+  readonly [AnalyticsEvent.DraftsListOpened]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly entry_point: AnalyticsDraftEntryPoint;
+    readonly draft_count: AnalyticsCountBucket;
+  };
+  readonly [AnalyticsEvent.DraftOpened]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+    readonly input: AnalyticsDraftInput;
+    readonly already_open: boolean;
+    readonly draft_age: AnalyticsDraftAge;
+    /** Whether the search box held text; never the text itself. */
+    readonly used_search: boolean;
+  };
+  readonly [AnalyticsEvent.DraftsFilterChanged]: {
+    readonly surface: "avatar_menu";
+    /** `null` when the box is not offered (the dialog is not inside a task). */
+    readonly this_task: boolean | null;
+    readonly other_tasks: boolean;
+    readonly start_pages: boolean;
+  };
+  readonly [AnalyticsEvent.DraftCopied]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+    readonly input: AnalyticsDraftInput;
+  };
+  readonly [AnalyticsEvent.DraftDeleted]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+    readonly input: AnalyticsDraftInput;
+    readonly undo_offered: boolean;
+    readonly draft_age: AnalyticsDraftAge;
+  };
+  readonly [AnalyticsEvent.DraftDeleteUndone]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+  };
   readonly [AnalyticsEvent.NotificationCenterOpened]: {
     readonly entry_point: AnalyticsNotificationEntryPoint;
     readonly host_state: AnalyticsNotificationHostState;
@@ -1236,6 +1303,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     defaultServiceTier: true,
     diffViewerPreferences: true,
     homeTabEnabled: true,
+    taskTabLayout: true,
     "layout.preset.compact": true,
     "layout.preset.default": true,
     "layout.preset.detailed": true,
@@ -1331,6 +1399,7 @@ const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "session-import",
   "task-context",
   "task-tabs",
+  "welcome",
 ]);
 
 const ANALYTICS_TARGETS = new Set<string>([
@@ -1620,6 +1689,37 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["target", "role"],
   ),
   ...eventKeyEntries(
+    [AnalyticsEvent.DraftsListOpened],
+    ["surface", "entry_point", "draft_count"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftOpened],
+    [
+      "surface",
+      "draft_kind",
+      "input",
+      "already_open",
+      "draft_age",
+      "used_search",
+    ],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftsFilterChanged],
+    ["surface", "this_task", "other_tasks", "start_pages"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftCopied],
+    ["surface", "draft_kind", "input"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftDeleted],
+    ["surface", "draft_kind", "input", "undo_offered", "draft_age"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftDeleteUndone],
+    ["surface", "draft_kind"],
+  ),
+  ...eventKeyEntries(
     [AnalyticsEvent.NotificationCenterOpened],
     ["entry_point", "host_state", "attention_bucket", "unread_bucket"],
   ),
@@ -1758,6 +1858,10 @@ const EXACT_PROPERTY_VALUES: {
   command: ANALYTICS_COMMANDS,
   context: new Set(["personal", "team"]),
   count_bucket: ANALYTICS_COUNT_BUCKETS,
+  draft_count: ANALYTICS_COUNT_BUCKETS,
+  draft_kind: new Set(["start_page", "chat", "new_agent"]),
+  draft_age: new Set(["under_1h", "1h_24h", "1d_7d", "over_7d"]),
+  input: new Set(["keyboard", "pointer"]),
   entry_point: ANALYTICS_NOTIFICATION_ENTRY_POINTS,
   filter: ANALYTICS_NOTIFICATION_FILTERS,
   host_state: ANALYTICS_NOTIFICATION_HOST_STATES,
@@ -1803,6 +1907,28 @@ function eventValueEntries(
 }
 
 const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.DraftsListOpened,
+      AnalyticsEvent.DraftOpened,
+      AnalyticsEvent.DraftCopied,
+      AnalyticsEvent.DraftDeleted,
+      AnalyticsEvent.DraftDeleteUndone,
+    ],
+    "surface",
+    new Set(["start_page", "avatar_menu"]),
+  ),
+  // The filter only exists in the avatar dialog.
+  ...eventValueEntries(
+    [AnalyticsEvent.DraftsFilterChanged],
+    "surface",
+    new Set(["avatar_menu"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.DraftsListOpened],
+    "entry_point",
+    new Set(["button", "shortcut", "palette", "menu"]),
+  ),
   ...eventValueEntries(
     [AnalyticsEvent.NotificationNewRevealed],
     "count_bucket",
@@ -2009,6 +2135,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
 ]);
 
 const BOOLEAN_PROPERTY_KEYS = new Set<string>([
+  "already_open",
+  "other_tasks",
+  "start_pages",
+  "undo_offered",
+  "used_search",
   "cascade",
   "cleanup_worktrees",
   "customized",
@@ -2093,6 +2224,7 @@ const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
   "has_more",
   "result_count_bucket",
   "status",
+  "this_task",
 ]);
 
 function isEventScopedPropertyValue(
@@ -2122,6 +2254,10 @@ function isEventScopedPropertyValue(
   }
   if (key === "has_more") {
     if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
+    return typeof value === "boolean";
+  }
+  if (key === "this_task") {
+    if (value === null) return event === AnalyticsEvent.DraftsFilterChanged;
     return typeof value === "boolean";
   }
   if (key === "status") return isAnalyticsStatus(value);
@@ -2164,6 +2300,26 @@ function analyticsOutcomeBlockerPairIsValid(
   );
 }
 
+const DRAFTS_LIST_ENTRY_POINTS_BY_SURFACE = new Map<
+  string,
+  ReadonlySet<string>
+>([
+  ["start_page", new Set(["button", "shortcut", "palette"])],
+  ["avatar_menu", new Set(["menu", "palette"])],
+]);
+
+function analyticsDraftsListOpenedPairIsValid(
+  properties: Record<string, unknown>,
+): boolean {
+  const surface = properties.surface;
+  const entryPoint = properties.entry_point;
+  return (
+    typeof surface === "string" &&
+    typeof entryPoint === "string" &&
+    (DRAFTS_LIST_ENTRY_POINTS_BY_SURFACE.get(surface)?.has(entryPoint) ?? false)
+  );
+}
+
 function analyticsPropertiesAreRelationallyValid(
   event: AnalyticsEvent,
   properties: Record<string, unknown>,
@@ -2197,10 +2353,19 @@ function analyticsPropertiesAreRelationallyValid(
         properties.has_more === null)
     );
   }
+  if (event === AnalyticsEvent.DraftsListOpened) {
+    return analyticsDraftsListOpenedPairIsValid(properties);
+  }
   return true;
 }
 
-const NOTIFICATION_STRICT_EVENTS = new Set<AnalyticsEvent>([
+const STRICT_EVENTS = new Set<AnalyticsEvent>([
+  AnalyticsEvent.DraftsListOpened,
+  AnalyticsEvent.DraftOpened,
+  AnalyticsEvent.DraftsFilterChanged,
+  AnalyticsEvent.DraftCopied,
+  AnalyticsEvent.DraftDeleted,
+  AnalyticsEvent.DraftDeleteUndone,
   AnalyticsEvent.NotificationCenterOpened,
   AnalyticsEvent.NotificationFilterChanged,
   AnalyticsEvent.NotificationActivationCompleted,
@@ -2217,14 +2382,14 @@ export function sanitizeAnalyticsProperties(
   const record: Record<string, unknown> = { ...properties };
   const expectedKeys = eventPropertyKeys(event);
   if (expectedKeys === null) return null;
-  // The notification event family rejects rather than silently strips: a
+  // The notification and draft families reject rather than silently strip: a
   // property outside its exact allowlist is a caller bug (e.g. an
   // accidentally attached feed/host identifier), not extra data to discard
   // quietly. Other events keep the historical strip-only behavior other call
   // sites already rely on (see "strips identifiers, paths, content, queries,
   // and raw errors at runtime").
   if (
-    NOTIFICATION_STRICT_EVENTS.has(event) &&
+    STRICT_EVENTS.has(event) &&
     Object.keys(record).length !== expectedKeys.length
   ) {
     return null;
@@ -2536,6 +2701,7 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
 export function reportIssuePrivateSubmitPropertiesFromResult(
   result:
     | { readonly status: "delivered" }
+    | { readonly status: "queued" }
     | { readonly status: "unconfirmed" }
     | { readonly status: "unavailable" }
     | { readonly status: "failed" },
@@ -2568,6 +2734,11 @@ export function reportIssuePrivateSubmitPropertiesFromResult(
         blocker: null,
         attachment_count: attachmentCount,
       };
+    // An offline-queued report reports as `unconfirmed` rather than earning
+    // its own analytics value: delivery genuinely has not happened yet, and
+    // a new `outcome` literal is a change to every dashboard that reads this
+    // event - not something to add as a side effect of a delivery fix.
+    case "queued":
     case "unconfirmed":
       return {
         outcome: "unconfirmed",
