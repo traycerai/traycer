@@ -501,9 +501,18 @@ export function useChatMessageActions(
       revertFileChanges: boolean,
       revertArtifacts: boolean,
     ) => {
+      const delivery =
+        messageDelivery?.messageId === edit.targetMessageId
+          ? messageDelivery
+          : null;
       if (
         edit.deliveryRevision !== null
-          ? !canAct || deliveryPending
+          ? delivery?.revision !== edit.deliveryRevision ||
+            !canEditMessageDelivery({
+              delivery,
+              canAct,
+              deliveryPending,
+            })
           : !canModifyMessages
       )
         return;
@@ -560,6 +569,7 @@ export function useChatMessageActions(
       canModifyMessages,
       canAct,
       deliveryPending,
+      messageDelivery,
       messages,
       chatActions,
       dispatchUi,

@@ -453,6 +453,66 @@ describe("useChatMessageActions: accepted-message action projection", () => {
 
     expect(messageDeliveryEdit).not.toHaveBeenCalled();
   });
+
+  it("does not submit an open delivery edit after its host revision changes", () => {
+    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>();
+    let delivery: ChatMessageDelivery = {
+      messageId: TARGET_MESSAGE_ID,
+      revision: 1,
+      state: { phase: "pending" },
+    };
+    const { result, rerender } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
+            chatActions: {
+              ...fakeChatActions(() => null),
+              messageDeliveryEdit,
+            },
+            messageDelivery: delivery,
+          }),
+        ),
+      { wrapper },
+    );
+
+    delivery = { ...delivery, revision: 2 };
+    rerender();
+    act(() => result.current.revertOnEdit.onDontRevert());
+
+    expect(messageDeliveryEdit).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an open delivery edit after delivery becomes uneditable", () => {
+    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>();
+    const delivery: ChatMessageDelivery = {
+      messageId: TARGET_MESSAGE_ID,
+      revision: 1,
+      state: {
+        phase: "started",
+        turnId: "turn-1",
+        assistantMessageId: "assistant-1",
+      },
+    };
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
+            chatActions: {
+              ...fakeChatActions(() => null),
+              messageDeliveryEdit,
+            },
+            messageDelivery: delivery,
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => result.current.revertOnEdit.onDontRevert());
+
+    expect(messageDeliveryEdit).not.toHaveBeenCalled();
+  });
 });
 
 describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
