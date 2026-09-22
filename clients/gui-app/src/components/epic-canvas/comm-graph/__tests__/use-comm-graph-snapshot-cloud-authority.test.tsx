@@ -12,13 +12,17 @@ import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/hos
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
+import { __setCommGraphCloudSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
 import {
-  __setCommGraphCloudSubscriptionOpenerForTests,
-  __setCommGraphSubscriptionOpenerForTests,
-} from "@/lib/comm-graph/comm-graph-opener-override";
-import { __resetCommGraphRegistryForTests } from "@/lib/comm-graph/comm-graph-registry";
-import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
-import type { CommGraphSubscriptionRequest } from "@/lib/comm-graph/comm-graph-subscription";
+  __resetCommGraphCloudRegistryForTests,
+  getCommGraphCloudSubscriptionManager,
+} from "@/lib/comm-graph/comm-graph-cloud-registry";
+import {
+  acquireCommGraphSubscription,
+  getCommGraphSubscriptionManager,
+  releaseCommGraphSubscription,
+  __resetCommGraphRegistryForTests,
+} from "@/lib/comm-graph/comm-graph-registry";
 import type { CommGraphCloudSubscriptionRequest } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 import {
   readCommGraphTimelineEpicState,
@@ -53,7 +57,9 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
-function cloudEvent(): HostCommunicationGraphCloudFeedEvent {
+function cloudEvent(
+  overrides: Partial<HostCommunicationGraphCloudFeedEvent>,
+): HostCommunicationGraphCloudFeedEvent {
   return {
     eventId: "cloud-event",
     originHostId: "origin-a",
@@ -73,6 +79,7 @@ function cloudEvent(): HostCommunicationGraphCloudFeedEvent {
     originRefId: null,
     peerEpicId: null,
     historicalUpload: false,
+    ...overrides,
   };
 }
 
@@ -95,18 +102,99 @@ describe("useCommGraphSnapshot cloud authority", () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     __setCommGraphCloudSubscriptionOpenerForTests(null);
-    __setCommGraphSubscriptionOpenerForTests(null);
     __resetCommGraphCloudRegistryForTests();
     __resetCommGraphRegistryForTests();
   });
 
-  it("detaches local on host-confirmed cloud authority and never unions it back during relay failure", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    const localClose = vi.fn();
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: localClose };
+  it("never opens a local subscription while the cloud relay is pending or available", async () => {
+    // No `__setCommGraphSubscriptionOpenerForTests` exists any more - the
+    // seam was deleted along with the fallback it fed. The only thing left to
+    // assert is structural: the epic's LOCAL registry manager (still exported
+    // for a possible future explicit local-only mode, see
+    // `use-comm-graph-snapshot.ts`) must never be attached by this hook.
+    const localManager = getCommGraphSubscriptionManager("epic-1");
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
     });
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
+
+    // Pending: the relay has not answered yet.
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    expect(localManager.isAttached()).toBe(false);
+
+    act(() => cloudRequests[0].handlers.onAvailability("available"));
+    // Available: still never touches the local plane.
+    expect(localManager.isAttached()).toBe(false);
+  });
+
+  it("never opens a local subscription once every candidate relay is unsupported", async () => {
+    const localManager = getCommGraphSubscriptionManager("epic-1");
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+
+    act(() => cloudRequests[0].handlers.onStatus("unsupported"));
+
+    expect(
+      getCommGraphCloudSubscriptionManager("epic-1").getAvailability(),
+    ).toBe("unsupported");
+    expect(localManager.isAttached()).toBe(false);
+  });
+
+  it("ignores rows already cached in the local manager from a prior session", async () => {
+    // Simulates upgrading from a build that still fed the local fan-in: an
+    // epic can carry a populated, detached local manager from before this
+    // change. `useCommGraphSnapshot` must never read it, in any cloud state.
+    const staleClaim = {};
+    const staleClose = vi.fn();
+    // `acquireCommGraphSubscription` requires the registry entry to already
+    // exist (it early-returns otherwise) - resolving the manager first is
+    // what creates it, exactly as the real hook's `useMemo` does at render.
+    getCommGraphSubscriptionManager("epic-1");
+    acquireCommGraphSubscription(
+      "epic-1",
+      staleClaim,
+      (request) => {
+        request.handlers.onSnapshot(
+          [
+            {
+              id: 1,
+              kind: "a2a_message",
+              timestamp: 1_000,
+              senderAgentId: "agent-a",
+              receiverAgentId: "agent-b",
+              responseId: null,
+              inReplyTo: null,
+              expectReply: true,
+              messageText: "stale local row",
+              noticeReason: null,
+              originKind: null,
+              originChatId: null,
+              originRefId: null,
+              peerEpicId: null,
+            },
+          ],
+          1,
+        );
+        return { close: staleClose };
+      },
+      ["origin-a"],
+    );
+    releaseCommGraphSubscription("epic-1", staleClaim);
+    expect(
+      getCommGraphSubscriptionManager("epic-1")
+        .getSnapshot()
+        .events.map((event) => event.messageText),
+    ).toEqual(["stale local row"]);
+
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
@@ -116,58 +204,91 @@ describe("useCommGraphSnapshot cloud authority", () => {
     const { result } = renderHook(() =>
       useCommGraphSnapshot("epic-1", ["origin-a"], null),
     );
-    await waitFor(() => expect(localRequests).toHaveLength(1));
+    // Pending: the stale row must not leak in before the relay answers.
+    expect(result.current.events).toEqual([]);
+
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
-    expect(cloudRequests[0].hostId).toBe("origin-a");
-
-    act(() => {
-      localRequests[0].handlers.onSnapshot(
-        [
-          {
-            id: 1,
-            kind: "a2a_message",
-            timestamp: 1_000,
-            senderAgentId: "agent-a",
-            receiverAgentId: "agent-b",
-            responseId: null,
-            inReplyTo: null,
-            expectReply: true,
-            messageText: "local only",
-            noticeReason: null,
-            originKind: null,
-            originChatId: null,
-            originRefId: null,
-            peerEpicId: null,
-          },
-        ],
-        1,
-      );
-    });
-    expect(result.current.events[0]?.messageText).toBe("local only");
-
     act(() => {
       cloudRequests[0].handlers.onAvailability("available");
-      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
+      cloudRequests[0].handlers.onSnapshot([cloudEvent({})], 20, null);
     });
-    await waitFor(() => expect(localClose).toHaveBeenCalledTimes(1));
+    // Available: only the cloud row appears.
     expect(result.current.events.map((event) => event.eventId)).toEqual([
       "cloud-event",
     ]);
 
+    act(() => cloudRequests[0].handlers.onStatus("unsupported"));
+    // Unsupported: still no reach for the stale local cache.
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+  });
+
+  it("retains cloud rows through relay disconnect, unsupported, and an auth demotion, and resumes on restoration", async () => {
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    const { result } = renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["origin-a"], null),
+    );
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    act(() => {
+      cloudRequests[0].handlers.onAvailability("available");
+      cloudRequests[0].handlers.onSnapshot([cloudEvent({})], 20, null);
+    });
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+
+    // Transient relay disconnect: the row stays.
     act(() => cloudRequests[0].handlers.onStatus("reconnecting"));
     expect(result.current.events.map((event) => event.eventId)).toEqual([
       "cloud-event",
     ]);
-    expect(localRequests).toHaveLength(1);
+
+    // Every candidate now unsupported: the row still stays.
+    act(() => cloudRequests[0].handlers.onStatus("unsupported"));
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+    expect(result.current.hosts[0]?.status).toBe("unsupported");
+
+    // Auth demotion: the claim releases, the manager detaches, and the row
+    // is still readable - only the reported feed goes non-live.
+    const cloudOpenedBeforeDemotion = cloudRequests.length;
+    act(() => {
+      useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    });
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+    expect(result.current.hosts[0]?.status).toBe("reconnecting");
+
+    // Restoration: re-verification re-claims the relay. Reattaching clears
+    // the prior cycle's sticky `unsupported` verdict, so the same host is
+    // retried rather than staying permanently rejected.
+    act(() => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    });
+    await waitFor(() =>
+      expect(cloudRequests.length).toBeGreaterThan(cloudOpenedBeforeDemotion),
+    );
+    act(() => {
+      cloudRequests[cloudRequests.length - 1].handlers.onStatus("live");
+    });
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+    expect(result.current.hosts[0]?.status).toBe("live");
   });
 
-  it("selects an empty cloud snapshot instead of retaining local rows", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    const localClose = vi.fn();
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: localClose };
-    });
+  it("reports initialHistoryCaughtUp false after a bounded snapshot and true only once onCaughtUp fires", async () => {
+    // Snapshot and caught-up progress are distinct wire frames - a bounded
+    // initial snapshot is not itself a completeness claim, and the hook must
+    // not treat the two as one signal.
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
@@ -177,60 +298,37 @@ describe("useCommGraphSnapshot cloud authority", () => {
     const { result } = renderHook(() =>
       useCommGraphSnapshot("epic-1", ["origin-a"], null),
     );
-    await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
-
-    act(() => {
-      localRequests[0].handlers.onSnapshot(
-        [
-          {
-            id: 1,
-            kind: "a2a_message",
-            timestamp: 1_000,
-            senderAgentId: "agent-a",
-            receiverAgentId: "agent-b",
-            responseId: null,
-            inReplyTo: null,
-            expectReply: true,
-            messageText: "local only",
-            noticeReason: null,
-            originKind: null,
-            originChatId: null,
-            originRefId: null,
-            peerEpicId: null,
-          },
-        ],
-        1,
-      );
-    });
-    expect(result.current.events[0]?.messageText).toBe("local only");
 
     act(() => {
       cloudRequests[0].handlers.onAvailability("available");
-      cloudRequests[0].handlers.onSnapshot([], 0, null);
+      cloudRequests[0].handlers.onSnapshot([cloudEvent({})], 20, null);
     });
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+    expect(result.current.initialHistoryCaughtUp).toBe(false);
 
-    await waitFor(() => expect(localClose).toHaveBeenCalledTimes(1));
-    expect(result.current.events).toEqual([]);
+    act(() =>
+      cloudRequests[0].handlers.onCaughtUp(
+        { ingestVersion: 20, eventId: "cloud-event" },
+        20,
+      ),
+    );
+    expect(result.current.initialHistoryCaughtUp).toBe(true);
   });
 
   it("rebases a held local cursor onto the equivalent canonical cloud row", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: vi.fn() };
-    });
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
       return { close: vi.fn() };
     });
 
-    const { result } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["origin-a"], null),
-    );
-    await waitFor(() => expect(localRequests).toHaveLength(1));
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    // A cursor persisted by a build that still read the local plane - the
+    // migration path this reconciliation exists for.
     const localEvent = {
       id: 9,
       hostId: "origin-a",
@@ -249,7 +347,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
       peerEpicId: null,
     };
     act(() => {
-      localRequests[0].handlers.onSnapshot([localEvent], 9);
       useCommGraphTimelineStore
         .getState()
         .setCursor("epic-1", commGraphCursorForEvent(localEvent));
@@ -261,7 +358,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     );
 
     act(() => {
-      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
+      cloudRequests[0].handlers.onSnapshot([cloudEvent({})], 20, null);
       cloudRequests[0].handlers.onCaughtUp(
         { ingestVersion: 20, eventId: "cloud-event" },
         20,
@@ -273,17 +370,9 @@ describe("useCommGraphSnapshot cloud authority", () => {
         "cloud-event",
       ),
     );
-    expect(result.current.events.map((event) => event.eventId)).toEqual([
-      "cloud-event",
-    ]);
   });
 
   it("holds a local cursor until bounded cloud history reaches its initial head", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: vi.fn() };
-    });
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
@@ -291,7 +380,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
-    await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     const localEvent = {
       id: 9,
@@ -312,13 +400,12 @@ describe("useCommGraphSnapshot cloud authority", () => {
     };
     const localCursor = commGraphCursorForEvent(localEvent);
     act(() => {
-      localRequests[0].handlers.onSnapshot([localEvent], 9);
       useCommGraphTimelineStore.getState().setCursor("epic-1", localCursor);
       cloudRequests[0].handlers.onAvailability("available");
       cloudRequests[0].handlers.onSnapshot(
         [
           {
-            ...cloudEvent(),
+            ...cloudEvent({}),
             eventId: "cloud-before",
             originSequence: 8,
             ingestVersion: 10,
@@ -335,7 +422,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     );
 
     act(() => {
-      cloudRequests[0].handlers.onEvent(cloudEvent());
+      cloudRequests[0].handlers.onEvent(cloudEvent({}));
       cloudRequests[0].handlers.onCaughtUp(
         { ingestVersion: 20, eventId: "cloud-event" },
         20,
@@ -350,11 +437,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
   });
 
   it("releases a held local cursor when the cloud head ends in a skipped row", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: vi.fn() };
-    });
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
@@ -362,7 +444,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
-    await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     const localCursor = {
       timestamp: 3_000,
@@ -372,7 +453,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     act(() => {
       useCommGraphTimelineStore.getState().setCursor("epic-1", localCursor);
       cloudRequests[0].handlers.onAvailability("available");
-      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 21, null);
+      cloudRequests[0].handlers.onSnapshot([cloudEvent({})], 21, null);
     });
     expect(readCommGraphTimelineEpicState("epic-1").cursor).toEqual(
       localCursor,
@@ -395,11 +476,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
   });
 
   it("holds the cloud claim only while the session holds a cloud verdict", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: vi.fn() };
-    });
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     // One close spy PER handle: the manager may redial the same relay on a
     // readiness-key change, so "the stream is closed" is a claim about every
@@ -415,9 +491,8 @@ describe("useCommGraphSnapshot cloud authority", () => {
 
     renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
 
-    // The local fan-in is this host's own event log and serves the unverified
-    // session; the cloud-sourced relay is not claimed without a verdict.
-    await waitFor(() => expect(localRequests).toHaveLength(1));
+    // No history authority and no local plane to serve the unverified
+    // session either - the relay is simply not claimed without a verdict.
     expect(cloudRequests).toHaveLength(0);
 
     // Non-vacuity: the verdict returning is what claims the relay...
@@ -440,59 +515,8 @@ describe("useCommGraphSnapshot cloud authority", () => {
     expect(cloudRequests).toHaveLength(openedBeforeDemotion);
   });
 
-  it("falls back to the local fan-in after a demotion, even once the cloud was authoritative", async () => {
-    const localRequests: CommGraphSubscriptionRequest[] = [];
-    const localClose = vi.fn();
-    __setCommGraphSubscriptionOpenerForTests((request) => {
-      localRequests.push(request);
-      return { close: localClose };
-    });
-    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
-    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
-      cloudRequests.push(request);
-      return { close: vi.fn() };
-    });
-
-    const { result } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["origin-a"], null),
-    );
-    await waitFor(() => expect(cloudRequests).toHaveLength(1));
-    act(() => {
-      cloudRequests[0].handlers.onAvailability("available");
-      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
-    });
-    await waitFor(() => expect(localClose).toHaveBeenCalledTimes(1));
-    expect(result.current.events.map((event) => event.eventId)).toEqual([
-      "cloud-event",
-    ]);
-
-    // The detached manager retains its `available` verdict for the next
-    // attach; without a session verdict it is not read as authoritative, so
-    // the local fan-in re-attaches and its snapshot is selected.
-    const cloudOpenedBeforeDemotion = cloudRequests.length;
-    act(() => {
-      useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
-    });
-    await waitFor(() => expect(localRequests.length).toBeGreaterThan(1));
-    expect(result.current.events).toEqual([]);
-
-    // Re-verification re-claims the relay and the retained cloud rows return.
-    act(() => {
-      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
-    });
-    await waitFor(() =>
-      expect(cloudRequests.length).toBeGreaterThan(cloudOpenedBeforeDemotion),
-    );
-    await waitFor(() =>
-      expect(result.current.events.map((event) => event.eventId)).toEqual([
-        "cloud-event",
-      ]),
-    );
-  });
-
   it("uses a signed-in non-origin host to relay the cloud feed", async () => {
     directoryEntries.current = [directoryEntry("relay-b", undefined)];
-    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
@@ -542,7 +566,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
       }),
       directoryEntry("zzz-available-relay", undefined),
     ];
-    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
       cloudRequests.push(request);
@@ -558,7 +581,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
   });
 
   it("retries a rejected fallback relay when that same host publishes its endpoint", async () => {
-    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     let endpointPublished = false;
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -581,7 +603,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
   });
 
   it("retries a rejected remote relay after its public key rotates", async () => {
-    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     let acceptsRelay = false;
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -609,7 +630,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
   });
 
   it("keeps a healthy relay attached when an unrelated host entry changes", async () => {
-    __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
     const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
     const cloudClose = vi.fn();
     __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -641,7 +661,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
         directoryEntry("aaa-other", undefined),
         directoryEntry("zzz-tab", undefined),
       ];
-      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
       __setCommGraphCloudSubscriptionOpenerForTests((request) => {
         cloudRequests.push(request);
@@ -664,7 +683,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
         directoryEntry("zzz-remote", undefined),
         directoryEntry("aaa-remote", undefined),
       ];
-      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
       __setCommGraphCloudSubscriptionOpenerForTests((request) => {
         cloudRequests.push(request);
@@ -690,7 +708,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
         directoryEntry("aaa-other-remote", undefined),
         directoryEntry("zzz-tab-remote", undefined),
       ];
-      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
       const cloudClose = vi.fn();
       __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -728,7 +745,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
         directoryEntry("mmm-other", undefined),
         directoryEntry("zzz-tab", undefined),
       ];
-      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
       const cloudClose = vi.fn();
       __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -759,7 +775,6 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     it("resolves a late directory arrival to exactly the origin then the tab host, and nothing else", async () => {
-      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
       __setCommGraphCloudSubscriptionOpenerForTests((request) => {
         cloudRequests.push(request);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
-import { CIVIC_KINDS } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
+import { OBLIQUE_CIVIC_KINDS } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
 import { civicCapacityFor } from "@/lib/comm-graph/office/office-layout";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
@@ -1904,7 +1904,7 @@ describe("plaza civic rooms", () => {
       expect(
         floor.civic.map((room) => room.kind),
         label,
-      ).toEqual(CIVIC_KINDS);
+      ).toEqual(OBLIQUE_CIVIC_KINDS);
       expect(floor.road, label).not.toBeNull();
       for (const room of floor.civic) {
         expect(room.floorIndex, `${label}/${room.kind}`).toBe(index);
@@ -1931,23 +1931,27 @@ describe("plaza civic rooms", () => {
     }
   });
 
-  it("sizes the ward and the chair run from the host's population", () => {
+  it("sizes the ward from the host's population, and stands up no waiting room", () => {
     eachPlaza("triage", SCALES, ({ floor, agents, label }) => {
       const want = civicCapacityFor(agents);
       const beds = roomOf(floor, "infirmary").seatIds.length;
-      const chairs = roomOf(floor, "waiting-room").seatIds.length;
       // THE FORMULA IN FULL, at every scale and both viewports: the bay is
       // placed past the last wing's amenities, so the columns a bigger
       // population buys are columns the ward gets.
       expect(beds, `${label} beds`).toBe(want.beds);
-      expect(chairs, `${label} chairs`).toBe(want.chairs);
       // Said separately, so a view that fell back on the contract's floor of
       // two would still be visible as a shortfall rather than as a formula.
       expect(beds, `${label} beds`).toBeGreaterThanOrEqual(2);
-      expect(chairs, `${label} chairs`).toBeGreaterThanOrEqual(2);
       // Standing at a counter is not sitting down, and nobody sits in a door.
       expect(roomOf(floor, "help-desk").seatIds, label).toEqual([]);
       expect(roomOf(floor, "archive").seatIds, label).toEqual([]);
+      // No waiting room here any more (a deliberate simplification - an
+      // awaiting agent now keeps its ordinary desk instead), and none of the
+      // three remaining rooms is secretly wearing its old name.
+      expect(
+        floor.civic.find((room) => room.kind === "waiting-room"),
+        label,
+      ).toBeUndefined();
     });
   });
 
@@ -2001,8 +2005,8 @@ describe("plaza civic rooms", () => {
     for (const key of keysOf(room.bounds))
       expect(onRoad.has(key), `${at}/${key}`).toBe(false);
     const kerb = room.kerbTile;
-    // Only the two rooms something drives to name a kerb (C6).
-    if (room.kind === "waiting-room" || room.kind === "archive") {
+    // Only the archive names no kerb (C6) - nobody is collected from it.
+    if (room.kind === "archive") {
       expect(kerb, at).toBeNull();
       return;
     }
@@ -2137,7 +2141,7 @@ describe("plaza civic rooms", () => {
     });
   });
 
-  it("draws the beds and chairs from the seats, and the bay at the overview", () => {
+  it("draws the beds from the seats, and the bay at the overview, with no lounge chair left to draw", () => {
     for (const [label, view] of [
       ["towers", TOWERS_VIEW],
       ["building", BUILDING_VIEW],
@@ -2148,9 +2152,11 @@ describe("plaza civic rooms", () => {
       const seatsOfKind = (kind: string): ReadonlyArray<OfficeSeat> =>
         [...layout.seats.values()].filter((seat) => seat.kind === kind);
       const bed = seatsOfKind("bed").at(0);
-      const chair = seatsOfKind("lounge").at(0);
       if (bed === undefined) throw new Error(`${label} planned no bed`);
-      if (chair === undefined) throw new Error(`${label} planned no chair`);
+      // The waiting room (and its lounge chairs) is gone - a deliberate
+      // simplification, and this is its bounded regression: an awaiting agent
+      // now keeps an ordinary desk instead of a chair furnished nowhere else.
+      expect(seatsOfKind("lounge"), label).toEqual([]);
 
       const spritesOf = (
         seat: OfficeSeat,
@@ -2167,8 +2173,6 @@ describe("plaza civic rooms", () => {
       // `seatProps`, where the per-seat drawable budget can count it.
       expect(spritesOf(bed, null), label).toEqual(["bed"]);
       expect(spritesOf(bed, "agent-1"), label).toEqual(["bed", "bed-occupied"]);
-      expect(spritesOf(chair, null), label).toEqual(["lounge-chair"]);
-      expect(spritesOf(chair, "agent-1"), label).toEqual(["lounge-chair"]);
       // Nothing of a seat is drawn at the overview; the block map speaks there.
       expect(
         painter.seatProps(layout, bed, idleDeskState(null), 0),
@@ -2189,6 +2193,28 @@ describe("plaza civic rooms", () => {
       );
       expect(rooms, label).toBeGreaterThan(0);
       expect(civic, label).toHaveLength(rooms);
+    }
+  });
+
+  it("gives an awaiting agent an ordinary desk, not a lounge seat, in Building", () => {
+    // The bounded regression root asked for: Building plans no waiting-room
+    // civic room and no `lounge` seat anywhere, and an agent whose status
+    // would once have queued it into that room is still seated somewhere
+    // real - the seat book's fallback to an ordinary desk, not a stranded
+    // agent with nowhere to sit.
+    const epic = makeTestEpic("triage", 40, 1);
+    const layout = planBuilding(initialInput(epic, VIEWPORTS[0]));
+    expect(
+      [...layout.seats.values()].some((seat) => seat.kind === "lounge"),
+    ).toBe(false);
+    expect(
+      layout.floors.some((floor) =>
+        floor.civic.some((room) => room.kind === "waiting-room"),
+      ),
+    ).toBe(false);
+    for (const agent of epic.agents) {
+      const desk = layout.desks.get(agent.id);
+      expect(desk, agent.id).toBeDefined();
     }
   });
 });

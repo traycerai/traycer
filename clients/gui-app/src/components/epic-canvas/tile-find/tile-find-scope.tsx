@@ -129,8 +129,13 @@ export function TileFindScope(props: TileFindScopeProps): ReactNode {
         data-epic-id={epicId}
         data-active={isActive ? "true" : "false"}
       >
+        {node.type === "comm-graph" ? (
+          <TileFindBar tileInstanceId={node.instanceId} placement="row" />
+        ) : null}
         {children}
-        <TileFindBar tileInstanceId={node.instanceId} />
+        {node.type === "comm-graph" ? null : (
+          <TileFindBar tileInstanceId={node.instanceId} />
+        )}
       </div>
     </TileFindContext.Provider>
   );
