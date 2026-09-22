@@ -3,6 +3,7 @@ import { BlockErrorBoundary } from "@/editor-core/nodes/shared/block-error-bound
 import { WireframeBlockToolbar } from "@/editor-core/nodes/wireframe/wireframe-block-toolbar";
 import { WireframeFullscreenDialog } from "@/editor-core/nodes/wireframe/wireframe-fullscreen-dialog";
 import { WireframeIframe } from "@/editor-core/nodes/wireframe/wireframe-iframe";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -11,6 +12,7 @@ import { toast } from "sonner";
 // document into the iframe would flash a half-built page over and over. Wait
 // for the same quiet window the chat mermaid block uses before rendering.
 const RENDER_DEBOUNCE_MS = 500;
+const COPIED_RESET_MS = 2000;
 const WIREFRAME_TITLE = "UI Preview";
 
 interface WireframeBlockProps {
@@ -36,13 +38,12 @@ export function WireframeBlock(props: WireframeBlockProps) {
   const code = decodeWireframeCode(props["data-code"] ?? "");
   const htmlContent = useDebouncedValue(code, RENDER_DEBOUNCE_MS);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    if (typeof navigator === "undefined") return;
-    void navigator.clipboard.writeText(code).then(() => {
-      toast.success("HTML copied to clipboard");
-    });
-  }, [code]);
+  const { copy } = useClipboardCopy({
+    resetMs: COPIED_RESET_MS,
+    onSuccess: () => toast.success("HTML copied to clipboard"),
+    onError: () => toast.error("Couldn't copy the HTML"),
+  });
+  const handleCopy = useCallback(() => copy(code), [copy, code]);
 
   if (code.trim().length === 0) {
     return (

@@ -22,6 +22,16 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 
+// The real wireframe block mounts a sandboxed iframe that negotiates its
+// height with the parent window over `postMessage` - genuine browser
+// behavior jsdom has no host for. Stub it so these tests can exercise
+// `OptionPreview`'s rich-markdown branch (does it route into a wireframe
+// block at all) without dragging that machinery into DOM assertions that
+// only care about the wrapper's class.
+vi.mock("@/editor-core/nodes/wireframe/wireframe-iframe", () => ({
+  WireframeIframe: () => <div data-testid="wireframe-iframe" />,
+}));
+
 describe("InterviewSegment", () => {
   afterEach(cleanup);
 
@@ -1092,5 +1102,94 @@ describe("InterviewSegment", () => {
     });
     expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+  });
+
+  describe("option previews", () => {
+    // Same render/expand/open sequence as the "expands into a read-only
+    // pager" and "mounts targeted option details inline" cases above: a
+    // single answered question, expand the historical disclosure, then open
+    // the option's own `? details` toggle to mount `InterviewOptionDetailsRegion`.
+    function renderAnsweredOptionDetails(option: {
+      readonly label: string;
+      readonly preview: string;
+    }): HTMLElement {
+      render(
+        <InterviewTestProviders>
+          <InterviewSegment
+            blockId="interview-option-preview"
+            status="completed"
+            questions={[
+              {
+                questionId: "q1",
+                question: "Which format?",
+                header: null,
+                options: [
+                  {
+                    label: option.label,
+                    description: null,
+                    preview: option.preview,
+                  },
+                ],
+                multiSelect: false,
+                allowsCustomAnswer: null,
+              },
+            ]}
+            answers={[
+              {
+                questionId: "q1",
+                question: "Which format?",
+                values: [option.label],
+                notes: null,
+                selection: {
+                  questionIndex: 0,
+                  optionIndices: [0],
+                  optionLabels: [option.label],
+                  customText: null,
+                },
+              },
+            ]}
+            draftAnswers={[]}
+            outcome="answered"
+            settlement={null}
+            error={null}
+            delivery={null}
+            forkedWithoutAnswer={false}
+            interviewDeliveryRetry={null}
+            forkAction={null}
+          />
+        </InterviewTestProviders>,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /Answered 1 question/ }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: `${option.label} details` }),
+      );
+      return screen.getByRole("note", { name: "Option details" });
+    }
+
+    it("renders a tilde-fenced preview as a rich wireframe block, not a verbatim pre", () => {
+      const details = renderAnsweredOptionDetails({
+        label: "Tilde fence",
+        preview: "~~~wireframe\n<div>Tilde</div>\n~~~",
+      });
+
+      expect(details.querySelector(".tc-node-wireframe")).not.toBeNull();
+      expect(details.querySelector("pre")).toBeNull();
+    });
+
+    it("renders a preview that only mentions backticks mid-line as verbatim pre text", () => {
+      const preview = "Wrap the value in ``` before sending\n  col1   col2";
+      const details = renderAnsweredOptionDetails({
+        label: "Verbatim table",
+        preview,
+      });
+
+      const pre = details.querySelector("pre");
+      expect(pre).not.toBeNull();
+      expect(pre?.textContent).toBe(preview);
+      expect(details.querySelector(".tc-node-wireframe")).toBeNull();
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
@@ -112,6 +113,14 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     props.highlightGeneration ?? 0,
     containerRef,
   );
+  // The scroll container below outlives the question inside it, so an offset
+  // left by a long question would open the next one below its header.
+  const questionScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (questionScrollRef.current !== null) {
+      questionScrollRef.current.scrollTop = 0;
+    }
+  }, [safeIndex]);
 
   return (
     <section
@@ -148,6 +157,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
         // diagrams) and option previews open inline, so the body is bounded
         // and scrolls while the pager and Skip/Submit row below stay put.
         <div
+          ref={questionScrollRef}
           data-native-scrollbar="true"
           className="min-h-0 max-h-[min(55dvh,36rem)] overflow-y-auto overscroll-contain"
         >
