@@ -341,6 +341,11 @@ function hostTerminalVerdictMessage(error: HostRpcError): string | null {
  */
 export const EDITOR_ACCESS_DENIED_PHRASE = "does not have editor access";
 export const OWNER_ACCESS_DENIED_PHRASE = "does not have owner access";
+/**
+ * The cloud refuses a share with a team that has no paid plan in this fixed
+ * phrase; it is the only 403 whose remedy is a plan, not a role.
+ */
+export const TEAM_PLAN_REQUIRED_PHRASE = "requires a paid team plan";
 
 /**
  * The host's epic role gates (`defineEditorResolver` / `defineOwnerResolver`)
@@ -357,6 +362,9 @@ function forbiddenToastMessage(message: string): string {
   }
   if (message.includes(OWNER_ACCESS_DENIED_PHRASE)) {
     return "Only this task's owner can do that.";
+  }
+  if (message.includes(TEAM_PLAN_REQUIRED_PHRASE)) {
+    return "This team needs the Sync plan before it can share tasks.";
   }
   return "You don't have permission to do that.";
 }
