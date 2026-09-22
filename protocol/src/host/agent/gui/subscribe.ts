@@ -95,6 +95,7 @@ export {
   type ChatQueueSteerMode,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { z } from "zod";
+import { chatMessageDeliverySchema } from "./message-delivery";
 import { chatPortForwardSchema } from "@traycer/protocol/host/port-forward";
 import {
   guiHarnessIdSchema,
@@ -119,6 +120,7 @@ import {
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
   chatRangeResponseSchema,
+  chatRangeResponseSchemaPreMessageDelivery,
   chatRangeResponseSchemaPreBrowser,
   chatRangeResponseSchemaPreFallback,
   chatRangeResponseSchemaPreShellHost,
@@ -127,6 +129,7 @@ import {
   chatTranscriptDerivedSchema,
   chatTranscriptDerivedSchemaPreSetupPlacement,
   chatTranscriptWindowSchema,
+  chatTranscriptWindowSchemaPreMessageDelivery,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreFallback,
   chatTranscriptWindowSchemaPreShellHost,
@@ -219,7 +222,7 @@ export const chatActionSchemaV17ToV19 = lazySchema(() =>
   ]),
 );
 
-export const chatActionSchema = lazySchema(() =>
+const chatActionSchemaV110ToV114 = lazySchema(() =>
   z.enum([
     ...chatActionSchemaV17ToV19.options,
     // `1.10`: the fallback grace card's menu open/close.
@@ -233,6 +236,14 @@ export const chatActionSchema = lazySchema(() =>
     // detach resumes the frozen remainder with no extra message.
     "fallback.holdForChoice",
     "fallback.releaseChoice",
+  ]),
+);
+export const chatActionSchema = lazySchema(() =>
+  z.enum([
+    ...chatActionSchemaV110ToV114.options,
+    "messageDeliveryEdit",
+    "messageDeliveryRetry",
+    "messageDeliveryCancel",
   ]),
 );
 export type ChatAction = z.infer<typeof chatActionSchema>;
@@ -1864,6 +1875,7 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
 );
 export const chatSnapshotSchema = lazySchema(() =>
   chatSnapshotSchemaV17.extend({
+    messageDelivery: chatMessageDeliverySchema.nullable().optional(),
     chat: chatSchema,
     // Re-widened for the same reason `chatSchema` re-widens `settings`: the V17
     // base is pre-`auto` because 1.7 and 1.8 embed it.
@@ -2438,10 +2450,10 @@ const draftImageAckCauseFields = {
 // mode, so no list below aliases this one.
 const chatSubscribeCommonServerFrameSchemasV110 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchema,
+    message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreShellHostPreAuto,
     event: chatEventSchema,
-    action: chatActionSchema,
+    action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
@@ -2456,10 +2468,10 @@ const chatSubscribeCommonServerFrameSchemasV110 =
 // why it needs its own list rather than an alias of either neighbour.
 const chatSubscribeCommonServerFrameSchemasV111 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchema,
+    message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreAuto,
     event: chatEventSchema,
-    action: chatActionSchema,
+    action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
@@ -2477,10 +2489,10 @@ const chatSubscribeCommonServerFrameSchemasV111 =
 // a `1.12` peer a frame it cannot parse, in one direction or the other.
 const chatSubscribeCommonServerFrameSchemasV112 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchema,
+    message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreAuto,
     event: chatEventSchema,
-    action: chatActionSchema,
+    action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
@@ -2495,10 +2507,10 @@ const chatSubscribeCommonServerFrameSchemasV112 =
 // port-forward item, which is the one axis `1.14` adds here.
 const chatSubscribeCommonServerFrameSchemasV113 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchema,
+    message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPrePortForward,
     event: chatEventSchema,
-    action: chatActionSchema,
+    action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
@@ -2510,6 +2522,21 @@ const chatSubscribeCommonServerFrameSchemasV113 =
 
 // The live common frames (`chat.subscribe@1.14`): the port-forward item on the
 // queue, over `1.13`'s `auto`.
+const chatSubscribeCommonServerFrameSchemasV114 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaV18,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchemaV110ToV114,
+    approval: chatApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2598,7 +2625,20 @@ const chatSubscribeSharedServerFrameSchemasV113 = [
   ...chatSubscribeCommonServerFrameSchemasV113,
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
+const chatSubscribeSharedServerFrameSchemasV114 = [
+  ...chatSubscribeCommonServerFrameSchemasV114,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+const messageDeliveryChangedServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("messageDeliveryChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    delivery: chatMessageDeliverySchema.nullable(),
+  }),
+);
 const chatSubscribeSharedServerFrameSchemas = [
+  messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemas,
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
@@ -3256,7 +3296,7 @@ const chatSubscribeClientFrameSchemaOptionsPreAuto = [
 // six mode-bearing frames re-bound to the live permission-mode enum. Same
 // frames in the same order; `1.11` is the first line whose client may say
 // `auto`.
-const chatSubscribeClientFrameSchemaOptions = [
+const chatSubscribeClientFrameSchemaOptionsPreMessageDelivery = [
   lazySchema(() =>
     chatSubscribeClientFrameSchemaV17ToV19Options[0].extend({
       settings: chatRunSettingsSchema,
@@ -3278,6 +3318,36 @@ const chatSubscribeClientFrameSchemaOptions = [
   stopBackgroundSessionClientFrameSchema,
   fallbackHoldForChoiceClientFrameSchema,
   fallbackReleaseChoiceClientFrameSchema,
+] as const;
+
+const messageDeliveryActionFields = {
+  ...ownerActionFrameFields,
+  messageId: lazySchema(() => z.string()),
+  expectedRevision: lazySchema(() => z.number().int().positive()),
+};
+const chatSubscribeClientFrameSchemaOptions = [
+  ...chatSubscribeClientFrameSchemaOptionsPreMessageDelivery,
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("messageDeliveryEdit"),
+      ...messageDeliveryActionFields,
+      content: jsonContentSchema,
+      browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("messageDeliveryRetry"),
+      ...messageDeliveryActionFields,
+      settings: chatRunSettingsSchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("messageDeliveryCancel"),
+      ...messageDeliveryActionFields,
+    }),
+  ),
 ] as const;
 
 export const chatSubscribeClientFrameSchema = lazySchema(() =>
@@ -4553,7 +4623,7 @@ const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
     chat: chatRecordSchema,
     queue: chatQueueStateSchemaPrePortForward,
     pendingApprovals: z.array(chatApprovalStateSchema),
-    tail: chatTranscriptWindowSchema,
+    tail: chatTranscriptWindowSchemaPreMessageDelivery,
     derived: chatTranscriptDerivedSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
     // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
@@ -4566,13 +4636,19 @@ const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
 
 // The live windowed snapshot (`chat.subscribe@1.14`): `1.13` plus the agent's
 // port forwards and the queue item that reports one going `interrupted`.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+const chatWindowedSnapshotSchemaV114 = lazySchema(() =>
   chatWindowedSnapshotSchemaV113.extend({
     queue: chatQueueStateSchema,
     // `default([])`, not optional, for the reason `managedCommands` is: one
     // array shape on the snapshot and on `portForwardsChanged`, and a host too
     // old to send it has no forwards to show, so `[]` is the truth.
     portForwards: z.array(chatPortForwardSchema).default([]),
+  }),
+);
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV114.extend({
+    messageDelivery: chatMessageDeliverySchema.nullable().optional(),
+    tail: chatTranscriptWindowSchema,
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -4658,6 +4734,15 @@ const chatSubscribeIndexChangedServerFrameSchema = lazySchema(() =>
   }),
 );
 
+const chatSubscribeRangeServerFrameSchemaPreMessageDelivery = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPreMessageDelivery,
+  }),
+);
+
 const chatSubscribeRangeServerFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("range"),
@@ -4704,6 +4789,23 @@ const chatRangeResponseSchemaV18 = lazySchema(() =>
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
   }),
+);
+
+const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV114,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV114,
+  ]),
 );
 
 export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
@@ -4872,7 +4974,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -4954,6 +5056,14 @@ const resnapshotClientFrameSchema = lazySchema(() =>
     ...textFrameFields,
     ...chatReferenceFields,
   }),
+);
+
+export const chatSubscribeWindowedClientFrameSchemaV113ToV114 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsPreMessageDelivery,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]),
 );
 
 export const chatSubscribeWindowedClientFrameSchema = lazySchema(() =>
@@ -5238,7 +5348,7 @@ export const chatSubscribeV113 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 13 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV113,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV113ToV114,
 });
 
 /**
@@ -5263,6 +5373,15 @@ export const chatSubscribeV113 = defineStreamRpcContract({
 export const chatSubscribeV114 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 14 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV114,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV113ToV114,
+});
+
+/** Accepted conversation messages retain explicit execution state on the host. */
+export const chatSubscribeV115 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 15 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

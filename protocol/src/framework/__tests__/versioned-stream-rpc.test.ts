@@ -124,11 +124,12 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // re-minted above THAT at @1.13 - its fourth renumber. The port-forward
     // surface (the agent's forwards on the snapshot, `portForwardsChanged`,
     // and the queue item that reports one going `interrupted`) took @1.14.
+    // Host-owned accepted-message delivery took @1.15.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(14);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(15);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(

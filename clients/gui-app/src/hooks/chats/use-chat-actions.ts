@@ -9,6 +9,7 @@ import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas
 import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
   ChatSessionStoreHandle,
+  ChatSessionState,
   EditUserMessageInput,
   InterviewDeliveryRetryIdentity,
   SendChatSessionMessageInput,
@@ -39,6 +40,9 @@ type SendChatMessageInput = SendChatSessionMessageInput;
  * remains the single source of truth - these are just typed proxies.
  */
 export interface ChatActions {
+  readonly messageDeliveryEdit: ChatSessionState["messageDeliveryEdit"];
+  readonly messageDeliveryRetry: ChatSessionState["messageDeliveryRetry"];
+  readonly messageDeliveryCancel: ChatSessionState["messageDeliveryCancel"];
   readonly sendMessage: (
     input: SendChatMessageInput,
   ) => SentChatMessageAction | null;
@@ -134,6 +138,12 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
+      messageDeliveryEdit: (input) =>
+        handle.store.getState().messageDeliveryEdit(input),
+      messageDeliveryRetry: (delivery, settings) =>
+        handle.store.getState().messageDeliveryRetry(delivery, settings),
+      messageDeliveryCancel: (delivery) =>
+        handle.store.getState().messageDeliveryCancel(delivery),
       sendMessage: (input) =>
         tracked(handle.store.getState().sendMessage(input), () => {
           Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {

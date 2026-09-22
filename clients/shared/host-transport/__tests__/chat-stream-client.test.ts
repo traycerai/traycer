@@ -473,6 +473,7 @@ function makeNoopCallbacks(
     onSnapshot,
     onActionAck: () => undefined,
     onMessageAccepted: () => undefined,
+    onMessageDeliveryChanged: () => undefined,
     onQueueChanged: () => undefined,
     onTurnStateChanged: () => undefined,
     onBlockDelta: () => undefined,
@@ -565,6 +566,7 @@ describe("ChatStreamClient", () => {
       },
       onActionAck: () => undefined,
       onMessageAccepted: () => undefined,
+      onMessageDeliveryChanged: () => undefined,
       onQueueChanged: () => undefined,
       onTurnStateChanged: () => undefined,
       onBlockDelta: () => undefined,
@@ -1268,6 +1270,7 @@ function recordingCallbacks(): {
     },
     onActionAck: () => undefined,
     onMessageAccepted: () => undefined,
+    onMessageDeliveryChanged: () => undefined,
     onQueueChanged: () => undefined,
     onTurnStateChanged: () => undefined,
     onBlockDelta: (frame) => {

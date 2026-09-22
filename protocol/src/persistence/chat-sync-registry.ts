@@ -30,13 +30,13 @@ import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-syn
 // schema embeds, so a copied `{ major: 1, minor: 0 }` here would let a future
 // bump register 1.1 while the payload schema and the writers stayed on 1.0.
 
-export const chatHeadRecordV150 = defineRecordContract({
+export const chatHeadRecordV160 = defineRecordContract({
   name: "chat-head",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatHeadRecordSchema,
 });
 
-export const chatShardRecordV150 = defineRecordContract({
+export const chatShardRecordV160 = defineRecordContract({
   name: "chat-shard",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatShardRecordSchema,
@@ -45,18 +45,18 @@ export const chatShardRecordV150 = defineRecordContract({
 export const chatSyncRecordRegistry = defineVersionedRecordRegistry({
   "chat-head": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
-        5: { contract: chatHeadRecordV150, upgradeFromPreviousVersion: null },
+        6: { contract: chatHeadRecordV160, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
   },
   "chat-shard": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
-        5: { contract: chatShardRecordV150, upgradeFromPreviousVersion: null },
+        6: { contract: chatShardRecordV160, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

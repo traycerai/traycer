@@ -319,6 +319,7 @@ export function publishedChatSessionState(
     },
     messages: input.conversion.messages,
     events: input.conversion.events,
+    messageDelivery: null,
     queue: { status: "idle", items: [] },
     // A copy has no live host stream, so no managed commands can ever arrive.
     managedCommands: [],
@@ -427,6 +428,9 @@ export function publishedChatSessionState(
     sendSeededUserMessage: () => null,
     deleteMessageSuffix: () => null,
     editUserMessage: () => null,
+    messageDeliveryEdit: () => null,
+    messageDeliveryRetry: () => null,
+    messageDeliveryCancel: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
     fallbackHoldForChoice: () => null,
