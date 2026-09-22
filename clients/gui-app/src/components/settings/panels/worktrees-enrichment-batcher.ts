@@ -5,6 +5,7 @@ import {
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorktreeHostEntryV14,
@@ -12,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 
 /**
@@ -120,6 +122,47 @@ export function keepResolvedEnrichmentRows(
 }
 
 /**
+ * The ONE observer-side definition of a per-path enrichment query, shared by
+ * every surface that reads activity-enriched worktree rows: this panel's
+ * viewport leg below, and the task / owner / PR-search hooks through
+ * `useWorktreeEnrichmentForClient`. Sharing it is what keeps the query-level
+ * options (`gcTime`, `structuralSharing`) identical on a key two surfaces
+ * observe at once - TanStack holds ONE option set per query, so a second
+ * definition would silently swap the resolved-row guard in and out depending
+ * on which observer rendered last.
+ *
+ * `staleTime` is the only observer-level knob, because the surfaces genuinely
+ * differ there: this panel is manual-refresh (`Infinity`), while the History
+ * and hover surfaces keep the app default (`null`) so a remount after it can
+ * still pick up a PR fact the host warmed in the background. `null` omits the
+ * field rather than passing `undefined`, which would OVERRIDE the app default
+ * with "always stale" instead of inheriting it.
+ */
+export function perPathEnrichmentQueryOptions(args: {
+  readonly hostId: string | null;
+  readonly path: string;
+  readonly batcher: WorktreeEnrichmentBatcher | null;
+  readonly enabled: boolean;
+  readonly staleTime: number | null;
+}) {
+  const { hostId, path, batcher, enabled, staleTime } = args;
+  // The batcher is transport, not cache identity - it stays out of the
+  // query key, exactly as the client did under `useHostQueries`.
+  const fetcher = (): Promise<WorktreeListAllForHostResponseV14> =>
+    batcher === null
+      ? Promise.reject(hostClientUnavailableError("worktree.listAllForHost"))
+      : batcher.fetchPath(path);
+  return queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
+    queryKey: perPathEnrichmentQueryKey(hostId, path),
+    queryFn: fetcher,
+    enabled,
+    ...(staleTime === null ? {} : { staleTime }),
+    gcTime: WORKTREE_ENRICHMENT_GC_MS,
+    structuralSharing: keepResolvedEnrichmentRows,
+  });
+}
+
+/**
  * Observer-leg fetch driver over the batched transport. Split out here (not
  * `useHostQueries`, the usual wrapper) because that wrapper hard-wires one
  * `client.request` per request spec - the whole point of this module is the
@@ -135,27 +178,18 @@ export function useBatchedEnrichmentQueries(args: {
 }): Array<UseQueryResult<WorktreeListAllForHostResponseV14, HostRpcError>> {
   const { hostId, paths, batcher, enabled } = args;
   return useQueries({
-    queries: paths.map((path) => {
-      // The batcher is transport, not cache identity - it stays out of the
-      // query key, exactly as the client did under `useHostQueries`.
-      const fetcher = (): Promise<WorktreeListAllForHostResponseV14> =>
-        batcher === null
-          ? Promise.reject(
-              hostClientUnavailableError("worktree.listAllForHost"),
-            )
-          : batcher.fetchPath(path);
-      return queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
-        queryKey: perPathEnrichmentQueryKey(hostId, path),
-        queryFn: fetcher,
+    queries: paths.map((path) =>
+      perPathEnrichmentQueryOptions({
+        hostId,
+        path,
+        batcher,
         enabled,
         // Probe-once for real (manual-refresh model): an enriched row never
         // refetches on remount or scroll-back. Refresh invalidation and the
         // cold-PR retry ledgers are the only re-probe paths.
         staleTime: Infinity,
-        gcTime: WORKTREE_ENRICHMENT_GC_MS,
-        structuralSharing: keepResolvedEnrichmentRows,
-      });
-    }),
+      }),
+    ),
   });
 }
 // Coalescing window: how long the first enqueued path waits for company
@@ -254,4 +288,28 @@ export function createWorktreeEnrichmentBatcher(
         }
       }),
   };
+}
+
+/**
+ * The batcher over one host client's selection-mode read - the ONLY place a
+ * background (`forceRefresh: false`) multi-path `worktree.listAllForHost`
+ * request is written. It is a WIRE shape, never a cache key: every row it
+ * returns lands under its own {@link perPathEnrichmentQueryKey}, which is what
+ * lets a per-path `worktree.changed` frame re-probe exactly the rows it names
+ * (`invalidate-worktree-changed-caches.ts`) instead of a whole batch.
+ */
+export function createWorktreeEnrichmentBatcherForClient(
+  client: HostClient<HostRpcRegistry>,
+): WorktreeEnrichmentBatcher {
+  return createWorktreeEnrichmentBatcher((paths) =>
+    withHostQueryErrorBoundary("worktree.listAllForHost", () =>
+      client.request("worktree.listAllForHost", {
+        includeActivity: true,
+        activityPaths: [...paths],
+        cursor: null,
+        limit: null,
+        forceRefresh: false,
+      }),
+    ),
+  );
 }

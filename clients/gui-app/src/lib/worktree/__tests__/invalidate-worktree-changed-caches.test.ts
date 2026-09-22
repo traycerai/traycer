@@ -293,6 +293,100 @@ describe("invalidateWorktreeChangedCaches + worktree.getBinding", () => {
   });
 });
 
+describe("invalidateWorktreeChangedCaches + an ACTIVE multi-path enrichment observer", () => {
+  // No surface builds a multi-path key any more (every enrichment read caches
+  // per path), but a batch that reappears must still behave correctly: a path
+  // frame naming one of its paths must mark it, never refetch it - refetching
+  // would re-derive every row the batch covers for one row's change, which is
+  // the amplification the per-path cache shape exists to remove.
+  it("marks but does not refetch an active multi-path key on a frame naming one of its paths", async () => {
+    const queryClient = createAppQueryClient();
+    const key = multiPathEnrichmentKey(["/wt/a", "/wt/b"]);
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({ worktrees: [], nextCursor: null });
+    };
+    const observer = new QueryObserver(queryClient, { queryKey: key, queryFn });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set(["/wt/b"]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fetches).toBe(1);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    stop();
+  });
+
+  it("refetches the same active multi-path key on a root frame", async () => {
+    const queryClient = createAppQueryClient();
+    const key = multiPathEnrichmentKey(["/wt/a", "/wt/b"]);
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({ worktrees: [], nextCursor: null });
+    };
+    const observer = new QueryObserver(queryClient, { queryKey: key, queryFn });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: true,
+      worktreePaths: new Set(),
+    });
+
+    // `fetches` increments when the queryFn STARTS, not when its promise
+    // settles - wait for the settled state (isInvalidated cleared) too, or
+    // this races the success dispatch that clears it.
+    await waitUntil(
+      () =>
+        fetches === 2 &&
+        queryClient.getQueryState(key)?.isInvalidated === false,
+    );
+    stop();
+  });
+
+  it("leaves the same active multi-path key untouched by a frame for a path it doesn't contain", async () => {
+    const queryClient = createAppQueryClient();
+    const key = multiPathEnrichmentKey(["/wt/a", "/wt/b"]);
+    let fetches = 0;
+    const queryFn = () => {
+      fetches += 1;
+      return Promise.resolve({ worktrees: [], nextCursor: null });
+    };
+    const observer = new QueryObserver(queryClient, { queryKey: key, queryFn });
+    const stop = observer.subscribe(() => undefined);
+    await waitUntil(() => observer.getCurrentResult().data !== undefined);
+    expect(fetches).toBe(1);
+
+    invalidateWorktreeChangedCaches(queryClient, HOST_ID, {
+      root: false,
+      worktreePaths: new Set(["/wt/other"]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fetches).toBe(1);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    stop();
+  });
+});
+
+function multiPathEnrichmentKey(activityPaths: readonly string[]): QueryKey {
+  return hostQueryKeys.method(HOST_ID, "worktree.listAllForHost", {
+    includeActivity: true,
+    activityPaths: [...activityPaths],
+    cursor: null,
+    limit: null,
+    forceRefresh: false,
+  });
+}
+
 function bindingKey(): QueryKey {
   return hostQueryKeys.method(HOST_ID, "worktree.getBinding", {
     epicId: EPIC_ID,

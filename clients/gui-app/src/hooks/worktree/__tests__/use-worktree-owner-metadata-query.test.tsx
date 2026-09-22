@@ -6,12 +6,14 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   LEGACY_HOST_RESOLVED_AT,
   type WorktreeBinding,
   type WorktreeHostEntryV16,
   type WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
@@ -234,6 +236,146 @@ describe("useWorktreeOwnerMetadata", () => {
     expect(fixture.calls("worktree.getBinding")).toHaveLength(2);
   });
 
+  it("forces a refresh across TWO managed worktrees with one wire call, landing each row in its own per-path cache entry", async () => {
+    const pathA = "/worktrees/app/feature-a";
+    const pathB = "/worktrees/app/feature-b";
+    const twoWorktreeBinding: WorktreeBinding = {
+      entries: [
+        {
+          workspacePath: "/repos/app-a",
+          mode: "worktree",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          worktreePath: pathA,
+          branch: "feature/a",
+          isPrimary: true,
+          isImported: false,
+          setupState: "succeeded",
+          setupTerminalSessionId: null,
+          setupExitCode: 0,
+          setupFailedAt: null,
+          createdAt: 1,
+          ownedSubmodules: [],
+        },
+        {
+          workspacePath: "/repos/app-b",
+          mode: "worktree",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          worktreePath: pathB,
+          branch: "feature/b",
+          isPrimary: false,
+          isImported: false,
+          setupState: "succeeded",
+          setupTerminalSessionId: null,
+          setupExitCode: 0,
+          setupFailedAt: null,
+          createdAt: 1,
+          ownedSubmodules: [],
+        },
+      ],
+    };
+    const calls: Array<
+      RequestOfMethod<HostRpcRegistry, "worktree.listAllForHost">
+    > = [];
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-two-worktrees",
+      handlers: {
+        "worktree.getBinding": () =>
+          Promise.resolve({
+            binding: twoWorktreeBinding,
+            missingWorktreePaths: [],
+          }),
+        "worktree.listAllForHost": (params) => {
+          calls.push(params);
+          const requested = params.activityPaths ?? [];
+          return Promise.resolve({
+            worktrees: requested.map((path) =>
+              worktreeEntry({
+                worktreePath: path,
+                branch:
+                  path === pathA ? "feature/a-renamed" : "feature/b-renamed",
+                resolvedAt: 9_000,
+              }),
+            ),
+            nextCursor: null,
+          });
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const client = spine.createRequester(mockLocalHostEntry);
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const rendered = renderHook(
+      () =>
+        useWorktreeOwnerMetadata({
+          client,
+          epicId: EPIC_ID,
+          ownerId: OWNER_ID,
+          ownerKind: "chat",
+          binding: undefined,
+          enabled: true,
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.binding).not.toBeNull();
+    });
+
+    await act(async () => {
+      await rendered.result.current.refresh();
+    });
+
+    // ONE wire call covering both managed worktrees, not two.
+    const refreshCalls = calls.filter((call) => call.forceRefresh);
+    expect(refreshCalls).toHaveLength(1);
+    expect([...(refreshCalls[0]?.activityPaths ?? [])].sort()).toEqual(
+      [pathA, pathB].sort(),
+    );
+
+    // Each row lands in its OWN per-path cache entry - never a shared
+    // multi-path key that no observer reads.
+    const hostId = client.getActiveHostId();
+    const entryA = queryClient.getQueryData<{
+      readonly worktrees: readonly WorktreeHostEntryV16[];
+    }>(perPathEnrichmentQueryKey(hostId, pathA));
+    const entryB = queryClient.getQueryData<{
+      readonly worktrees: readonly WorktreeHostEntryV16[];
+    }>(perPathEnrichmentQueryKey(hostId, pathB));
+    expect(entryA?.worktrees).toHaveLength(1);
+    expect(entryA?.worktrees[0]?.worktreePath).toBe(pathA);
+    expect(entryB?.worktrees).toHaveLength(1);
+    expect(entryB?.worktrees[0]?.worktreePath).toBe(pathB);
+
+    await waitFor(() => {
+      expect(rendered.result.current.worktrees).toHaveLength(2);
+    });
+    const branches = rendered.result.current.worktrees
+      .map((entry) => entry.branch)
+      .sort();
+    expect(branches).toEqual(["feature/a-renamed", "feature/b-renamed"]);
+  });
+
   it("issues neither read while the card is closed", () => {
     const fixture = createFixture(null);
     renderHook(
@@ -268,11 +410,12 @@ function useOwnerMetadata(client: HostClient<HostRpcRegistry>) {
 }
 
 function worktreeEntry(args: {
+  readonly worktreePath: string;
   readonly branch: string;
   readonly resolvedAt: number | null;
 }): WorktreeHostEntryV16 {
   return {
-    worktreePath: WORKTREE_PATH,
+    worktreePath: args.worktreePath,
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
     branch: args.branch,
@@ -367,6 +510,7 @@ function createFixture(
         return Promise.resolve({
           worktrees: [
             worktreeEntry({
+              worktreePath: WORKTREE_PATH,
               branch: worktreeBranch,
               resolvedAt: worktreeResolvedAt,
             }),
