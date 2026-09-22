@@ -10,13 +10,16 @@
  */
 import { z } from "zod";
 import { providerIdSchema } from "./provider-ids";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ── Scope tuple (shared by every native verb) ──────────────────────────────
 
 /** Wire scope is `global | project` only (tech-plan Decision 5). Provider
  * cwd-local files (e.g. kimi-code `.kimi-code/mcp.json`) are host path-contract
  * details, not a third wire scope. */
-export const providerNativeScopeSchema = z.enum(["global", "project"]);
+export const providerNativeScopeSchema = lazySchema(() =>
+  z.enum(["global", "project"]),
+);
 export type ProviderNativeScope = z.infer<typeof providerNativeScopeSchema>;
 
 /**
@@ -26,11 +29,13 @@ export type ProviderNativeScope = z.infer<typeof providerNativeScopeSchema>;
  * - `scope: "project"` → non-empty `workspaceRoot`
  * - `scope: "global"` → `workspaceRoot: null`
  */
-export const providerNativeScopeTupleBaseSchema = z.object({
-  providerId: providerIdSchema,
-  scope: providerNativeScopeSchema,
-  workspaceRoot: z.string().nullable(),
-});
+export const providerNativeScopeTupleBaseSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    scope: providerNativeScopeSchema,
+    workspaceRoot: z.string().nullable(),
+  }),
+);
 
 /**
  * Shared scope/workspaceRoot invariant used by every nested native context
@@ -84,8 +89,8 @@ export function withProviderNativeScopeInvariant<Shape extends z.ZodRawShape>(
   return schema.superRefine(refineProviderNativeScope);
 }
 
-export const providerNativeScopeTupleSchema = withProviderNativeScopeInvariant(
-  providerNativeScopeTupleBaseSchema,
+export const providerNativeScopeTupleSchema = lazySchema(() =>
+  withProviderNativeScopeInvariant(providerNativeScopeTupleBaseSchema),
 );
 export type ProviderNativeScopeTuple = z.infer<
   typeof providerNativeScopeTupleSchema
@@ -93,55 +98,61 @@ export type ProviderNativeScopeTuple = z.infer<
 
 // ── Native error contract (rides inside additive native result fields) ─────
 
-export const providerNativeErrorCodeSchema = z.enum([
-  "duplicate_name",
-  "unsupported_scope",
-  "unsupported_action",
-  "no_change_detected",
-  "external_drift",
-  "store_version_unsupported",
-  "rollback_failed",
-  // The provider's own config could not be READ or PARSED - a malformed
-  // `config.yaml`/`config.toml`/`mcp.json`, or an unreadable one.
-  //
-  // This is a LIST-side failure, unlike every code above it, and it exists
-  // because the alternative is worse in both directions. Swallowing the
-  // failure into an empty list tells the user "this provider has no MCP
-  // servers", which is indistinguishable from the truth and sends them
-  // looking for the wrong bug. Letting it reject instead takes down the whole
-  // `providers.list` response - native results ride on that call, so one
-  // malformed file would empty the entire provider catalog on every poll.
-  //
-  // A typed result is the only option that scopes the failure to the provider
-  // it belongs to. `detail` carries a REDACTED parser message (see
-  // `ConfigParseError`, which redacts at construction): parse errors quote the
-  // offending source line, which is routinely a credential.
-  "config_unreadable",
-]);
+export const providerNativeErrorCodeSchema = lazySchema(() =>
+  z.enum([
+    "duplicate_name",
+    "unsupported_scope",
+    "unsupported_action",
+    "no_change_detected",
+    "external_drift",
+    "store_version_unsupported",
+    "rollback_failed",
+    // The provider's own config could not be READ or PARSED - a malformed
+    // `config.yaml`/`config.toml`/`mcp.json`, or an unreadable one.
+    //
+    // This is a LIST-side failure, unlike every code above it, and it exists
+    // because the alternative is worse in both directions. Swallowing the
+    // failure into an empty list tells the user "this provider has no MCP
+    // servers", which is indistinguishable from the truth and sends them
+    // looking for the wrong bug. Letting it reject instead takes down the whole
+    // `providers.list` response - native results ride on that call, so one
+    // malformed file would empty the entire provider catalog on every poll.
+    //
+    // A typed result is the only option that scopes the failure to the provider
+    // it belongs to. `detail` carries a REDACTED parser message (see
+    // `ConfigParseError`, which redacts at construction): parse errors quote the
+    // offending source line, which is routinely a credential.
+    "config_unreadable",
+  ]),
+);
 export type ProviderNativeErrorCode = z.infer<
   typeof providerNativeErrorCodeSchema
 >;
 
-export const providerNativeErrorResultSchema = z.object({
-  ok: z.literal(false),
-  code: providerNativeErrorCodeSchema,
-  detail: z.string().nullable(),
-});
+export const providerNativeErrorResultSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(false),
+    code: providerNativeErrorCodeSchema,
+    detail: z.string().nullable(),
+  }),
+);
 export type ProviderNativeErrorResult = z.infer<
   typeof providerNativeErrorResultSchema
 >;
 
 // ── Capability descriptor (action → scope table) ───────────────────────────
 
-export const providerSettingsTabSchema = z.enum([
-  "general",
-  "env",
-  "usage",
-  "mcp",
-  "plugins",
-  "skills",
-  "modelProviders",
-]);
+export const providerSettingsTabSchema = lazySchema(() =>
+  z.enum([
+    "general",
+    "env",
+    "usage",
+    "mcp",
+    "plugins",
+    "skills",
+    "modelProviders",
+  ]),
+);
 export type ProviderSettingsTab = z.infer<typeof providerSettingsTabSchema>;
 
 /**
@@ -150,23 +161,21 @@ export type ProviderSettingsTab = z.infer<typeof providerSettingsTabSchema>;
  * native configuration operations; an in-process harness can only use them
  * for the latter.
  */
-export const providerEnvOverrideScopeSchema = z.enum([
-  "harness-and-native-config",
-  "native-config-only",
-]);
+export const providerEnvOverrideScopeSchema = lazySchema(() =>
+  z.enum(["harness-and-native-config", "native-config-only"]),
+);
 export type ProviderEnvOverrideScope = z.infer<
   typeof providerEnvOverrideScopeSchema
 >;
 
-export const providerMcpTransportSchema = z.enum(["stdio", "http", "sse"]);
+export const providerMcpTransportSchema = lazySchema(() =>
+  z.enum(["stdio", "http", "sse"]),
+);
 export type ProviderMcpTransport = z.infer<typeof providerMcpTransportSchema>;
 
-export const providerMcpAuthTypeSchema = z.enum([
-  "none",
-  "header",
-  "env",
-  "oauth",
-]);
+export const providerMcpAuthTypeSchema = lazySchema(() =>
+  z.enum(["none", "header", "env", "oauth"]),
+);
 export type ProviderMcpAuthType = z.infer<typeof providerMcpAuthTypeSchema>;
 
 /**
@@ -175,13 +184,9 @@ export type ProviderMcpAuthType = z.infer<typeof providerMcpAuthTypeSchema>;
  * - `login` / `submitCode` / `logout` / `clearAuth` — standard flows
  * - `forceReauth` — copilot-style "logout" (no clean logout; re-auth only)
  */
-export const providerMcpAuthActionSchema = z.enum([
-  "login",
-  "submitCode",
-  "logout",
-  "clearAuth",
-  "forceReauth",
-]);
+export const providerMcpAuthActionSchema = lazySchema(() =>
+  z.enum(["login", "submitCode", "logout", "clearAuth", "forceReauth"]),
+);
 export type ProviderMcpAuthAction = z.infer<typeof providerMcpAuthActionSchema>;
 
 /**
@@ -189,13 +194,9 @@ export type ProviderMcpAuthAction = z.infer<typeof providerMcpAuthActionSchema>;
  * cli-add/remove (patch + enable/disable only); opencode has CLI add but no
  * remove; kimi is patch-only; etc.
  */
-export const providerMcpMutationActionSchema = z.enum([
-  "add",
-  "update",
-  "remove",
-  "toggleServer",
-  "toggleTool",
-]);
+export const providerMcpMutationActionSchema = lazySchema(() =>
+  z.enum(["add", "update", "remove", "toggleServer", "toggleTool"]),
+);
 export type ProviderMcpMutationAction = z.infer<
   typeof providerMcpMutationActionSchema
 >;
@@ -210,12 +211,9 @@ export type ProviderMcpMutationAction = z.infer<
  *   grid read-only (grok/kimi until request_permission identity is proven)
  * - `none` — no per-tool control in v1
  */
-export const providerMcpPerToolBackingSchema = z.enum([
-  "native",
-  "store",
-  "degraded-server-level",
-  "none",
-]);
+export const providerMcpPerToolBackingSchema = lazySchema(() =>
+  z.enum(["native", "store", "degraded-server-level", "none"]),
+);
 export type ProviderMcpPerToolBacking = z.infer<
   typeof providerMcpPerToolBackingSchema
 >;
@@ -226,30 +224,36 @@ export type ProviderMcpPerToolBacking = z.infer<
  * - `probe` — Traycer MCP client (no-auth / API-key servers only)
  * - `none` — capability unavailable
  */
-export const providerMcpDataSourceSchema = z.enum(["native", "probe", "none"]);
+export const providerMcpDataSourceSchema = lazySchema(() =>
+  z.enum(["native", "probe", "none"]),
+);
 export type ProviderMcpDataSource = z.infer<typeof providerMcpDataSourceSchema>;
 
 /**
  * Write path for server CRUD. Cursor is patch-only; opencode CLI add + patch
  * remove; kimi patch-only (kimi-code has no `mcp` CLI).
  */
-export const providerMcpWritePathSchema = z.enum(["cli", "patch", "none"]);
+export const providerMcpWritePathSchema = lazySchema(() =>
+  z.enum(["cli", "patch", "none"]),
+);
 export type ProviderMcpWritePath = z.infer<typeof providerMcpWritePathSchema>;
 
 /**
  * MCP surface actions that may be advertised with a per-action scope list.
  * Missing/empty scopes means the action is unsupported for that provider.
  */
-export const providerMcpCapabilityActionSchema = z.enum([
-  "list",
-  "add",
-  "update",
-  "remove",
-  "toggleServer",
-  "toggleTool",
-  "discover",
-  "auth",
-]);
+export const providerMcpCapabilityActionSchema = lazySchema(() =>
+  z.enum([
+    "list",
+    "add",
+    "update",
+    "remove",
+    "toggleServer",
+    "toggleTool",
+    "discover",
+    "auth",
+  ]),
+);
 export type ProviderMcpCapabilityAction = z.infer<
   typeof providerMcpCapabilityActionSchema
 >;
@@ -259,76 +263,80 @@ export type ProviderMcpCapabilityAction = z.infer<
  * Declarative per-provider metadata — the renderer shows exactly these
  * fields and no more, replacing a renderer-side provider allowlist.
  */
-export const providerMcpOauthFieldSchema = z.enum(["clientId", "resource"]);
+export const providerMcpOauthFieldSchema = lazySchema(() =>
+  z.enum(["clientId", "resource"]),
+);
 export type ProviderMcpOauthField = z.infer<typeof providerMcpOauthFieldSchema>;
 
-export const providerMcpCapabilitiesSchema = z.object({
-  transports: z.array(providerMcpTransportSchema),
-  authTypes: z.array(providerMcpAuthTypeSchema),
-  authActions: z.array(providerMcpAuthActionSchema),
-  /**
-   * Action → supported scopes table. Empty array means the action is not
-   * offered for any scope (UI hides it; host rejects it).
-   */
-  actionScopes: z.object({
-    list: z.array(providerNativeScopeSchema),
-    add: z.array(providerNativeScopeSchema),
-    update: z.array(providerNativeScopeSchema),
-    remove: z.array(providerNativeScopeSchema),
-    toggleServer: z.array(providerNativeScopeSchema),
-    toggleTool: z.array(providerNativeScopeSchema),
-    discover: z.array(providerNativeScopeSchema),
-    auth: z.array(providerNativeScopeSchema),
+export const providerMcpCapabilitiesSchema = lazySchema(() =>
+  z.object({
+    transports: z.array(providerMcpTransportSchema),
+    authTypes: z.array(providerMcpAuthTypeSchema),
+    authActions: z.array(providerMcpAuthActionSchema),
+    /**
+     * Action → supported scopes table. Empty array means the action is not
+     * offered for any scope (UI hides it; host rejects it).
+     */
+    actionScopes: z.object({
+      list: z.array(providerNativeScopeSchema),
+      add: z.array(providerNativeScopeSchema),
+      update: z.array(providerNativeScopeSchema),
+      remove: z.array(providerNativeScopeSchema),
+      toggleServer: z.array(providerNativeScopeSchema),
+      toggleTool: z.array(providerNativeScopeSchema),
+      discover: z.array(providerNativeScopeSchema),
+      auth: z.array(providerNativeScopeSchema),
+    }),
+    addServer: providerMcpWritePathSchema,
+    removeServer: providerMcpWritePathSchema,
+    updateServer: providerMcpWritePathSchema,
+    /**
+     * True when the provider's write path genuinely serializes more than one
+     * header row (installed-CLI-confirmed repeatable flag, or a config-file
+     * headers map). False (default) — the renderer shows exactly one header
+     * row with no "Add header" affordance, so no captured row is ever
+     * silently dropped by the host.
+     */
+    supportsMultipleHeaders: z.boolean().default(false).optional(),
+    /**
+     * OAuth fields to render on Add when `authTypes` includes `"oauth"`.
+     * Empty (default) — the provider has no Add-time OAuth field capture
+     * (e.g. OAuth completes entirely via a separate login action).
+     */
+    oauthFields: z.array(providerMcpOauthFieldSchema).default([]).optional(),
+    perToolBacking: providerMcpPerToolBackingSchema,
+    /**
+     * Status dot source. UI labels probe results as connectivity checks, never
+     * as "provider CLI is logged in."
+     */
+    statusSource: providerMcpDataSourceSchema,
+    toolsSource: providerMcpDataSourceSchema,
+    /**
+     * Tool input schemas. Always `probe` or `none` today (universal native
+     * negative for instructions; schemas follow the same rule except droid /
+     * codex / amp / opencode-family native paths).
+     */
+    schemasSource: providerMcpDataSourceSchema,
+    /** `initialize.instructions` — probe-only for every provider. */
+    instructionsSource: z.enum(["probe", "none"]),
+    /**
+     * True when store-backed enforcement only applies inside Traycer-launched
+     * sessions (codex `-c enabled_tools`, amp SDK `enabledTools`). UI shows
+     * the "Traycer sessions only" note.
+     */
+    traycerSessionsOnlyEnforcement: z.boolean(),
+    /**
+     * V3 ACP fallback: stdio servers are config-management-only (cannot inject
+     * over ACP). UI shows a degrade notice when true.
+     */
+    stdioDegradeNotice: z.boolean(),
+    /**
+     * OAuth'd servers have no Traycer probe path (wrong OAuth client). Status /
+     * names only where a native source exists; hover schemas/instructions omit.
+     */
+    oauthDegradesToConfigOnly: z.boolean(),
   }),
-  addServer: providerMcpWritePathSchema,
-  removeServer: providerMcpWritePathSchema,
-  updateServer: providerMcpWritePathSchema,
-  /**
-   * True when the provider's write path genuinely serializes more than one
-   * header row (installed-CLI-confirmed repeatable flag, or a config-file
-   * headers map). False (default) — the renderer shows exactly one header
-   * row with no "Add header" affordance, so no captured row is ever
-   * silently dropped by the host.
-   */
-  supportsMultipleHeaders: z.boolean().default(false).optional(),
-  /**
-   * OAuth fields to render on Add when `authTypes` includes `"oauth"`.
-   * Empty (default) — the provider has no Add-time OAuth field capture
-   * (e.g. OAuth completes entirely via a separate login action).
-   */
-  oauthFields: z.array(providerMcpOauthFieldSchema).default([]).optional(),
-  perToolBacking: providerMcpPerToolBackingSchema,
-  /**
-   * Status dot source. UI labels probe results as connectivity checks, never
-   * as "provider CLI is logged in."
-   */
-  statusSource: providerMcpDataSourceSchema,
-  toolsSource: providerMcpDataSourceSchema,
-  /**
-   * Tool input schemas. Always `probe` or `none` today (universal native
-   * negative for instructions; schemas follow the same rule except droid /
-   * codex / amp / opencode-family native paths).
-   */
-  schemasSource: providerMcpDataSourceSchema,
-  /** `initialize.instructions` — probe-only for every provider. */
-  instructionsSource: z.enum(["probe", "none"]),
-  /**
-   * True when store-backed enforcement only applies inside Traycer-launched
-   * sessions (codex `-c enabled_tools`, amp SDK `enabledTools`). UI shows
-   * the "Traycer sessions only" note.
-   */
-  traycerSessionsOnlyEnforcement: z.boolean(),
-  /**
-   * V3 ACP fallback: stdio servers are config-management-only (cannot inject
-   * over ACP). UI shows a degrade notice when true.
-   */
-  stdioDegradeNotice: z.boolean(),
-  /**
-   * OAuth'd servers have no Traycer probe path (wrong OAuth client). Status /
-   * names only where a native source exists; hover schemas/instructions omit.
-   */
-  oauthDegradesToConfigOnly: z.boolean(),
-});
+);
 export type ProviderMcpCapabilities = z.infer<
   typeof providerMcpCapabilitiesSchema
 >;
@@ -341,89 +349,88 @@ export type ProviderMcpCapabilities = z.infer<
  * - `patch` — edit config plugin array (opencode family)
  * - `read-only` — list only; no install button
  */
-export const providerPluginsAddModeSchema = z.enum([
-  "cli-source",
-  "marketplace",
-  "file-drop",
-  "patch",
-  "read-only",
-]);
+export const providerPluginsAddModeSchema = lazySchema(() =>
+  z.enum(["cli-source", "marketplace", "file-drop", "patch", "read-only"]),
+);
 export type ProviderPluginsAddMode = z.infer<
   typeof providerPluginsAddModeSchema
 >;
 
-export const providerPluginsCapabilityActionSchema = z.enum([
-  "list",
-  "add",
-  "remove",
-  "setEnabled",
-]);
+export const providerPluginsCapabilityActionSchema = lazySchema(() =>
+  z.enum(["list", "add", "remove", "setEnabled"]),
+);
 export type ProviderPluginsCapabilityAction = z.infer<
   typeof providerPluginsCapabilityActionSchema
 >;
 
-export const providerPluginsCapabilitiesSchema = z.object({
-  addModes: z.array(providerPluginsAddModeSchema),
-  /**
-   * Machine-readable marketplace listing. False for droid/copilot/qwen
-   * (text-only) — UI offers add-by-source instead of browse.
-   */
-  marketplaceBrowse: z.boolean(),
-  /**
-   * Action → supported scopes table. Empty array means the action is not
-   * offered for any scope.
-   */
-  actionScopes: z.object({
-    list: z.array(providerNativeScopeSchema),
-    add: z.array(providerNativeScopeSchema),
-    remove: z.array(providerNativeScopeSchema),
-    setEnabled: z.array(providerNativeScopeSchema),
+export const providerPluginsCapabilitiesSchema = lazySchema(() =>
+  z.object({
+    addModes: z.array(providerPluginsAddModeSchema),
+    /**
+     * Machine-readable marketplace listing. False for droid/copilot/qwen
+     * (text-only) — UI offers add-by-source instead of browse.
+     */
+    marketplaceBrowse: z.boolean(),
+    /**
+     * Action → supported scopes table. Empty array means the action is not
+     * offered for any scope.
+     */
+    actionScopes: z.object({
+      list: z.array(providerNativeScopeSchema),
+      add: z.array(providerNativeScopeSchema),
+      remove: z.array(providerNativeScopeSchema),
+      setEnabled: z.array(providerNativeScopeSchema),
+    }),
+    /**
+     * V4 amp: plugins load for CLI `tools list` / `plugins list`, but plugin
+     * tools are absent from Traycer `execute()` stream. UI warns when true.
+     */
+    traycerSessionToolsNotice: z.boolean(),
   }),
-  /**
-   * V4 amp: plugins load for CLI `tools list` / `plugins list`, but plugin
-   * tools are absent from Traycer `execute()` stream. UI warns when true.
-   */
-  traycerSessionToolsNotice: z.boolean(),
-});
+);
 export type ProviderPluginsCapabilities = z.infer<
   typeof providerPluginsCapabilitiesSchema
 >;
 
-export const providerSkillsCapabilityActionSchema = z.enum([
-  "list",
-  "add",
-  "create",
-  "import",
-  "remove",
-  "inspect",
-  "edit",
-  "update",
-]);
+export const providerSkillsCapabilityActionSchema = lazySchema(() =>
+  z.enum([
+    "list",
+    "add",
+    "create",
+    "import",
+    "remove",
+    "inspect",
+    "edit",
+    "update",
+  ]),
+);
 export type ProviderSkillsCapabilityAction = z.infer<
   typeof providerSkillsCapabilityActionSchema
 >;
 
-export const providerSkillsCapabilitiesSchema = z.object({
-  /**
-   * Action → supported scopes table. Empty array means the action is not
-   * offered for any scope.
-   *
-   * `inspect` / `edit` / `update` are the skew gate for the picker/edit
-   * composer. They are optional so an older host (or a descriptor that has
-   * not advertised them yet) still parses; a GUI seeing no `inspect` uses
-   * legacy single-shot `import`. Do not default them - absent is the signal.
-   */
-  actionScopes: z.object({
-    list: z.array(providerNativeScopeSchema),
-    add: z.array(providerNativeScopeSchema),
-    create: z.array(providerNativeScopeSchema),
-    import: z.array(providerNativeScopeSchema),
-    remove: z.array(providerNativeScopeSchema),
-    inspect: z.array(providerNativeScopeSchema).optional(),
-    edit: z.array(providerNativeScopeSchema).optional(),
-    update: z.array(providerNativeScopeSchema).optional(),
+export const providerSkillsCapabilitiesSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Action → supported scopes table. Empty array means the action is not
+     * offered for any scope.
+     *
+     * `inspect` / `edit` / `update` are the skew gate for the picker/edit
+     * composer. They are optional so an older host (or a descriptor that has
+     * not advertised them yet) still parses; a GUI seeing no `inspect` uses
+     * legacy single-shot `import`. Do not default them - absent is the signal.
+     */
+    actionScopes: z.object({
+      list: z.array(providerNativeScopeSchema),
+      add: z.array(providerNativeScopeSchema),
+      create: z.array(providerNativeScopeSchema),
+      import: z.array(providerNativeScopeSchema),
+      remove: z.array(providerNativeScopeSchema),
+      inspect: z.array(providerNativeScopeSchema).optional(),
+      edit: z.array(providerNativeScopeSchema).optional(),
+      update: z.array(providerNativeScopeSchema).optional(),
+    }),
   }),
-});
+);
 export type ProviderSkillsCapabilities = z.infer<
   typeof providerSkillsCapabilitiesSchema
 >;
@@ -452,13 +459,9 @@ export type ProviderSkillsCapabilities = z.infer<
  * the plan's "Scope selector" decision). An action→scope table would have to
  * answer `["global"]` for everything, which reads as a real choice and is not.
  */
-export const providerModelProvidersCapabilityActionSchema = z.enum([
-  "connect",
-  "oauth",
-  "disconnect",
-  "createCustom",
-  "updateCustom",
-]);
+export const providerModelProvidersCapabilityActionSchema = lazySchema(() =>
+  z.enum(["connect", "oauth", "disconnect", "createCustom", "updateCustom"]),
+);
 export type ProviderModelProvidersCapabilityAction = z.infer<
   typeof providerModelProvidersCapabilityActionSchema
 >;
@@ -475,9 +478,11 @@ export type ProviderModelProvidersCapabilityAction = z.infer<
  * (e.g. the CLI version gate allows the list endpoints but not the write
  * ones).
  */
-export const providerModelProvidersCapabilitiesSchema = z.object({
-  actions: z.array(providerModelProvidersCapabilityActionSchema),
-});
+export const providerModelProvidersCapabilitiesSchema = lazySchema(() =>
+  z.object({
+    actions: z.array(providerModelProvidersCapabilityActionSchema),
+  }),
+);
 export type ProviderModelProvidersCapabilities = z.infer<
   typeof providerModelProvidersCapabilitiesSchema
 >;
@@ -486,32 +491,34 @@ export type ProviderModelProvidersCapabilities = z.infer<
  * Per-capability facts the UI renders tabs/modals from. Null domain objects
  * mean the tab is unsupported (also reflected in `supportedTabs`).
  */
-export const providerNativeCapabilitiesSchema = z.object({
-  supportedTabs: z.array(providerSettingsTabSchema),
-  /**
-   * Omitted by older hosts and ordinary contracts, which retain the existing
-   * harness-and-native-config behaviour. A non-default value lets the client
-   * make the Env tab honest without a provider-id special case.
-   */
-  envOverrideScope: providerEnvOverrideScopeSchema.optional(),
-  mcp: providerMcpCapabilitiesSchema.nullable(),
-  plugins: providerPluginsCapabilitiesSchema.nullable(),
-  skills: providerSkillsCapabilitiesSchema.nullable(),
-  /**
-   * Upstream LLM credential management - see
-   * `providerModelProvidersCapabilitiesSchema`. Null for every provider that
-   * is not the `opencode` module.
-   *
-   * Required-and-nullable, exactly like its three siblings, rather than
-   * `.optional()`: every hop that lands on this shape has to fill it, and
-   * required is what makes forgetting fail loudly. Optional would let a missed
-   * fill pass type-checking and reach the wire as an absent key, which the
-   * whole-object `.catch()` on `providerCliStateSchema` turns into a silently
-   * empty capability object - MCP, Plugins and Skills gone with it, for a
-   * field nobody set.
-   */
-  modelProviders: providerModelProvidersCapabilitiesSchema.nullable(),
-});
+export const providerNativeCapabilitiesSchema = lazySchema(() =>
+  z.object({
+    supportedTabs: z.array(providerSettingsTabSchema),
+    /**
+     * Omitted by older hosts and ordinary contracts, which retain the existing
+     * harness-and-native-config behaviour. A non-default value lets the client
+     * make the Env tab honest without a provider-id special case.
+     */
+    envOverrideScope: providerEnvOverrideScopeSchema.optional(),
+    mcp: providerMcpCapabilitiesSchema.nullable(),
+    plugins: providerPluginsCapabilitiesSchema.nullable(),
+    skills: providerSkillsCapabilitiesSchema.nullable(),
+    /**
+     * Upstream LLM credential management - see
+     * `providerModelProvidersCapabilitiesSchema`. Null for every provider that
+     * is not the `opencode` module.
+     *
+     * Required-and-nullable, exactly like its three siblings, rather than
+     * `.optional()`: every hop that lands on this shape has to fill it, and
+     * required is what makes forgetting fail loudly. Optional would let a missed
+     * fill pass type-checking and reach the wire as an absent key, which the
+     * whole-object `.catch()` on `providerCliStateSchema` turns into a silently
+     * empty capability object - MCP, Plugins and Skills gone with it, for a
+     * field nobody set.
+     */
+    modelProviders: providerModelProvidersCapabilitiesSchema.nullable(),
+  }),
+);
 export type ProviderNativeCapabilities = z.infer<
   typeof providerNativeCapabilitiesSchema
 >;
@@ -533,82 +540,89 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES: ProviderNativeCapabilities =
 // ── Transport + auth (write vs masked read) ────────────────────────────────
 
 /** Write-side secret: raw value is accepted on the wire once, never echoed. */
-export const providerMcpSecretWriteSchema = z.object({
-  name: z.string().min(1),
-  value: z.string(),
-});
+export const providerMcpSecretWriteSchema = lazySchema(() =>
+  z.object({
+    name: z.string().min(1),
+    value: z.string(),
+  }),
+);
 export type ProviderMcpSecretWrite = z.infer<
   typeof providerMcpSecretWriteSchema
 >;
 
 /** Read-side secret mask: name + presence only. */
-export const providerMcpSecretMaskSchema = z.object({
-  name: z.string().min(1),
-  hasValue: z.boolean(),
-});
+export const providerMcpSecretMaskSchema = lazySchema(() =>
+  z.object({
+    name: z.string().min(1),
+    hasValue: z.boolean(),
+  }),
+);
 export type ProviderMcpSecretMask = z.infer<typeof providerMcpSecretMaskSchema>;
 
-export const providerMcpAuthWriteSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("header"),
-    name: z.string().min(1),
-    value: z.string(),
-    /**
-     * Extra repeatable header rows beyond `name`/`value` (the first row).
-     * Additive: providers that only serialize one header (most CLIs) ignore
-     * it; providers with repeatable `--header` support (Qwen) consume it.
-     * Defaults to `[]` so older payloads/providers parse unchanged.
-     */
-    additionalHeaders: z
-      .array(providerMcpSecretWriteSchema)
-      .default([])
-      .optional(),
-  }),
-  z.object({
-    type: z.literal("env"),
-    name: z.string().min(1),
-    value: z.string(),
-  }),
-  z.object({
-    type: z.literal("oauth"),
-    /**
-     * Provider-specific OAuth client identity (Codex `--oauth-client-id`).
-     * Additive/optional: null when the provider has no client-id concept or
-     * the user left it blank.
-     */
-    oauthClientId: z.string().nullable().default(null).optional(),
-    /**
-     * Provider-specific OAuth resource indicator (Codex `--oauth-resource`).
-     */
-    oauthResource: z.string().nullable().default(null).optional(),
-  }),
-]);
+export const providerMcpAuthWriteSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("header"),
+      name: z.string().min(1),
+      value: z.string(),
+      /**
+       * Extra repeatable header rows beyond `name`/`value` (the first row).
+       * Additive: providers that only serialize one header (most CLIs) ignore
+       * it; providers with repeatable `--header` support (Qwen) consume it.
+       * Defaults to `[]` so older payloads/providers parse unchanged.
+       */
+      additionalHeaders: z
+        .array(providerMcpSecretWriteSchema)
+        .default([])
+        .optional(),
+    }),
+    z.object({
+      type: z.literal("env"),
+      name: z.string().min(1),
+      value: z.string(),
+    }),
+    z.object({
+      type: z.literal("oauth"),
+      /**
+       * Provider-specific OAuth client identity (Codex `--oauth-client-id`).
+       * Additive/optional: null when the provider has no client-id concept or
+       * the user left it blank.
+       */
+      oauthClientId: z.string().nullable().default(null).optional(),
+      /**
+       * Provider-specific OAuth resource indicator (Codex `--oauth-resource`).
+       */
+      oauthResource: z.string().nullable().default(null).optional(),
+    }),
+  ]),
+);
 export type ProviderMcpAuthWrite = z.infer<typeof providerMcpAuthWriteSchema>;
 
-export const providerMcpAuthReadSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("header"),
-    name: z.string().min(1),
-    hasValue: z.boolean(),
-  }),
-  z.object({
-    type: z.literal("env"),
-    name: z.string().min(1),
-    hasValue: z.boolean(),
-  }),
-  z.object({
-    type: z.literal("oauth"),
-  }),
-]);
+export const providerMcpAuthReadSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("header"),
+      name: z.string().min(1),
+      hasValue: z.boolean(),
+    }),
+    z.object({
+      type: z.literal("env"),
+      name: z.string().min(1),
+      hasValue: z.boolean(),
+    }),
+    z.object({
+      type: z.literal("oauth"),
+    }),
+  ]),
+);
 export type ProviderMcpAuthRead = z.infer<typeof providerMcpAuthReadSchema>;
 
 /**
  * Write-side transport (mutate add/update). Secrets may be present; host never
  * echoes them on list responses.
  */
-export const providerMcpServerTransportWriteSchema = z.discriminatedUnion(
-  "type",
-  [
+export const providerMcpServerTransportWriteSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
     z.object({
       type: z.literal("stdio"),
       command: z.string().min(1),
@@ -625,7 +639,7 @@ export const providerMcpServerTransportWriteSchema = z.discriminatedUnion(
       url: z.string().min(1),
       auth: providerMcpAuthWriteSchema.nullable(),
     }),
-  ],
+  ]),
 );
 export type ProviderMcpServerTransportWrite = z.infer<
   typeof providerMcpServerTransportWriteSchema
@@ -635,9 +649,8 @@ export type ProviderMcpServerTransportWrite = z.infer<
  * Read-side transport (list/discover). Least-privilege: no raw env/headers/
  * argv on the wire — command/url identity only, secrets masked.
  */
-export const providerMcpServerTransportReadSchema = z.discriminatedUnion(
-  "type",
-  [
+export const providerMcpServerTransportReadSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
     z.object({
       type: z.literal("stdio"),
       command: z.string(),
@@ -653,7 +666,7 @@ export const providerMcpServerTransportReadSchema = z.discriminatedUnion(
       url: z.string(),
       auth: providerMcpAuthReadSchema.nullable(),
     }),
-  ],
+  ]),
 );
 export type ProviderMcpServerTransportRead = z.infer<
   typeof providerMcpServerTransportReadSchema
@@ -661,15 +674,17 @@ export type ProviderMcpServerTransportRead = z.infer<
 
 // ── MCP list / server row ──────────────────────────────────────────────────
 
-export const providerMcpServerStatusSchema = z.enum([
-  "connected",
-  "disconnected",
-  "connecting",
-  "needs_auth",
-  "error",
-  "unknown",
-  "config_only",
-]);
+export const providerMcpServerStatusSchema = lazySchema(() =>
+  z.enum([
+    "connected",
+    "disconnected",
+    "connecting",
+    "needs_auth",
+    "error",
+    "unknown",
+    "config_only",
+  ]),
+);
 export type ProviderMcpServerStatus = z.infer<
   typeof providerMcpServerStatusSchema
 >;
@@ -682,37 +697,40 @@ export type ProviderMcpServerStatus = z.infer<
  * Empty when the tool is not denied. Inherited (user/shared) denies lock the
  * row so the UI does not present a no-op local enable toggle.
  */
-export const providerMcpToolDenySourceSchema = z.enum([
-  "user",
-  "shared",
-  "local",
-]);
+export const providerMcpToolDenySourceSchema = lazySchema(() =>
+  z.enum(["user", "shared", "local"]),
+);
 export type ProviderMcpToolDenySource = z.infer<
   typeof providerMcpToolDenySourceSchema
 >;
 
-export const providerMcpToolSchema = z.object({
-  name: z.string(),
-  description: z.string().nullable(),
-  /**
-   * JSON Schema object for tool input, when known. Null when names-only
-   * (native without schemas) or not yet discovered.
-   */
-  inputSchema: z.record(z.string(), z.unknown()).nullable(),
-  enabled: z.boolean(),
-  /**
-   * True when the tool row is display-only (degraded-server-level backing or
-   * OAuth-degraded probe), or when a deny is inherited from a non-local source
-   * that a local toggle cannot clear.
-   */
-  readOnly: z.boolean(),
-  /**
-   * Sources that currently deny this tool (union). Omitted or empty when the
-   * provider has no multi-source deny provenance (Claude is the first consumer).
-   * Wire parse defaults missing values to [] via Zod `.default`.
-   */
-  denySources: z.array(providerMcpToolDenySourceSchema).default([]).optional(),
-});
+export const providerMcpToolSchema = lazySchema(() =>
+  z.object({
+    name: z.string(),
+    description: z.string().nullable(),
+    /**
+     * JSON Schema object for tool input, when known. Null when names-only
+     * (native without schemas) or not yet discovered.
+     */
+    inputSchema: z.record(z.string(), z.unknown()).nullable(),
+    enabled: z.boolean(),
+    /**
+     * True when the tool row is display-only (degraded-server-level backing or
+     * OAuth-degraded probe), or when a deny is inherited from a non-local source
+     * that a local toggle cannot clear.
+     */
+    readOnly: z.boolean(),
+    /**
+     * Sources that currently deny this tool (union). Omitted or empty when the
+     * provider has no multi-source deny provenance (Claude is the first consumer).
+     * Wire parse defaults missing values to [] via Zod `.default`.
+     */
+    denySources: z
+      .array(providerMcpToolDenySourceSchema)
+      .default([])
+      .optional(),
+  }),
+);
 /**
  * Inferred type keeps `denySources` optional so host constructors that do not
  * set Claude provenance need not pass an empty array. Wire parse still
@@ -720,87 +738,93 @@ export const providerMcpToolSchema = z.object({
  */
 export type ProviderMcpTool = z.infer<typeof providerMcpToolSchema>;
 
-export const providerMcpServerSchema = z.object({
-  name: z.string(),
-  enabled: z.boolean(),
-  transport: providerMcpServerTransportReadSchema,
-  status: providerMcpServerStatusSchema,
-  /**
-   * Which plane produced `status` — UI labels probe vs native differently.
-   */
-  statusSource: providerMcpDataSourceSchema,
-  statusDetail: z.string().nullable(),
-  tools: z.array(providerMcpToolSchema),
-  /**
-   * True while discovery is in-flight; client re-fetches / polls list.
-   */
-  discoveryPending: z.boolean(),
-  /**
-   * `initialize.instructions` text when probe-available; null otherwise.
-   */
-  instructions: z.string().nullable(),
-  /**
-   * Server is OAuth-gated and Traycer cannot probe it; manage via provider
-   * native surface / config only.
-   */
-  configOnly: z.boolean(),
-  /**
-   * Stdio server under an ACP provider that cannot inject stdio over ACP
-   * (V3 degrade). Config editable; live connect unavailable in-session.
-   */
-  stdioDegraded: z.boolean(),
-});
+export const providerMcpServerSchema = lazySchema(() =>
+  z.object({
+    name: z.string(),
+    enabled: z.boolean(),
+    transport: providerMcpServerTransportReadSchema,
+    status: providerMcpServerStatusSchema,
+    /**
+     * Which plane produced `status` — UI labels probe vs native differently.
+     */
+    statusSource: providerMcpDataSourceSchema,
+    statusDetail: z.string().nullable(),
+    tools: z.array(providerMcpToolSchema),
+    /**
+     * True while discovery is in-flight; client re-fetches / polls list.
+     */
+    discoveryPending: z.boolean(),
+    /**
+     * `initialize.instructions` text when probe-available; null otherwise.
+     */
+    instructions: z.string().nullable(),
+    /**
+     * Server is OAuth-gated and Traycer cannot probe it; manage via provider
+     * native surface / config only.
+     */
+    configOnly: z.boolean(),
+    /**
+     * Stdio server under an ACP provider that cannot inject stdio over ACP
+     * (V3 degrade). Config editable; live connect unavailable in-session.
+     */
+    stdioDegraded: z.boolean(),
+  }),
+);
 export type ProviderMcpServer = z.infer<typeof providerMcpServerSchema>;
 
 // ── Plugins / skills rows ──────────────────────────────────────────────────
 
-export const providerPluginSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  version: z.string().nullable(),
-  enabled: z.boolean(),
-  source: z.string().nullable(),
-  /**
-   * True when the plugin is listed but cannot be toggled/removed in v1
-   * (read-only tab).
-   */
-  readOnly: z.boolean(),
-  /**
-   * Plugin description, when the provider's listing exposes one. Additive:
-   * defaults to null for providers that don't populate it yet.
-   */
-  description: z.string().nullable().default(null).optional(),
-  /**
-   * Human-facing name from the provider's own manifest ("PDF", "Default
-   * templates") where `name` is the install id ("pdf", "openai-templates").
-   * Additive; renderers fall back to `name`.
-   */
-  displayName: z.string().nullable().default(null).optional(),
-  /**
-   * The provider ships artwork for this plugin AND the file is present on
-   * disk. A presence flag, not the image: icons are fetched one at a time
-   * through the `pluginIcon` list arm, because the rows carry megabytes of
-   * PNG in aggregate and this listing is re-fetched on a 30s staleTime.
-   * Renderers that see `false` skip the round trip and draw their fallback.
-   */
-  hasIcon: z.boolean().default(false).optional(),
-  /**
-   * The provider ships a SEPARATE dark-theme asset for this plugin.
-   *
-   * Rare (3 of 13 on a stock Codex install). It exists so renderers only vary
-   * their icon request by theme where the answer actually differs: without it,
-   * flipping theme would miss the cache for every row and re-fetch the whole
-   * ~900 KB set to receive identical bytes.
-   */
-  hasDarkIcon: z.boolean().default(false).optional(),
-});
+export const providerPluginSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    version: z.string().nullable(),
+    enabled: z.boolean(),
+    source: z.string().nullable(),
+    /**
+     * True when the plugin is listed but cannot be toggled/removed in v1
+     * (read-only tab).
+     */
+    readOnly: z.boolean(),
+    /**
+     * Plugin description, when the provider's listing exposes one. Additive:
+     * defaults to null for providers that don't populate it yet.
+     */
+    description: z.string().nullable().default(null).optional(),
+    /**
+     * Human-facing name from the provider's own manifest ("PDF", "Default
+     * templates") where `name` is the install id ("pdf", "openai-templates").
+     * Additive; renderers fall back to `name`.
+     */
+    displayName: z.string().nullable().default(null).optional(),
+    /**
+     * The provider ships artwork for this plugin AND the file is present on
+     * disk. A presence flag, not the image: icons are fetched one at a time
+     * through the `pluginIcon` list arm, because the rows carry megabytes of
+     * PNG in aggregate and this listing is re-fetched on a 30s staleTime.
+     * Renderers that see `false` skip the round trip and draw their fallback.
+     */
+    hasIcon: z.boolean().default(false).optional(),
+    /**
+     * The provider ships a SEPARATE dark-theme asset for this plugin.
+     *
+     * Rare (3 of 13 on a stock Codex install). It exists so renderers only vary
+     * their icon request by theme where the answer actually differs: without it,
+     * flipping theme would miss the cache for every row and re-fetch the whole
+     * ~900 KB set to receive identical bytes.
+     */
+    hasDarkIcon: z.boolean().default(false).optional(),
+  }),
+);
 export type ProviderPlugin = z.infer<typeof providerPluginSchema>;
 
 /**
  * Which theme variant of a plugin icon to resolve. Hosts fall back to the
  * light asset when a plugin ships no dark one, so `dark` is always answerable.
  */
-export const providerPluginIconThemeSchema = z.enum(["light", "dark"]);
+export const providerPluginIconThemeSchema = lazySchema(() =>
+  z.enum(["light", "dark"]),
+);
 export type ProviderPluginIconTheme = z.infer<
   typeof providerPluginIconThemeSchema
 >;
@@ -815,111 +839,119 @@ export type ProviderPluginIconTheme = z.infer<
  * against a REMOTE host - which is a shipped, paid mode here. Bytes over the
  * existing websocket work identically for local and remote.
  */
-export const providerPluginIconSchema = z.object({
-  /** `data:<mime>;base64,<bytes>`, or null when unreadable/absent/oversized. */
-  dataUri: z.string().nullable(),
-  /** Why there is no icon, for logs. Not surfaced as an error state. */
-  error: z.string().nullable(),
-});
+export const providerPluginIconSchema = lazySchema(() =>
+  z.object({
+    /** `data:<mime>;base64,<bytes>`, or null when unreadable/absent/oversized. */
+    dataUri: z.string().nullable(),
+    /** Why there is no icon, for logs. Not surfaced as an error state. */
+    error: z.string().nullable(),
+  }),
+);
 export type ProviderPluginIcon = z.infer<typeof providerPluginIconSchema>;
 
-export const providerSkillSourceBadgeSchema = z.enum([
-  "shared",
-  "provider",
-  "plugin",
-  "managed",
-]);
+export const providerSkillSourceBadgeSchema = lazySchema(() =>
+  z.enum(["shared", "provider", "plugin", "managed"]),
+);
 export type ProviderSkillSourceBadge = z.infer<
   typeof providerSkillSourceBadgeSchema
 >;
 
-export const providerSkillSchema = z.object({
-  name: z.string(),
-  description: z.string().nullable(),
-  path: z.string(),
-  source: providerSkillSourceBadgeSchema,
-  /**
-   * Provenance display line ("Imported from <source>"). Omitted or null when
-   * the skill was authored locally or has no recorded origin.
-   */
-  origin: z.string().nullable().optional(),
-  /**
-   * True when a foreign real directory occupies a would-be link target.
-   * Omitted means this is not a conflict row.
-   */
-  conflict: z.boolean().optional(),
-});
+export const providerSkillSchema = lazySchema(() =>
+  z.object({
+    name: z.string(),
+    description: z.string().nullable(),
+    path: z.string(),
+    source: providerSkillSourceBadgeSchema,
+    /**
+     * Provenance display line ("Imported from <source>"). Omitted or null when
+     * the skill was authored locally or has no recorded origin.
+     */
+    origin: z.string().nullable().optional(),
+    /**
+     * True when a foreign real directory occupies a would-be link target.
+     * Omitted means this is not a conflict row.
+     */
+    conflict: z.boolean().optional(),
+  }),
+);
 export type ProviderSkill = z.infer<typeof providerSkillSchema>;
 
 /**
  * Frozen skill row as of the `providers.list@7.0` cut. Live
  * {@link providerSkillSchema} grew `origin` / `conflict`; v7.0 must not.
  */
-export const providerSkillSchemaV70Preimage = z.object({
-  name: z.string(),
-  description: z.string().nullable(),
-  path: z.string(),
-  source: providerSkillSourceBadgeSchema,
-});
+export const providerSkillSchemaV70Preimage = lazySchema(() =>
+  z.object({
+    name: z.string(),
+    description: z.string().nullable(),
+    path: z.string(),
+    source: providerSkillSourceBadgeSchema,
+  }),
+);
 export type ProviderSkillV70Preimage = z.infer<
   typeof providerSkillSchemaV70Preimage
 >;
 
-export const providerSkillInspectCandidateSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().nullable(),
-  relPath: z.string().min(1),
-  installed: z.boolean(),
-});
+export const providerSkillInspectCandidateSchema = lazySchema(() =>
+  z.object({
+    name: z.string().min(1),
+    description: z.string().nullable(),
+    relPath: z.string().min(1),
+    installed: z.boolean(),
+  }),
+);
 export type ProviderSkillInspectCandidate = z.infer<
   typeof providerSkillInspectCandidateSchema
 >;
 
-export const providersSkillsInspectResultSchema = z.object({
-  token: z.string().min(1),
-  commitSha: z.string().min(1),
-  candidates: z.array(providerSkillInspectCandidateSchema),
-});
+export const providersSkillsInspectResultSchema = lazySchema(() =>
+  z.object({
+    token: z.string().min(1),
+    commitSha: z.string().min(1),
+    candidates: z.array(providerSkillInspectCandidateSchema),
+  }),
+);
 export type ProvidersSkillsInspectResult = z.infer<
   typeof providersSkillsInspectResultSchema
 >;
 
 // ── Mutation action payloads ───────────────────────────────────────────────
 
-export const providersMcpMutateActionSchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("add"),
-    name: z.string().min(1),
-    transport: providerMcpServerTransportWriteSchema,
-  }),
-  z.object({
-    action: z.literal("update"),
-    name: z.string().min(1),
-    transport: providerMcpServerTransportWriteSchema,
-  }),
-  z.object({
-    action: z.literal("remove"),
-    name: z.string().min(1),
-  }),
-  z.object({
-    action: z.literal("toggleServer"),
-    name: z.string().min(1),
-    enabled: z.boolean(),
-  }),
-  z.object({
-    action: z.literal("toggleTool"),
-    serverName: z.string().min(1),
-    toolName: z.string().min(1),
-    enabled: z.boolean(),
-  }),
-]);
+export const providersMcpMutateActionSchema = lazySchema(() =>
+  z.discriminatedUnion("action", [
+    z.object({
+      action: z.literal("add"),
+      name: z.string().min(1),
+      transport: providerMcpServerTransportWriteSchema,
+    }),
+    z.object({
+      action: z.literal("update"),
+      name: z.string().min(1),
+      transport: providerMcpServerTransportWriteSchema,
+    }),
+    z.object({
+      action: z.literal("remove"),
+      name: z.string().min(1),
+    }),
+    z.object({
+      action: z.literal("toggleServer"),
+      name: z.string().min(1),
+      enabled: z.boolean(),
+    }),
+    z.object({
+      action: z.literal("toggleTool"),
+      serverName: z.string().min(1),
+      toolName: z.string().min(1),
+      enabled: z.boolean(),
+    }),
+  ]),
+);
 export type ProvidersMcpMutateAction = z.infer<
   typeof providersMcpMutateActionSchema
 >;
 
-export const providersPluginsMutateActionSchema = z.discriminatedUnion(
-  "action",
-  [
+export const providersPluginsMutateActionSchema = lazySchema(() =>
+  z.discriminatedUnion("action", [
     z.object({
       action: z.literal("add"),
       /**
@@ -937,109 +969,111 @@ export const providersPluginsMutateActionSchema = z.discriminatedUnion(
       id: z.string().min(1),
       enabled: z.boolean(),
     }),
-  ],
+  ]),
 );
 export type ProvidersPluginsMutateAction = z.infer<
   typeof providersPluginsMutateActionSchema
 >;
 
-export const providersSkillsMutateActionSchema = z
-  .discriminatedUnion("action", [
-    z.object({
-      action: z.literal("add"),
-      /**
-       * Absolute path to a local skill directory (or SKILL.md file) to copy
-       * into the shared or provider-native root.
-       */
-      sourcePath: z.string().min(1),
-      /**
-       * When true, write under the provider-native root; otherwise the shared
-       * `~/.agents/skills` root.
-       */
-      providerScoped: z.boolean(),
+export const providersSkillsMutateActionSchema = lazySchema(() =>
+  z
+    .discriminatedUnion("action", [
+      z.object({
+        action: z.literal("add"),
+        /**
+         * Absolute path to a local skill directory (or SKILL.md file) to copy
+         * into the shared or provider-native root.
+         */
+        sourcePath: z.string().min(1),
+        /**
+         * When true, write under the provider-native root; otherwise the shared
+         * `~/.agents/skills` root.
+         */
+        providerScoped: z.boolean(),
+      }),
+      z.object({
+        action: z.literal("create"),
+        /** Skill directory / frontmatter name (host validates name pattern). */
+        name: z.string().min(1),
+        description: z.string(),
+        body: z.string(),
+        /**
+         * When true, write under the provider-native root; otherwise the shared
+         * `~/.agents/skills` root.
+         */
+        providerScoped: z.boolean(),
+      }),
+      z.object({
+        action: z.literal("import"),
+        /**
+         * File, URL, or directory depending on provider (e.g. copilot
+         * `skill add`).
+         */
+        source: z.string().min(1),
+        /**
+         * When true, write under the provider-native root; otherwise the shared
+         * `~/.agents/skills` root. Copilot CLI install is used only when
+         * provider-scoped (its store is inherently provider-native).
+         */
+        providerScoped: z.boolean(),
+        /**
+         * Inspect-session token from a prior `inspect`. Omitted on the legacy
+         * single-shot import path.
+         */
+        token: z.string().min(1).optional(),
+        /**
+         * Candidate names selected in the picker. Omitted on the legacy
+         * single-shot import path.
+         */
+        names: z.array(z.string().min(1)).optional(),
+      }),
+      z.object({
+        action: z.literal("inspect"),
+        /**
+         * File, URL, `owner/repo`, tree URL, or `npx skills add …` wrapper.
+         */
+        source: z.string().min(1),
+        /**
+         * Dest-root scope used to mark candidates `installed`. Same axis as
+         * the mutation envelope's `scope`.
+         */
+        scope: providerNativeScopeSchema,
+      }),
+      z.object({
+        action: z.literal("edit"),
+        path: z.string().min(1),
+        /** SHA-256 of the exact SKILL.md text the editor loaded. */
+        expectedHash: z.string().regex(/^[0-9a-f]{64}$/),
+        name: z.string().min(1),
+        description: z.string(),
+        body: z.string(),
+      }),
+      z.object({
+        action: z.literal("update"),
+        name: z.string().min(1),
+        path: z.string().min(1),
+        /**
+         * Required to clobber local edits (canon hash ≠ recorded
+         * `installedHash`). Omitted / false is a dry check that must not write.
+         */
+        confirm: z.boolean().optional(),
+      }),
+      z.object({
+        action: z.literal("remove"),
+        name: z.string().min(1),
+        path: z.string().min(1),
+      }),
+    ])
+    .superRefine((value, ctx) => {
+      if (value.action !== "import") return;
+      if ((value.token === undefined) === (value.names === undefined)) return;
+      ctx.addIssue({
+        code: "custom",
+        path: value.token === undefined ? ["token"] : ["names"],
+        message: "token and names must be provided together",
+      });
     }),
-    z.object({
-      action: z.literal("create"),
-      /** Skill directory / frontmatter name (host validates name pattern). */
-      name: z.string().min(1),
-      description: z.string(),
-      body: z.string(),
-      /**
-       * When true, write under the provider-native root; otherwise the shared
-       * `~/.agents/skills` root.
-       */
-      providerScoped: z.boolean(),
-    }),
-    z.object({
-      action: z.literal("import"),
-      /**
-       * File, URL, or directory depending on provider (e.g. copilot
-       * `skill add`).
-       */
-      source: z.string().min(1),
-      /**
-       * When true, write under the provider-native root; otherwise the shared
-       * `~/.agents/skills` root. Copilot CLI install is used only when
-       * provider-scoped (its store is inherently provider-native).
-       */
-      providerScoped: z.boolean(),
-      /**
-       * Inspect-session token from a prior `inspect`. Omitted on the legacy
-       * single-shot import path.
-       */
-      token: z.string().min(1).optional(),
-      /**
-       * Candidate names selected in the picker. Omitted on the legacy
-       * single-shot import path.
-       */
-      names: z.array(z.string().min(1)).optional(),
-    }),
-    z.object({
-      action: z.literal("inspect"),
-      /**
-       * File, URL, `owner/repo`, tree URL, or `npx skills add …` wrapper.
-       */
-      source: z.string().min(1),
-      /**
-       * Dest-root scope used to mark candidates `installed`. Same axis as
-       * the mutation envelope's `scope`.
-       */
-      scope: providerNativeScopeSchema,
-    }),
-    z.object({
-      action: z.literal("edit"),
-      path: z.string().min(1),
-      /** SHA-256 of the exact SKILL.md text the editor loaded. */
-      expectedHash: z.string().regex(/^[0-9a-f]{64}$/),
-      name: z.string().min(1),
-      description: z.string(),
-      body: z.string(),
-    }),
-    z.object({
-      action: z.literal("update"),
-      name: z.string().min(1),
-      path: z.string().min(1),
-      /**
-       * Required to clobber local edits (canon hash ≠ recorded
-       * `installedHash`). Omitted / false is a dry check that must not write.
-       */
-      confirm: z.boolean().optional(),
-    }),
-    z.object({
-      action: z.literal("remove"),
-      name: z.string().min(1),
-      path: z.string().min(1),
-    }),
-  ])
-  .superRefine((value, ctx) => {
-    if (value.action !== "import") return;
-    if ((value.token === undefined) === (value.names === undefined)) return;
-    ctx.addIssue({
-      code: "custom",
-      path: value.token === undefined ? ["token"] : ["names"],
-      message: "token and names must be provided together",
-    });
-  });
+);
 export type ProvidersSkillsMutateAction = z.infer<
   typeof providersSkillsMutateActionSchema
 >;
@@ -1052,89 +1086,92 @@ export type ProvidersSkillsMutateAction = z.infer<
  * Scope/workspaceRoot invariant applied via shared refinement (union arms
  * cannot individually be ZodEffects under discriminatedUnion).
  */
-export const nativeListQuerySchema = z
-  .discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("mcp"),
-      providerId: providerIdSchema,
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-    }),
-    z.object({
-      kind: z.literal("plugins"),
-      providerId: providerIdSchema,
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-    }),
-    z.object({
-      kind: z.literal("skills"),
-      providerId: providerIdSchema,
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-    }),
-    z.object({
-      kind: z.literal("mcpDiscover"),
-      providerId: providerIdSchema,
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      serverName: z.string().min(1),
+export const nativeListQuerySchema = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("mcp"),
+        providerId: providerIdSchema,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("plugins"),
+        providerId: providerIdSchema,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("skills"),
+        providerId: providerIdSchema,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("mcpDiscover"),
+        providerId: providerIdSchema,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+        /**
+         * When true, bypass the discovery cache and re-probe / re-query native.
+         */
+        forceRefresh: z.boolean(),
+      }),
       /**
-       * When true, bypass the discovery cache and re-probe / re-query native.
+       * One plugin's artwork, addressed BY ID rather than by a path taken from
+       * the `plugins` row. The host re-resolves the file from its own walk, so
+       * no client-supplied filesystem path is ever opened - the same reason
+       * `assertRemovableSkill` re-lists instead of trusting the row it was
+       * handed. Split off `plugins` so the megabyte-scale bytes are not re-sent
+       * on that list's 30s refetch.
        */
-      forceRefresh: z.boolean(),
-    }),
-    /**
-     * One plugin's artwork, addressed BY ID rather than by a path taken from
-     * the `plugins` row. The host re-resolves the file from its own walk, so
-     * no client-supplied filesystem path is ever opened - the same reason
-     * `assertRemovableSkill` re-lists instead of trusting the row it was
-     * handed. Split off `plugins` so the megabyte-scale bytes are not re-sent
-     * on that list's 30s refetch.
-     */
-    z.object({
-      kind: z.literal("pluginIcon"),
-      providerId: providerIdSchema,
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      pluginId: z.string().min(1),
-      theme: providerPluginIconThemeSchema,
-    }),
-  ])
-  .superRefine(refineProviderNativeScope);
+      z.object({
+        kind: z.literal("pluginIcon"),
+        providerId: providerIdSchema,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        pluginId: z.string().min(1),
+        theme: providerPluginIconThemeSchema,
+      }),
+    ])
+    .superRefine(refineProviderNativeScope),
+);
 export type NativeListQuery = z.infer<typeof nativeListQuerySchema>;
 
-const nativeListSuccessResultSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("mcp"),
-    servers: z.array(providerMcpServerSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("plugins"),
-    plugins: z.array(providerPluginSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("skills"),
-    skills: z.array(providerSkillSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("mcpDiscover"),
-    server: providerMcpServerSchema,
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("pluginIcon"),
-    icon: providerPluginIconSchema,
-  }),
-]);
+const nativeListSuccessResultSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcp"),
+      servers: z.array(providerMcpServerSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("plugins"),
+      plugins: z.array(providerPluginSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skills"),
+      skills: z.array(providerSkillSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcpDiscover"),
+      server: providerMcpServerSchema,
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("pluginIcon"),
+      icon: providerPluginIconSchema,
+    }),
+  ]),
+);
 
-export const nativeListResultSchema = z.union([
-  nativeListSuccessResultSchema,
-  providerNativeErrorResultSchema,
-]);
+export const nativeListResultSchema = lazySchema(() =>
+  z.union([nativeListSuccessResultSchema, providerNativeErrorResultSchema]),
+);
 export type NativeListResult = z.infer<typeof nativeListResultSchema>;
 
 /**
@@ -1143,38 +1180,42 @@ export type NativeListResult = z.infer<typeof nativeListResultSchema>;
  * v7.0 must not. Other arms stay pointed at the live object schemas they
  * already used - those have not grown.
  */
-const nativeListSuccessResultSchemaV70Preimage = z.discriminatedUnion("kind", [
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("mcp"),
-    servers: z.array(providerMcpServerSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("plugins"),
-    plugins: z.array(providerPluginSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("skills"),
-    skills: z.array(providerSkillSchemaV70Preimage),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("mcpDiscover"),
-    server: providerMcpServerSchema,
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("pluginIcon"),
-    icon: providerPluginIconSchema,
-  }),
-]);
+const nativeListSuccessResultSchemaV70Preimage = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcp"),
+      servers: z.array(providerMcpServerSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("plugins"),
+      plugins: z.array(providerPluginSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skills"),
+      skills: z.array(providerSkillSchemaV70Preimage),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcpDiscover"),
+      server: providerMcpServerSchema,
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("pluginIcon"),
+      icon: providerPluginIconSchema,
+    }),
+  ]),
+);
 
-export const nativeListResultSchemaV70Preimage = z.union([
-  nativeListSuccessResultSchemaV70Preimage,
-  providerNativeErrorResultSchema,
-]);
+export const nativeListResultSchemaV70Preimage = lazySchema(() =>
+  z.union([
+    nativeListSuccessResultSchemaV70Preimage,
+    providerNativeErrorResultSchema,
+  ]),
+);
 export type NativeListResultV70Preimage = z.infer<
   typeof nativeListResultSchemaV70Preimage
 >;
@@ -1186,70 +1227,73 @@ export type NativeListResultV70Preimage = z.infer<
  * Runtime XOR with classic `enabled` is enforced on the request envelope.
  * Scope/workspaceRoot invariant via shared refinement.
  */
-export const nativeMutationSchema = z
-  .discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("mcp"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      mutation: providersMcpMutateActionSchema,
+export const nativeMutationSchema = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("mcp"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        mutation: providersMcpMutateActionSchema,
+      }),
+      z.object({
+        kind: z.literal("plugins"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        mutation: providersPluginsMutateActionSchema,
+      }),
+      z.object({
+        kind: z.literal("skills"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        mutation: providersSkillsMutateActionSchema,
+      }),
+    ])
+    .superRefine((value, ctx) => {
+      refineProviderNativeScope(value, ctx);
+      if (
+        value.kind === "skills" &&
+        value.mutation.action === "inspect" &&
+        value.mutation.scope !== value.scope
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["mutation", "scope"],
+          message: "inspect scope must match the mutation scope",
+        });
+      }
     }),
-    z.object({
-      kind: z.literal("plugins"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      mutation: providersPluginsMutateActionSchema,
-    }),
-    z.object({
-      kind: z.literal("skills"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      mutation: providersSkillsMutateActionSchema,
-    }),
-  ])
-  .superRefine((value, ctx) => {
-    refineProviderNativeScope(value, ctx);
-    if (
-      value.kind === "skills" &&
-      value.mutation.action === "inspect" &&
-      value.mutation.scope !== value.scope
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["mutation", "scope"],
-        message: "inspect scope must match the mutation scope",
-      });
-    }
-  });
+);
 export type NativeMutation = z.infer<typeof nativeMutationSchema>;
 
-const nativeMutationSuccessResultSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("mcp"),
-    servers: z.array(providerMcpServerSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("plugins"),
-    plugins: z.array(providerPluginSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("skills"),
-    skills: z.array(providerSkillSchema),
-  }),
-  z.object({
-    ok: z.literal(true),
-    kind: z.literal("skillsInspect"),
-    ...providersSkillsInspectResultSchema.shape,
-  }),
-]);
+const nativeMutationSuccessResultSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcp"),
+      servers: z.array(providerMcpServerSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("plugins"),
+      plugins: z.array(providerPluginSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skills"),
+      skills: z.array(providerSkillSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skillsInspect"),
+      ...providersSkillsInspectResultSchema.shape,
+    }),
+  ]),
+);
 
-export const nativeMutationResultSchema = z.union([
-  nativeMutationSuccessResultSchema,
-  providerNativeErrorResultSchema,
-]);
+export const nativeMutationResultSchema = lazySchema(() =>
+  z.union([nativeMutationSuccessResultSchema, providerNativeErrorResultSchema]),
+);
 export type NativeMutationResult = z.infer<typeof nativeMutationResultSchema>;
 
 // ── Carrier payloads: MCP auth (startLogin / awaitLogin / cancelLogin) ─────
@@ -1259,41 +1303,43 @@ export type NativeMutationResult = z.infer<typeof nativeMutationResultSchema>;
  * Server context uses `workspaceRoot` (same scope-tuple field as list/mutate).
  * Scope/workspaceRoot invariant via shared refinement.
  */
-export const nativeAuthActionSchema = z
-  .discriminatedUnion("action", [
-    z.object({
-      action: z.literal("login"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      serverName: z.string().min(1),
-    }),
-    z.object({
-      action: z.literal("submitCode"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      serverName: z.string().min(1),
-      code: z.string().min(1),
-    }),
-    z.object({
-      action: z.literal("logout"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      serverName: z.string().min(1),
-    }),
-    z.object({
-      action: z.literal("clearAuth"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      serverName: z.string().min(1),
-    }),
-    z.object({
-      action: z.literal("forceReauth"),
-      scope: providerNativeScopeSchema,
-      workspaceRoot: z.string().nullable(),
-      serverName: z.string().min(1),
-    }),
-  ])
-  .superRefine(refineProviderNativeScope);
+export const nativeAuthActionSchema = lazySchema(() =>
+  z
+    .discriminatedUnion("action", [
+      z.object({
+        action: z.literal("login"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+      }),
+      z.object({
+        action: z.literal("submitCode"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+        code: z.string().min(1),
+      }),
+      z.object({
+        action: z.literal("logout"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+      }),
+      z.object({
+        action: z.literal("clearAuth"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+      }),
+      z.object({
+        action: z.literal("forceReauth"),
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+      }),
+    ])
+    .superRefine(refineProviderNativeScope),
+);
 export type NativeAuthAction = z.infer<typeof nativeAuthActionSchema>;
 
 /**
@@ -1301,24 +1347,28 @@ export type NativeAuthAction = z.infer<typeof nativeAuthActionSchema>;
  * Never a long poll — host pending-auth registry (R02) owns concurrency;
  * this schema only supports repeated bounded polls returning a status.
  */
-export const nativeAuthPollContextSchema = withProviderNativeScopeInvariant(
-  z.object({
-    scope: providerNativeScopeSchema,
-    workspaceRoot: z.string().nullable(),
-    serverName: z.string().min(1),
-  }),
+export const nativeAuthPollContextSchema = lazySchema(() =>
+  withProviderNativeScopeInvariant(
+    z.object({
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+      serverName: z.string().min(1),
+    }),
+  ),
 );
 export type NativeAuthPollContext = z.infer<typeof nativeAuthPollContextSchema>;
 
 /**
  * Cancel context for `providers.cancelLogin@1.1` with mcpAuth.
  */
-export const nativeAuthCancelContextSchema = withProviderNativeScopeInvariant(
-  z.object({
-    scope: providerNativeScopeSchema,
-    workspaceRoot: z.string().nullable(),
-    serverName: z.string().min(1),
-  }),
+export const nativeAuthCancelContextSchema = lazySchema(() =>
+  withProviderNativeScopeInvariant(
+    z.object({
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+      serverName: z.string().min(1),
+    }),
+  ),
 );
 export type NativeAuthCancelContext = z.infer<
   typeof nativeAuthCancelContextSchema
@@ -1332,31 +1382,33 @@ export type NativeAuthCancelContext = z.infer<
  * - `done` — completed synchronously (or logout/clear/submitCode success)
  * - `unsupported` — provider/server cannot perform this action
  */
-export const nativeAuthResultSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("authorizationUrl"),
-    authorizationUrl: z.string(),
-  }),
-  z.object({
-    kind: z.literal("pendingInstruction"),
-    instruction: z.string(),
-  }),
-  z.object({
-    kind: z.literal("pending"),
-  }),
-  z.object({
-    kind: z.literal("done"),
-  }),
-  z.object({
-    kind: z.literal("unsupported"),
-    reason: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("error"),
-    code: providerNativeErrorCodeSchema,
-    detail: z.string().nullable(),
-  }),
-]);
+export const nativeAuthResultSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("authorizationUrl"),
+      authorizationUrl: z.string(),
+    }),
+    z.object({
+      kind: z.literal("pendingInstruction"),
+      instruction: z.string(),
+    }),
+    z.object({
+      kind: z.literal("pending"),
+    }),
+    z.object({
+      kind: z.literal("done"),
+    }),
+    z.object({
+      kind: z.literal("unsupported"),
+      reason: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("error"),
+      code: providerNativeErrorCodeSchema,
+      detail: z.string().nullable(),
+    }),
+  ]),
+);
 export type NativeAuthResult = z.infer<typeof nativeAuthResultSchema>;
 
 // ── Model providers (upstream LLM credential connect) ──────────────────────
@@ -1380,11 +1432,13 @@ export type NativeAuthResult = z.infer<typeof nativeAuthResultSchema>;
  * evaluates nothing here - the renderer does, over the answers it is
  * collecting in the same form.
  */
-export const modelProviderPromptConditionSchema = z.object({
-  key: z.string().min(1),
-  op: z.enum(["eq", "neq"]),
-  value: z.string(),
-});
+export const modelProviderPromptConditionSchema = lazySchema(() =>
+  z.object({
+    key: z.string().min(1),
+    op: z.enum(["eq", "neq"]),
+    value: z.string(),
+  }),
+);
 export type ModelProviderPromptCondition = z.infer<
   typeof modelProviderPromptConditionSchema
 >;
@@ -1401,28 +1455,30 @@ export type ModelProviderPromptCondition = z.infer<
  * (every field is answered, explicitly, with `null` for "upstream did not say")
  * instead of letting an unmapped SDK field pass as an absent key.
  */
-export const modelProviderPromptSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("text"),
-    key: z.string().min(1),
-    message: z.string(),
-    placeholder: z.string().nullable(),
-    when: modelProviderPromptConditionSchema.nullable(),
-  }),
-  z.object({
-    type: z.literal("select"),
-    key: z.string().min(1),
-    message: z.string(),
-    options: z.array(
-      z.object({
-        label: z.string(),
-        value: z.string(),
-        hint: z.string().nullable(),
-      }),
-    ),
-    when: modelProviderPromptConditionSchema.nullable(),
-  }),
-]);
+export const modelProviderPromptSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("text"),
+      key: z.string().min(1),
+      message: z.string(),
+      placeholder: z.string().nullable(),
+      when: modelProviderPromptConditionSchema.nullable(),
+    }),
+    z.object({
+      type: z.literal("select"),
+      key: z.string().min(1),
+      message: z.string(),
+      options: z.array(
+        z.object({
+          label: z.string(),
+          value: z.string(),
+          hint: z.string().nullable(),
+        }),
+      ),
+      when: modelProviderPromptConditionSchema.nullable(),
+    }),
+  ]),
+);
 export type ModelProviderPrompt = z.infer<typeof modelProviderPromptSchema>;
 
 /**
@@ -1439,11 +1495,13 @@ export type ModelProviderPrompt = z.infer<typeof modelProviderPromptSchema>;
  * nothing extra" is a fact worth stating, and an absent key would make every
  * consumer write the same `?? []`.
  */
-export const modelProviderAuthMethodSchema = z.object({
-  type: z.enum(["oauth", "api"]),
-  label: z.string(),
-  prompts: z.array(modelProviderPromptSchema),
-});
+export const modelProviderAuthMethodSchema = lazySchema(() =>
+  z.object({
+    type: z.enum(["oauth", "api"]),
+    label: z.string(),
+    prompts: z.array(modelProviderPromptSchema),
+  }),
+);
 export type ModelProviderAuthMethod = z.infer<
   typeof modelProviderAuthMethodSchema
 >;
@@ -1474,12 +1532,9 @@ export type ModelProviderAuthMethod = z.infer<
  * the consequence that was accepted (a stored key shadowed by an env var
  * reports `env` and reads as read-only).
  */
-export const modelProviderSourceSchema = z.enum([
-  "env",
-  "config",
-  "custom",
-  "api",
-]);
+export const modelProviderSourceSchema = lazySchema(() =>
+  z.enum(["env", "config", "custom", "api"]),
+);
 export type ModelProviderSource = z.infer<typeof modelProviderSourceSchema>;
 
 /**
@@ -1511,76 +1566,78 @@ export type ModelProviderSource = z.infer<typeof modelProviderSourceSchema>;
  * (`connect` carries plaintext once), and the read side reports presence and
  * origin only - the same convention the MCP secret write/mask pair follows.
  */
-const modelProviderEntryBaseSchema = z.object({
-  id: z.string().min(1),
-  name: z.string(),
-  source: modelProviderSourceSchema.nullable(),
-  hasStoredCredential: z.boolean(),
-  canDisconnect: z.boolean(),
-  connected: z.boolean(),
-  methods: z.array(modelProviderAuthMethodSchema),
-  /**
-   * This provider is declared in the user's own OpenCode config AS an
-   * OpenAI-compatible custom provider - upstream's `T(id)` predicate: a
-   * `provider[id]` block whose `npm` is `@ai-sdk/openai-compatible` with a
-   * non-empty model map.
-   *
-   * It exists to split one badge into two. `source: "config"` covers both a
-   * provider the user hand-wrote as a custom endpoint and one a config file
-   * merely supplies a key for; upstream shows those as "Custom" and "Config"
-   * respectively, and the difference is not recoverable from `source` alone.
-   *
-   * It is also what tells a client the row is EDITABLE: `updateCustom` applies
-   * to exactly the rows this flag is true for, because those are the ones
-   * whose name / base URL / model ids Traycer wrote and can rewrite.
-   *
-   * The predicate is upstream's and stays host-side - a client that re-derived
-   * it from a config file would be guessing at `npm` strings and model-map
-   * emptiness, and would drift the first time upstream tightened either.
-   */
-  configDeclaredCustom: z.boolean(),
-  /**
-   * The values this provider is DECLARED with, when it is a config-declared
-   * custom one. Non-null exactly when `configDeclaredCustom` is true - an
-   * invariant this schema enforces rather than describes (see the refinement
-   * below).
-   *
-   * Edit needs it, and needs it to be real. `updateCustom` carries the whole
-   * block, so a dialog opened with nothing to prefill would submit blanks over
-   * a working declaration - the user would "edit the name" and silently lose
-   * their base URL and model list. Sending the current values is what makes
-   * the round trip lossless.
-   *
-   * It also keeps the verb set closed. Re-enabling a disconnected custom
-   * provider is `updateCustom` with the row's own values - no `enable` verb,
-   * no `setDisabled` toggle, and nothing that could disagree with disconnect
-   * about what "off" means.
-   *
-   * It mirrors the write shape field for field - base URL, models with their
-   * names, headers, env var names - because a prefill that carries only part
-   * of the block is the blank-overwrite one field at a time. `key` is the one
-   * deliberate omission: the credential is write-only on this surface, so Edit
-   * reopens with the key field empty and leaving it empty must not clear a
-   * stored one. That is the host's rule to keep; the wire simply never carries
-   * a secret back.
-   *
-   * Read-side constraints are LOOSER than the write side on purpose. A user
-   * can hand-edit `opencode.json`, so a declared base URL may be malformed, a
-   * model may have no name, and a header key may be blank;
-   * `createCustom`/`updateCustom` reject all of those, but refusing to REPORT
-   * them would fail the row's parse and vanish the one provider whose
-   * declaration needs fixing - with Edit, the only surface that could fix it,
-   * gone with it. Validate what we accept; report what we find.
-   */
-  custom: z
-    .object({
-      baseUrl: z.string(),
-      models: z.array(z.object({ id: z.string(), name: z.string() })),
-      headers: z.array(z.object({ key: z.string(), value: z.string() })),
-      env: z.array(z.string()),
-    })
-    .nullable(),
-});
+const modelProviderEntryBaseSchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    name: z.string(),
+    source: modelProviderSourceSchema.nullable(),
+    hasStoredCredential: z.boolean(),
+    canDisconnect: z.boolean(),
+    connected: z.boolean(),
+    methods: z.array(modelProviderAuthMethodSchema),
+    /**
+     * This provider is declared in the user's own OpenCode config AS an
+     * OpenAI-compatible custom provider - upstream's `T(id)` predicate: a
+     * `provider[id]` block whose `npm` is `@ai-sdk/openai-compatible` with a
+     * non-empty model map.
+     *
+     * It exists to split one badge into two. `source: "config"` covers both a
+     * provider the user hand-wrote as a custom endpoint and one a config file
+     * merely supplies a key for; upstream shows those as "Custom" and "Config"
+     * respectively, and the difference is not recoverable from `source` alone.
+     *
+     * It is also what tells a client the row is EDITABLE: `updateCustom` applies
+     * to exactly the rows this flag is true for, because those are the ones
+     * whose name / base URL / model ids Traycer wrote and can rewrite.
+     *
+     * The predicate is upstream's and stays host-side - a client that re-derived
+     * it from a config file would be guessing at `npm` strings and model-map
+     * emptiness, and would drift the first time upstream tightened either.
+     */
+    configDeclaredCustom: z.boolean(),
+    /**
+     * The values this provider is DECLARED with, when it is a config-declared
+     * custom one. Non-null exactly when `configDeclaredCustom` is true - an
+     * invariant this schema enforces rather than describes (see the refinement
+     * below).
+     *
+     * Edit needs it, and needs it to be real. `updateCustom` carries the whole
+     * block, so a dialog opened with nothing to prefill would submit blanks over
+     * a working declaration - the user would "edit the name" and silently lose
+     * their base URL and model list. Sending the current values is what makes
+     * the round trip lossless.
+     *
+     * It also keeps the verb set closed. Re-enabling a disconnected custom
+     * provider is `updateCustom` with the row's own values - no `enable` verb,
+     * no `setDisabled` toggle, and nothing that could disagree with disconnect
+     * about what "off" means.
+     *
+     * It mirrors the write shape field for field - base URL, models with their
+     * names, headers, env var names - because a prefill that carries only part
+     * of the block is the blank-overwrite one field at a time. `key` is the one
+     * deliberate omission: the credential is write-only on this surface, so Edit
+     * reopens with the key field empty and leaving it empty must not clear a
+     * stored one. That is the host's rule to keep; the wire simply never carries
+     * a secret back.
+     *
+     * Read-side constraints are LOOSER than the write side on purpose. A user
+     * can hand-edit `opencode.json`, so a declared base URL may be malformed, a
+     * model may have no name, and a header key may be blank;
+     * `createCustom`/`updateCustom` reject all of those, but refusing to REPORT
+     * them would fail the row's parse and vanish the one provider whose
+     * declaration needs fixing - with Edit, the only surface that could fix it,
+     * gone with it. Validate what we accept; report what we find.
+     */
+    custom: z
+      .object({
+        baseUrl: z.string(),
+        models: z.array(z.object({ id: z.string(), name: z.string() })),
+        headers: z.array(z.object({ key: z.string(), value: z.string() })),
+        env: z.array(z.string()),
+      })
+      .nullable(),
+  }),
+);
 
 /**
  * `configDeclaredCustom` and `custom` are one fact in two fields, so the wire
@@ -1596,7 +1653,7 @@ const modelProviderEntryBaseSchema = z.object({
  * `refineProviderNativeScope` above: a state nothing downstream can act on
  * should be unrepresentable, not just unasserted.
  */
-export const modelProviderEntrySchema =
+export const modelProviderEntrySchema = lazySchema(() =>
   modelProviderEntryBaseSchema.superRefine((entry, ctx) => {
     if (entry.configDeclaredCustom && entry.custom === null) {
       ctx.addIssue({
@@ -1613,7 +1670,8 @@ export const modelProviderEntrySchema =
         message: "custom values require configDeclaredCustom: true",
       });
     }
-  });
+  }),
+);
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 
 /**
@@ -1661,10 +1719,9 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
  *   here can, and a code no producer can emit is worse than a missing one: it
  *   gets handled, weighed, and never reached.
  */
-export const modelProviderListErrorCodeSchema = z.enum([
-  "capability_unavailable",
-  "server_unavailable",
-]);
+export const modelProviderListErrorCodeSchema = lazySchema(() =>
+  z.enum(["capability_unavailable", "server_unavailable"]),
+);
 export type ModelProviderListErrorCode = z.infer<
   typeof modelProviderListErrorCodeSchema
 >;
@@ -1700,34 +1757,40 @@ export type ModelProviderListErrorCode = z.infer<
  * arm for exactly that condition, and two ways to say one thing is how
  * consumers end up handling only one of them.
  */
-export const modelProviderAuthErrorCodeSchema = z.enum([
-  "server_unavailable",
-  "provider_not_found",
-  "attempt_not_found",
-  "attempt_superseded",
-  "attempt_expired",
-  "code_rejected",
-  "invalid_input",
-  "provider_auth_failed",
-]);
+export const modelProviderAuthErrorCodeSchema = lazySchema(() =>
+  z.enum([
+    "server_unavailable",
+    "provider_not_found",
+    "attempt_not_found",
+    "attempt_superseded",
+    "attempt_expired",
+    "code_rejected",
+    "invalid_input",
+    "provider_auth_failed",
+  ]),
+);
 export type ModelProviderAuthErrorCode = z.infer<
   typeof modelProviderAuthErrorCodeSchema
 >;
 
 /** Same envelope shape as `providerNativeErrorResultSchema`, own vocabulary. */
-export const modelProviderListErrorResultSchema = z.object({
-  ok: z.literal(false),
-  code: modelProviderListErrorCodeSchema,
-  detail: z.string().nullable(),
-});
+export const modelProviderListErrorResultSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(false),
+    code: modelProviderListErrorCodeSchema,
+    detail: z.string().nullable(),
+  }),
+);
 export type ModelProviderListErrorResult = z.infer<
   typeof modelProviderListErrorResultSchema
 >;
 
-const modelProvidersListSuccessResultSchema = z.object({
-  ok: z.literal(true),
-  providers: z.array(modelProviderEntrySchema),
-});
+const modelProvidersListSuccessResultSchema = lazySchema(() =>
+  z.object({
+    ok: z.literal(true),
+    providers: z.array(modelProviderEntrySchema),
+  }),
+);
 
 /**
  * `providers.listModelProviders` payload. Success or a typed error, the same
@@ -1735,10 +1798,12 @@ const modelProvidersListSuccessResultSchema = z.object({
  * or a managed server that would not start, is a result rather than a
  * transport failure.
  */
-export const modelProvidersListResultSchema = z.union([
-  modelProvidersListSuccessResultSchema,
-  modelProviderListErrorResultSchema,
-]);
+export const modelProvidersListResultSchema = lazySchema(() =>
+  z.union([
+    modelProvidersListSuccessResultSchema,
+    modelProviderListErrorResultSchema,
+  ]),
+);
 export type ModelProvidersListResult = z.infer<
   typeof modelProvidersListResultSchema
 >;
@@ -1752,7 +1817,9 @@ export type ModelProvidersListResult = z.infer<
  * Values are plaintext and travel exactly once, on the way in: nothing reads
  * them back (see `modelProviderEntrySchema`).
  */
-export const modelProviderAuthInputsSchema = z.record(z.string(), z.string());
+export const modelProviderAuthInputsSchema = lazySchema(() =>
+  z.record(z.string(), z.string()),
+);
 export type ModelProviderAuthInputs = z.infer<
   typeof modelProviderAuthInputsSchema
 >;
@@ -1811,10 +1878,12 @@ export type ModelProviderAuthInputs = z.infer<
  * rule on those makes a real provider unreachable to punish a name Traycer
  * never chose - and unreachable by the one verb that could rename it.
  */
-const newCustomProviderIdSchema = z
-  .string()
-  .min(1)
-  .regex(/^[a-z0-9][a-z0-9-_]*$/);
+const newCustomProviderIdSchema = lazySchema(() =>
+  z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9][a-z0-9-_]*$/),
+);
 
 /**
  * Config key of an EXISTING provider block. Non-empty and nothing more: the
@@ -1826,7 +1895,7 @@ const newCustomProviderIdSchema = z
  * would be a second, weaker copy of that judgement, and the weaker copy is
  * the one that would drift.
  */
-const existingCustomProviderIdSchema = z.string().min(1);
+const existingCustomProviderIdSchema = lazySchema(() => z.string().min(1));
 
 /**
  * One model in a custom provider's map: the id the API is called with, and the
@@ -1842,16 +1911,20 @@ const existingCustomProviderIdSchema = z.string().min(1);
  * (`@cf/meta/llama-3.2-1b-instruct`). The provider-id rule above must never be
  * reused here - it would reject roughly 2,000 real model ids.
  */
-const customProviderModelSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-});
+const customProviderModelSchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+  }),
+);
 
 /** One literal request header written to the block's `options.headers`. */
-const customProviderHeaderSchema = z.object({
-  key: z.string().min(1),
-  value: z.string(),
-});
+const customProviderHeaderSchema = lazySchema(() =>
+  z.object({
+    key: z.string().min(1),
+    value: z.string(),
+  }),
+);
 
 /**
  * The declarable half of a custom provider - everything the form collects
@@ -1872,7 +1945,7 @@ const customProviderHeaderSchema = z.object({
  */
 const customProviderShape = {
   /** Display name for the provider itself. */
-  name: z.string().min(1),
+  name: lazySchema(() => z.string().min(1)),
   /**
    * `options.baseURL`. A `http://` or `https://` PREFIX check, matching what
    * OpenCode's connect dialog enforces - not a full URL parse.
@@ -1884,7 +1957,7 @@ const customProviderShape = {
    * to survive a URL that parses here and fails to connect, which it did
    * anyway - nothing downstream ever trusted this field to be reachable.
    */
-  baseUrl: z.string().regex(/^https?:\/\//),
+  baseUrl: lazySchema(() => z.string().regex(/^https?:\/\//)),
   /**
    * The block's model map, as ordered rows. NON-EMPTY, and that is upstream's
    * constraint rather than tidiness: `T(id)` requires a non-empty model map,
@@ -1895,7 +1968,7 @@ const customProviderShape = {
    * Order is the user's. Duplicate ids are the host's to collapse, since it
    * owns the map this becomes.
    */
-  models: z.array(customProviderModelSchema).min(1),
+  models: lazySchema(() => z.array(customProviderModelSchema).min(1)),
   /**
    * Literal headers for `options.headers`. Defaulted rather than nullable
    * because this field has only TWO states to express - some headers, or none
@@ -1908,7 +1981,7 @@ const customProviderShape = {
    * omitted field and an empty one mean the same thing. Nothing is destroyed
    * by treating them alike.
    */
-  headers: z.array(customProviderHeaderSchema).default([]),
+  headers: lazySchema(() => z.array(customProviderHeaderSchema).default([])),
   /**
    * The API key typed into the form, or null when the user left it blank.
    *
@@ -1917,7 +1990,7 @@ const customProviderShape = {
    * is the same secret `connect` carries and travels under the same rule -
    * plaintext once, on the way in, never echoed back on a row.
    */
-  key: z.string().min(1).nullable().default(null),
+  key: lazySchema(() => z.string().min(1).nullable().default(null)),
   /**
    * Environment variable NAMES the block's key may be read from.
    *
@@ -1942,45 +2015,47 @@ const customProviderShape = {
    * key. Clearing is a thing someone has to ask for; not mentioning it is not
    * asking.
    */
-  env: z.array(z.string().min(1)).nullable().default(null),
+  env: lazySchema(() => z.array(z.string().min(1)).nullable().default(null)),
 };
 
-export const modelProviderAuthActionSchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("connect"),
-    modelProviderId: z.string().min(1),
-    methodIndex: z.number().int().nonnegative().nullable(),
-    /** The pasted secret. Upstream's `ApiAuth.key`, not a key NAME. */
-    key: z.string().min(1),
-    inputs: modelProviderAuthInputsSchema,
-  }),
-  z.object({
-    action: z.literal("startOauth"),
-    modelProviderId: z.string().min(1),
-    methodIndex: z.number().int().nonnegative(),
-    inputs: modelProviderAuthInputsSchema,
-  }),
-  z.object({
-    action: z.literal("submitCode"),
-    modelProviderId: z.string().min(1),
-    attemptId: z.string().min(1),
-    code: z.string().min(1),
-  }),
-  z.object({
-    action: z.literal("disconnect"),
-    modelProviderId: z.string().min(1),
-  }),
-  z.object({
-    action: z.literal("createCustom"),
-    modelProviderId: newCustomProviderIdSchema,
-    ...customProviderShape,
-  }),
-  z.object({
-    action: z.literal("updateCustom"),
-    modelProviderId: existingCustomProviderIdSchema,
-    ...customProviderShape,
-  }),
-]);
+export const modelProviderAuthActionSchema = lazySchema(() =>
+  z.discriminatedUnion("action", [
+    z.object({
+      action: z.literal("connect"),
+      modelProviderId: z.string().min(1),
+      methodIndex: z.number().int().nonnegative().nullable(),
+      /** The pasted secret. Upstream's `ApiAuth.key`, not a key NAME. */
+      key: z.string().min(1),
+      inputs: modelProviderAuthInputsSchema,
+    }),
+    z.object({
+      action: z.literal("startOauth"),
+      modelProviderId: z.string().min(1),
+      methodIndex: z.number().int().nonnegative(),
+      inputs: modelProviderAuthInputsSchema,
+    }),
+    z.object({
+      action: z.literal("submitCode"),
+      modelProviderId: z.string().min(1),
+      attemptId: z.string().min(1),
+      code: z.string().min(1),
+    }),
+    z.object({
+      action: z.literal("disconnect"),
+      modelProviderId: z.string().min(1),
+    }),
+    z.object({
+      action: z.literal("createCustom"),
+      modelProviderId: newCustomProviderIdSchema,
+      ...customProviderShape,
+    }),
+    z.object({
+      action: z.literal("updateCustom"),
+      modelProviderId: existingCustomProviderIdSchema,
+      ...customProviderShape,
+    }),
+  ]),
+);
 export type ModelProviderAuthAction = z.infer<
   typeof modelProviderAuthActionSchema
 >;
@@ -1994,19 +2069,23 @@ export type ModelProviderAuthAction = z.infer<
  * id of a superseded attempt is told so (`error`), rather than being handed
  * the live attempt's status under the impression it is its own.
  */
-export const modelProviderAuthPollContextSchema = z.object({
-  modelProviderId: z.string().min(1),
-  attemptId: z.string().min(1),
-});
+export const modelProviderAuthPollContextSchema = lazySchema(() =>
+  z.object({
+    modelProviderId: z.string().min(1),
+    attemptId: z.string().min(1),
+  }),
+);
 export type ModelProviderAuthPollContext = z.infer<
   typeof modelProviderAuthPollContextSchema
 >;
 
 /** Cancel context - the same addressing as the poll. */
-export const modelProviderAuthCancelContextSchema = z.object({
-  modelProviderId: z.string().min(1),
-  attemptId: z.string().min(1),
-});
+export const modelProviderAuthCancelContextSchema = lazySchema(() =>
+  z.object({
+    modelProviderId: z.string().min(1),
+    attemptId: z.string().min(1),
+  }),
+);
 export type ModelProviderAuthCancelContext = z.infer<
   typeof modelProviderAuthCancelContextSchema
 >;
@@ -2039,30 +2118,32 @@ export type ModelProviderAuthCancelContext = z.infer<
  * separate instruction-only arm would never be produced. An arm nothing can
  * emit is a promise to clients that cannot be kept.
  */
-export const modelProviderAuthResultSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("authorizationUrl"),
-    attemptId: z.string().min(1),
-    authorizationUrl: z.string(),
-    method: z.enum(["auto", "code"]),
-    instructions: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("pending"),
-  }),
-  z.object({
-    kind: z.literal("done"),
-  }),
-  z.object({
-    kind: z.literal("unsupported"),
-    reason: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("error"),
-    code: modelProviderAuthErrorCodeSchema,
-    detail: z.string().nullable(),
-  }),
-]);
+export const modelProviderAuthResultSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("authorizationUrl"),
+      attemptId: z.string().min(1),
+      authorizationUrl: z.string(),
+      method: z.enum(["auto", "code"]),
+      instructions: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("pending"),
+    }),
+    z.object({
+      kind: z.literal("done"),
+    }),
+    z.object({
+      kind: z.literal("unsupported"),
+      reason: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("error"),
+      code: modelProviderAuthErrorCodeSchema,
+      detail: z.string().nullable(),
+    }),
+  ]),
+);
 export type ModelProviderAuthResult = z.infer<
   typeof modelProviderAuthResultSchema
 >;
@@ -2091,120 +2172,119 @@ export type ModelProviderAuthResult = z.infer<
 // end; when it goes red, hand-freeze the sub-schema that grew - do not
 // regenerate the fixture to green.
 
-export const providerNativeScopeSchemaV70 = z.enum(["global", "project"]);
+export const providerNativeScopeSchemaV70 = lazySchema(() =>
+  z.enum(["global", "project"]),
+);
 export type ProviderNativeScopeV70 = z.infer<
   typeof providerNativeScopeSchemaV70
 >;
 
-export const providerEnvOverrideScopeSchemaV70 = z.enum([
-  "harness-and-native-config",
-  "native-config-only",
-]);
+export const providerEnvOverrideScopeSchemaV70 = lazySchema(() =>
+  z.enum(["harness-and-native-config", "native-config-only"]),
+);
 
-export const providerSettingsTabSchemaV70Preimage = z.enum([
-  "general",
-  "env",
-  "usage",
-  "mcp",
-  "plugins",
-  "skills",
-  // `modelProviders` is NOT here. The tab rides the live enum, which v7.0 now
-  // binds directly. Anything that produces this pre-image shape must FILTER
-  // `supportedTabs` rather than reparse it - this enum rejects a whole array
-  // for one unknown member, and the capability object's `.catch()` would then
-  // serve an empty default, costing the reader MCP, Plugins and Skills over a
-  // single tab id.
-]);
+export const providerSettingsTabSchemaV70Preimage = lazySchema(() =>
+  z.enum([
+    "general",
+    "env",
+    "usage",
+    "mcp",
+    "plugins",
+    "skills",
+    // `modelProviders` is NOT here. The tab rides the live enum, which v7.0 now
+    // binds directly. Anything that produces this pre-image shape must FILTER
+    // `supportedTabs` rather than reparse it - this enum rejects a whole array
+    // for one unknown member, and the capability object's `.catch()` would then
+    // serve an empty default, costing the reader MCP, Plugins and Skills over a
+    // single tab id.
+  ]),
+);
 export type ProviderSettingsTabV70Preimage = z.infer<
   typeof providerSettingsTabSchemaV70Preimage
 >;
 
-export const providerMcpTransportSchemaV70 = z.enum(["stdio", "http", "sse"]);
-export const providerMcpAuthTypeSchemaV70 = z.enum([
-  "none",
-  "header",
-  "env",
-  "oauth",
-]);
-export const providerMcpAuthActionSchemaV70 = z.enum([
-  "login",
-  "submitCode",
-  "logout",
-  "clearAuth",
-  "forceReauth",
-]);
-export const providerMcpPerToolBackingSchemaV70 = z.enum([
-  "native",
-  "store",
-  "degraded-server-level",
-  "none",
-]);
-export const providerMcpDataSourceSchemaV70 = z.enum([
-  "native",
-  "probe",
-  "none",
-]);
-export const providerMcpWritePathSchemaV70 = z.enum(["cli", "patch", "none"]);
-export const providerMcpOauthFieldSchemaV70 = z.enum(["clientId", "resource"]);
+export const providerMcpTransportSchemaV70 = lazySchema(() =>
+  z.enum(["stdio", "http", "sse"]),
+);
+export const providerMcpAuthTypeSchemaV70 = lazySchema(() =>
+  z.enum(["none", "header", "env", "oauth"]),
+);
+export const providerMcpAuthActionSchemaV70 = lazySchema(() =>
+  z.enum(["login", "submitCode", "logout", "clearAuth", "forceReauth"]),
+);
+export const providerMcpPerToolBackingSchemaV70 = lazySchema(() =>
+  z.enum(["native", "store", "degraded-server-level", "none"]),
+);
+export const providerMcpDataSourceSchemaV70 = lazySchema(() =>
+  z.enum(["native", "probe", "none"]),
+);
+export const providerMcpWritePathSchemaV70 = lazySchema(() =>
+  z.enum(["cli", "patch", "none"]),
+);
+export const providerMcpOauthFieldSchemaV70 = lazySchema(() =>
+  z.enum(["clientId", "resource"]),
+);
 
-export const providerMcpCapabilitiesSchemaV70 = z.object({
-  transports: z.array(providerMcpTransportSchemaV70),
-  authTypes: z.array(providerMcpAuthTypeSchemaV70),
-  authActions: z.array(providerMcpAuthActionSchemaV70),
-  actionScopes: z.object({
-    list: z.array(providerNativeScopeSchemaV70),
-    add: z.array(providerNativeScopeSchemaV70),
-    update: z.array(providerNativeScopeSchemaV70),
-    remove: z.array(providerNativeScopeSchemaV70),
-    toggleServer: z.array(providerNativeScopeSchemaV70),
-    toggleTool: z.array(providerNativeScopeSchemaV70),
-    discover: z.array(providerNativeScopeSchemaV70),
-    auth: z.array(providerNativeScopeSchemaV70),
+export const providerMcpCapabilitiesSchemaV70 = lazySchema(() =>
+  z.object({
+    transports: z.array(providerMcpTransportSchemaV70),
+    authTypes: z.array(providerMcpAuthTypeSchemaV70),
+    authActions: z.array(providerMcpAuthActionSchemaV70),
+    actionScopes: z.object({
+      list: z.array(providerNativeScopeSchemaV70),
+      add: z.array(providerNativeScopeSchemaV70),
+      update: z.array(providerNativeScopeSchemaV70),
+      remove: z.array(providerNativeScopeSchemaV70),
+      toggleServer: z.array(providerNativeScopeSchemaV70),
+      toggleTool: z.array(providerNativeScopeSchemaV70),
+      discover: z.array(providerNativeScopeSchemaV70),
+      auth: z.array(providerNativeScopeSchemaV70),
+    }),
+    addServer: providerMcpWritePathSchemaV70,
+    removeServer: providerMcpWritePathSchemaV70,
+    updateServer: providerMcpWritePathSchemaV70,
+    supportsMultipleHeaders: z.boolean().default(false).optional(),
+    oauthFields: z.array(providerMcpOauthFieldSchemaV70).default([]).optional(),
+    perToolBacking: providerMcpPerToolBackingSchemaV70,
+    statusSource: providerMcpDataSourceSchemaV70,
+    toolsSource: providerMcpDataSourceSchemaV70,
+    schemasSource: providerMcpDataSourceSchemaV70,
+    instructionsSource: z.enum(["probe", "none"]),
+    traycerSessionsOnlyEnforcement: z.boolean(),
+    stdioDegradeNotice: z.boolean(),
+    oauthDegradesToConfigOnly: z.boolean(),
   }),
-  addServer: providerMcpWritePathSchemaV70,
-  removeServer: providerMcpWritePathSchemaV70,
-  updateServer: providerMcpWritePathSchemaV70,
-  supportsMultipleHeaders: z.boolean().default(false).optional(),
-  oauthFields: z.array(providerMcpOauthFieldSchemaV70).default([]).optional(),
-  perToolBacking: providerMcpPerToolBackingSchemaV70,
-  statusSource: providerMcpDataSourceSchemaV70,
-  toolsSource: providerMcpDataSourceSchemaV70,
-  schemasSource: providerMcpDataSourceSchemaV70,
-  instructionsSource: z.enum(["probe", "none"]),
-  traycerSessionsOnlyEnforcement: z.boolean(),
-  stdioDegradeNotice: z.boolean(),
-  oauthDegradesToConfigOnly: z.boolean(),
-});
+);
 
-export const providerPluginsAddModeSchemaV70 = z.enum([
-  "cli-source",
-  "marketplace",
-  "file-drop",
-  "patch",
-  "read-only",
-]);
+export const providerPluginsAddModeSchemaV70 = lazySchema(() =>
+  z.enum(["cli-source", "marketplace", "file-drop", "patch", "read-only"]),
+);
 
-export const providerPluginsCapabilitiesSchemaV70 = z.object({
-  addModes: z.array(providerPluginsAddModeSchemaV70),
-  marketplaceBrowse: z.boolean(),
-  actionScopes: z.object({
-    list: z.array(providerNativeScopeSchemaV70),
-    add: z.array(providerNativeScopeSchemaV70),
-    remove: z.array(providerNativeScopeSchemaV70),
-    setEnabled: z.array(providerNativeScopeSchemaV70),
+export const providerPluginsCapabilitiesSchemaV70 = lazySchema(() =>
+  z.object({
+    addModes: z.array(providerPluginsAddModeSchemaV70),
+    marketplaceBrowse: z.boolean(),
+    actionScopes: z.object({
+      list: z.array(providerNativeScopeSchemaV70),
+      add: z.array(providerNativeScopeSchemaV70),
+      remove: z.array(providerNativeScopeSchemaV70),
+      setEnabled: z.array(providerNativeScopeSchemaV70),
+    }),
+    traycerSessionToolsNotice: z.boolean(),
   }),
-  traycerSessionToolsNotice: z.boolean(),
-});
+);
 
-export const providerSkillsCapabilitiesSchemaV70Preimage = z.object({
-  actionScopes: z.object({
-    list: z.array(providerNativeScopeSchemaV70),
-    add: z.array(providerNativeScopeSchemaV70),
-    create: z.array(providerNativeScopeSchemaV70),
-    import: z.array(providerNativeScopeSchemaV70),
-    remove: z.array(providerNativeScopeSchemaV70),
+export const providerSkillsCapabilitiesSchemaV70Preimage = lazySchema(() =>
+  z.object({
+    actionScopes: z.object({
+      list: z.array(providerNativeScopeSchemaV70),
+      add: z.array(providerNativeScopeSchemaV70),
+      create: z.array(providerNativeScopeSchemaV70),
+      import: z.array(providerNativeScopeSchemaV70),
+      remove: z.array(providerNativeScopeSchemaV70),
+    }),
   }),
-});
+);
 export type ProviderSkillsCapabilitiesV70Preimage = z.infer<
   typeof providerSkillsCapabilitiesSchemaV70Preimage
 >;
@@ -2223,13 +2303,15 @@ export type ProviderSkillsCapabilitiesV70Preimage = z.infer<
  * is the one place where growth is not merely leaked but fatal, because
  * `providerCliStateSchemaV70Preimage` reads the whole thing through one `.catch()`.
  */
-export const providerNativeCapabilitiesSchemaV70Preimage = z.object({
-  supportedTabs: z.array(providerSettingsTabSchemaV70Preimage),
-  envOverrideScope: providerEnvOverrideScopeSchemaV70.optional(),
-  mcp: providerMcpCapabilitiesSchemaV70.nullable(),
-  plugins: providerPluginsCapabilitiesSchemaV70.nullable(),
-  skills: providerSkillsCapabilitiesSchemaV70Preimage.nullable(),
-});
+export const providerNativeCapabilitiesSchemaV70Preimage = lazySchema(() =>
+  z.object({
+    supportedTabs: z.array(providerSettingsTabSchemaV70Preimage),
+    envOverrideScope: providerEnvOverrideScopeSchemaV70.optional(),
+    mcp: providerMcpCapabilitiesSchemaV70.nullable(),
+    plugins: providerPluginsCapabilitiesSchemaV70.nullable(),
+    skills: providerSkillsCapabilitiesSchemaV70Preimage.nullable(),
+  }),
+);
 export type ProviderNativeCapabilitiesV70Preimage = z.infer<
   typeof providerNativeCapabilitiesSchemaV70Preimage
 >;
@@ -2303,15 +2385,17 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCa
 // This pin is byte-identical to the live enum TODAY, and that is the point: it
 // changes no snapshot and no wire now, and it stops the EIGHTH member from
 // reaching four already-shipped lines the day someone adds one.
-export const providerSettingsTabSchemaV70 = z.enum([
-  "general",
-  "env",
-  "usage",
-  "mcp",
-  "plugins",
-  "skills",
-  "modelProviders",
-]);
+export const providerSettingsTabSchemaV70 = lazySchema(() =>
+  z.enum([
+    "general",
+    "env",
+    "usage",
+    "mcp",
+    "plugins",
+    "skills",
+    "modelProviders",
+  ]),
+);
 export type ProviderSettingsTabV70 = z.infer<
   typeof providerSettingsTabSchemaV70
 >;
@@ -2336,10 +2420,11 @@ export type ProviderSettingsTabV70 = z.infer<
  * its MCP, Plugins and Skills tabs together - and it grew once already, when
  * `modelProviders` landed.
  */
-export const providerNativeCapabilitiesSchemaV70 =
+export const providerNativeCapabilitiesSchemaV70 = lazySchema(() =>
   providerNativeCapabilitiesSchema.extend({
     supportedTabs: z.array(providerSettingsTabSchemaV70),
-  });
+  }),
+);
 export type ProviderNativeCapabilitiesV70 = z.infer<
   typeof providerNativeCapabilitiesSchemaV70
 >;

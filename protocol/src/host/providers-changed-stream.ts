@@ -4,30 +4,35 @@ import {
   providerIdSchemaV80,
 } from "@traycer/protocol/host/provider-schemas";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const providersChangedOpenRequestSchema = z.object({});
+export const providersChangedOpenRequestSchema = lazySchema(() => z.object({}));
 
-export const providersChangedServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("changed"),
-    providerId: providerIdSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const providersChangedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("changed"),
+      providerId: providerIdSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type ProvidersChangedServerFrame = z.infer<
   typeof providersChangedServerFrameSchema
 >;
 
-export const providersChangedClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("ping"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const providersChangedClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 
 /**
  * Frozen server-frame shape as `cli-v1.3.0` / `host-v1.3.0` shipped @1.0: the
@@ -40,7 +45,7 @@ export const providersChangedClientFrameSchema = z.discriminatedUnion("kind", [
  * pure invalidation signal, and a peer that cannot name Antigravity has no
  * Antigravity state to invalidate.
  */
-export const providersChangedServerFrameSchemaPreAntigravity =
+export const providersChangedServerFrameSchemaPreAntigravity = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("changed"),
@@ -51,7 +56,8 @@ export const providersChangedServerFrameSchemaPreAntigravity =
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ]);
+  ]),
+);
 
 export const providersChangedV10 = defineStreamRpcContract({
   method: "providers.changed",

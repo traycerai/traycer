@@ -32,28 +32,33 @@ import {
   hostCommandInterpreterSchema,
   hostConnectivitySchema,
 } from "./host-status";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const hostResolveRepoPathsRequestSchema = z.object({
-  epicId: z.string().min(1),
-  identity: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("remote-url"),
-      remoteUrl: z.string().min(1),
-    }),
-    z.object({
-      kind: z.literal("workspace"),
-      workspacePath: z.string().min(1),
-    }),
-  ]),
-});
+export const hostResolveRepoPathsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    identity: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("remote-url"),
+        remoteUrl: z.string().min(1),
+      }),
+      z.object({
+        kind: z.literal("workspace"),
+        workspacePath: z.string().min(1),
+      }),
+    ]),
+  }),
+);
 export type HostResolveRepoPathsRequest = z.infer<
   typeof hostResolveRepoPathsRequestSchema
 >;
 
-export const hostResolveRepoPathsResponseSchema = z.object({
-  paths: z.array(z.string()),
-  scratchDirectory: z.string(),
-});
+export const hostResolveRepoPathsResponseSchema = lazySchema(() =>
+  z.object({
+    paths: z.array(z.string()),
+    scratchDirectory: z.string(),
+  }),
+);
 export type HostResolveRepoPathsResponse = z.infer<
   typeof hostResolveRepoPathsResponseSchema
 >;
@@ -65,25 +70,29 @@ export const hostResolveRepoPathsV10 = defineRpcContract({
   responseSchema: hostResolveRepoPathsResponseSchema,
 });
 
-export const hostOneOffShellRunRequestSchema = z.object({
-  epicId: z.string().min(1),
-  command: z.string().min(1),
-  cwd: z.string().min(1),
-  timeoutMs: z.number().int().positive().max(300_000),
-});
+export const hostOneOffShellRunRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    command: z.string().min(1),
+    cwd: z.string().min(1),
+    timeoutMs: z.number().int().positive().max(300_000),
+  }),
+);
 export type HostOneOffShellRunRequest = z.infer<
   typeof hostOneOffShellRunRequestSchema
 >;
 
-export const hostOneOffShellRunResponseSchema = z.object({
-  stdout: z.string(),
-  stderr: z.string(),
-  exitCode: z.number().int().nullable(),
-  signal: z.string().nullable(),
-  timedOut: z.boolean(),
-  outputLimitExceeded: z.boolean(),
-  outputBytes: z.number().int().nonnegative(),
-});
+export const hostOneOffShellRunResponseSchema = lazySchema(() =>
+  z.object({
+    stdout: z.string(),
+    stderr: z.string(),
+    exitCode: z.number().int().nullable(),
+    signal: z.string().nullable(),
+    timedOut: z.boolean(),
+    outputLimitExceeded: z.boolean(),
+    outputBytes: z.number().int().nonnegative(),
+  }),
+);
 export type HostOneOffShellRunResponse = z.infer<
   typeof hostOneOffShellRunResponseSchema
 >;
@@ -139,26 +148,30 @@ export const hostOneOffShellRunV10 = defineRpcContract({
  * will meet: that is `commandInterpreter`, and the claim that `platform`
  * answers it was only ever true on POSIX.
  */
-export const hostDirectoryEntrySchema = z.object({
-  hostId: z.string(),
-  displayName: z.string().nullable(),
-  platform: z.string().nullable(),
-  appVersion: z.string().nullable(),
-  connectivity: hostConnectivitySchema,
-  commandInterpreter: hostCommandInterpreterSchema.nullable(),
-});
+export const hostDirectoryEntrySchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    displayName: z.string().nullable(),
+    platform: z.string().nullable(),
+    appVersion: z.string().nullable(),
+    connectivity: hostConnectivitySchema,
+    commandInterpreter: hostCommandInterpreterSchema.nullable(),
+  }),
+);
 export type HostDirectoryEntrySummary = z.infer<
   typeof hostDirectoryEntrySchema
 >;
 
-export const hostDirectoryListRequestSchema = z.object({});
+export const hostDirectoryListRequestSchema = lazySchema(() => z.object({}));
 export type HostDirectoryListRequest = z.infer<
   typeof hostDirectoryListRequestSchema
 >;
 
-export const hostDirectoryListResponseSchema = z.object({
-  hosts: z.array(hostDirectoryEntrySchema),
-});
+export const hostDirectoryListResponseSchema = lazySchema(() =>
+  z.object({
+    hosts: z.array(hostDirectoryEntrySchema),
+  }),
+);
 export type HostDirectoryListResponse = z.infer<
   typeof hostDirectoryListResponseSchema
 >;
@@ -178,27 +191,30 @@ export const hostDirectoryListV10 = defineRpcContract({
  * sentinel id. `epicId` scopes destination path authorization when the job is
  * created; status and cancel rely on that already-authorized job capability.
  */
-export const hostFileCopyOverwriteSchema = z.enum([
-  "overwrite",
-  "skip-existing",
-]);
+export const hostFileCopyOverwriteSchema = lazySchema(() =>
+  z.enum(["overwrite", "skip-existing"]),
+);
 export type HostFileCopyOverwrite = z.infer<typeof hostFileCopyOverwriteSchema>;
 
-export const hostFileCopyStartRequestSchema = z.object({
-  epicId: z.string().min(1),
-  sourceHostId: z.string().min(1).nullable(),
-  sourcePath: z.string().min(1),
-  destinationPath: z.string().min(1),
-  exclude: z.array(z.string().min(1)),
-  overwrite: hostFileCopyOverwriteSchema.default("overwrite"),
-});
+export const hostFileCopyStartRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    sourceHostId: z.string().min(1).nullable(),
+    sourcePath: z.string().min(1),
+    destinationPath: z.string().min(1),
+    exclude: z.array(z.string().min(1)),
+    overwrite: hostFileCopyOverwriteSchema.default("overwrite"),
+  }),
+);
 export type HostFileCopyStartRequest = z.infer<
   typeof hostFileCopyStartRequestSchema
 >;
 
-export const hostFileCopyStartResponseSchema = z.object({
-  jobId: z.string().min(1),
-});
+export const hostFileCopyStartResponseSchema = lazySchema(() =>
+  z.object({
+    jobId: z.string().min(1),
+  }),
+);
 export type HostFileCopyStartResponse = z.infer<
   typeof hostFileCopyStartResponseSchema
 >;
@@ -210,10 +226,12 @@ export const hostFileCopyStartV10 = defineRpcContract({
   responseSchema: hostFileCopyStartResponseSchema,
 });
 
-export const hostFileCopyProgressSchema = z.object({
-  filesCompleted: z.number().int().nonnegative(),
-  bytesTransferred: z.number().int().nonnegative(),
-});
+export const hostFileCopyProgressSchema = lazySchema(() =>
+  z.object({
+    filesCompleted: z.number().int().nonnegative(),
+    bytesTransferred: z.number().int().nonnegative(),
+  }),
+);
 export type HostFileCopyProgress = z.infer<typeof hostFileCopyProgressSchema>;
 
 export const HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH = 1024;
@@ -226,18 +244,20 @@ export const HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH = 1024;
  */
 export const HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH = 4096;
 
-export const hostFileCopyFailureOperationSchema = z.enum([
-  "enumerate",
-  "stat",
-  "readlink",
-  "readdir",
-  "open",
-  "read",
-  "create-directory",
-  "write",
-  "create-symlink",
-  "preserve-metadata",
-]);
+export const hostFileCopyFailureOperationSchema = lazySchema(() =>
+  z.enum([
+    "enumerate",
+    "stat",
+    "readlink",
+    "readdir",
+    "open",
+    "read",
+    "create-directory",
+    "write",
+    "create-symlink",
+    "preserve-metadata",
+  ]),
+);
 export type HostFileCopyFailureOperation = z.infer<
   typeof hostFileCopyFailureOperationSchema
 >;
@@ -246,17 +266,21 @@ export type HostFileCopyFailureOperation = z.infer<
  * Sampled failure items reach agent context through status. `message` shares
  * the unreadable/reason bound; `relativePath` uses the path ceiling.
  */
-export const hostFileCopyFailureSchema = z.object({
-  relativePath: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
-  operation: hostFileCopyFailureOperationSchema,
-  message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
-});
+export const hostFileCopyFailureSchema = lazySchema(() =>
+  z.object({
+    relativePath: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+    operation: hostFileCopyFailureOperationSchema,
+    message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
+  }),
+);
 export type HostFileCopyFailure = z.infer<typeof hostFileCopyFailureSchema>;
 
-export const hostFileCopySkippedUnsafeSymlinkSchema = z.object({
-  relativePath: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
-  target: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
-});
+export const hostFileCopySkippedUnsafeSymlinkSchema = lazySchema(() =>
+  z.object({
+    relativePath: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+    target: z.string().max(HOST_FILE_COPY_MANIFEST_PATH_MAX_LENGTH),
+  }),
+);
 export type HostFileCopySkippedUnsafeSymlink = z.infer<
   typeof hostFileCopySkippedUnsafeSymlinkSchema
 >;
@@ -269,14 +293,16 @@ export type HostFileCopySkippedUnsafeSymlink = z.infer<
  */
 export const HOST_FILE_COPY_MANIFEST_ITEM_LIMIT = 200;
 
-export const hostFileCopyManifestSummarySchema = z.object({
-  filesCopied: z.number().int().nonnegative(),
-  directoriesCreated: z.number().int().nonnegative(),
-  symlinksCreated: z.number().int().nonnegative(),
-  bytesCopied: z.number().int().nonnegative(),
-  replacements: z.number().int().nonnegative(),
-  skippedExisting: z.number().int().nonnegative(),
-});
+export const hostFileCopyManifestSummarySchema = lazySchema(() =>
+  z.object({
+    filesCopied: z.number().int().nonnegative(),
+    directoriesCreated: z.number().int().nonnegative(),
+    symlinksCreated: z.number().int().nonnegative(),
+    bytesCopied: z.number().int().nonnegative(),
+    replacements: z.number().int().nonnegative(),
+    skippedExisting: z.number().int().nonnegative(),
+  }),
+);
 export type HostFileCopyManifestSummary = z.infer<
   typeof hostFileCopyManifestSummarySchema
 >;
@@ -288,44 +314,46 @@ export type HostFileCopyManifestSummary = z.infer<
  * impossible to report through one unary status response. The object refine
  * enforces that each count equals its sample length plus omitted remainder.
  */
-export const hostFileCopyManifestSchema = z
-  .object({
-    summary: hostFileCopyManifestSummarySchema,
-    failureCount: z.number().int().nonnegative(),
-    failures: z
-      .array(hostFileCopyFailureSchema)
-      .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
-    failuresOmitted: z.number().int().nonnegative(),
-    skippedUnsafeSymlinkCount: z.number().int().nonnegative(),
-    skippedUnsafeSymlinks: z
-      .array(hostFileCopySkippedUnsafeSymlinkSchema)
-      .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
-    skippedUnsafeSymlinksOmitted: z.number().int().nonnegative(),
-  })
-  .superRefine((manifest, ctx) => {
-    if (
-      manifest.failureCount !==
-      manifest.failures.length + manifest.failuresOmitted
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["failureCount"],
-        message: "failureCount must equal failures.length + failuresOmitted",
-      });
-    }
-    if (
-      manifest.skippedUnsafeSymlinkCount !==
-      manifest.skippedUnsafeSymlinks.length +
-        manifest.skippedUnsafeSymlinksOmitted
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["skippedUnsafeSymlinkCount"],
-        message:
-          "skippedUnsafeSymlinkCount must equal skippedUnsafeSymlinks.length + skippedUnsafeSymlinksOmitted",
-      });
-    }
-  });
+export const hostFileCopyManifestSchema = lazySchema(() =>
+  z
+    .object({
+      summary: hostFileCopyManifestSummarySchema,
+      failureCount: z.number().int().nonnegative(),
+      failures: z
+        .array(hostFileCopyFailureSchema)
+        .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
+      failuresOmitted: z.number().int().nonnegative(),
+      skippedUnsafeSymlinkCount: z.number().int().nonnegative(),
+      skippedUnsafeSymlinks: z
+        .array(hostFileCopySkippedUnsafeSymlinkSchema)
+        .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
+      skippedUnsafeSymlinksOmitted: z.number().int().nonnegative(),
+    })
+    .superRefine((manifest, ctx) => {
+      if (
+        manifest.failureCount !==
+        manifest.failures.length + manifest.failuresOmitted
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["failureCount"],
+          message: "failureCount must equal failures.length + failuresOmitted",
+        });
+      }
+      if (
+        manifest.skippedUnsafeSymlinkCount !==
+        manifest.skippedUnsafeSymlinks.length +
+          manifest.skippedUnsafeSymlinksOmitted
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["skippedUnsafeSymlinkCount"],
+          message:
+            "skippedUnsafeSymlinkCount must equal skippedUnsafeSymlinks.length + skippedUnsafeSymlinksOmitted",
+        });
+      }
+    }),
+);
 export type HostFileCopyManifest = z.infer<typeof hostFileCopyManifestSchema>;
 
 const hostFileCopyActiveStatusFields = {
@@ -343,13 +371,15 @@ const hostFileCopyTerminalStatusFields = {
  * because of this reason. The message is bounded because it reaches agent
  * context through status.
  */
-const hostFileCopyFailureReasonSchema = z.object({
-  operation: hostFileCopyFailureOperationSchema,
-  message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
-});
+const hostFileCopyFailureReasonSchema = lazySchema(() =>
+  z.object({
+    operation: hostFileCopyFailureOperationSchema,
+    message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
+  }),
+);
 
 const hostFileCopyNoFailureReasonField = {
-  reason: z.never().optional(),
+  reason: lazySchema(() => z.never().optional()),
 } as const;
 
 /**
@@ -361,44 +391,48 @@ const hostFileCopyNoFailureReasonField = {
  * v1 design keeps out of scope. Unlike a known terminal state, there is no
  * progress or manifest left to return for an unknown id.
  */
-export const hostFileCopyStatusResponseSchema = z.discriminatedUnion("state", [
-  z.object({
-    state: z.literal("queued"),
-    ...hostFileCopyActiveStatusFields,
-    ...hostFileCopyNoFailureReasonField,
-  }),
-  z.object({
-    state: z.literal("running"),
-    ...hostFileCopyActiveStatusFields,
-    ...hostFileCopyNoFailureReasonField,
-  }),
-  z.object({
-    state: z.literal("completed"),
-    ...hostFileCopyTerminalStatusFields,
-    ...hostFileCopyNoFailureReasonField,
-  }),
-  z.object({
-    state: z.literal("failed"),
-    ...hostFileCopyTerminalStatusFields,
-    reason: hostFileCopyFailureReasonSchema,
-  }),
-  z.object({
-    state: z.literal("cancelled"),
-    ...hostFileCopyTerminalStatusFields,
-    ...hostFileCopyNoFailureReasonField,
-  }),
-  z.object({
-    state: z.literal("unknown-job"),
-    ...hostFileCopyNoFailureReasonField,
-  }),
-]);
+export const hostFileCopyStatusResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({
+      state: z.literal("queued"),
+      ...hostFileCopyActiveStatusFields,
+      ...hostFileCopyNoFailureReasonField,
+    }),
+    z.object({
+      state: z.literal("running"),
+      ...hostFileCopyActiveStatusFields,
+      ...hostFileCopyNoFailureReasonField,
+    }),
+    z.object({
+      state: z.literal("completed"),
+      ...hostFileCopyTerminalStatusFields,
+      ...hostFileCopyNoFailureReasonField,
+    }),
+    z.object({
+      state: z.literal("failed"),
+      ...hostFileCopyTerminalStatusFields,
+      reason: hostFileCopyFailureReasonSchema,
+    }),
+    z.object({
+      state: z.literal("cancelled"),
+      ...hostFileCopyTerminalStatusFields,
+      ...hostFileCopyNoFailureReasonField,
+    }),
+    z.object({
+      state: z.literal("unknown-job"),
+      ...hostFileCopyNoFailureReasonField,
+    }),
+  ]),
+);
 export type HostFileCopyStatusResponse = z.infer<
   typeof hostFileCopyStatusResponseSchema
 >;
 
-export const hostFileCopyStatusRequestSchema = z.object({
-  jobId: z.string().min(1),
-});
+export const hostFileCopyStatusRequestSchema = lazySchema(() =>
+  z.object({
+    jobId: z.string().min(1),
+  }),
+);
 export type HostFileCopyStatusRequest = z.infer<
   typeof hostFileCopyStatusRequestSchema
 >;
@@ -410,16 +444,20 @@ export const hostFileCopyStatusV10 = defineRpcContract({
   responseSchema: hostFileCopyStatusResponseSchema,
 });
 
-export const hostFileCopyCancelRequestSchema = z.object({
-  jobId: z.string().min(1),
-});
+export const hostFileCopyCancelRequestSchema = lazySchema(() =>
+  z.object({
+    jobId: z.string().min(1),
+  }),
+);
 export type HostFileCopyCancelRequest = z.infer<
   typeof hostFileCopyCancelRequestSchema
 >;
 
-export const hostFileCopyCancelResponseSchema = z.object({
-  accepted: z.boolean(),
-});
+export const hostFileCopyCancelResponseSchema = lazySchema(() =>
+  z.object({
+    accepted: z.boolean(),
+  }),
+);
 export type HostFileCopyCancelResponse = z.infer<
   typeof hostFileCopyCancelResponseSchema
 >;
@@ -436,14 +474,15 @@ export const HOST_FILE_TRANSFER_ENUMERATE_PAGE_SIZE = 256;
 
 const hostFileTransferEntryMetadataFields = {
   /** Empty string denotes the source root itself. */
-  relativePath: z.string(),
+  relativePath: lazySchema(() => z.string()),
   /** Permission and special mode bits; file-type bits are excluded. */
-  mode: z.number().int().nonnegative().max(0o7777),
-  mtimeMs: z.number().finite(),
+  mode: lazySchema(() => z.number().int().nonnegative().max(0o7777)),
+  mtimeMs: lazySchema(() => z.number().finite()),
 } as const;
 
-const hostFileTransferUnreadableOperationSchema =
-  hostFileCopyFailureOperationSchema.extract(["stat", "readlink", "readdir"]);
+const hostFileTransferUnreadableOperationSchema = lazySchema(() =>
+  hostFileCopyFailureOperationSchema.extract(["stat", "readlink", "readdir"]),
+);
 
 /**
  * The source walk computes symlink safety against the transferred tree's
@@ -452,34 +491,36 @@ const hostFileTransferUnreadableOperationSchema =
  * absolute target or `..` resolution escaping the transferred tree (rsync
  * `--safe-links` semantics).
  */
-export const hostFileTransferEntrySchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("file"),
-    ...hostFileTransferEntryMetadataFields,
-    sizeBytes: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("directory"),
-    ...hostFileTransferEntryMetadataFields,
-  }),
-  z.object({
-    kind: z.literal("symlink"),
-    ...hostFileTransferEntryMetadataFields,
-    target: z.string(),
-    safety: z.enum(["safe", "unsafe"]),
-  }),
-  /**
-   * A source-authored per-entry failure keeps the page and later walk entries
-   * usable. `message` is bounded because it reaches the agent through the
-   * manifest and follows the same output discipline as manifest failure items.
-   */
-  z.object({
-    kind: z.literal("unreadable"),
-    relativePath: z.string(),
-    operation: hostFileTransferUnreadableOperationSchema,
-    message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
-  }),
-]);
+export const hostFileTransferEntrySchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("file"),
+      ...hostFileTransferEntryMetadataFields,
+      sizeBytes: z.number().int().nonnegative(),
+    }),
+    z.object({
+      kind: z.literal("directory"),
+      ...hostFileTransferEntryMetadataFields,
+    }),
+    z.object({
+      kind: z.literal("symlink"),
+      ...hostFileTransferEntryMetadataFields,
+      target: z.string(),
+      safety: z.enum(["safe", "unsafe"]),
+    }),
+    /**
+     * A source-authored per-entry failure keeps the page and later walk entries
+     * usable. `message` is bounded because it reaches the agent through the
+     * manifest and follows the same output discipline as manifest failure items.
+     */
+    z.object({
+      kind: z.literal("unreadable"),
+      relativePath: z.string(),
+      operation: hostFileTransferUnreadableOperationSchema,
+      message: z.string().max(HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH),
+    }),
+  ]),
+);
 export type HostFileTransferEntry = z.infer<typeof hostFileTransferEntrySchema>;
 
 /**
@@ -487,22 +528,26 @@ export type HostFileTransferEntry = z.infer<typeof hostFileTransferEntrySchema>;
  * the handle pins the authorized descriptor: read and close intentionally do
  * not re-authorize its epic scope or imply the descriptor is re-derivable.
  */
-export const hostFileTransferEnumerateRequestSchema = z.object({
-  epicId: z.string().min(1),
-  sourcePath: z.string().min(1),
-  exclude: z.array(z.string().min(1)),
-  cursor: z.string().min(1).nullable(),
-});
+export const hostFileTransferEnumerateRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    sourcePath: z.string().min(1),
+    exclude: z.array(z.string().min(1)),
+    cursor: z.string().min(1).nullable(),
+  }),
+);
 export type HostFileTransferEnumerateRequest = z.infer<
   typeof hostFileTransferEnumerateRequestSchema
 >;
 
-export const hostFileTransferEnumerateResponseSchema = z.object({
-  entries: z
-    .array(hostFileTransferEntrySchema)
-    .max(HOST_FILE_TRANSFER_ENUMERATE_PAGE_SIZE),
-  nextCursor: z.string().min(1).nullable(),
-});
+export const hostFileTransferEnumerateResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z
+      .array(hostFileTransferEntrySchema)
+      .max(HOST_FILE_TRANSFER_ENUMERATE_PAGE_SIZE),
+    nextCursor: z.string().min(1).nullable(),
+  }),
+);
 export type HostFileTransferEnumerateResponse = z.infer<
   typeof hostFileTransferEnumerateResponseSchema
 >;
@@ -514,19 +559,23 @@ export const hostFileTransferEnumerateV10 = defineRpcContract({
   responseSchema: hostFileTransferEnumerateResponseSchema,
 });
 
-export const hostFileTransferOpenRequestSchema = z.object({
-  epicId: z.string().min(1),
-  sourcePath: z.string().min(1),
-  relativePath: z.string(),
-});
+export const hostFileTransferOpenRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    sourcePath: z.string().min(1),
+    relativePath: z.string(),
+  }),
+);
 export type HostFileTransferOpenRequest = z.infer<
   typeof hostFileTransferOpenRequestSchema
 >;
 
-export const hostFileTransferOpenResponseSchema = z.object({
-  handleId: z.string().min(1),
-  sizeBytes: z.number().int().nonnegative(),
-});
+export const hostFileTransferOpenResponseSchema = lazySchema(() =>
+  z.object({
+    handleId: z.string().min(1),
+    sizeBytes: z.number().int().nonnegative(),
+  }),
+);
 export type HostFileTransferOpenResponse = z.infer<
   typeof hostFileTransferOpenResponseSchema
 >;
@@ -551,11 +600,13 @@ export const HOST_FILE_TRANSFER_MAX_CHUNK_BYTES = 512 * 1024;
 export const HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS =
   Math.ceil(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES / 3) * 4;
 
-export const hostFileTransferReadChunkRequestSchema = z.object({
-  handleId: z.string().min(1),
-  offset: z.number().int().nonnegative(),
-  length: z.number().int().positive().max(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES),
-});
+export const hostFileTransferReadChunkRequestSchema = lazySchema(() =>
+  z.object({
+    handleId: z.string().min(1),
+    offset: z.number().int().nonnegative(),
+    length: z.number().int().positive().max(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES),
+  }),
+);
 export type HostFileTransferReadChunkRequest = z.infer<
   typeof hostFileTransferReadChunkRequestSchema
 >;
@@ -567,15 +618,17 @@ export type HostFileTransferReadChunkRequest = z.infer<
  * It is never projected into the agent-facing start/status/cancel surface or
  * accepted as a tool argument, so the agent never holds or re-emits bytes.
  */
-export const hostFileTransferReadChunkResponseSchema = z.object({
-  bytesBase64: z.base64().max(HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS),
-  bytesRead: z
-    .number()
-    .int()
-    .nonnegative()
-    .max(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES),
-  eof: z.boolean(),
-});
+export const hostFileTransferReadChunkResponseSchema = lazySchema(() =>
+  z.object({
+    bytesBase64: z.base64().max(HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS),
+    bytesRead: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES),
+    eof: z.boolean(),
+  }),
+);
 export type HostFileTransferReadChunkResponse = z.infer<
   typeof hostFileTransferReadChunkResponseSchema
 >;
@@ -587,16 +640,20 @@ export const hostFileTransferReadChunkV10 = defineRpcContract({
   responseSchema: hostFileTransferReadChunkResponseSchema,
 });
 
-export const hostFileTransferCloseRequestSchema = z.object({
-  handleId: z.string().min(1),
-});
+export const hostFileTransferCloseRequestSchema = lazySchema(() =>
+  z.object({
+    handleId: z.string().min(1),
+  }),
+);
 export type HostFileTransferCloseRequest = z.infer<
   typeof hostFileTransferCloseRequestSchema
 >;
 
-export const hostFileTransferCloseResponseSchema = z.object({
-  closed: z.boolean(),
-});
+export const hostFileTransferCloseResponseSchema = lazySchema(() =>
+  z.object({
+    closed: z.boolean(),
+  }),
+);
 export type HostFileTransferCloseResponse = z.infer<
   typeof hostFileTransferCloseResponseSchema
 >;
@@ -631,9 +688,8 @@ export const hostFileTransferCloseV10 = defineRpcContract({
  * target requires it to equal the dialing principal's `originHostId`, so a
  * dialed host may only ever speak for its own agents.
  */
-export const hostAgentRemoteSenderFactsSchema = z.discriminatedUnion(
-  "surface",
-  [
+export const hostAgentRemoteSenderFactsSchema = lazySchema(() =>
+  z.discriminatedUnion("surface", [
     z.object({
       surface: z.literal("gui"),
       hostId: z.string().min(1),
@@ -648,7 +704,7 @@ export const hostAgentRemoteSenderFactsSchema = z.discriminatedUnion(
       agentMode: agentModeSchema,
       profileId: z.string().nullable(),
     }),
-  ],
+  ]),
 );
 export type HostAgentRemoteSenderFacts = z.infer<
   typeof hostAgentRemoteSenderFactsSchema
@@ -676,11 +732,12 @@ export type HostAgentRemoteSenderFacts = z.infer<
  * inherit-from-parent — and the parent it would try to inherit from is the
  * record the target does not have.
  */
-export const hostAgentCreateFromRemoteSenderRequestSchema =
+export const hostAgentCreateFromRemoteSenderRequestSchema = lazySchema(() =>
   createAgentRequestSchemaV30.extend({
     senderFacts: hostAgentRemoteSenderFactsSchema,
     workspaceIntent: z.literal("folderless").nullable(),
-  });
+  }),
+);
 export type HostAgentCreateFromRemoteSenderRequest = z.infer<
   typeof hostAgentCreateFromRemoteSenderRequestSchema
 >;

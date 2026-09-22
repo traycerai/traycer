@@ -106,6 +106,7 @@ import {
   snapshotMetaEpicSchemaV10,
   snapshotMetaEpicSchemaV12,
 } from "@traycer/protocol/host/epic/snapshot-meta";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The frozen `@1.0` / `@1.1` / `@1.2` open request, as shipped.
@@ -114,9 +115,11 @@ import {
  * here would be a same-version wire-shape change on three already-released
  * lines. `@1.3` extends it below.
  */
-export const epicSubscribeOpenRequestSchemaV10 = z.object({
-  epicId: z.string(),
-});
+export const epicSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+  }),
+);
 export type EpicSubscribeOpenRequestV10 = z.infer<
   typeof epicSubscribeOpenRequestSchemaV10
 >;
@@ -131,29 +134,31 @@ export type EpicSubscribeOpenRequestV10 = z.infer<
  * nesting makes "both or neither" structural, so there is no cross-field
  * runtime check for a later reader to overlook.
  */
-export const epicSubscribeClientSeedOfferSchema = z.object({
-  /**
-   * Base64-encoded `Y.encodeStateVector` of the live root Epic doc the client
-   * still holds. The host answers `Y.encodeStateAsUpdate(doc, thisVector)` -
-   * everything it has that the client does not.
-   */
-  stateVectorBase64: z.string().min(1),
-  /**
-   * The room the offered state came from - the `roomId` off the snapshot meta
-   * that seeded this client's doc. The host serves a delta only when this
-   * names the room it is about to encode from, and otherwise falls back to a
-   * full snapshot.
-   *
-   * Required inside the offer, not optional. A major schema migration mints a
-   * NEW room for the same `epicId`, so a state vector alone cannot distinguish
-   * "what this client is missing from this room" from "state belonging to the
-   * pre-migration room": diffing against the latter would union two logically
-   * different documents. A client that cannot name its room - one seeded by a
-   * pre-`@1.2` host, which never sent `roomId` - therefore sends NO offer and
-   * takes a full snapshot rather than guessing.
-   */
-  roomId: z.string().min(1),
-});
+export const epicSubscribeClientSeedOfferSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Base64-encoded `Y.encodeStateVector` of the live root Epic doc the client
+     * still holds. The host answers `Y.encodeStateAsUpdate(doc, thisVector)` -
+     * everything it has that the client does not.
+     */
+    stateVectorBase64: z.string().min(1),
+    /**
+     * The room the offered state came from - the `roomId` off the snapshot meta
+     * that seeded this client's doc. The host serves a delta only when this
+     * names the room it is about to encode from, and otherwise falls back to a
+     * full snapshot.
+     *
+     * Required inside the offer, not optional. A major schema migration mints a
+     * NEW room for the same `epicId`, so a state vector alone cannot distinguish
+     * "what this client is missing from this room" from "state belonging to the
+     * pre-migration room": diffing against the latter would union two logically
+     * different documents. A client that cannot name its room - one seeded by a
+     * pre-`@1.2` host, which never sent `roomId` - therefore sends NO offer and
+     * takes a full snapshot rather than guessing.
+     */
+    roomId: z.string().min(1),
+  }),
+);
 export type EpicSubscribeClientSeedOffer = z.infer<
   typeof epicSubscribeClientSeedOfferSchema
 >;
@@ -177,10 +182,11 @@ export type EpicSubscribeClientSeedOffer = z.infer<
  * it builds its first open request anyway - and an unrecognized offer degrades
  * to today's full snapshot with no error on any path.
  */
-export const epicSubscribeOpenRequestSchema =
+export const epicSubscribeOpenRequestSchema = lazySchema(() =>
   epicSubscribeOpenRequestSchemaV10.extend({
     seedOffer: epicSubscribeClientSeedOfferSchema.optional(),
-  });
+  }),
+);
 export type EpicSubscribeOpenRequest = z.infer<
   typeof epicSubscribeOpenRequestSchema
 >;
@@ -189,11 +195,9 @@ export type EpicSubscribeOpenRequest = z.infer<
  * Per-artifact-room availability surfaced to the GUI. Mirrors
  * `EpicArtifactRoomManager`'s {@link ArtifactRoomAvailability}.
  */
-export const epicArtifactRoomAvailabilitySchema = z.enum([
-  "ready",
-  "unavailable",
-  "retrying",
-]);
+export const epicArtifactRoomAvailabilitySchema = lazySchema(() =>
+  z.enum(["ready", "unavailable", "retrying"]),
+);
 export type EpicArtifactRoomAvailability = z.infer<
   typeof epicArtifactRoomAvailabilitySchema
 >;
@@ -208,11 +212,9 @@ export type EpicArtifactRoomAvailability = z.infer<
  * - `upload`   - publish artifact-room bodies (the long, fraction-bearing phase).
  * - `finalize` - write the final root and tear down the migration provider.
  */
-export const epicMigrationPhaseSchema = z.enum([
-  "prepare",
-  "upload",
-  "finalize",
-]);
+export const epicMigrationPhaseSchema = lazySchema(() =>
+  z.enum(["prepare", "upload", "finalize"]),
+);
 export type EpicMigrationPhase = z.infer<typeof epicMigrationPhaseSchema>;
 
 /**
@@ -221,11 +223,9 @@ export type EpicMigrationPhase = z.infer<typeof epicMigrationPhaseSchema>;
  * while the host's cloud room websocket is offline, so this frame is the
  * source of truth for whether "All changes synced" is safe to show.
  */
-export const epicCloudSyncStatusSchema = z.enum([
-  "connected",
-  "reconnecting",
-  "disconnected",
-]);
+export const epicCloudSyncStatusSchema = lazySchema(() =>
+  z.enum(["connected", "reconnecting", "disconnected"]),
+);
 export type EpicCloudSyncStatus = z.infer<typeof epicCloudSyncStatusSchema>;
 
 /**
@@ -233,12 +233,9 @@ export type EpicCloudSyncStatus = z.infer<typeof epicCloudSyncStatusSchema>;
  * different question from {@link epicCloudSyncStatusSchema}: a local mirror
  * can report its local connection as healthy while cloud sync is paused.
  */
-export const epicDurabilityStatusSchema = z.enum([
-  "local",
-  "promoting",
-  "paused",
-  "offline",
-]);
+export const epicDurabilityStatusSchema = lazySchema(() =>
+  z.enum(["local", "promoting", "paused", "offline"]),
+);
 export type EpicDurabilityStatus = z.infer<typeof epicDurabilityStatusSchema>;
 
 /**
@@ -251,7 +248,9 @@ export type EpicDurabilityStatus = z.infer<typeof epicDurabilityStatusSchema>;
  * be omitted, falling back to today's rendering just as it does for a host
  * that does not speak @1.4, rather than widening this released enum.
  */
-export const epicPromotionStateSchema = z.enum(["pending", "active"]);
+export const epicPromotionStateSchema = lazySchema(() =>
+  z.enum(["pending", "active"]),
+);
 export type EpicPromotionState = z.infer<typeof epicPromotionStateSchema>;
 
 /**
@@ -259,7 +258,9 @@ export type EpicPromotionState = z.infer<typeof epicPromotionStateSchema>;
  * intentionally wider, so the host maps recognised values to this closed wire
  * union and omits unknown values.
  */
-export const epicDurabilityPauseReasonSchema = z.enum(["access-revoked"]);
+export const epicDurabilityPauseReasonSchema = lazySchema(() =>
+  z.enum(["access-revoked"]),
+);
 export type EpicDurabilityPauseReason = z.infer<
   typeof epicDurabilityPauseReasonSchema
 >;
@@ -290,12 +291,14 @@ export type EpicDurabilityPauseReason = z.infer<
  * negotiated minor speaks, and omits the key when that minor has no member for
  * it.
  */
-export const epicDurabilityPauseReasonSchemaV15 = z.enum([
-  "access-revoked",
-  "delete-pending-acknowledgement",
-  "delete-tombstone-unscoped-cleared",
-  "orphaned-local-edits-after-cloud-delete",
-]);
+export const epicDurabilityPauseReasonSchemaV15 = lazySchema(() =>
+  z.enum([
+    "access-revoked",
+    "delete-pending-acknowledgement",
+    "delete-tombstone-unscoped-cleared",
+    "orphaned-local-edits-after-cloud-delete",
+  ]),
+);
 export type EpicDurabilityPauseReasonV15 = z.infer<
   typeof epicDurabilityPauseReasonSchemaV15
 >;
@@ -325,14 +328,9 @@ export type EpicDurabilityPauseReasonV15 = z.infer<
  * Value growth on the same emission-gated terms as the pause-reason widening:
  * `@1.3` / `@1.4` stay frozen and are never sent `unknown` or `cloud`.
  */
-export const epicDurabilityStatusSchemaV15 = z.enum([
-  "local",
-  "promoting",
-  "paused",
-  "offline",
-  "unknown",
-  "cloud",
-]);
+export const epicDurabilityStatusSchemaV15 = lazySchema(() =>
+  z.enum(["local", "promoting", "paused", "offline", "unknown", "cloud"]),
+);
 export type EpicDurabilityStatusV15 = z.infer<
   typeof epicDurabilityStatusSchemaV15
 >;
@@ -360,11 +358,9 @@ export type EpicDurabilityStatusV15 = z.infer<
  * Optional on the frame, and its absence at `@1.5` means `unknown` - the same
  * conservative reading as `durability`, for the same reason.
  */
-export const epicLocalProtectionSchema = z.enum([
-  "armed",
-  "unavailable",
-  "unknown",
-]);
+export const epicLocalProtectionSchema = lazySchema(() =>
+  z.enum(["armed", "unavailable", "unknown"]),
+);
 export type EpicLocalProtection = z.infer<typeof epicLocalProtectionSchema>;
 
 /**
@@ -383,16 +379,18 @@ export type EpicLocalProtection = z.infer<typeof epicLocalProtectionSchema>;
  * reconciled against the cloud", so neither may be reused here without an
  * equivalence proof.
  */
-export const epicCloudFreshnessStateSchema = z.enum([
-  /** Served from the local mirror; no cloud contact has been made yet. */
-  "local-copy",
-  /** Cloud is attached to the same Y.Doc and reconciliation is in flight. */
-  "syncing",
-  /** Known to be behind the cloud, or too old to claim otherwise. */
-  "stale",
-  /** A full root cloud reconciliation succeeded and recorded its timestamp. */
-  "current",
-]);
+export const epicCloudFreshnessStateSchema = lazySchema(() =>
+  z.enum([
+    /** Served from the local mirror; no cloud contact has been made yet. */
+    "local-copy",
+    /** Cloud is attached to the same Y.Doc and reconciliation is in flight. */
+    "syncing",
+    /** Known to be behind the cloud, or too old to claim otherwise. */
+    "stale",
+    /** A full root cloud reconciliation succeeded and recorded its timestamp. */
+    "current",
+  ]),
+);
 export type EpicCloudFreshnessState = z.infer<
   typeof epicCloudFreshnessStateSchema
 >;
@@ -404,11 +402,9 @@ export type EpicCloudFreshnessState = z.infer<
  * successful full root cloud reconciliation may record the timestamp that
  * licenses the `current` claim.
  */
-export const epicCloudFreshnessUnknownStateSchema = z.enum([
-  "local-copy",
-  "syncing",
-  "stale",
-]);
+export const epicCloudFreshnessUnknownStateSchema = lazySchema(() =>
+  z.enum(["local-copy", "syncing", "stale"]),
+);
 export type EpicCloudFreshnessUnknownState = z.infer<
   typeof epicCloudFreshnessUnknownStateSchema
 >;
@@ -419,21 +415,23 @@ export type EpicCloudFreshnessUnknownState = z.infer<
  * number, so `current` is UNREACHABLE without the timestamp that licenses it -
  * the safety contract holds by construction instead of by convention.
  */
-export const epicCloudFreshnessSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("lastCloudSyncAt"),
-    /**
-     * Epoch milliseconds of the last SUCCESSFUL full root cloud reconciliation
-     * for this epic. Persisted, so it survives a restart of a closed mirror.
-     */
-    reconciledAtEpochMs: z.number().int().nonnegative(),
-    state: epicCloudFreshnessStateSchema,
-  }),
-  z.object({
-    kind: z.literal("freshnessUnknown"),
-    state: epicCloudFreshnessUnknownStateSchema,
-  }),
-]);
+export const epicCloudFreshnessSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("lastCloudSyncAt"),
+      /**
+       * Epoch milliseconds of the last SUCCESSFUL full root cloud reconciliation
+       * for this epic. Persisted, so it survives a restart of a closed mirror.
+       */
+      reconciledAtEpochMs: z.number().int().nonnegative(),
+      state: epicCloudFreshnessStateSchema,
+    }),
+    z.object({
+      kind: z.literal("freshnessUnknown"),
+      state: epicCloudFreshnessUnknownStateSchema,
+    }),
+  ]),
+);
 export type EpicCloudFreshness = z.infer<typeof epicCloudFreshnessSchema>;
 
 // ─── Frozen `epic.subscribe@1.0` server-frame set (as shipped) ────────────
@@ -451,12 +449,14 @@ export type EpicCloudFreshness = z.infer<typeof epicCloudFreshnessSchema>;
  * `meta` shape without duplicating the other fourteen frame kinds and without
  * disturbing this one - see {@link epicSubscribeSnapshotServerFrameSchemaV12}.
  */
-const epicSubscribeSnapshotServerFrameSchemaV10 = z.object({
-  kind: z.literal("snapshot"),
-  epicId: z.string(),
-  meta: snapshotMetaEpicSchemaV10,
-  hasBinaryPayload: z.literal(true),
-});
+const epicSubscribeSnapshotServerFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    epicId: z.string(),
+    meta: snapshotMetaEpicSchemaV10,
+    hasBinaryPayload: z.literal(true),
+  }),
+);
 
 /**
  * The frozen `@1.0` frames between `snapshot` and `cloudSyncStatus`. Two frame
@@ -481,93 +481,115 @@ const epicSubscribeServerFrameSchemasBeforeCloudSyncStatus = [
    * state vector here (placeholder) - the real snapshot overwrites the full
    * meta when it arrives.
    */
-  z.object({
-    kind: z.literal("earlyMeta"),
-    epicId: z.string(),
-    meta: earlyMetaEpicSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("update"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("awareness"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("permissionChanged"),
-    epicId: z.string(),
-    permissionRole: permissionRoleSchema.nullable(),
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("earlyMeta"),
+      epicId: z.string(),
+      meta: earlyMetaEpicSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("update"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(true),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("awareness"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(true),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("permissionChanged"),
+      epicId: z.string(),
+      permissionRole: permissionRoleSchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
 ] as const;
 
-const epicSubscribeCloudSyncStatusServerFrameSchemaV10 = z.object({
-  kind: z.literal("cloudSyncStatus"),
-  epicId: z.string(),
-  status: epicCloudSyncStatusSchema,
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeCloudSyncStatusServerFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("cloudSyncStatus"),
+    epicId: z.string(),
+    status: epicCloudSyncStatusSchema,
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
 const epicSubscribeServerFrameSchemasAfterCloudSyncStatus = [
-  z.object({
-    kind: z.literal("pong"),
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("artifactRoomSnapshot"),
-    epicId: z.string(),
-    artifactRoomId: z.string().min(1),
-    /**
-     * Base64-encoded `Y.encodeStateVector` of the host-side artifactRoom Y.Doc
-     * AFTER applying the bytes carried by this frame. The GUI compares it
-     * against any local dirty watermark on the corresponding artifactRoom replica
-     * to decide whether the artifactRoom is converged or still needs a reconcile
-     * update fan-out.
-     */
-    hostArtifactRoomStateVectorBase64: z.string(),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("artifactRoomUpdate"),
-    epicId: z.string(),
-    artifactRoomId: z.string().min(1),
-    /**
-     * Base64-encoded `Y.encodeStateVector` of the host-side artifactRoom Y.Doc
-     * AFTER applying the update bytes carried by this frame. Mirrors
-     * `artifactRoomSnapshot` so the GUI can advance per-artifact-room host coverage on
-     * incremental updates without waiting for a full snapshot.
-     */
-    hostArtifactRoomStateVectorBase64: z.string(),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("artifactRoomAwareness"),
-    epicId: z.string(),
-    artifactRoomId: z.string().min(1),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("artifactRoomState"),
-    epicId: z.string(),
-    artifactRoomId: z.string().min(1),
-    state: epicArtifactRoomAvailabilitySchema,
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("artifactRoomSnapshot"),
+      epicId: z.string(),
+      artifactRoomId: z.string().min(1),
+      /**
+       * Base64-encoded `Y.encodeStateVector` of the host-side artifactRoom Y.Doc
+       * AFTER applying the bytes carried by this frame. The GUI compares it
+       * against any local dirty watermark on the corresponding artifactRoom replica
+       * to decide whether the artifactRoom is converged or still needs a reconcile
+       * update fan-out.
+       */
+      hostArtifactRoomStateVectorBase64: z.string(),
+      hasBinaryPayload: z.literal(true),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("artifactRoomUpdate"),
+      epicId: z.string(),
+      artifactRoomId: z.string().min(1),
+      /**
+       * Base64-encoded `Y.encodeStateVector` of the host-side artifactRoom Y.Doc
+       * AFTER applying the update bytes carried by this frame. Mirrors
+       * `artifactRoomSnapshot` so the GUI can advance per-artifact-room host coverage on
+       * incremental updates without waiting for a full snapshot.
+       */
+      hostArtifactRoomStateVectorBase64: z.string(),
+      hasBinaryPayload: z.literal(true),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("artifactRoomAwareness"),
+      epicId: z.string(),
+      artifactRoomId: z.string().min(1),
+      hasBinaryPayload: z.literal(true),
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("artifactRoomState"),
+      epicId: z.string(),
+      artifactRoomId: z.string().min(1),
+      state: epicArtifactRoomAvailabilitySchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
   /**
    * One-shot signal that the host is about to begin a major migration for
    * this epic. Emitted before any `migrationProgress` frame so the GUI can
    * show the migration-progress modal immediately and replace the silent
    * skeleton state.
    */
-  z.object({
-    kind: z.literal("migrationStarted"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("migrationStarted"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
   /**
    * Progress update for an in-flight major migration. `chunksDone` and
    * `chunksTotal` carry an opaque tick fraction for the active `phase`; the
@@ -575,14 +597,16 @@ const epicSubscribeServerFrameSchemasAfterCloudSyncStatus = [
    * `prepare`/`finalize` the host sends `chunksDone: 0, chunksTotal: 1`
    * and the renderer ignores the numbers in favour of a spinner.
    */
-  z.object({
-    kind: z.literal("migrationProgress"),
-    epicId: z.string(),
-    phase: epicMigrationPhaseSchema,
-    chunksDone: z.number().int().nonnegative(),
-    chunksTotal: z.number().int().positive(),
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("migrationProgress"),
+      epicId: z.string(),
+      phase: epicMigrationPhaseSchema,
+      chunksDone: z.number().int().nonnegative(),
+      chunksTotal: z.number().int().positive(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
   /**
    * Terminal failure signal for an in-flight major migration. Emitted in
    * lieu of a fatal-error WS close so the session stays alive and the GUI
@@ -591,12 +615,14 @@ const epicSubscribeServerFrameSchemasAfterCloudSyncStatus = [
    * host-side logging; the modal copy is fixed and never displays this
    * string.
    */
-  z.object({
-    kind: z.literal("migrationFailed"),
-    epicId: z.string(),
-    reason: z.string(),
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("migrationFailed"),
+      epicId: z.string(),
+      reason: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
   /**
    * One-shot, terminal signal that this epic needs a major migration but the
    * caller lacks the write access (owner/editor) required to perform it. The
@@ -606,24 +632,28 @@ const epicSubscribeServerFrameSchemasAfterCloudSyncStatus = [
    * epic once so it upgrades. Distinct from `migrationFailed` precisely because
    * a retry from this caller can never succeed.
    */
-  z.object({
-    kind: z.literal("migrationNotAllowed"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("migrationNotAllowed"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
   /**
    * One-shot signal that the host observed a REMOTE `meta.deleted`
    * transition on the epic room (someone else deleted the epic while this
    * client had it open), carrying the deletion attribution so the renderer
    * can force-close the tab and toast who deleted it.
    */
-  z.object({
-    kind: z.literal("epicDeleted"),
-    epicId: z.string(),
-    deletedByDisplayName: z.string().nullable(),
-    deletedByTraycerUserId: z.string().nullable(),
-    hasBinaryPayload: z.literal(false),
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("epicDeleted"),
+      epicId: z.string(),
+      deletedByDisplayName: z.string().nullable(),
+      deletedByTraycerUserId: z.string().nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ),
 ] as const;
 
 /**
@@ -647,9 +677,8 @@ const epicSubscribeSharedServerFrameSchemasV10 = [
   ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
 ] as const;
 
-export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  epicSubscribeSharedServerFrameSchemasV10,
+export const epicSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", epicSubscribeSharedServerFrameSchemasV10),
 );
 
 /**
@@ -681,25 +710,29 @@ export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
  * against an old host must treat dirtiness as **unknown**, not clean. Gate on
  * negotiated version / frame support instead.
  */
-const epicSubscribeArtifactRoomDirtyServerFrameSchema = z.object({
-  kind: z.literal("artifactRoomDirty"),
-  epicId: z.string(),
-  artifactRoomId: z.string().min(1),
-  dirty: z.boolean(),
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeArtifactRoomDirtyServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("artifactRoomDirty"),
+    epicId: z.string(),
+    artifactRoomId: z.string().min(1),
+    dirty: z.boolean(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
 /**
  * Root-doc transition delta after the cycle's `dirtySnapshot`. Same three-term
  * composition as per-room dirtiness (provider unsynced ∨ unflushed buffer ∨
  * retained pending row).
  */
-const epicSubscribeRootDirtyServerFrameSchema = z.object({
-  kind: z.literal("rootDirty"),
-  epicId: z.string(),
-  dirty: z.boolean(),
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeRootDirtyServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("rootDirty"),
+    epicId: z.string(),
+    dirty: z.boolean(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
 /**
  * Atomic per-subscription dirtiness snapshot for `@1.1`.
@@ -710,18 +743,20 @@ const epicSubscribeRootDirtyServerFrameSchema = z.object({
  * N separate per-room frames. After this, transitions use
  * `artifactRoomDirty` / `rootDirty` deltas.
  */
-const epicSubscribeDirtySnapshotServerFrameSchema = z.object({
-  kind: z.literal("dirtySnapshot"),
-  epicId: z.string(),
-  rootDirty: z.boolean(),
-  rooms: z.array(
-    z.object({
-      artifactRoomId: z.string().min(1),
-      dirty: z.boolean(),
-    }),
-  ),
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeDirtySnapshotServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("dirtySnapshot"),
+    epicId: z.string(),
+    rootDirty: z.boolean(),
+    rooms: z.array(
+      z.object({
+        artifactRoomId: z.string().min(1),
+        dirty: z.boolean(),
+      }),
+    ),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
 // ─── `epic.subscribe@1.1` - additive: dirtySnapshot + dirty deltas ────────
 //
@@ -730,12 +765,14 @@ const epicSubscribeDirtySnapshotServerFrameSchema = z.object({
 // kinds, and the resolver gates on the negotiated version rather than assuming
 // the peer will tolerate an unknown frame. Both minors share the same V10 base
 // array so the frozen set cannot drift.
-export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
-  ...epicSubscribeSharedServerFrameSchemasV10,
-  epicSubscribeDirtySnapshotServerFrameSchema,
-  epicSubscribeArtifactRoomDirtyServerFrameSchema,
-  epicSubscribeRootDirtyServerFrameSchema,
-]);
+export const epicSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...epicSubscribeSharedServerFrameSchemasV10,
+    epicSubscribeDirtySnapshotServerFrameSchema,
+    epicSubscribeArtifactRoomDirtyServerFrameSchema,
+    epicSubscribeRootDirtyServerFrameSchema,
+  ]),
+);
 
 // ─── `epic.subscribe@1.2` - additive: room identity on snapshot meta ──────
 //
@@ -773,20 +810,24 @@ export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
  * carries the room identity. Later minors (`@1.3`+) keep this exact frame:
  * their growth rides the `cloudSyncStatus` frame instead.
  */
-const epicSubscribeSnapshotServerFrameSchemaV12 = z.object({
-  kind: z.literal("snapshot"),
-  epicId: z.string(),
-  meta: snapshotMetaEpicSchemaV12,
-  hasBinaryPayload: z.literal(true),
-});
+const epicSubscribeSnapshotServerFrameSchemaV12 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    epicId: z.string(),
+    meta: snapshotMetaEpicSchemaV12,
+    hasBinaryPayload: z.literal(true),
+  }),
+);
 
-export const epicSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
-  epicSubscribeSnapshotServerFrameSchemaV12,
-  ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
-  epicSubscribeDirtySnapshotServerFrameSchema,
-  epicSubscribeArtifactRoomDirtyServerFrameSchema,
-  epicSubscribeRootDirtyServerFrameSchema,
-]);
+export const epicSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicSubscribeSnapshotServerFrameSchemaV12,
+    ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
+    epicSubscribeDirtySnapshotServerFrameSchema,
+    epicSubscribeArtifactRoomDirtyServerFrameSchema,
+    epicSubscribeRootDirtyServerFrameSchema,
+  ]),
+);
 
 // ─── `epic.subscribe@1.3` - additive: delta-seeded reattach ───────────────
 //
@@ -828,20 +869,24 @@ export const epicSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
  * carry the delta-seed basis marker. `@1.4`+ keep this exact frame: their
  * growth rides the `cloudSyncStatus` frame instead.
  */
-const epicSubscribeSnapshotServerFrameSchemaV13 = z.object({
-  kind: z.literal("snapshot"),
-  epicId: z.string(),
-  meta: snapshotMetaEpicSchema,
-  hasBinaryPayload: z.literal(true),
-});
+const epicSubscribeSnapshotServerFrameSchemaV13 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    epicId: z.string(),
+    meta: snapshotMetaEpicSchema,
+    hasBinaryPayload: z.literal(true),
+  }),
+);
 
-export const epicSubscribeServerFrameSchemaV13 = z.discriminatedUnion("kind", [
-  epicSubscribeSnapshotServerFrameSchemaV13,
-  ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
-  epicSubscribeDirtySnapshotServerFrameSchema,
-  epicSubscribeArtifactRoomDirtyServerFrameSchema,
-  epicSubscribeRootDirtyServerFrameSchema,
-]);
+export const epicSubscribeServerFrameSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicSubscribeSnapshotServerFrameSchemaV13,
+    ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
+    epicSubscribeDirtySnapshotServerFrameSchema,
+    epicSubscribeArtifactRoomDirtyServerFrameSchema,
+    epicSubscribeRootDirtyServerFrameSchema,
+  ]),
+);
 
 // ─── `epic.subscribe@1.4` - additive per-epic durability status ───────────
 //
@@ -850,27 +895,31 @@ export const epicSubscribeServerFrameSchemaV13 = z.discriminatedUnion("kind", [
 // optional so a @1.4 GUI remains compatible with an older host. @1.0 through
 // @1.3 remain frozen: the resolver omits these keys unless this minor was
 // negotiated.
-const epicSubscribeCloudSyncStatusServerFrameSchemaV14 = z.object({
-  kind: z.literal("cloudSyncStatus"),
-  epicId: z.string(),
-  status: epicCloudSyncStatusSchema,
-  durability: epicDurabilityStatusSchema.optional(),
-  // Meaningful only with durability=paused. Kept optional (rather than a
-  // discriminated union) so an unrecognised host registry value degrades to a
-  // neutral paused state and the additive compatibility gate stays simple.
-  pauseReason: epicDurabilityPauseReasonSchema.optional(),
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeCloudSyncStatusServerFrameSchemaV14 = lazySchema(() =>
+  z.object({
+    kind: z.literal("cloudSyncStatus"),
+    epicId: z.string(),
+    status: epicCloudSyncStatusSchema,
+    durability: epicDurabilityStatusSchema.optional(),
+    // Meaningful only with durability=paused. Kept optional (rather than a
+    // discriminated union) so an unrecognised host registry value degrades to a
+    // neutral paused state and the additive compatibility gate stays simple.
+    pauseReason: epicDurabilityPauseReasonSchema.optional(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-export const epicSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
-  epicSubscribeSnapshotServerFrameSchemaV13,
-  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
-  epicSubscribeCloudSyncStatusServerFrameSchemaV14,
-  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
-  epicSubscribeDirtySnapshotServerFrameSchema,
-  epicSubscribeArtifactRoomDirtyServerFrameSchema,
-  epicSubscribeRootDirtyServerFrameSchema,
-]);
+export const epicSubscribeServerFrameSchemaV14 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicSubscribeSnapshotServerFrameSchemaV13,
+    ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+    epicSubscribeCloudSyncStatusServerFrameSchemaV14,
+    ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+    epicSubscribeDirtySnapshotServerFrameSchema,
+    epicSubscribeArtifactRoomDirtyServerFrameSchema,
+    epicSubscribeRootDirtyServerFrameSchema,
+  ]),
+);
 
 // ─── `epic.subscribe@1.5` - additive live promotion state ─────────────────
 //
@@ -879,25 +928,29 @@ export const epicSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
 // peer the missing distinction between an in-progress upload and a durable,
 // currently wedged reservation. @1.4 remains frozen and the host gates this
 // key on the negotiated minor.
-const epicSubscribeCloudSyncStatusServerFrameSchemaV15 = z.object({
-  kind: z.literal("cloudSyncStatus"),
-  epicId: z.string(),
-  status: epicCloudSyncStatusSchema,
-  durability: epicDurabilityStatusSchema.optional(),
-  pauseReason: epicDurabilityPauseReasonSchema.optional(),
-  promotionState: epicPromotionStateSchema.optional(),
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeCloudSyncStatusServerFrameSchemaV15 = lazySchema(() =>
+  z.object({
+    kind: z.literal("cloudSyncStatus"),
+    epicId: z.string(),
+    status: epicCloudSyncStatusSchema,
+    durability: epicDurabilityStatusSchema.optional(),
+    pauseReason: epicDurabilityPauseReasonSchema.optional(),
+    promotionState: epicPromotionStateSchema.optional(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-export const epicSubscribeServerFrameSchemaV15 = z.discriminatedUnion("kind", [
-  epicSubscribeSnapshotServerFrameSchemaV13,
-  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
-  epicSubscribeCloudSyncStatusServerFrameSchemaV15,
-  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
-  epicSubscribeDirtySnapshotServerFrameSchema,
-  epicSubscribeArtifactRoomDirtyServerFrameSchema,
-  epicSubscribeRootDirtyServerFrameSchema,
-]);
+export const epicSubscribeServerFrameSchemaV15 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicSubscribeSnapshotServerFrameSchemaV13,
+    ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+    epicSubscribeCloudSyncStatusServerFrameSchemaV15,
+    ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+    epicSubscribeDirtySnapshotServerFrameSchema,
+    epicSubscribeArtifactRoomDirtyServerFrameSchema,
+    epicSubscribeRootDirtyServerFrameSchema,
+  ]),
+);
 
 // ─── `epic.subscribe@1.6` - one additive minor for the s5 status pass ─────
 //
@@ -924,27 +977,31 @@ export const epicSubscribeServerFrameSchemaV15 = z.discriminatedUnion("kind", [
 // Optionality here is a wire-compat affordance (an older host on this line may
 // omit them), not permission to render silence as reassurance - that reading
 // is the class of status defect this minor exists to correct.
-const epicSubscribeCloudSyncStatusServerFrameSchemaV16 = z.object({
-  kind: z.literal("cloudSyncStatus"),
-  epicId: z.string(),
-  status: epicCloudSyncStatusSchema,
-  durability: epicDurabilityStatusSchemaV15.optional(),
-  pauseReason: epicDurabilityPauseReasonSchemaV15.optional(),
-  promotionState: epicPromotionStateSchema.optional(),
-  localProtection: epicLocalProtectionSchema.optional(),
-  freshness: epicCloudFreshnessSchema.optional(),
-  hasBinaryPayload: z.literal(false),
-});
+const epicSubscribeCloudSyncStatusServerFrameSchemaV16 = lazySchema(() =>
+  z.object({
+    kind: z.literal("cloudSyncStatus"),
+    epicId: z.string(),
+    status: epicCloudSyncStatusSchema,
+    durability: epicDurabilityStatusSchemaV15.optional(),
+    pauseReason: epicDurabilityPauseReasonSchemaV15.optional(),
+    promotionState: epicPromotionStateSchema.optional(),
+    localProtection: epicLocalProtectionSchema.optional(),
+    freshness: epicCloudFreshnessSchema.optional(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-export const epicSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
-  epicSubscribeSnapshotServerFrameSchemaV13,
-  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
-  epicSubscribeCloudSyncStatusServerFrameSchemaV16,
-  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
-  epicSubscribeDirtySnapshotServerFrameSchema,
-  epicSubscribeArtifactRoomDirtyServerFrameSchema,
-  epicSubscribeRootDirtyServerFrameSchema,
-]);
+export const epicSubscribeServerFrameSchemaV16 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    epicSubscribeSnapshotServerFrameSchemaV13,
+    ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+    epicSubscribeCloudSyncStatusServerFrameSchemaV16,
+    ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+    epicSubscribeDirtySnapshotServerFrameSchema,
+    epicSubscribeArtifactRoomDirtyServerFrameSchema,
+    epicSubscribeRootDirtyServerFrameSchema,
+  ]),
+);
 
 /** The latest installed shape. Host code builds frames against this. */
 export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV16;
@@ -952,45 +1009,47 @@ export type EpicSubscribeServerFrame = z.infer<
   typeof epicSubscribeServerFrameSchema
 >;
 
-export const epicSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("applyUpdate"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("awareness"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("ping"),
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("artifactRoomApplyUpdate"),
-    epicId: z.string(),
-    artifactRoomId: z.string().min(1),
-    hasBinaryPayload: z.literal(true),
-  }),
-  z.object({
-    kind: z.literal("artifactRoomAwareness"),
-    epicId: z.string(),
-    artifactRoomId: z.string().min(1),
-    hasBinaryPayload: z.literal(true),
-  }),
-  /**
-   * Client-initiated retry of a failed major migration. The host resolver
-   * tears down the current epic lease and re-runs `openEpic`, which is
-   * retry-safe (server prepare skips duplicates, transformDuplicatedRoom is
-   * idempotent). Emitted from the migration-progress modal's Retry button.
-   */
-  z.object({
-    kind: z.literal("retryMigration"),
-    epicId: z.string(),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const epicSubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("applyUpdate"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(true),
+    }),
+    z.object({
+      kind: z.literal("awareness"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(true),
+    }),
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("artifactRoomApplyUpdate"),
+      epicId: z.string(),
+      artifactRoomId: z.string().min(1),
+      hasBinaryPayload: z.literal(true),
+    }),
+    z.object({
+      kind: z.literal("artifactRoomAwareness"),
+      epicId: z.string(),
+      artifactRoomId: z.string().min(1),
+      hasBinaryPayload: z.literal(true),
+    }),
+    /**
+     * Client-initiated retry of a failed major migration. The host resolver
+     * tears down the current epic lease and re-runs `openEpic`, which is
+     * retry-safe (server prepare skips duplicates, transformDuplicatedRoom is
+     * idempotent). Emitted from the migration-progress modal's Retry button.
+     */
+    z.object({
+      kind: z.literal("retryMigration"),
+      epicId: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type EpicSubscribeClientFrame = z.infer<
   typeof epicSubscribeClientFrameSchema
 >;

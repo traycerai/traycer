@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { HomeHero } from "@/components/home/home-hero";
+import { resetLandingPromptForTests } from "@/components/home/landing-prompt";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
@@ -143,5 +144,32 @@ describe("<HomeHero />", () => {
     render(<HomeHero workspaceFolders={[]} />);
 
     expect(screen.queryByText("global-app")).toBeNull();
+  });
+
+  it("keeps the prompt line when the hero remounts", () => {
+    // Earlier tests in this file already filled the page-load cache, and
+    // `Math.random()` can draw the same line twice. Two different draws make
+    // a second pick fail the assertion.
+    resetLandingPromptForTests();
+    const random = vi.spyOn(Math, "random");
+    random.mockReturnValueOnce(0).mockReturnValueOnce(0.99);
+    try {
+      const first = render(<HomeHero workspaceFolders={[]} />);
+      const prompt = first.container.querySelector(
+        "[data-landing-hero] p",
+      )?.textContent;
+      expect(prompt).toBe("What should we work on?");
+      expect(random).toHaveBeenCalledTimes(1);
+      first.unmount();
+
+      const second = render(<HomeHero workspaceFolders={[]} />);
+      expect(
+        second.container.querySelector("[data-landing-hero] p")?.textContent,
+      ).toBe(prompt);
+      expect(random).toHaveBeenCalledTimes(1);
+    } finally {
+      random.mockRestore();
+      resetLandingPromptForTests();
+    }
   });
 });

@@ -156,6 +156,12 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       autoPermissionModeProtocolSupported: null,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
+      // Unused by this suite - it covers background-section spacing, not Stop.
+      getStopConfirmationTarget: () => ({
+        turnId: null,
+        revision: 0,
+        connectionEpoch: 0,
+      }),
       stopDisabled: true,
       onStopTurn: () => null,
     },

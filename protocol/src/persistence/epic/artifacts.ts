@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Epic artifacts: spec / ticket / story / review (plus their tombstone
@@ -21,55 +22,65 @@ const ticketStatusSchema = getRecordSchema(
 );
 
 const baseEpicArtifactFields = {
-  id: z.string(),
-  folderName: z.string(),
-  title: z.string(),
+  id: lazySchema(() => z.string()),
+  folderName: lazySchema(() => z.string()),
+  title: lazySchema(() => z.string()),
   // Artifact room hosting this artifact's body fragment
   // (`artifact-body:{artifactId}`). Populated when the host assigns the
   // artifact to a artifactRoom; empty string is a transitional placeholder for code
   // paths that pre-date artifact-room allocation (e.g. v1.0.0→v2.0.0 migration emit
   // before the artifactRoom manager lands).
-  artifactRoomId: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  createdManually: z.boolean(),
-  parentId: z.string().nullable(),
+  artifactRoomId: lazySchema(() => z.string()),
+  createdAt: lazySchema(() => z.number()),
+  updatedAt: lazySchema(() => z.number()),
+  createdManually: lazySchema(() => z.boolean()),
+  parentId: lazySchema(() => z.string().nullable()),
 } as const;
 
-export const specArtifactSchema = z.object({
-  kind: z.literal("spec"),
-  ...baseEpicArtifactFields,
-});
+export const specArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("spec"),
+    ...baseEpicArtifactFields,
+  }),
+);
 export type SpecArtifact = z.infer<typeof specArtifactSchema>;
 
-export const ticketArtifactSchema = z.object({
-  kind: z.literal("ticket"),
-  ...baseEpicArtifactFields,
-  assignee: z.string(),
-  status: ticketStatusSchema,
-});
+export const ticketArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("ticket"),
+    ...baseEpicArtifactFields,
+    assignee: z.string(),
+    status: ticketStatusSchema,
+  }),
+);
 export type TicketArtifact = z.infer<typeof ticketArtifactSchema>;
 
-export const storyArtifactSchema = z.object({
-  kind: z.literal("story"),
-  ...baseEpicArtifactFields,
-  assignee: z.string(),
-  status: ticketStatusSchema,
-});
+export const storyArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("story"),
+    ...baseEpicArtifactFields,
+    assignee: z.string(),
+    status: ticketStatusSchema,
+  }),
+);
 export type StoryArtifact = z.infer<typeof storyArtifactSchema>;
 
-export const reviewArtifactSchema = z.object({
-  kind: z.literal("review"),
-  ...baseEpicArtifactFields,
-});
+export const reviewArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("review"),
+    ...baseEpicArtifactFields,
+  }),
+);
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 
-export const epicArtifactSchema = z.discriminatedUnion("kind", [
-  specArtifactSchema,
-  ticketArtifactSchema,
-  storyArtifactSchema,
-  reviewArtifactSchema,
-]);
+export const epicArtifactSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    specArtifactSchema,
+    ticketArtifactSchema,
+    storyArtifactSchema,
+    reviewArtifactSchema,
+  ]),
+);
 export type EpicArtifact = z.infer<typeof epicArtifactSchema>;
 
 /**
@@ -97,48 +108,58 @@ export function artifactBodyFragmentName(artifactId: string): string {
 }
 
 const baseDeletedEpicArtifactFields = {
-  id: z.string(),
-  title: z.string(),
-  artifactRoomId: z.string().nullable(),
-  deletedAt: z.string(),
-  folderName: z.string().nullish(),
-  parentId: z.string().nullish(),
-  createdAt: z.number().nullish(),
-  createdManually: z.boolean().nullish(),
-  assignee: z.string().nullish(),
-  status: ticketStatusSchema.nullish(),
+  id: lazySchema(() => z.string()),
+  title: lazySchema(() => z.string()),
+  artifactRoomId: lazySchema(() => z.string().nullable()),
+  deletedAt: lazySchema(() => z.string()),
+  folderName: lazySchema(() => z.string().nullish()),
+  parentId: lazySchema(() => z.string().nullish()),
+  createdAt: lazySchema(() => z.number().nullish()),
+  createdManually: lazySchema(() => z.boolean().nullish()),
+  assignee: lazySchema(() => z.string().nullish()),
+  status: lazySchema(() => ticketStatusSchema.nullish()),
 } as const;
 
-export const deletedSpecArtifactSchema = z.object({
-  kind: z.literal("spec"),
-  ...baseDeletedEpicArtifactFields,
-});
+export const deletedSpecArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("spec"),
+    ...baseDeletedEpicArtifactFields,
+  }),
+);
 export type DeletedSpecArtifact = z.infer<typeof deletedSpecArtifactSchema>;
 
-export const deletedTicketArtifactSchema = z.object({
-  kind: z.literal("ticket"),
-  ...baseDeletedEpicArtifactFields,
-});
+export const deletedTicketArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("ticket"),
+    ...baseDeletedEpicArtifactFields,
+  }),
+);
 export type DeletedTicketArtifact = z.infer<typeof deletedTicketArtifactSchema>;
 
-export const deletedStoryArtifactSchema = z.object({
-  kind: z.literal("story"),
-  ...baseDeletedEpicArtifactFields,
-});
+export const deletedStoryArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("story"),
+    ...baseDeletedEpicArtifactFields,
+  }),
+);
 export type DeletedStoryArtifact = z.infer<typeof deletedStoryArtifactSchema>;
 
-export const deletedReviewArtifactSchema = z.object({
-  kind: z.literal("review"),
-  ...baseDeletedEpicArtifactFields,
-});
+export const deletedReviewArtifactSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("review"),
+    ...baseDeletedEpicArtifactFields,
+  }),
+);
 export type DeletedReviewArtifact = z.infer<typeof deletedReviewArtifactSchema>;
 
-export const deletedEpicArtifactSchema = z.discriminatedUnion("kind", [
-  deletedSpecArtifactSchema,
-  deletedTicketArtifactSchema,
-  deletedStoryArtifactSchema,
-  deletedReviewArtifactSchema,
-]);
+export const deletedEpicArtifactSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    deletedSpecArtifactSchema,
+    deletedTicketArtifactSchema,
+    deletedStoryArtifactSchema,
+    deletedReviewArtifactSchema,
+  ]),
+);
 export type DeletedEpicArtifact = z.infer<typeof deletedEpicArtifactSchema>;
 
 /**

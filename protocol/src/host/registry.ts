@@ -89,6 +89,7 @@ import {
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
+import { agentResolveMessagePeerV10 } from "@traycer/protocol/host/agent/message-peer";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -1116,9 +1117,10 @@ export { hostUsageSummaryV10, hostUsageSummaryV20 };
  *    `downgradePathsFromLatest` bridge back to every older major the
  *    host still accepts from older clients.
  *
- * `validateVersionedRpcRegistry()` - which
- * `defineVersionedRpcRegistry()` runs automatically at module load - is
- * the single contract future growth has to keep passing.
+ * `validateVersionedRpcRegistry()` is the single contract future growth has
+ * to keep passing. Construction below runs only its structural pass, so that
+ * importing this module walks no schema; the full pass runs at build time and
+ * in CI over every static registry (`protocol/scripts/compat/static-registries.ts`).
  */
 // `snapshots.*@1.0` - local-only snapshot storage management. Contracts land
 // inline here pending a per-domain contracts file. Schemas live in
@@ -6656,6 +6658,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
   },
+  "agent.resolveMessagePeer": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentResolveMessagePeerV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "agent.sendMessage": {
     1: {
       latestMinor: 0,
@@ -11035,7 +11050,8 @@ type DuplicateHostRpcMethodNames =
  * contracts and bridges, so callers keep resolver/query checking against the
  * latest request and response shapes - and the precise literal is still
  * statically checked against this annotation and dynamically validated by
- * `defineFloorAwareVersionedRpcRegistry` below.
+ * `defineFloorAwareVersionedRpcRegistry` below (its structural pass; the
+ * schema-compatibility pass runs at build time and in CI).
  *
  * `Record<never, never>` is `{}` while the key sets stay disjoint, so the
  * duplicate intersection is a no-op in the healthy case.
@@ -11987,8 +12003,10 @@ export type HostStreamRpcRegistry =
 // Annotated with `HostStreamRpcRegistry` itself (not `typeof
 // HOST_STREAM_RPC_REGISTRY_DEFINITION`, which is more precise but exceeds
 // TS7056's declaration-emit ceiling once `chat.subscribe` alone carries this
-// many minors): `defineVersionedStreamRpcRegistry` still validates the full
-// precise literal at this call site (nothing here weakens that check), and
+// many minors): `defineVersionedStreamRpcRegistry` still runs its structural
+// pass over the full precise literal at this call site, and the static-registry
+// check validates it in full at build time and in CI (nothing here weakens
+// either), and
 // its precise return type remains assignable to this narrower annotation
 // (the only difference is `chat.subscribe`'s widened value slot, and a
 // branded, more precise value is always assignable into an unbranded,

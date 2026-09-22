@@ -102,9 +102,17 @@ failures.
   dispositions: browser-scoped (main names a tile command back to the focused
   tile - Cmd+W/T/L) and app-forwarded (main replays the keystroke into the host
   renderer - Cmd+K, ⇧⌘W, ⌘/⇧⌘ brackets). Adding a chord means adding a row
-  there; do not add a focus check to a menu item instead. Electron ROLE items
-  (reload, cut/copy/paste, select-all) already act on the focused web contents
-  and are correct as they are - leave them alone.
+  there; do not add a focus check to a menu item instead. Reload and Force
+  Reload are native menu commands with explicit targeting through the owning
+  window's `focusedFrame` (`menu/reload-focused-page.ts`). Do not restore their
+  Electron roles: `getFocusedWebContents()` can select an unrelated retained
+  webview because guest `isFocused()` reflects the root view's focus. Editing
+  roles (cut/copy/paste, select-all) remain native.
+  Help → Toggle Developer Tools is app-scoped and resolves a registered
+  Traycer window in `MenuController`; never use the guest-focused Electron
+  `toggleDevTools` role. Browser tiles have a separate, explicitly targeted
+  DevTools action. Both app menu visibility and dispatch retain the
+  non-production DevTools gate.
 - **Local browser tiles are renderer-owned `<webview>` guests.** Main admits
   the guest through the one-use attach grant, seeds cookies, and runs
   capabilities on the registered `webContents`. Placement is CSS

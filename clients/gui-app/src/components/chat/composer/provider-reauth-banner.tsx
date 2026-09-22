@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Copy, ExternalLink } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useId, useMemo, useState } from "react";
 import {
@@ -48,12 +48,11 @@ import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-sub
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   providerLoginIsRemoteSafe,
@@ -701,21 +700,11 @@ function OAuthWaitingDetails(props: {
   readonly userCode: string | null;
   readonly loginUrl: string | null;
   readonly autoOpen: boolean;
-  readonly copied: boolean;
-  readonly copy: (value: string) => void;
   readonly codePaste: ProviderProfileLoginFlow["codePaste"];
   readonly openLink: (url: string, kind: "auth", event: null) => Promise<void>;
 }): ReactNode {
-  const {
-    processingCode,
-    userCode,
-    loginUrl,
-    autoOpen,
-    copied,
-    copy,
-    codePaste,
-    openLink,
-  } = props;
+  const { processingCode, userCode, loginUrl, autoOpen, codePaste, openLink } =
+    props;
   return (
     <>
       {processingCode || userCode === null ? null : (
@@ -723,18 +712,7 @@ function OAuthWaitingDetails(props: {
           <code className="rounded-md border border-border/60 bg-foreground/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-foreground">
             {userCode}
           </code>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
-            onClick={() => copy(userCode)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          <SignInCopyIconButton value={userCode} kind="code" variant="ghost" />
         </div>
       )}
       {processingCode || loginUrl === null ? null : (
@@ -749,18 +727,7 @@ function OAuthWaitingDetails(props: {
             <ExternalLink className="size-3.5" />
             {openBrowserLabel(autoOpen)}
           </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          <SignInCopyIconButton value={loginUrl} kind="link" variant="ghost" />
         </div>
       )}
       {codePaste.enabled && userCode === null ? (
@@ -815,11 +782,6 @@ function OAuthWaitingRow({
       void openLink(url, "auth", null);
     },
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: 1600,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
   const processingCode = codePaste.phase !== "idle";
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
@@ -848,8 +810,6 @@ function OAuthWaitingRow({
         userCode={userCode}
         loginUrl={loginUrl}
         autoOpen={autoOpen}
-        copied={copied}
-        copy={copy}
         codePaste={codePaste}
         openLink={openLink}
       />

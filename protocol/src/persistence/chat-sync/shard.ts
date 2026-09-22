@@ -27,6 +27,7 @@ import {
   type ChatSyncPayloadVersion,
 } from "@traycer/protocol/persistence/chat-sync/version";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The `chat-shard` record: one immutable, content-addressed PART of a
@@ -73,11 +74,9 @@ import { z } from "zod";
  * oversight to fix.
  */
 
-export const chatShardSectionSchema = z.enum([
-  "messages",
-  "events",
-  "host-private",
-]);
+export const chatShardSectionSchema = lazySchema(() =>
+  z.enum(["messages", "events", "host-private"]),
+);
 export type ChatShardSection = z.infer<typeof chatShardSectionSchema>;
 
 export const chatShardRecordShape = {
@@ -95,7 +94,7 @@ export const chatShardRecordShape = {
    * attributable, and the cross-check that stops a part from another chat -
    * or another chat's fork - being assembled into this one.
    */
-  chatId: z.string().min(1),
+  chatId: lazySchema(() => z.string().min(1)),
   /** Which head section this part carries. */
   section: chatShardSectionSchema,
   /**
@@ -103,11 +102,11 @@ export const chatShardRecordShape = {
    * empty otherwise. A shard IS a cohort, so there is no empty one - see
    * `refineChatShardSection`.
    */
-  messages: z.array(preservedChatMessageSchema),
+  messages: lazySchema(() => z.array(preservedChatMessageSchema)),
   /** Ordered preserved events: non-empty when `section` is `"events"`, empty otherwise. */
-  events: z.array(preservedChatEventSchema),
+  events: lazySchema(() => z.array(preservedChatEventSchema)),
   /** Opaque host state: present when `section` is `"host-private"`, `null` otherwise. */
-  hostPrivate: chatSyncHostPrivateSchema.nullable(),
+  hostPrivate: lazySchema(() => chatSyncHostPrivateSchema.nullable()),
 } as const;
 
 /**
@@ -199,10 +198,12 @@ export const chatShardReaderSchema = reprojectResidualCapture({
  * at every captured level. What the frozen `storage` surface is generated
  * from, because a capturing schema cannot describe its own wire form.
  */
-export const chatShardStorageSchema = storageProjection({
-  ...chatShardRecordShape,
-  hostPrivate: chatSyncHostPrivateStorageSchema.nullable(),
-});
+export const chatShardStorageSchema = lazySchema(() =>
+  storageProjection({
+    ...chatShardRecordShape,
+    hostPrivate: chatSyncHostPrivateStorageSchema.nullable(),
+  }),
+);
 
 /**
  * Public structural mirror of the registered record.

@@ -502,6 +502,11 @@ describe("AuthService", () => {
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    // `setSignedOut()` does not touch `cloudVerdictLoss` (E10) - it is a
+    // separate latch a real `signed-out` never clears in production either -
+    // so a test that latches it (a credential/account rejection) leaks it
+    // into the next one unless the suite resets it itself.
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
     restoreFetch = installFetch(() => okWithProfile());
   });
 
@@ -513,6 +518,7 @@ describe("AuthService", () => {
       }
     }
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     restoreFetch();
   });
@@ -1367,6 +1373,10 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("revoked-token", "revoked-token-refresh"),
     );
+    // E10: authn REJECTED this credential (a token rejection, not silence),
+    // so the share-refusal toast must say "sign in again" rather than "check
+    // your connection".
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
   });
 
   it("HOLDS the local plane when validation rejects with 404 on start() - the account is gone, the epics on this disk are not", async () => {
@@ -1402,6 +1412,13 @@ describe("AuthService", () => {
     // to delete machine-shared state on the server's behalf.
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("missing-user-token", "missing-user-token-refresh"),
+    );
+    // E10: this is the ACCOUNT rejection, not a token rejection - the
+    // share-refusal toast reads `lastError` (via this latch) to say "this
+    // account is no longer available" rather than "sign in again", which
+    // would invite a retry that cannot ever succeed.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe(
+      "account-unavailable",
     );
   });
 
@@ -1477,6 +1494,10 @@ describe("AuthService", () => {
       expectedStored("offline-token", "offline-token-refresh"),
     );
     expect(service.getLastError()).toBeNull();
+    // E10: authn was never REACHED (as opposed to the 401/404 rejections
+    // above), so the share-refusal toast keeps the "check your connection"
+    // advice.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
     // Offline startup never reaches the refresh: a validation with NO verdict
     // does not authorize a spend (only a REJECTED one does), so the whole
     // offline window costs zero refresh generations.
@@ -1581,6 +1602,53 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
     expect(service.getLastError()).toBeNull();
+    // E10: `applySignedIn` clears the latch through the same setter that
+    // mirrors it into the store, and the setter's "not rejected" branch
+    // always writes `unreachable` - not because authn was necessarily
+    // unreachable a moment ago, but because a live verdict retires whatever
+    // caused the LAST loss, and `unreachable` is what the mirror falls back
+    // to once the latch is open. Its value stops mattering the moment the
+    // status leaves `unverified`; it is asserted here for exactly that
+    // reason - a future regression could leave a stale `session-rejected`
+    // sitting under a `signed-in` status with nothing else to catch it.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+  });
+
+  it("E10: a credential rejection's cloudVerdictLoss survives clearLastError and clears only on a later sign-in", async () => {
+    // The toast bridge clears the transient `lastError` right after showing
+    // it (`auth-session-expired-toast-bridge.tsx`) - if `cloudVerdictLoss`
+    // rode along with that clear, a share attempt minutes later would have
+    // lost the one fact the unverified-share toast needs.
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "revoked-token", refreshToken: "revoked-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() => status(401));
+
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
+
+    service.clearLastError();
+    expect(service.getLastError()).toBeNull();
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
+
+    restoreFetch();
+    restoreFetch = installFetch(() => okWithProfile());
+    await service.signIn();
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "fresh-token",
+      refreshToken: "fresh-token-refresh",
+    });
+    await vi.waitFor(() => {
+      expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token");
+    });
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
   });
 
   it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {

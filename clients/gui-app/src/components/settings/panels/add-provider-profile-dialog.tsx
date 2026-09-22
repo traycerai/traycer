@@ -1,10 +1,8 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
-  Check,
   CheckCircle2,
   ChevronRight,
-  Copy,
   Eye,
   EyeOff,
   ExternalLink,
@@ -42,10 +40,9 @@ import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
-import { handleSignInLinkCopyError } from "./provider-sign-in-link";
+import { SignInCopyIconButton } from "./sign-in-copy-icon-button";
 import {
   openBrowserLabel,
   useAutoOpenLoginUrl,
@@ -56,8 +53,6 @@ import {
   type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
-
-const COPY_CONFIRMATION_RESET_MS = 1600;
 
 /**
  * Whether a new managed profile for this provider can SHARE the ambient
@@ -656,29 +651,15 @@ function ShareSkillsAndPluginsField({
 function WaitingStepDeviceCode(props: {
   readonly processingCode: boolean;
   readonly userCode: string | null;
-  readonly copied: boolean;
-  readonly copy: (value: string) => void;
 }): ReactNode {
   if (props.processingCode || props.userCode === null) return null;
-  const { userCode, copied, copy } = props;
+  const { userCode } = props;
   return (
     <div className="flex flex-wrap items-center gap-2 pl-6">
       <code className="rounded-md border border-border/60 bg-foreground/5 px-2.5 py-1 font-mono text-ui tracking-[0.12em] text-foreground">
         {userCode}
       </code>
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="outline"
-        aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
-        onClick={() => copy(userCode)}
-      >
-        {copied ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </Button>
+      <SignInCopyIconButton value={userCode} kind="code" variant="outline" />
     </div>
   );
 }
@@ -687,12 +668,10 @@ function WaitingStepUrlActions(props: {
   readonly processingCode: boolean;
   readonly loginUrl: string | null;
   readonly autoOpen: boolean;
-  readonly copied: boolean;
-  readonly copy: (value: string) => void;
   readonly onOpenExternalLink: (url: string) => void;
 }): ReactNode {
   if (props.processingCode || props.loginUrl === null) return null;
-  const { loginUrl, autoOpen, copied, copy, onOpenExternalLink } = props;
+  const { loginUrl, autoOpen, onOpenExternalLink } = props;
   return (
     <div className="flex flex-wrap items-center gap-2 pl-6">
       <Button
@@ -704,19 +683,7 @@ function WaitingStepUrlActions(props: {
         <ExternalLink className="size-3.5" />
         {openBrowserLabel(autoOpen)}
       </Button>
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="outline"
-        aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-        onClick={() => copy(loginUrl)}
-      >
-        {copied ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </Button>
+      <SignInCopyIconButton value={loginUrl} kind="link" variant="outline" />
     </div>
   );
 }
@@ -794,11 +761,6 @@ export function AddProfileWaitingStep({
     loginUrl,
     onOpenExternalLink,
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: COPY_CONFIRMATION_RESET_MS,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
   const processingCode = codePaste.phase !== "idle";
   const deviceCode = userCode !== null;
   const { title, guidance } = waitingStepCopy({
@@ -828,15 +790,11 @@ export function AddProfileWaitingStep({
       <WaitingStepDeviceCode
         processingCode={processingCode}
         userCode={userCode}
-        copied={copied}
-        copy={copy}
       />
       <WaitingStepUrlActions
         processingCode={processingCode}
         loginUrl={loginUrl}
         autoOpen={autoOpen}
-        copied={copied}
-        copy={copy}
         onOpenExternalLink={onOpenExternalLink}
       />
       <WaitingStepPasteFallback

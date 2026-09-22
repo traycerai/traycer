@@ -25,6 +25,7 @@ import {
   browserViewportStateSchema,
 } from "@traycer/protocol/host/browser/viewport";
 import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // The curated CDP vocabulary lives in its own module (it is addressed
 // independently of either stream contract) but stays part of this module's
@@ -33,91 +34,96 @@ export * from "@traycer/protocol/host/browser/cdp-contracts";
 export * from "@traycer/protocol/host/browser/viewport";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
 const binaryFrameFields = {
-  hasBinaryPayload: z.literal(true),
+  hasBinaryPayload: lazySchema(() => z.literal(true)),
 } as const;
 
 const requestFrameFields = {
   ...textFrameFields,
-  requestId: z.string(),
+  requestId: lazySchema(() => z.string()),
 } as const;
 
 const browserSessionReferenceFields = {
-  sessionId: z.string(),
+  sessionId: lazySchema(() => z.string()),
 } as const;
 
-const browserOriginTierSchema = z.enum(["dev", "external"]);
+const browserOriginTierSchema = lazySchema(() => z.enum(["dev", "external"]));
 export type BrowserOriginTier = z.infer<typeof browserOriginTierSchema>;
 
-const browserSessionStatusSchema = z.enum([
-  "provisioning",
-  "ready",
-  "navigating",
-  "closing",
-  "crashed",
-  // A durable tab whose replaceable native/headless runtime is not currently
-  // attached. Its logical identity remains available for on-demand activation.
-  "dormant",
-]);
+const browserSessionStatusSchema = lazySchema(() =>
+  z.enum([
+    "provisioning",
+    "ready",
+    "navigating",
+    "closing",
+    "crashed",
+    // A durable tab whose replaceable native/headless runtime is not currently
+    // attached. Its logical identity remains available for on-demand activation.
+    "dormant",
+  ]),
+);
 export type BrowserSessionStatus = z.infer<typeof browserSessionStatusSchema>;
 
-const browserSessionClosedReasonSchema = z.enum([
-  "completed",
-  "idle-ttl",
-  "evicted",
-  "crashed",
-]);
+const browserSessionClosedReasonSchema = lazySchema(() =>
+  z.enum(["completed", "idle-ttl", "evicted", "crashed"]),
+);
 export type BrowserSessionClosedReason = z.infer<
   typeof browserSessionClosedReasonSchema
 >;
 
 /** Profile controls credential sharing, not logical session identity. */
-export const browserSessionProfileKindSchema = z.enum(["primary", "isolated"]);
+export const browserSessionProfileKindSchema = lazySchema(() =>
+  z.enum(["primary", "isolated"]),
+);
 export type BrowserSessionProfileKind = z.infer<
   typeof browserSessionProfileKindSchema
 >;
 
 /** Attribution for one in-flight tab action; this grants no lock or lease. */
-const browserTabDriverSchema = z
-  .object({
-    chatId: z.string(),
-    agentRunId: z.string().nullable(),
-    requestId: z.string(),
-  })
-  .strict();
+const browserTabDriverSchema = lazySchema(() =>
+  z
+    .object({
+      chatId: z.string(),
+      agentRunId: z.string().nullable(),
+      requestId: z.string(),
+    })
+    .strict(),
+);
 export type BrowserTabDriver = z.infer<typeof browserTabDriverSchema>;
 
 /** One page, addressed by a durable host-minted id rather than a CDP id. */
-const browserTabInfoSchema = z
-  .object({
-    tabId: z.string(),
-    url: z.string(),
-    originTier: browserOriginTierSchema,
-    status: browserSessionStatusSchema,
-    title: z.string().nullable(),
-    // Live discovery hint only: the currently viewed/MRU visible tile, or an
-    // active headless screencast peek. It grants no control capability.
-    viewed: z.boolean(),
-    drivenBy: z.array(browserTabDriverSchema),
-    /**
-     * Which desktop window's native route currently holds this tab's binding,
-     * or `null` for a tab no route holds (headless, dormant, or bound nowhere
-     * yet). Native routes are elected per scope AND window, so a tab of a
-     * shared session can be live in one window while another window shows it
-     * as elsewhere - which is a fact the client must be TOLD, not one it can
-     * infer from how long a binding has taken to arrive.
-     *
-     * `.default(null)` rather than required, and the reason is mechanical: the
-     * schema is `.strict()` and the GUI's stream client DROPS any frame that
-     * fails to parse, so a host that does not emit this field yet would blank
-     * every tile in the panel rather than degrade one branch of one tile.
-     */
-    boundWindowId: z.string().nullable().default(null),
-  })
-  .strict();
+const browserTabInfoSchema = lazySchema(() =>
+  z
+    .object({
+      tabId: z.string(),
+      url: z.string(),
+      originTier: browserOriginTierSchema,
+      status: browserSessionStatusSchema,
+      title: z.string().nullable(),
+      // Live discovery hint only: the currently viewed/MRU visible tile, or an
+      // active headless screencast peek. It grants no control capability.
+      viewed: z.boolean(),
+      drivenBy: z.array(browserTabDriverSchema),
+      /**
+       * Which desktop window's native route currently holds this tab's binding,
+       * or `null` for a tab no route holds (headless, dormant, or bound nowhere
+       * yet). Native routes are elected per scope AND window, so a tab of a
+       * shared session can be live in one window while another window shows it
+       * as elsewhere - which is a fact the client must be TOLD, not one it can
+       * infer from how long a binding has taken to arrive.
+       *
+       * `.default(null)` rather than required, and the reason is mechanical: the
+       * schema is `.strict()` and the GUI's stream client DROPS any frame that
+       * fails to parse, so a host that does not emit this field yet would blank
+       * every tile in the panel rather than degrade one branch of one tile.
+       */
+      boundWindowId: z.string().nullable().default(null),
+    })
+    .strict(),
+);
 export type BrowserTabInfo = z.infer<typeof browserTabInfoSchema>;
 
 /**
@@ -125,31 +131,35 @@ export type BrowserTabInfo = z.infer<typeof browserTabInfoSchema>;
  * scope: one epic's tabs, or the epic-less `independent` inventory a device's
  * Start Page owns.
  */
-const browserSessionInfoSchema = z
-  .object({
-    sessionId: z.string(),
-    scope: hostResourceScopeSchema,
-    hostId: z.string(),
-    profile: browserSessionProfileKindSchema,
-    lastActivityAt: z.number(),
-    runtime: z
-      .object({
-        kind: z.enum(["headless", "electron", "dormant"]),
-        revision: z.number().int().nonnegative(),
-      })
-      .strict(),
-    tabs: z.array(browserTabInfoSchema),
-  })
-  .strict();
+const browserSessionInfoSchema = lazySchema(() =>
+  z
+    .object({
+      sessionId: z.string(),
+      scope: hostResourceScopeSchema,
+      hostId: z.string(),
+      profile: browserSessionProfileKindSchema,
+      lastActivityAt: z.number(),
+      runtime: z
+        .object({
+          kind: z.enum(["headless", "electron", "dormant"]),
+          revision: z.number().int().nonnegative(),
+        })
+        .strict(),
+      tabs: z.array(browserTabInfoSchema),
+    })
+    .strict(),
+);
 export type BrowserSessionInfo = z.infer<typeof browserSessionInfoSchema>;
 
 /** One tab addressed through its owning session. */
-export const browserTabIdentitySchema = z
-  .object({
-    sessionId: z.string(),
-    tabId: z.string(),
-  })
-  .strict();
+export const browserTabIdentitySchema = lazySchema(() =>
+  z
+    .object({
+      sessionId: z.string(),
+      tabId: z.string(),
+    })
+    .strict(),
+);
 export type BrowserTabIdentity = z.infer<typeof browserTabIdentitySchema>;
 
 /**
@@ -166,12 +176,14 @@ export type BrowserTabIdentity = z.infer<typeof browserTabIdentitySchema>;
  * client on the host's own machine watches the native runtime directly - so
  * there is nothing to hand off.
  */
-export const browserOpenedTabSchema = z
-  .object({
-    ...browserTabIdentitySchema.shape,
-    handoffToken: z.string().nullable(),
-  })
-  .strict();
+export const browserOpenedTabSchema = lazySchema(() =>
+  z
+    .object({
+      ...browserTabIdentitySchema.shape,
+      handoffToken: z.string().nullable(),
+    })
+    .strict(),
+);
 export type BrowserOpenedTab = z.infer<typeof browserOpenedTabSchema>;
 
 /**
@@ -183,11 +195,13 @@ export type BrowserOpenedTab = z.infer<typeof browserOpenedTabSchema>;
  * one). The authenticated user is re-derived host-side on every access check,
  * so nothing about ownership travels on this request.
  */
-export const browserSessionsOpenRequestSchema = z
-  .object({
-    scope: hostResourceScopeSchema,
-  })
-  .strict();
+export const browserSessionsOpenRequestSchema = lazySchema(() =>
+  z
+    .object({
+      scope: hostResourceScopeSchema,
+    })
+    .strict(),
+);
 export type BrowserSessionsOpenRequest = z.infer<
   typeof browserSessionsOpenRequestSchema
 >;
@@ -218,53 +232,63 @@ export type BrowserSessionsOpenRequest = z.infer<
  * a version skew into an inert "+ Add browser" button. Absent means
  * unpartitioned - the same thing those producers meant by sending `null`.
  */
-export const browserStorageCookieSchema = z.object({
-  name: z.string(),
-  value: z.string(),
-  domain: z.string(),
-  path: z.string(),
-  expires: z.number(),
-  httpOnly: z.boolean(),
-  secure: z.boolean(),
-  sameSite: z.enum(["Strict", "Lax", "None"]),
-  partitionKey: z.string().nullable().default(null),
-});
-export type BrowserStorageCookie = z.infer<typeof browserStorageCookieSchema>;
-
-export const browserStorageLocalStorageEntrySchema = z
-  .object({
+export const browserStorageCookieSchema = lazySchema(() =>
+  z.object({
     name: z.string(),
     value: z.string(),
-  })
-  .strict();
+    domain: z.string(),
+    path: z.string(),
+    expires: z.number(),
+    httpOnly: z.boolean(),
+    secure: z.boolean(),
+    sameSite: z.enum(["Strict", "Lax", "None"]),
+    partitionKey: z.string().nullable().default(null),
+  }),
+);
+export type BrowserStorageCookie = z.infer<typeof browserStorageCookieSchema>;
+
+export const browserStorageLocalStorageEntrySchema = lazySchema(() =>
+  z
+    .object({
+      name: z.string(),
+      value: z.string(),
+    })
+    .strict(),
+);
 export type BrowserStorageLocalStorageEntry = z.infer<
   typeof browserStorageLocalStorageEntrySchema
 >;
 
-export const browserStorageOriginSchema = z
-  .object({
-    origin: z.string(),
-    localStorage: z.array(browserStorageLocalStorageEntrySchema),
-  })
-  .strict();
+export const browserStorageOriginSchema = lazySchema(() =>
+  z
+    .object({
+      origin: z.string(),
+      localStorage: z.array(browserStorageLocalStorageEntrySchema),
+    })
+    .strict(),
+);
 export type BrowserStorageOrigin = z.infer<typeof browserStorageOriginSchema>;
 
-export const browserStorageStateSchema = z
-  .object({
-    cookies: z.array(browserStorageCookieSchema),
-    origins: z.array(browserStorageOriginSchema),
-  })
-  .strict();
+export const browserStorageStateSchema = lazySchema(() =>
+  z
+    .object({
+      cookies: z.array(browserStorageCookieSchema),
+      origins: z.array(browserStorageOriginSchema),
+    })
+    .strict(),
+);
 export type BrowserStorageState = z.infer<typeof browserStorageStateSchema>;
 
 /** Unpartitioned cookie identity: exactly what a tombstone is keyed by. */
-export const browserCookieKeySchema = z
-  .object({
-    domain: z.string(),
-    name: z.string(),
-    path: z.string(),
-  })
-  .strict();
+export const browserCookieKeySchema = lazySchema(() =>
+  z
+    .object({
+      domain: z.string(),
+      name: z.string(),
+      path: z.string(),
+    })
+    .strict(),
+);
 export type BrowserCookieKey = z.infer<typeof browserCookieKeySchema>;
 
 /**
@@ -284,15 +308,17 @@ export type BrowserCookieKey = z.infer<typeof browserCookieKeySchema>;
  * a sign-out to live sessions from `removedKeys` alone and never from what a
  * merge happened to tombstone.
  */
-export const browserPrimaryProfileDeltaSchema = z
-  .object({
-    domain: z.string(),
-    cookies: z.array(browserStorageCookieSchema),
-    removedKeys: z.array(browserCookieKeySchema),
-    /** When the window opened, from the sender's clock. */
-    issuedAt: z.number(),
-  })
-  .strict();
+export const browserPrimaryProfileDeltaSchema = lazySchema(() =>
+  z
+    .object({
+      domain: z.string(),
+      cookies: z.array(browserStorageCookieSchema),
+      removedKeys: z.array(browserCookieKeySchema),
+      /** When the window opened, from the sender's clock. */
+      issuedAt: z.number(),
+    })
+    .strict(),
+);
 export type BrowserPrimaryProfileDelta = z.infer<
   typeof browserPrimaryProfileDeltaSchema
 >;
@@ -417,25 +443,29 @@ export const BROWSER_FORGET_LEDGER_MAX_DOMAINS = 1_024;
  * entirely the REPLAY ORDERING's obligation, never a check the applier can
  * make from the frame's own contents.
  */
-export const browserPrimaryProfileObservedSchema = z
-  .object({
-    domain: z.string(),
-    /** Every cookie the domain's subtree holds after the capture, not a delta. */
-    cookies: z.array(browserStorageCookieSchema),
-  })
-  .strict();
+export const browserPrimaryProfileObservedSchema = lazySchema(() =>
+  z
+    .object({
+      domain: z.string(),
+      /** Every cookie the domain's subtree holds after the capture, not a delta. */
+      cookies: z.array(browserStorageCookieSchema),
+    })
+    .strict(),
+);
 export type BrowserPrimaryProfileObserved = z.infer<
   typeof browserPrimaryProfileObservedSchema
 >;
 
 /** One site the user forgot, stamped by the forgetting desktop's own clock. */
-export const browserForgetLedgerDomainSchema = z
-  .object({
-    /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
-    domain: z.string(),
-    forgottenAt: z.number(),
-  })
-  .strict();
+export const browserForgetLedgerDomainSchema = lazySchema(() =>
+  z
+    .object({
+      /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
+      domain: z.string(),
+      forgottenAt: z.number(),
+    })
+    .strict(),
+);
 export type BrowserForgetLedgerDomain = z.infer<
   typeof browserForgetLedgerDomainSchema
 >;
@@ -474,72 +504,73 @@ export type BrowserForgetLedgerDomain = z.infer<
  * that way, not because nothing had shipped yet. `domains` is bounded by
  * {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
  */
-export const browserForgetLedgerSchema = z
-  .object({
-    forgetAllAt: z.number().nullable(),
-    domains: z.array(browserForgetLedgerDomainSchema),
-    /**
-     * The authoring desktop's monotonic forget counter, bumped by every
-     * forget-all and every clear-site. Desktop-local and never compared across
-     * machines: a host only ever echoes it back on the ack.
-     *
-     * Bounded at the SCHEMA, unlike the payload bounds above, and for the
-     * opposite reason. Those bound volume, where a silent parse failure would
-     * cost the receiver its `over-bound` trace. This is a COUNTER the far end
-     * stores and compares: a fractional or negative one is not a big frame to
-     * refuse loudly, it is a value that poisons a watermark, and there is
-     * nothing a peer could usefully do with it but drop the frame.
-     */
-    revision: z.number().int().nonnegative(),
-  })
-  .strict();
+export const browserForgetLedgerSchema = lazySchema(() =>
+  z
+    .object({
+      forgetAllAt: z.number().nullable(),
+      domains: z.array(browserForgetLedgerDomainSchema),
+      /**
+       * The authoring desktop's monotonic forget counter, bumped by every
+       * forget-all and every clear-site. Desktop-local and never compared across
+       * machines: a host only ever echoes it back on the ack.
+       *
+       * Bounded at the SCHEMA, unlike the payload bounds above, and for the
+       * opposite reason. Those bound volume, where a silent parse failure would
+       * cost the receiver its `over-bound` trace. This is a COUNTER the far end
+       * stores and compares: a fractional or negative one is not a big frame to
+       * refuse loudly, it is a value that poisons a watermark, and there is
+       * nothing a peer could usefully do with it but drop the frame.
+       */
+      revision: z.number().int().nonnegative(),
+    })
+    .strict(),
+);
 export type BrowserForgetLedger = z.infer<typeof browserForgetLedgerSchema>;
 
 const cdpRequestFrameFields = {
   ...requestFrameFields,
-  tabId: z.string(),
+  tabId: lazySchema(() => z.string()),
   // Host resolves a durable Electron tabId to one exact native incarnation
   // before dispatch.
-  registrationId: z.string(),
+  registrationId: lazySchema(() => z.string()),
   target: browserCdpTargetSchema,
 } as const;
 
-const browserCdpRequestFrameSchema = z
-  .object({
-    kind: z.literal("cdpRequest"),
-    ...cdpRequestFrameFields,
-    command: browserCdpCommandSchema,
-  })
-  .strict();
+const browserCdpRequestFrameSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("cdpRequest"),
+      ...cdpRequestFrameFields,
+      command: browserCdpCommandSchema,
+    })
+    .strict(),
+);
 
-const browserBurstOutcomeSchema = z.enum([
-  "finished",
-  "closed",
-  "crashed",
-  "suspended",
-]);
+const browserBurstOutcomeSchema = lazySchema(() =>
+  z.enum(["finished", "closed", "crashed", "suspended"]),
+);
 export type BrowserBurstOutcome = z.infer<typeof browserBurstOutcomeSchema>;
 
-const electronTabCreateReasonSchema = z.enum([
-  "session-bootstrap",
-  "agent-open",
-  "restore",
-  // A `moveTab`: the guest already exists under ANOTHER window of the same
-  // desktop, and this create asks main to transfer it to the sender's window
-  // without touching its WebContents. Like `restore`, it may replace a birth
-  // the window already holds for the tab - a window that moved a tab away
-  // still remembers it, and the move back must not be refused for that.
-  "move",
-]);
+const electronTabCreateReasonSchema = lazySchema(() =>
+  z.enum([
+    "session-bootstrap",
+    "agent-open",
+    "restore",
+    // A `moveTab`: the guest already exists under ANOTHER window of the same
+    // desktop, and this create asks main to transfer it to the sender's window
+    // without touching its WebContents. Like `restore`, it may replace a birth
+    // the window already holds for the tab - a window that moved a tab away
+    // still remembers it, and the move back must not be refused for that.
+    "move",
+  ]),
+);
 export type ElectronTabCreateReason = z.infer<
   typeof electronTabCreateReasonSchema
 >;
 
-const electronTabCreateFailureCodeSchema = z.enum([
-  "identity_violation",
-  "native_unavailable",
-  "native_create_failed",
-]);
+const electronTabCreateFailureCodeSchema = lazySchema(() =>
+  z.enum(["identity_violation", "native_unavailable", "native_create_failed"]),
+);
 export type ElectronTabCreateFailureCode = z.infer<
   typeof electronTabCreateFailureCodeSchema
 >;
@@ -553,31 +584,34 @@ export type ElectronTabCreateFailureCode = z.infer<
  * handle. `ok: false` is an ordinary answer carrying `reason` and nothing else
  * - notably a dormant tab, which is reported rather than woken.
  */
-export const browserTabPreviewSchema = z
-  .object({
-    ok: z.boolean(),
-    /** Base64 JPEG, capped host-side to the wire bound below. */
-    screenshotBase64: z.string().max(2_097_152).nullable(),
-    // Deliberately uncapped: a real `data:`/`blob:` url or a long title would
-    // otherwise fail the whole frame's parse and the picker would just wait
-    // out its timeout. Only the screenshot is bounded, and the host clamps
-    // that at the producer.
-    url: z.string().nullable(),
-    title: z.string().nullable(),
-    reason: z.string().nullable(),
-  })
-  .strict();
+export const browserTabPreviewSchema = lazySchema(() =>
+  z
+    .object({
+      ok: z.boolean(),
+      /** Base64 JPEG, capped host-side to the wire bound below. */
+      screenshotBase64: z.string().max(2_097_152).nullable(),
+      // Deliberately uncapped: a real `data:`/`blob:` url or a long title would
+      // otherwise fail the whole frame's parse and the picker would just wait
+      // out its timeout. Only the screenshot is bounded, and the host clamps
+      // that at the producer.
+      url: z.string().nullable(),
+      title: z.string().nullable(),
+      reason: z.string().nullable(),
+    })
+    .strict(),
+);
 export type BrowserTabPreview = z.infer<typeof browserTabPreviewSchema>;
 
 /** Who opened the tab: the agent driving the session, or the page itself. */
-const browserTabOpenedSourceSchema = z.enum(["agent", "page"]);
+const browserTabOpenedSourceSchema = lazySchema(() =>
+  z.enum(["agent", "page"]),
+);
 export type BrowserTabOpenedSource = z.infer<
   typeof browserTabOpenedSourceSchema
 >;
 
-export const browserSessionsServerFrameV20Schema = z.discriminatedUnion(
-  "kind",
-  [
+export const browserSessionsServerFrameV20Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z
       .object({
         kind: z.literal("snapshot"),
@@ -840,28 +874,30 @@ export const browserSessionsServerFrameV20Schema = z.discriminatedUnion(
         cellTitle: z.string(),
       })
       .strict(),
-  ],
+  ]),
 );
 /** Additive 2.1 frames are emitted only to a negotiated 2.1 peer. */
-export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
-  ...browserSessionsServerFrameV20Schema.options,
-  browserViewportStateSchema.extend({
-    kind: z.literal("viewportState"),
-    ...textFrameFields,
-  }),
-  z
-    .object({
-      kind: z.literal("electronViewportRequest"),
-      ...requestFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      registrationId: z.string(),
-      revision: z.number().int().nonnegative(),
-      intent: browserViewportIntentSchema,
-      geometry: browserViewportGeometrySchema,
-    })
-    .strict(),
-]);
+export const browserSessionsServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...browserSessionsServerFrameV20Schema.options,
+    browserViewportStateSchema.extend({
+      kind: z.literal("viewportState"),
+      ...textFrameFields,
+    }),
+    z
+      .object({
+        kind: z.literal("electronViewportRequest"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        registrationId: z.string(),
+        revision: z.number().int().nonnegative(),
+        intent: browserViewportIntentSchema,
+        geometry: browserViewportGeometrySchema,
+      })
+      .strict(),
+  ]),
+);
 export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
@@ -905,9 +941,8 @@ export function canonicalDesktopIdentityAttestBytes(input: {
   );
 }
 
-export const browserSessionsClientFrameV20Schema = z.discriminatedUnion(
-  "kind",
-  [
+export const browserSessionsClientFrameV20Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z
       .object({
         kind: z.literal("openTab"),
@@ -1180,49 +1215,51 @@ export const browserSessionsClientFrameV20Schema = z.discriminatedUnion(
         ...browserForgetLedgerSchema.shape,
       })
       .strict(),
-  ],
+  ]),
 );
-export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
-  ...browserSessionsClientFrameV20Schema.options,
-  z
-    .object({
-      kind: z.literal("setViewport"),
-      ...requestFrameFields,
+export const browserSessionsClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...browserSessionsClientFrameV20Schema.options,
+    z
+      .object({
+        kind: z.literal("setViewport"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        intent: browserViewportIntentSchema,
+      })
+      .strict(),
+    browserViewportGeometrySchema.extend({
+      kind: z.literal("reportViewport"),
+      ...textFrameFields,
       sessionId: z.string(),
       tabId: z.string(),
-      intent: browserViewportIntentSchema,
-    })
-    .strict(),
-  browserViewportGeometrySchema.extend({
-    kind: z.literal("reportViewport"),
-    ...textFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    viewerId: z.string().min(1).max(128),
-    claim: z.boolean(),
-  }),
-  z
-    .object({
-      kind: z.literal("electronViewportResult"),
-      ...requestFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      registrationId: z.string(),
-      revision: z.number().int().nonnegative(),
-      result: z.discriminatedUnion("ok", [
-        z
-          .object({
-            ok: z.literal(true),
-            applied: browserViewportGeometrySchema,
-          })
-          .strict(),
-        z
-          .object({ ok: z.literal(false), message: z.string().max(2048) })
-          .strict(),
-      ]),
-    })
-    .strict(),
-]);
+      viewerId: z.string().min(1).max(128),
+      claim: z.boolean(),
+    }),
+    z
+      .object({
+        kind: z.literal("electronViewportResult"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        registrationId: z.string(),
+        revision: z.number().int().nonnegative(),
+        result: z.discriminatedUnion("ok", [
+          z
+            .object({
+              ok: z.literal(true),
+              applied: browserViewportGeometrySchema,
+            })
+            .strict(),
+          z
+            .object({ ok: z.literal(false), message: z.string().max(2048) })
+            .strict(),
+        ]),
+      })
+      .strict(),
+  ]),
+);
 export type BrowserSessionsClientFrame = z.infer<
   typeof browserSessionsClientFrameSchema
 >;
@@ -1368,33 +1405,37 @@ export const browserSessionsV21 = defineStreamRpcContract({
 });
 
 /** One site the user's stored primary profile still holds cookies for. */
-export const browserSavedLoginSiteSchema = z
-  .object({
-    /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
-    domain: z.string(),
-    /** Newest observation of any live cookie under that domain, host clock. */
-    lastSeen: z.number(),
-    /**
-     * Which host contributed this login, when it was a HEADLESS session on the
-     * answering host rather than the user's own desktop jar. `null` means
-     * "nothing to attribute": the desktop's own
-     * browsing put it here, so there is no other machine to name.
-     *
-     * It is a `hostId` - the canonical host identity, which the GUI resolves to
-     * a display name through the host directory - and the answering host stamps
-     * its OWN id from its persisted identity. Nothing a client sends can name a
-     * host here.
-     *
-     * `.default(null)` so a host that predates this field still parses, exactly
-     * as the pre-epic slices it reads do.
-     */
-    contributedByHostId: z.string().nullable().default(null),
-  })
-  .strict();
+export const browserSavedLoginSiteSchema = lazySchema(() =>
+  z
+    .object({
+      /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
+      domain: z.string(),
+      /** Newest observation of any live cookie under that domain, host clock. */
+      lastSeen: z.number(),
+      /**
+       * Which host contributed this login, when it was a HEADLESS session on the
+       * answering host rather than the user's own desktop jar. `null` means
+       * "nothing to attribute": the desktop's own
+       * browsing put it here, so there is no other machine to name.
+       *
+       * It is a `hostId` - the canonical host identity, which the GUI resolves to
+       * a display name through the host directory - and the answering host stamps
+       * its OWN id from its persisted identity. Nothing a client sends can name a
+       * host here.
+       *
+       * `.default(null)` so a host that predates this field still parses, exactly
+       * as the pre-epic slices it reads do.
+       */
+      contributedByHostId: z.string().nullable().default(null),
+    })
+    .strict(),
+);
 export type BrowserSavedLoginSite = z.infer<typeof browserSavedLoginSiteSchema>;
 
 /** No input: the slice read is the caller's own, from the request identity. */
-export const browserSavedLoginSitesRequestSchema = z.object({}).strict();
+export const browserSavedLoginSitesRequestSchema = lazySchema(() =>
+  z.object({}).strict(),
+);
 
 /**
  * `sealed` is not "no sites": it is "this host holds no key for you yet", and
@@ -1403,9 +1444,8 @@ export const browserSavedLoginSitesRequestSchema = z.object({}).strict();
  * what lets Settings offer "Connect this desktop to unlock saved logins"
  * instead of claiming the user has no saved logins at all.
  */
-export const browserSavedLoginSitesResponseSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const browserSavedLoginSitesResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("sealed") }).strict(),
     z
       .object({
@@ -1413,7 +1453,7 @@ export const browserSavedLoginSitesResponseSchema = z.discriminatedUnion(
         sites: z.array(browserSavedLoginSiteSchema),
       })
       .strict(),
-  ],
+  ]),
 );
 export type BrowserSavedLoginSitesResponse = z.infer<
   typeof browserSavedLoginSitesResponseSchema
@@ -1432,7 +1472,7 @@ export const browserSavedLoginSitesV10 = defineRpcContract({
   responseSchema: browserSavedLoginSitesResponseSchema,
 });
 
-const browserScreencastFormatSchema = z.enum(["jpeg"]);
+const browserScreencastFormatSchema = lazySchema(() => z.enum(["jpeg"]));
 export type BrowserScreencastFormat = z.infer<
   typeof browserScreencastFormatSchema
 >;
@@ -1457,78 +1497,81 @@ export type BrowserScreencastFormat = z.infer<
  * authentication is the boundary; this field bounds a cooperating client and
  * denies nothing.
  */
-const browserScreencastViewerRoleSchema = z.enum(["tile", "pip", "viewer"]);
+const browserScreencastViewerRoleSchema = lazySchema(() =>
+  z.enum(["tile", "pip", "viewer"]),
+);
 export type BrowserScreencastViewerRole = z.infer<
   typeof browserScreencastViewerRoleSchema
 >;
 
 /** Scope-authorized, tab-addressed screencast subscription. */
-export const browserScreencastOpenRequestSchema = z
-  .object({
-    scope: hostResourceScopeSchema,
-    sessionId: z.string(),
-    tabId: z.string(),
-    maxWidth: z.number().int().positive(),
-    maxHeight: z.number().int().positive(),
-    quality: z.number().int().min(0).max(100),
-    format: browserScreencastFormatSchema,
-    role: browserScreencastViewerRoleSchema,
-    // The `handoffToken` a successful `openTab` answered this client with, when
-    // this viewer is watching the tab that open produced; `null` for any other
-    // viewer. The host holds the tab's session where the opener can see it
-    // until pixels reach a viewer presenting the token, so a bystander that
-    // picked the tab up from a session update does not release it.
-    handoffToken: z.string().nullable(),
-  })
-  .strict();
+export const browserScreencastOpenRequestSchema = lazySchema(() =>
+  z
+    .object({
+      scope: hostResourceScopeSchema,
+      sessionId: z.string(),
+      tabId: z.string(),
+      maxWidth: z.number().int().positive(),
+      maxHeight: z.number().int().positive(),
+      quality: z.number().int().min(0).max(100),
+      format: browserScreencastFormatSchema,
+      role: browserScreencastViewerRoleSchema,
+      // The `handoffToken` a successful `openTab` answered this client with, when
+      // this viewer is watching the tab that open produced; `null` for any other
+      // viewer. The host holds the tab's session where the opener can see it
+      // until pixels reach a viewer presenting the token, so a bystander that
+      // picked the tab up from a session update does not release it.
+      handoffToken: z.string().nullable(),
+    })
+    .strict(),
+);
 export type BrowserScreencastOpenRequest = z.infer<
   typeof browserScreencastOpenRequestSchema
 >;
 
-const browserScreencastMetadataSchema = z
-  .object({
-    offsetTop: z.number(),
-    pageScaleFactor: z.number(),
-    deviceWidth: z.number(),
-    deviceHeight: z.number(),
-    scrollOffsetX: z.number(),
-    scrollOffsetY: z.number(),
-    timestamp: z.number(),
-  })
-  .strict();
+const browserScreencastMetadataSchema = lazySchema(() =>
+  z
+    .object({
+      offsetTop: z.number(),
+      pageScaleFactor: z.number(),
+      deviceWidth: z.number(),
+      deviceHeight: z.number(),
+      scrollOffsetX: z.number(),
+      scrollOffsetY: z.number(),
+      timestamp: z.number(),
+    })
+    .strict(),
+);
 export type BrowserScreencastMetadata = z.infer<
   typeof browserScreencastMetadataSchema
 >;
 
-const browserScreencastUnsupportedFeatureSchema = z.enum([
-  "fileUpload",
-  "download",
-]);
+const browserScreencastUnsupportedFeatureSchema = lazySchema(() =>
+  z.enum(["fileUpload", "download"]),
+);
 export type BrowserScreencastUnsupportedFeature = z.infer<
   typeof browserScreencastUnsupportedFeatureSchema
 >;
 
 /** ICE candidate-pair types telemetry may report - a closed vocabulary. */
-export const browserScreencastIcePairTypeSchema = z.enum([
-  "host",
-  "srflx",
-  "prflx",
-  "relay",
-  "unknown",
-]);
+export const browserScreencastIcePairTypeSchema = lazySchema(() =>
+  z.enum(["host", "srflx", "prflx", "relay", "unknown"]),
+);
 export type BrowserScreencastIcePairType = z.infer<
   typeof browserScreencastIcePairTypeSchema
 >;
 
 /** Full navigation snapshot every time; consumers never reconstruct deltas. */
-export const browserNavStateSchema = z
-  .object({
-    url: z.string(),
-    canGoBack: z.boolean(),
-    canGoForward: z.boolean(),
-    loading: z.boolean(),
-  })
-  .strict();
+export const browserNavStateSchema = lazySchema(() =>
+  z
+    .object({
+      url: z.string(),
+      canGoBack: z.boolean(),
+      canGoForward: z.boolean(),
+      loading: z.boolean(),
+    })
+    .strict(),
+);
 export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
 
 /**
@@ -1551,20 +1594,20 @@ export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
  * frame already carries one for the whole array).
  */
 const browserScreencastIceCandidateBaseFields = {
-  candidate: z.string().max(16_384),
-  sdpMid: z.string().nullable(),
-  sdpMLineIndex: z.number().int().nonnegative().nullable(),
+  candidate: lazySchema(() => z.string().max(16_384)),
+  sdpMid: lazySchema(() => z.string().nullable()),
+  sdpMLineIndex: lazySchema(() => z.number().int().nonnegative().nullable()),
 } as const;
 
 const browserScreencastIceCandidateFields = {
-  negotiationId: z.number().int().nonnegative(),
+  negotiationId: lazySchema(() => z.number().int().nonnegative()),
   ...browserScreencastIceCandidateBaseFields,
 } as const;
 
 /** One candidate as it rides `sdpAnswer.candidates`. */
-const browserScreencastBatchedIceCandidateSchema = z
-  .object(browserScreencastIceCandidateBaseFields)
-  .strict();
+const browserScreencastBatchedIceCandidateSchema = lazySchema(() =>
+  z.object(browserScreencastIceCandidateBaseFields).strict(),
+);
 export type BrowserScreencastBatchedIceCandidate = z.infer<
   typeof browserScreencastBatchedIceCandidateSchema
 >;
@@ -1576,13 +1619,15 @@ export type BrowserScreencastBatchedIceCandidate = z.infer<
  * negotiate against the SAME set. Additive with a `[]` default: an older host
  * sends nothing and the client keeps its STUN-only fallback.
  */
-export const browserScreencastIceServerSchema = z
-  .object({
-    urls: z.array(z.string().max(2_048)).max(16),
-    username: z.string().nullable(),
-    credential: z.string().nullable(),
-  })
-  .strict();
+export const browserScreencastIceServerSchema = lazySchema(() =>
+  z
+    .object({
+      urls: z.array(z.string().max(2_048)).max(16),
+      username: z.string().nullable(),
+      credential: z.string().nullable(),
+    })
+    .strict(),
+);
 export type BrowserScreencastIceServer = z.infer<
   typeof browserScreencastIceServerSchema
 >;
@@ -1595,12 +1640,16 @@ export type BrowserScreencastIceServer = z.infer<
  */
 export const BROWSER_SCREENCAST_STUN_URL = "stun:stun.l.google.com:19302";
 
-const browserScreencastAgentCursorTypeSchema = z.enum(["move", "down", "up"]);
+const browserScreencastAgentCursorTypeSchema = lazySchema(() =>
+  z.enum(["move", "down", "up"]),
+);
 export type BrowserScreencastAgentCursorType = z.infer<
   typeof browserScreencastAgentCursorTypeSchema
 >;
 
-const browserScreencastCaptureModeSchema = z.enum(["jpeg", "video"]);
+const browserScreencastCaptureModeSchema = lazySchema(() =>
+  z.enum(["jpeg", "video"]),
+);
 export type BrowserScreencastCaptureMode = z.infer<
   typeof browserScreencastCaptureModeSchema
 >;
@@ -1610,486 +1659,525 @@ export type BrowserScreencastCaptureMode = z.infer<
  * these to decide whether to turn the JPEG pump back on and traces them as a
  * fixed vocabulary; anything variable rides `videoPlaneState.detail`.
  */
-export const browserVideoPlaneFailureReasonSchema = z.enum([
-  "no-first-frame",
-  "frames-stopped",
-  "track-ended",
-  "connection-closed",
-  "connection-failed",
-  "answer-failed",
-]);
+export const browserVideoPlaneFailureReasonSchema = lazySchema(() =>
+  z.enum([
+    "no-first-frame",
+    "frames-stopped",
+    "track-ended",
+    "connection-closed",
+    "connection-failed",
+    "answer-failed",
+  ]),
+);
 export type BrowserVideoPlaneFailureReason = z.infer<
   typeof browserVideoPlaneFailureReasonSchema
 >;
 
 const browserScreencastSharedServerFrameSchemas = [
-  z
-    .object({
-      kind: z.literal("started"),
-      ...textFrameFields,
-      frameWidth: z.number().int().positive(),
-      frameHeight: z.number().int().positive(),
-      deviceScaleFactor: z.number().positive(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("frame"),
-      ...binaryFrameFields,
-      sequence: z.number().int().nonnegative(),
-      metadata: browserScreencastMetadataSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("stalled"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("resized"),
-      ...textFrameFields,
-      frameWidth: z.number().int().positive(),
-      frameHeight: z.number().int().positive(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("failed"),
-      ...textFrameFields,
-      reason: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("complete"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
-      // Answer to every `ping` on this contract, whichever transport carried
-      // it. There is no plain `pong` arm: the stream transport answers a mux
-      // `ping` itself, before any resolver sees the frame, and client-side it
-      // delivers a pong upward only for an application `ping` it queued - so a
-      // `pong` from here could never reach the sender. Carries no correlation
-      // id because the prober keeps one ping in flight at a time.
-      kind: z.literal("inputPong"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
-      // Control-plane RTT probe. Its own frame pair rather than
-      // the `ping`/`pong` above, which neither end can use for this: the
-      // stream transport answers a client `ping` before any resolver sees it,
-      // and the pong it sends back is credited to the transport's own ping
-      // queue - so a host-side prober can never observe its reply, and on this
-      // contract nobody can both initiate a round trip and observe it. The viewer answers with `rttProbeAck` carrying the same
-      // `probeId`, and reads `controlPlaneRttMs` - the host's smoothed
-      // estimate at send time, null before the first completed probe - to size
-      // its own deadlines off the same measurement.
-      kind: z.literal("rttProbe"),
-      ...textFrameFields,
-      probeId: z.number().int().nonnegative(),
-      controlPlaneRttMs: z.number().nonnegative().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("armed"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("revoked"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-      // `denied` answers a `preArm` the host refused because another viewer
-      // holds control. Only a viewer that sent one can ever receive it, which
-      // is why adding it to this enum cannot break an older client.
-      cause: z.enum(["disarmed", "stolen", "denied"]),
-    })
-    .strict(),
-  z
-    .object({
-      // How far the host has consumed this arm epoch's input sequence. Sent
-      // only for input that arrived over the MUX, coalesced, so it exists
-      // exactly during the window where the client is waiting to
-      // promote its pending DataChannel transport: once `lastSeq` covers the
-      // last frame the client put on the mux, nothing can reorder against the
-      // channel and the client promotes mid-arm.
-      kind: z.literal("inputAck"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-      lastSeq: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("dialogOpened"),
-      ...textFrameFields,
-      generation: z.number().int().nonnegative(),
-      type: z.enum(["alert", "beforeunload", "confirm", "prompt"]),
-      message: z.string(),
-      defaultValue: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("dialogSettled"),
-      ...textFrameFields,
-      generation: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("navState"),
-      ...textFrameFields,
-      ...browserNavStateSchema.shape,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("unsupportedInteraction"),
-      ...textFrameFields,
-      feature: browserScreencastUnsupportedFeatureSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("sdpOffer"),
-      ...textFrameFields,
-      negotiationId: z.number().int().nonnegative(),
-      sdp: z.string().max(1_048_576),
-      iceServers: z.array(browserScreencastIceServerSchema).default([]),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("iceCandidate"),
-      ...textFrameFields,
-      ...browserScreencastIceCandidateFields,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("agentCursor"),
-      ...textFrameFields,
-      type: browserScreencastAgentCursorTypeSchema,
-      // Normalized [0,1] to the viewport-epoch geometry, unclamped;
-      // epoch minted by the host.
-      epoch: z.number().int().nonnegative(),
-      normalizedX: z.number(),
-      normalizedY: z.number(),
-      // Agent identity/context shown alongside the cursor overlay.
-      label: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      // Which capture is running for this subscriber, and so what its input
-      // correlates against: `jpeg` = frames are being pumped, correlate on the
-      // presented frame; `video` = the JPEG cast is stopped for the video
-      // plane, correlate on the viewport epoch. `video` is sent when the
-      // attempt STARTS, not when a track goes live - the client shows its
-      // connecting loader for that window and paints no stale frame.
-      kind: z.literal("captureMode"),
-      ...textFrameFields,
-      mode: browserScreencastCaptureModeSchema,
-    })
-    .strict(),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("started"),
+        ...textFrameFields,
+        frameWidth: z.number().int().positive(),
+        frameHeight: z.number().int().positive(),
+        deviceScaleFactor: z.number().positive(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("frame"),
+        ...binaryFrameFields,
+        sequence: z.number().int().nonnegative(),
+        metadata: browserScreencastMetadataSchema,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("stalled"),
+        ...textFrameFields,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("resized"),
+        ...textFrameFields,
+        frameWidth: z.number().int().positive(),
+        frameHeight: z.number().int().positive(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("failed"),
+        ...textFrameFields,
+        reason: z.string(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("complete"),
+        ...textFrameFields,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        // Answer to every `ping` on this contract, whichever transport carried
+        // it. There is no plain `pong` arm: the stream transport answers a mux
+        // `ping` itself, before any resolver sees the frame, and client-side it
+        // delivers a pong upward only for an application `ping` it queued - so a
+        // `pong` from here could never reach the sender. Carries no correlation
+        // id because the prober keeps one ping in flight at a time.
+        kind: z.literal("inputPong"),
+        ...textFrameFields,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        // Control-plane RTT probe. Its own frame pair rather than
+        // the `ping`/`pong` above, which neither end can use for this: the
+        // stream transport answers a client `ping` before any resolver sees it,
+        // and the pong it sends back is credited to the transport's own ping
+        // queue - so a host-side prober can never observe its reply, and on this
+        // contract nobody can both initiate a round trip and observe it. The viewer answers with `rttProbeAck` carrying the same
+        // `probeId`, and reads `controlPlaneRttMs` - the host's smoothed
+        // estimate at send time, null before the first completed probe - to size
+        // its own deadlines off the same measurement.
+        kind: z.literal("rttProbe"),
+        ...textFrameFields,
+        probeId: z.number().int().nonnegative(),
+        controlPlaneRttMs: z.number().nonnegative().nullable(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("armed"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("revoked"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+        // `denied` answers a `preArm` the host refused because another viewer
+        // holds control. Only a viewer that sent one can ever receive it, which
+        // is why adding it to this enum cannot break an older client.
+        cause: z.enum(["disarmed", "stolen", "denied"]),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        // How far the host has consumed this arm epoch's input sequence. Sent
+        // only for input that arrived over the MUX, coalesced, so it exists
+        // exactly during the window where the client is waiting to
+        // promote its pending DataChannel transport: once `lastSeq` covers the
+        // last frame the client put on the mux, nothing can reorder against the
+        // channel and the client promotes mid-arm.
+        kind: z.literal("inputAck"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+        lastSeq: z.number().int().nonnegative(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("dialogOpened"),
+        ...textFrameFields,
+        generation: z.number().int().nonnegative(),
+        type: z.enum(["alert", "beforeunload", "confirm", "prompt"]),
+        message: z.string(),
+        defaultValue: z.string(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("dialogSettled"),
+        ...textFrameFields,
+        generation: z.number().int().nonnegative(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("navState"),
+        ...textFrameFields,
+        ...browserNavStateSchema.shape,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("unsupportedInteraction"),
+        ...textFrameFields,
+        feature: browserScreencastUnsupportedFeatureSchema,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("sdpOffer"),
+        ...textFrameFields,
+        negotiationId: z.number().int().nonnegative(),
+        sdp: z.string().max(1_048_576),
+        iceServers: z.array(browserScreencastIceServerSchema).default([]),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("iceCandidate"),
+        ...textFrameFields,
+        ...browserScreencastIceCandidateFields,
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("agentCursor"),
+        ...textFrameFields,
+        type: browserScreencastAgentCursorTypeSchema,
+        // Normalized [0,1] to the viewport-epoch geometry, unclamped;
+        // epoch minted by the host.
+        epoch: z.number().int().nonnegative(),
+        normalizedX: z.number(),
+        normalizedY: z.number(),
+        // Agent identity/context shown alongside the cursor overlay.
+        label: z.string(),
+      })
+      .strict(),
+  ),
+  lazySchema(() =>
+    z
+      .object({
+        // Which capture is running for this subscriber, and so what its input
+        // correlates against: `jpeg` = frames are being pumped, correlate on the
+        // presented frame; `video` = the JPEG cast is stopped for the video
+        // plane, correlate on the viewport epoch. `video` is sent when the
+        // attempt STARTS, not when a track goes live - the client shows its
+        // connecting loader for that window and paints no stale frame.
+        kind: z.literal("captureMode"),
+        ...textFrameFields,
+        mode: browserScreencastCaptureModeSchema,
+      })
+      .strict(),
+  ),
 ] as const;
 
-const browserViewportEpochV20Schema = z
-  .object({
-    // The video plane's hit-testing token. A JPEG-plane tile correlates
-    // input against the frame it painted (`castSequence`); a video-plane
-    // tile has no such frame, so the host mints a viewport epoch from
-    // `Page.getLayoutMetrics` and re-announces it whenever that geometry
-    // changes. Input carrying a stale (or no) epoch is rejected, exactly
-    // as input naming an unpresented frame is. Same counter as
-    // `agentCursor.epoch`.
-    kind: z.literal("viewportEpoch"),
-    ...textFrameFields,
-    epoch: z.number().int().nonnegative(),
-  })
-  .strict();
-export const browserScreencastServerFrameV20Schema = z.discriminatedUnion(
-  "kind",
-  [...browserScreencastSharedServerFrameSchemas, browserViewportEpochV20Schema],
+const browserViewportEpochV20Schema = lazySchema(() =>
+  z
+    .object({
+      // The video plane's hit-testing token. A JPEG-plane tile correlates
+      // input against the frame it painted (`castSequence`); a video-plane
+      // tile has no such frame, so the host mints a viewport epoch from
+      // `Page.getLayoutMetrics` and re-announces it whenever that geometry
+      // changes. Input carrying a stale (or no) epoch is rejected, exactly
+      // as input naming an unpresented frame is. Same counter as
+      // `agentCursor.epoch`.
+      kind: z.literal("viewportEpoch"),
+      ...textFrameFields,
+      epoch: z.number().int().nonnegative(),
+    })
+    .strict(),
 );
-export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
-  ...browserScreencastSharedServerFrameSchemas,
-  browserViewportEpochV20Schema.extend({
-    // Absent on a 2.0 host; 2.1 hosts always supply logical capture geometry.
-    logicalViewport: browserViewportGeometrySchema.nullable().default(null),
-  }),
-]);
+export const browserScreencastServerFrameV20Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...browserScreencastSharedServerFrameSchemas,
+    browserViewportEpochV20Schema,
+  ]),
+);
+export const browserScreencastServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...browserScreencastSharedServerFrameSchemas,
+    browserViewportEpochV20Schema.extend({
+      // Absent on a 2.0 host; 2.1 hosts always supply logical capture geometry.
+      logicalViewport: browserViewportGeometrySchema.nullable().default(null),
+    }),
+  ]),
+);
 export type BrowserScreencastServerFrame = z.infer<
   typeof browserScreencastServerFrameSchema
 >;
 
 const browserScreencastControlIdentitySchema = {
-  armEpoch: z.number().int().nonnegative(),
-  seq: z.number().int().nonnegative(),
+  armEpoch: lazySchema(() => z.number().int().nonnegative()),
+  seq: lazySchema(() => z.number().int().nonnegative()),
 };
 
-const browserScreencastPointerTypeSchema = z.enum([
-  "move",
-  "down",
-  "up",
-  "wheel",
-]);
+const browserScreencastPointerTypeSchema = lazySchema(() =>
+  z.enum(["move", "down", "up", "wheel"]),
+);
 export type BrowserScreencastPointerType = z.infer<
   typeof browserScreencastPointerTypeSchema
 >;
 
-const browserScreencastPointerButtonSchema = z.enum([
-  "none",
-  "left",
-  "middle",
-  "right",
-  "back",
-  "forward",
-]);
+const browserScreencastPointerButtonSchema = lazySchema(() =>
+  z.enum(["none", "left", "middle", "right", "back", "forward"]),
+);
 export type BrowserScreencastPointerButton = z.infer<
   typeof browserScreencastPointerButtonSchema
 >;
 
-const browserScreencastKeyboardTypeSchema = z.enum([
-  "rawKeyDown",
-  "keyUp",
-  "char",
-]);
+const browserScreencastKeyboardTypeSchema = lazySchema(() =>
+  z.enum(["rawKeyDown", "keyUp", "char"]),
+);
 
-export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("ack"),
-      ...textFrameFields,
-      sequence: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("viewport"),
-      ...textFrameFields,
-      width: z.number().int().positive(),
-      height: z.number().int().positive(),
-      dpr: z.number().finite().positive(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("ping"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("arm"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      // A speculative claim raised on hover, so the host has the
-      // dispatcher live before the click that needs it. Its own kind rather
-      // than a flag on `arm` because the AUTHORIZATION differs: this one is
-      // refused (`revoked`, cause `denied`) when another viewer holds control,
-      // where `arm` steals. Same epoch counter, same ordering, same
-      // registry - only the steal is withheld.
-      kind: z.literal("preArm"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("disarm"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("pointer"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-      type: browserScreencastPointerTypeSchema,
-      // Exactly one correlation token is set, per display plane: JPEG tiles
-      // name the painted frame, video tiles name the host's viewport epoch
-      // (see the `viewportEpoch` server frame). Neither set is unmappable
-      // and the host rejects it.
-      castSequence: z.number().int().nonnegative().nullable().default(null),
-      viewportEpoch: z.number().int().nonnegative().nullable().default(null),
-      normalizedX: z.number(),
-      normalizedY: z.number(),
-      button: browserScreencastPointerButtonSchema,
-      buttons: z.number().int().min(0).max(31),
-      modifiers: z.number().int().min(0).max(15),
-      // Local click tracker; 0 for move/wheel.
-      clickCount: z.number().int().min(0).max(8),
-      deltaX: z.number(),
-      deltaY: z.number(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("keyboard"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-      type: browserScreencastKeyboardTypeSchema,
-      code: z.string(),
-      key: z.string(),
-      modifiers: z.number().int().min(0).max(15),
-      // DOM event.repeat.
-      autoRepeat: z.boolean(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("insertText"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-      text: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("navigate"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-      url: z.string().max(2048),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("goBack"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("goForward"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("reload"),
-      ...textFrameFields,
-      ...browserScreencastControlIdentitySchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("dialogResponse"),
-      ...textFrameFields,
-      armEpoch: z.number().int().nonnegative(),
-      generation: z.number().int().nonnegative(),
-      accept: z.boolean(),
-      promptText: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("sdpAnswer"),
-      ...textFrameFields,
-      negotiationId: z.number().int().nonnegative(),
-      sdp: z.string().max(1_048_576),
-      // Local candidates gathered before the answer shipped, batched here
-      // instead of one `iceCandidate` frame each. `.default([])` - additive,
-      // and `browser.screencast` is not in the released baseline - so an
-      // older client that sends none still parses.
-      candidates: z
-        .array(browserScreencastBatchedIceCandidateSchema)
-        .max(256)
-        .default([]),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("iceCandidate"),
-      ...textFrameFields,
-      ...browserScreencastIceCandidateFields,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("videoPlaneState"),
-      ...textFrameFields,
-      // Lets the host ignore a "failed" from a negotiation round it already
-      // abandoned (a retry started a new, higher negotiationId).
-      negotiationId: z.number().int().nonnegative(),
-      // "live" = first decoded video frame; "failed" = track death/timeout.
-      state: z.enum(["live", "failed"]),
-      reason: browserVideoPlaneFailureReasonSchema.nullable(),
-      // Free-form context for the one code that has any (`answer-failed`
-      // carries the SDP error's text). Never parsed - it exists so the closed
-      // vocabulary above does not cost the host its diagnostics.
-      // `.default(null)` so an older client's frame still parses.
-      detail: z.string().max(256).nullable().default(null),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("videoStats"),
-      ...textFrameFields,
-      // Receive-side WebRTC getStats + client-observed timing; the trace log
-      // consumes this raw (semantics beyond the shape are out of scope here).
-      negotiationId: z.number().int().nonnegative(),
-      framesDecoded: z.number().int().nonnegative(),
-      framesDropped: z.number().int().nonnegative(),
-      packetsLost: z.number().int().nonnegative(),
-      jitterMs: z.number().nonnegative(),
-      roundTripTimeMs: z.number().nonnegative(),
-      // True capture-to-paint, median over the sampling window: WebRTC's
-      // Absolute Capture Time extension puts the SENDER's capture instant on
-      // the frame, and `requestVideoFrameCallback` metadata surfaces it as
-      // `captureTime` in the receiver's own clock domain, so
-      // `expectedDisplayTime - captureTime` needs no host stamp of its own.
-      // Null whenever the extension was not negotiated (it is a default, not
-      // a guarantee) or the WebView has no per-frame callback at all.
-      glassToGlassMs: z.number().nonnegative().nullable(),
-      // The same measurement's tail, and its two halves - `receiveTime` splits
-      // capture-to-paint into "how long the network held the frame" and "how
-      // long this client took to decode and composite it", which is the whole
-      // difference between a path problem and a client problem. Additive:
-      // `.default(null)` so an older client's frame still parses.
-      glassToGlassP95Ms: z.number().nonnegative().nullable().default(null),
-      networkPlusJitterMs: z.number().nonnegative().nullable().default(null),
-      decodeCompositeMs: z.number().nonnegative().nullable().default(null),
-      // Round trip of one `ping` sent on the `input-reliable` DataChannel: up
-      // the DataChannel, back over the mux as `inputPong`. Deliberately
-      // asymmetric - that IS the human input path's shape, and the uplink
-      // half is the leg deadlines are derived from. Null until a ping has
-      // completed.
-      dataChannelRttMs: z.number().nonnegative().nullable().default(null),
-      // getStats() candidate-pair `candidateType` of the active receive
-      // path (only observable receiver-side) - the "ICE path taken" metric.
-      // Closed vocabulary: telemetry carries no free text.
-      iceCandidatePairType: browserScreencastIcePairTypeSchema.catch("unknown"),
-    })
-    .strict(),
-  z
-    .object({
-      // Reply to the host's `rttProbe`, sent as soon as the viewer sees it.
-      // Carries nothing of its own: the host times the round trip and the
-      // probe frame carries the result back.
-      kind: z.literal("rttProbeAck"),
-      ...textFrameFields,
-      probeId: z.number().int().nonnegative(),
-    })
-    .strict(),
-]);
+export const browserScreencastClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("ack"),
+        ...textFrameFields,
+        sequence: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("viewport"),
+        ...textFrameFields,
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        dpr: z.number().finite().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("ping"),
+        ...textFrameFields,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("arm"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        // A speculative claim raised on hover, so the host has the
+        // dispatcher live before the click that needs it. Its own kind rather
+        // than a flag on `arm` because the AUTHORIZATION differs: this one is
+        // refused (`revoked`, cause `denied`) when another viewer holds control,
+        // where `arm` steals. Same epoch counter, same ordering, same
+        // registry - only the steal is withheld.
+        kind: z.literal("preArm"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("disarm"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("pointer"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+        type: browserScreencastPointerTypeSchema,
+        // Exactly one correlation token is set, per display plane: JPEG tiles
+        // name the painted frame, video tiles name the host's viewport epoch
+        // (see the `viewportEpoch` server frame). Neither set is unmappable
+        // and the host rejects it.
+        castSequence: z.number().int().nonnegative().nullable().default(null),
+        viewportEpoch: z.number().int().nonnegative().nullable().default(null),
+        normalizedX: z.number(),
+        normalizedY: z.number(),
+        button: browserScreencastPointerButtonSchema,
+        buttons: z.number().int().min(0).max(31),
+        modifiers: z.number().int().min(0).max(15),
+        // Local click tracker; 0 for move/wheel.
+        clickCount: z.number().int().min(0).max(8),
+        deltaX: z.number(),
+        deltaY: z.number(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("keyboard"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+        type: browserScreencastKeyboardTypeSchema,
+        code: z.string(),
+        key: z.string(),
+        modifiers: z.number().int().min(0).max(15),
+        // DOM event.repeat.
+        autoRepeat: z.boolean(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("insertText"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+        text: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("navigate"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+        url: z.string().max(2048),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("goBack"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("goForward"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("reload"),
+        ...textFrameFields,
+        ...browserScreencastControlIdentitySchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("dialogResponse"),
+        ...textFrameFields,
+        armEpoch: z.number().int().nonnegative(),
+        generation: z.number().int().nonnegative(),
+        accept: z.boolean(),
+        promptText: z.string().nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sdpAnswer"),
+        ...textFrameFields,
+        negotiationId: z.number().int().nonnegative(),
+        sdp: z.string().max(1_048_576),
+        // Local candidates gathered before the answer shipped, batched here
+        // instead of one `iceCandidate` frame each. `.default([])` - additive,
+        // and `browser.screencast` is not in the released baseline - so an
+        // older client that sends none still parses.
+        candidates: z
+          .array(browserScreencastBatchedIceCandidateSchema)
+          .max(256)
+          .default([]),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("iceCandidate"),
+        ...textFrameFields,
+        ...browserScreencastIceCandidateFields,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("videoPlaneState"),
+        ...textFrameFields,
+        // Lets the host ignore a "failed" from a negotiation round it already
+        // abandoned (a retry started a new, higher negotiationId).
+        negotiationId: z.number().int().nonnegative(),
+        // "live" = first decoded video frame; "failed" = track death/timeout.
+        state: z.enum(["live", "failed"]),
+        reason: browserVideoPlaneFailureReasonSchema.nullable(),
+        // Free-form context for the one code that has any (`answer-failed`
+        // carries the SDP error's text). Never parsed - it exists so the closed
+        // vocabulary above does not cost the host its diagnostics.
+        // `.default(null)` so an older client's frame still parses.
+        detail: z.string().max(256).nullable().default(null),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("videoStats"),
+        ...textFrameFields,
+        // Receive-side WebRTC getStats + client-observed timing; the trace log
+        // consumes this raw (semantics beyond the shape are out of scope here).
+        negotiationId: z.number().int().nonnegative(),
+        framesDecoded: z.number().int().nonnegative(),
+        framesDropped: z.number().int().nonnegative(),
+        packetsLost: z.number().int().nonnegative(),
+        jitterMs: z.number().nonnegative(),
+        roundTripTimeMs: z.number().nonnegative(),
+        // True capture-to-paint, median over the sampling window: WebRTC's
+        // Absolute Capture Time extension puts the SENDER's capture instant on
+        // the frame, and `requestVideoFrameCallback` metadata surfaces it as
+        // `captureTime` in the receiver's own clock domain, so
+        // `expectedDisplayTime - captureTime` needs no host stamp of its own.
+        // Null whenever the extension was not negotiated (it is a default, not
+        // a guarantee) or the WebView has no per-frame callback at all.
+        glassToGlassMs: z.number().nonnegative().nullable(),
+        // The same measurement's tail, and its two halves - `receiveTime` splits
+        // capture-to-paint into "how long the network held the frame" and "how
+        // long this client took to decode and composite it", which is the whole
+        // difference between a path problem and a client problem. Additive:
+        // `.default(null)` so an older client's frame still parses.
+        glassToGlassP95Ms: z.number().nonnegative().nullable().default(null),
+        networkPlusJitterMs: z.number().nonnegative().nullable().default(null),
+        decodeCompositeMs: z.number().nonnegative().nullable().default(null),
+        // Round trip of one `ping` sent on the `input-reliable` DataChannel: up
+        // the DataChannel, back over the mux as `inputPong`. Deliberately
+        // asymmetric - that IS the human input path's shape, and the uplink
+        // half is the leg deadlines are derived from. Null until a ping has
+        // completed.
+        dataChannelRttMs: z.number().nonnegative().nullable().default(null),
+        // getStats() candidate-pair `candidateType` of the active receive
+        // path (only observable receiver-side) - the "ICE path taken" metric.
+        // Closed vocabulary: telemetry carries no free text.
+        iceCandidatePairType:
+          browserScreencastIcePairTypeSchema.catch("unknown"),
+      })
+      .strict(),
+    z
+      .object({
+        // Reply to the host's `rttProbe`, sent as soon as the viewer sees it.
+        // Carries nothing of its own: the host times the round trip and the
+        // probe frame carries the result back.
+        kind: z.literal("rttProbeAck"),
+        ...textFrameFields,
+        probeId: z.number().int().nonnegative(),
+      })
+      .strict(),
+  ]),
+);
 export type BrowserScreencastClientFrame = z.infer<
   typeof browserScreencastClientFrameSchema
 >;

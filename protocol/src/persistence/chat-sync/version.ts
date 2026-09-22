@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The single literal version of the chat-sync publication contract.
@@ -118,10 +119,12 @@ export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
  * two cannot drift. A payload claiming any other version is not a v1.1 record
  * and does not parse as one.
  */
-export const chatSyncSchemaVersionSchema = z.object({
-  major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
-  minor: z.literal(CHAT_SYNC_SCHEMA_VERSION.minor),
-});
+export const chatSyncSchemaVersionSchema = lazySchema(() =>
+  z.object({
+    major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
+    minor: z.literal(CHAT_SYNC_SCHEMA_VERSION.minor),
+  }),
+);
 
 /**
  * The version a READER may accept, as opposed to the one a writer stamps.
@@ -141,10 +144,12 @@ export const chatSyncSchemaVersionSchema = z.object({
  * Older minors are accepted too: a 1.4 reader meeting a 1.0 head is the
  * ordinary case, not the interesting one.
  */
-export const chatSyncReaderVersionSchema = z.object({
-  major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
-  minor: z.number().int().nonnegative(),
-});
+export const chatSyncReaderVersionSchema = lazySchema(() =>
+  z.object({
+    major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
+    minor: z.number().int().nonnegative(),
+  }),
+);
 
 /**
  * A payload version as a reader may see it: this contract's major, any minor.
@@ -157,4 +162,6 @@ export type ChatSyncPayloadVersion = {
 };
 
 /** Lowercase hex SHA-256, the only form a content address is written in. */
-export const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export const sha256HexSchema = lazySchema(() =>
+  z.string().regex(/^[0-9a-f]{64}$/),
+);

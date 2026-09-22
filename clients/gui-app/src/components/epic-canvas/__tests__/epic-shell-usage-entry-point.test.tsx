@@ -19,6 +19,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
@@ -142,6 +143,7 @@ const usageSummaryRequests: UsageSummaryRequest[] = [];
 
 const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
+  schedulingPolicy: hostRpcSchedulingPolicy,
   invalidator: { invalidateHostScope: () => undefined },
   findHostById: (hostId) =>
     hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

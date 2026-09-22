@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Client-side mirror of `POST /api/v3/hosts/:hostId/attach-grant`'s response
@@ -19,8 +20,10 @@ export interface AttachGrantResponse {
 }
 
 export const attachGrantResponseSchema: z.ZodType<AttachGrantResponse> =
-  z.object({
-    grant: z.string().min(1),
-    role: z.string(),
-    expires_in: z.number(),
-  });
+  lazySchema(() =>
+    z.object({
+      grant: z.string().min(1),
+      role: z.string(),
+      expires_in: z.number(),
+    }),
+  );

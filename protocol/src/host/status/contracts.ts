@@ -20,19 +20,22 @@ import type {
 // the Node readers), and `host/maintenance/schemas.ts` already puts these
 // records on the wire the same way.
 import { hostInstallSourceKindSchema } from "@traycer/protocol/config/installation-records";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const hostStatusV10 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: z.object({}),
-  responseSchema: z.object({
-    ready: z.boolean(),
-    hostVersion: z.string(),
-    protocolVersion: z.object({
-      major: z.number().int().nonnegative(),
-      minor: z.number().int().nonnegative(),
+  requestSchema: lazySchema(() => z.object({})),
+  responseSchema: lazySchema(() =>
+    z.object({
+      ready: z.boolean(),
+      hostVersion: z.string(),
+      protocolVersion: z.object({
+        major: z.number().int().nonnegative(),
+        minor: z.number().int().nonnegative(),
+      }),
     }),
-  }),
+  ),
 });
 
 /**
@@ -42,15 +45,19 @@ export const hostStatusV10 = defineRpcContract({
  * update` is actually in flight on this box (Architecture §13, T16);
  * `null` the rest of the time.
  */
-export const hostUpdateProgressStateSchema = z.enum(["updating", "failed"]);
+export const hostUpdateProgressStateSchema = lazySchema(() =>
+  z.enum(["updating", "failed"]),
+);
 export type HostUpdateProgressState = z.infer<
   typeof hostUpdateProgressStateSchema
 >;
 
-export const hostStatusUpdateProgressSchema = z.object({
-  state: hostUpdateProgressStateSchema,
-  error: z.string().nullable(),
-});
+export const hostStatusUpdateProgressSchema = lazySchema(() =>
+  z.object({
+    state: hostUpdateProgressStateSchema,
+    error: z.string().nullable(),
+  }),
+);
 export type HostStatusUpdateProgress = z.infer<
   typeof hostStatusUpdateProgressSchema
 >;
@@ -61,11 +68,13 @@ export type HostStatusUpdateProgress = z.infer<
  * field. Counts are non-negative; a missing breakdown is `null` (unknown),
  * never a fabricated zero object.
  */
-export const hostBusyBreakdownSchema = z.object({
-  workingAgents: z.number().int().nonnegative(),
-  activeTerminalAgents: z.number().int().nonnegative(),
-  busyTerminals: z.number().int().nonnegative(),
-});
+export const hostBusyBreakdownSchema = lazySchema(() =>
+  z.object({
+    workingAgents: z.number().int().nonnegative(),
+    activeTerminalAgents: z.number().int().nonnegative(),
+    busyTerminals: z.number().int().nonnegative(),
+  }),
+);
 export type HostBusyBreakdown = z.infer<typeof hostBusyBreakdownSchema>;
 
 /**
@@ -78,24 +87,26 @@ export type HostBusyBreakdown = z.infer<typeof hostBusyBreakdownSchema>;
 export const hostStatusV11 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: z.object({}),
-  responseSchema: z.object({
-    ready: z.boolean(),
-    hostVersion: z.string(),
-    protocolVersion: z.object({
-      major: z.number().int().nonnegative(),
-      minor: z.number().int().nonnegative(),
+  requestSchema: lazySchema(() => z.object({})),
+  responseSchema: lazySchema(() =>
+    z.object({
+      ready: z.boolean(),
+      hostVersion: z.string(),
+      protocolVersion: z.object({
+        major: z.number().int().nonnegative(),
+        minor: z.number().int().nonnegative(),
+      }),
+      busy: z.boolean(),
+      /**
+       * Open sessions blocking an update drain. `null` means the host did not
+       * report a count — NOT that it reported zero. The two are different claims
+       * and the drain UI depends on the difference: it names the count in
+       * "Apply now — ends N sessions" and then ends that many.
+       */
+      busySessionCount: z.number().int().nonnegative().nullable(),
+      updateProgress: hostStatusUpdateProgressSchema.nullable(),
     }),
-    busy: z.boolean(),
-    /**
-     * Open sessions blocking an update drain. `null` means the host did not
-     * report a count — NOT that it reported zero. The two are different claims
-     * and the drain UI depends on the difference: it names the count in
-     * "Apply now — ends N sessions" and then ends that many.
-     */
-    busySessionCount: z.number().int().nonnegative().nullable(),
-    updateProgress: hostStatusUpdateProgressSchema.nullable(),
-  }),
+  ),
 });
 
 /**
@@ -112,24 +123,26 @@ export const hostStatusV11 = defineRpcContract({
 export const hostStatusV12 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 2 } as const,
-  requestSchema: z.object({}),
-  responseSchema: z.object({
-    ready: z.boolean(),
-    hostVersion: z.string(),
-    protocolVersion: z.object({
-      major: z.number().int().nonnegative(),
-      minor: z.number().int().nonnegative(),
+  requestSchema: lazySchema(() => z.object({})),
+  responseSchema: lazySchema(() =>
+    z.object({
+      ready: z.boolean(),
+      hostVersion: z.string(),
+      protocolVersion: z.object({
+        major: z.number().int().nonnegative(),
+        minor: z.number().int().nonnegative(),
+      }),
+      busy: z.boolean(),
+      /**
+       * Total busy items blocking an update drain (the sum of
+       * `busyBreakdown` when that is present). `null` means the host did not
+       * report a count — NOT that it reported zero.
+       */
+      busySessionCount: z.number().int().nonnegative().nullable(),
+      updateProgress: hostStatusUpdateProgressSchema.nullable(),
+      busyBreakdown: hostBusyBreakdownSchema.nullable(),
     }),
-    busy: z.boolean(),
-    /**
-     * Total busy items blocking an update drain (the sum of
-     * `busyBreakdown` when that is present). `null` means the host did not
-     * report a count — NOT that it reported zero.
-     */
-    busySessionCount: z.number().int().nonnegative().nullable(),
-    updateProgress: hostStatusUpdateProgressSchema.nullable(),
-    busyBreakdown: hostBusyBreakdownSchema.nullable(),
-  }),
+  ),
 });
 
 // ---- v1.3: the durable update attempt ---------------------------------------
@@ -141,31 +154,29 @@ export const hostStatusV12 = defineRpcContract({
 // live holder. v1.3 puts that on the wire additively, and `updateProgress`
 // keeps its exact released meaning for every peer below this minor.
 
-const hostUpdateOperationPhaseSchema = z.enum([
-  "downloading",
-  "preparing",
-  "applying",
-  "waiting-for-work",
-  "waiting-to-activate",
-  "restarting",
-  "verifying",
-  "complete",
-  "failed",
-  "superseded",
-]);
-const hostUpdateOperationExecutionSchema = z.enum([
-  "active",
-  "parked",
-  "terminal",
-]);
-const hostUpdateOperationContinuationSchema = z
-  .enum(["resume-apply", "activate"])
-  .nullable();
-const hostUpdateOperationTriggerSchema = z.enum([
-  "manual",
-  "automatic",
-  "support-floor",
-]);
+const hostUpdateOperationPhaseSchema = lazySchema(() =>
+  z.enum([
+    "downloading",
+    "preparing",
+    "applying",
+    "waiting-for-work",
+    "waiting-to-activate",
+    "restarting",
+    "verifying",
+    "complete",
+    "failed",
+    "superseded",
+  ]),
+);
+const hostUpdateOperationExecutionSchema = lazySchema(() =>
+  z.enum(["active", "parked", "terminal"]),
+);
+const hostUpdateOperationContinuationSchema = lazySchema(() =>
+  z.enum(["resume-apply", "activate"]).nullable(),
+);
+const hostUpdateOperationTriggerSchema = lazySchema(() =>
+  z.enum(["manual", "automatic", "support-floor"]),
+);
 
 // The wire vocabulary IS the record vocabulary - asserted, not assumed. A
 // phase added to the durable record without being added here would otherwise
@@ -207,13 +218,9 @@ void _updateOperationVocabularyAgrees;
  * that reason - a probe that could not run establishes nothing, and must not
  * be rendered as either a running update or an abandoned one.
  */
-export const hostUpdateOperationLivenessSchema = z.enum([
-  "active",
-  "parked",
-  "terminal",
-  "interrupted",
-  "indeterminate",
-]);
+export const hostUpdateOperationLivenessSchema = lazySchema(() =>
+  z.enum(["active", "parked", "terminal", "interrupted", "indeterminate"]),
+);
 export type HostUpdateOperationLiveness = z.infer<
   typeof hostUpdateOperationLivenessSchema
 >;
@@ -232,54 +239,56 @@ export type HostUpdateOperationLiveness = z.infer<
  * A fourth "nothing to show" lives one level up, as `updateOperation: null`,
  * and means the PEER did not say - see the field's own comment.
  */
-export const hostStatusUpdateOperationSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("none") }),
-  z.object({
-    kind: z.literal("unavailable"),
-    reason: z.enum(["corrupt", "unsupported-version", "unreadable"]),
-    /** Diagnostic detail where the host has one; never a user-facing string. */
-    cause: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("attempt"),
-    // `attemptId + generation + sequence` is the ordering key, in full. No
-    // timestamp is carried: two peers with skewed clocks must not be able to
-    // disagree about which observation is newer, and a client that could order
-    // by `updatedAt` is a client that will.
-    attemptId: z.string().min(1),
-    generation: z.number().int().positive(),
-    sequence: z.number().int().positive(),
-    targetVersion: z.string().min(1),
-    trigger: hostUpdateOperationTriggerSchema,
-    phase: hostUpdateOperationPhaseSchema,
-    execution: hostUpdateOperationExecutionSchema,
-    continuation: hostUpdateOperationContinuationSchema,
-    progress: z
-      .object({
-        percent: z.number().nullable(),
-        bytes: z.number().nullable(),
-        totalBytes: z.number().nullable(),
-      })
-      .nullable(),
-    liveness: hostUpdateOperationLivenessSchema,
-    /** Why liveness is `indeterminate`, when it is. `null` otherwise. */
-    livenessCause: z.string().nullable(),
-    // The live busy facts as of the SAME read that produced the phase above.
-    // Duplicated from the top level deliberately: a drain affordance that
-    // names a session count beside a phase must not be able to pair a count
-    // from one instant with a phase from another. Same `null` semantics as
-    // the top-level fields - "did not report", never "reported zero".
-    busySessionCount: z.number().int().nonnegative().nullable(),
-    busyBreakdown: hostBusyBreakdownSchema.nullable(),
-    error: z
-      .object({
-        code: z.string(),
-        message: z.string(),
-        phase: z.string(),
-      })
-      .nullable(),
-  }),
-]);
+export const hostStatusUpdateOperationSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("none") }),
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: z.enum(["corrupt", "unsupported-version", "unreadable"]),
+      /** Diagnostic detail where the host has one; never a user-facing string. */
+      cause: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("attempt"),
+      // `attemptId + generation + sequence` is the ordering key, in full. No
+      // timestamp is carried: two peers with skewed clocks must not be able to
+      // disagree about which observation is newer, and a client that could order
+      // by `updatedAt` is a client that will.
+      attemptId: z.string().min(1),
+      generation: z.number().int().positive(),
+      sequence: z.number().int().positive(),
+      targetVersion: z.string().min(1),
+      trigger: hostUpdateOperationTriggerSchema,
+      phase: hostUpdateOperationPhaseSchema,
+      execution: hostUpdateOperationExecutionSchema,
+      continuation: hostUpdateOperationContinuationSchema,
+      progress: z
+        .object({
+          percent: z.number().nullable(),
+          bytes: z.number().nullable(),
+          totalBytes: z.number().nullable(),
+        })
+        .nullable(),
+      liveness: hostUpdateOperationLivenessSchema,
+      /** Why liveness is `indeterminate`, when it is. `null` otherwise. */
+      livenessCause: z.string().nullable(),
+      // The live busy facts as of the SAME read that produced the phase above.
+      // Duplicated from the top level deliberately: a drain affordance that
+      // names a session count beside a phase must not be able to pair a count
+      // from one instant with a phase from another. Same `null` semantics as
+      // the top-level fields - "did not report", never "reported zero".
+      busySessionCount: z.number().int().nonnegative().nullable(),
+      busyBreakdown: hostBusyBreakdownSchema.nullable(),
+      error: z
+        .object({
+          code: z.string(),
+          message: z.string(),
+          phase: z.string(),
+        })
+        .nullable(),
+    }),
+  ]),
+);
 export type HostStatusUpdateOperation = z.infer<
   typeof hostStatusUpdateOperationSchema
 >;
@@ -327,14 +336,16 @@ export type HostStatusUpdateOperation = z.infer<
  * this, so `updateTransaction !== null` plus `updateOperation: null` cannot
  * happen, and `updateTransaction === null` means the peer is pre-1.3.
  */
-export const hostUpdateTransactionCapabilitySchema = z.object({
-  // A plain integer, not `z.literal(2)`: a literal would make a future v3 an
-  // enum-value growth, which the registry validator refuses on a response
-  // without an emission-gated declaration.
-  recordSchemaVersion: z.number().int().positive(),
-  /** Which execution authority this host currently selects. */
-  authority: z.enum(["legacy", "attempt"]),
-});
+export const hostUpdateTransactionCapabilitySchema = lazySchema(() =>
+  z.object({
+    // A plain integer, not `z.literal(2)`: a literal would make a future v3 an
+    // enum-value growth, which the registry validator refuses on a response
+    // without an emission-gated declaration.
+    recordSchemaVersion: z.number().int().positive(),
+    /** Which execution authority this host currently selects. */
+    authority: z.enum(["legacy", "attempt"]),
+  }),
+);
 export type HostUpdateTransactionCapability = z.infer<
   typeof hostUpdateTransactionCapabilitySchema
 >;
@@ -342,33 +353,35 @@ export type HostUpdateTransactionCapability = z.infer<
 export const hostStatusV13 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 3 } as const,
-  requestSchema: z.object({}),
-  responseSchema: z.object({
-    ready: z.boolean(),
-    hostVersion: z.string(),
-    protocolVersion: z.object({
-      major: z.number().int().nonnegative(),
-      minor: z.number().int().nonnegative(),
+  requestSchema: lazySchema(() => z.object({})),
+  responseSchema: lazySchema(() =>
+    z.object({
+      ready: z.boolean(),
+      hostVersion: z.string(),
+      protocolVersion: z.object({
+        major: z.number().int().nonnegative(),
+        minor: z.number().int().nonnegative(),
+      }),
+      busy: z.boolean(),
+      busySessionCount: z.number().int().nonnegative().nullable(),
+      /**
+       * The released coarse marker, unchanged. Still the ONLY update signal a
+       * pre-1.3 peer receives, so it keeps its exact current meaning: set while
+       * an update is in flight on this box, `null` otherwise.
+       */
+      updateProgress: hostStatusUpdateProgressSchema.nullable(),
+      busyBreakdown: hostBusyBreakdownSchema.nullable(),
+      /**
+       * `null` means the PEER did not report - it is pre-1.3 and the v1.2→v1.3
+       * upgrade wrote this. It does NOT mean "no update is running": a peer that
+       * said nothing here may still be reporting one through `updateProgress`,
+       * which is why that field remains the fallback rather than a legacy
+       * duplicate.
+       */
+      updateOperation: hostStatusUpdateOperationSchema.nullable(),
+      updateTransaction: hostUpdateTransactionCapabilitySchema.nullable(),
     }),
-    busy: z.boolean(),
-    busySessionCount: z.number().int().nonnegative().nullable(),
-    /**
-     * The released coarse marker, unchanged. Still the ONLY update signal a
-     * pre-1.3 peer receives, so it keeps its exact current meaning: set while
-     * an update is in flight on this box, `null` otherwise.
-     */
-    updateProgress: hostStatusUpdateProgressSchema.nullable(),
-    busyBreakdown: hostBusyBreakdownSchema.nullable(),
-    /**
-     * `null` means the PEER did not report - it is pre-1.3 and the v1.2→v1.3
-     * upgrade wrote this. It does NOT mean "no update is running": a peer that
-     * said nothing here may still be reporting one through `updateProgress`,
-     * which is why that field remains the fallback rather than a legacy
-     * duplicate.
-     */
-    updateOperation: hostStatusUpdateOperationSchema.nullable(),
-    updateTransaction: hostUpdateTransactionCapabilitySchema.nullable(),
-  }),
+  ),
 });
 
 /**
@@ -379,17 +392,19 @@ export const hostStatusV13 = defineRpcContract({
  * `epicCount` counts stores found, including ones whose stamp was unreadable;
  * it is not a count of epics at the maximum format.
  */
-export const hostStatusStoreFormatsSchema = z.object({
-  chatDb: z.object({
-    current: z.number().int().positive(),
-    onDiskMax: z.number().int().positive().nullable(),
-    epicCount: z.number().int().nonnegative(),
-    // Pending is boot before the first complete walk; failed means a root or
-    // store could not be read. Complete + null maximum is an affirmative
-    // empty-directory claim, unlike storeFormats:null from an older peer.
-    survey: z.enum(["pending", "complete", "failed"]),
+export const hostStatusStoreFormatsSchema = lazySchema(() =>
+  z.object({
+    chatDb: z.object({
+      current: z.number().int().positive(),
+      onDiskMax: z.number().int().positive().nullable(),
+      epicCount: z.number().int().nonnegative(),
+      // Pending is boot before the first complete walk; failed means a root or
+      // store could not be read. Complete + null maximum is an affirmative
+      // empty-directory claim, unlike storeFormats:null from an older peer.
+      survey: z.enum(["pending", "complete", "failed"]),
+    }),
   }),
-});
+);
 export type HostStatusStoreFormats = z.infer<
   typeof hostStatusStoreFormatsSchema
 >;
@@ -398,11 +413,13 @@ export const hostStatusV14 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 4 } as const,
   requestSchema: hostStatusV13.requestSchema,
-  responseSchema: hostStatusV13.responseSchema.extend({
-    // A pre-1.4 peer did not report its formats. Manufacturing the current
-    // build's format here would authorize offers using another host's data.
-    storeFormats: hostStatusStoreFormatsSchema.nullable(),
-  }),
+  responseSchema: lazySchema(() =>
+    hostStatusV13.responseSchema.extend({
+      // A pre-1.4 peer did not report its formats. Manufacturing the current
+      // build's format here would authorize offers using another host's data.
+      storeFormats: hostStatusStoreFormatsSchema.nullable(),
+    }),
+  ),
 });
 
 // A v1.0 peer never reports busy/update-progress state through this RPC.
@@ -519,24 +536,30 @@ export const hostStatusUpgradeV13ToV14 = defineUpgradePath<
  * installed side to one `HostStoreFormatsKnowledge` through
  * `resolveHostStoreFormats(version, declaredFormats)`.
  */
-export const hostStatusInstallSchema = z.object({
-  source: hostInstallSourceKindSchema,
-  version: z.string().min(1),
-  declaredFormats: z.object({ chatDb: z.number().int().positive() }).nullable(),
-});
+export const hostStatusInstallSchema = lazySchema(() =>
+  z.object({
+    source: hostInstallSourceKindSchema,
+    version: z.string().min(1),
+    declaredFormats: z
+      .object({ chatDb: z.number().int().positive() })
+      .nullable(),
+  }),
+);
 export type HostStatusInstall = z.infer<typeof hostStatusInstallSchema>;
 
 export const hostStatusV15 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 5 } as const,
   requestSchema: hostStatusV14.requestSchema,
-  responseSchema: hostStatusV14.responseSchema.extend({
-    // `null` is "no install record" - an unmanaged host, a dev host run from
-    // source, or a record this build could not read - and a client treats it
-    // as a registry install (the only identity the version shortcut serves),
-    // which is what it did before the field existed.
-    install: hostStatusInstallSchema.nullable(),
-  }),
+  responseSchema: lazySchema(() =>
+    hostStatusV14.responseSchema.extend({
+      // `null` is "no install record" - an unmanaged host, a dev host run from
+      // source, or a record this build could not read - and a client treats it
+      // as a registry install (the only identity the version shortcut serves),
+      // which is what it did before the field existed.
+      install: hostStatusInstallSchema.nullable(),
+    }),
+  ),
 });
 
 export const hostStatusUpgradeV14ToV15 = defineUpgradePath<
