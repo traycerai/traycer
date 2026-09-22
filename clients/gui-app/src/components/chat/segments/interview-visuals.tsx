@@ -283,10 +283,11 @@ function OptionDetailsTooltip(props: { readonly details: OptionDetails }) {
 }
 
 // A CommonMark fence opener: at most three spaces of indentation, then three
-// or more backticks or tildes, at the start of a line. A bare substring test
-// misses a `~~~wireframe` block and sends an ASCII mockup that merely mentions
-// ``` mid-line through the paragraph parser, which folds its whitespace.
-const FENCE_OPENER = /^ {0,3}(?:`{3,}|~{3,})/m;
+// or more backticks or tildes, at the start of a line; a backtick fence's info
+// string may not itself contain a backtick. A bare substring test misses a
+// `~~~wireframe` block and sends an ASCII mockup that merely mentions ```
+// mid-line through the paragraph parser, which folds its whitespace.
+const FENCE_OPENER = /^ {0,3}(?:`{3,}[^`\n]*$|~{3,})/m;
 
 /**
  * Claude's own tool contract describes `preview` as markdown shown in a
