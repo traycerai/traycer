@@ -220,6 +220,66 @@ function CutLeaseDialog(props: {
   );
 }
 
+type OwnedForwardPresentation = {
+  readonly stateLabel: string;
+  readonly stateVariant: "success" | "warning" | "info" | "muted";
+  /** The port badge. A listener that is not bound yet is not offered as one. */
+  readonly portLabel: string;
+  readonly detail: string;
+  readonly action: "Stop" | "Clear";
+};
+
+/**
+ * All four owned states, each spelled out. The listing carries the full
+ * record, unlike the chat row, so a forward still binding or already stopped
+ * can appear here, and neither is "forwarding": a binding forward has asked
+ * for a port and holds nothing yet, so its requested port is shown as a
+ * request, not as somewhere to point a browser; a stopped one is a record
+ * waiting for its release to be answered, with nothing to stop.
+ */
+function presentOwnedForward(
+  forward: OwnedPortForward,
+  machine: (hostId: string) => string,
+): OwnedForwardPresentation {
+  const route = `${machine(forward.listen.hostId)}:${forward.listen.boundPort ?? forward.listen.requestedPort} → ${machine(forward.target.hostId)}:${forward.target.port}`;
+  switch (forward.state) {
+    case "active":
+      return {
+        stateLabel: "Forwarding",
+        stateVariant: "success",
+        portLabel: `:${forward.listen.boundPort ?? forward.listen.requestedPort}`,
+        detail: `${route} · ${connectionsLabel(forward.counters.openConnections)} · ${formatByteSize(forward.counters.bytesIn)} in · ${formatByteSize(forward.counters.bytesOut)} out`,
+        action: "Stop",
+      };
+    case "interrupted":
+      return {
+        stateLabel: "Interrupted",
+        stateVariant: "warning",
+        portLabel: `:${forward.listen.boundPort ?? forward.listen.requestedPort}`,
+        detail: `${route} · ${forward.stateReason ?? "interrupted"}`,
+        action: "Clear",
+      };
+    case "binding":
+      return {
+        stateLabel: "Binding",
+        stateVariant: "info",
+        portLabel: `requested :${forward.listen.requestedPort}`,
+        detail: `Asking ${machine(forward.listen.hostId)} for port ${forward.listen.requestedPort} to reach ${machine(forward.target.hostId)}:${forward.target.port}. Nothing is listening yet.`,
+        action: "Stop",
+      };
+    case "stopped":
+      return {
+        stateLabel: "Stopped",
+        stateVariant: "muted",
+        portLabel: `:${forward.listen.boundPort ?? forward.listen.requestedPort}`,
+        detail: `${route} · ${forward.stateReason ?? "stopped"}`,
+        action: "Clear",
+      };
+  }
+  const unreachableState: never = forward.state;
+  return unreachableState;
+}
+
 function OwnedForwardRow(props: {
   readonly forward: OwnedPortForward;
   readonly machine: (hostId: string) => string;
@@ -227,13 +287,13 @@ function OwnedForwardRow(props: {
   readonly disabled: boolean;
   readonly onStop: () => void;
 }): ReactNode {
-  const { forward, machine } = props;
-  const interrupted = forward.state === "interrupted";
-  const listenPort = forward.listen.boundPort ?? forward.listen.requestedPort;
+  const { forward } = props;
+  const shown = presentOwnedForward(forward, props.machine);
   return (
     <li
       className="flex min-w-0 items-center gap-3 px-3 py-2"
       data-testid={`host-port-forward-owned-${forward.forwardId}`}
+      data-state={forward.state}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -241,19 +301,14 @@ function OwnedForwardRow(props: {
             {forward.description}
           </span>
           <Badge variant="muted" size="xs">
-            :{listenPort}
+            {shown.portLabel}
           </Badge>
-          <Badge variant={interrupted ? "warning" : "success"} size="xs">
-            {interrupted ? "Interrupted" : "Forwarding"}
+          <Badge variant={shown.stateVariant} size="xs">
+            {shown.stateLabel}
           </Badge>
         </div>
         <span className="min-w-0 break-words text-ui-xs text-muted-foreground">
-          {machine(forward.listen.hostId)}:{listenPort} →{" "}
-          {machine(forward.target.hostId)}:{forward.target.port}
-          {" · "}
-          {interrupted
-            ? (forward.stateReason ?? "interrupted")
-            : `${connectionsLabel(forward.counters.openConnections)} · ${formatByteSize(forward.counters.bytesIn)} in · ${formatByteSize(forward.counters.bytesOut)} out`}
+          {shown.detail}
         </span>
       </div>
       <Button
@@ -272,7 +327,7 @@ function OwnedForwardRow(props: {
             variant={undefined}
           />
         ) : null}
-        {interrupted ? "Clear" : "Stop"}
+        {shown.action}
       </Button>
     </li>
   );

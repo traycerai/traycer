@@ -265,3 +265,144 @@ describe("chat.subscribe@1.13 vs @1.14: the queueChanged frame's port-forward it
     ).toBe(true);
   });
 });
+
+describe("the chat row's state is two-valued", () => {
+  // Catches: `chatPortForwardSchema.state` reusing the four-value
+  // `portForwardStateSchema` instead of its own two-value
+  // `chatPortForwardStateSchema` - a `binding` or `stopped` row would then pass
+  // a schema whose whole job is to admit only the two states a chat row can
+  // ever be in.
+  it("rejects a row in state 'binding' or 'stopped'", () => {
+    expect(
+      chatPortForwardSchema.safeParse({
+        ...CHAT_PORT_FORWARD,
+        state: "binding",
+      }).success,
+    ).toBe(false);
+    expect(
+      chatPortForwardSchema.safeParse({
+        ...CHAT_PORT_FORWARD,
+        state: "stopped",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses a row in state 'active' or 'interrupted'", () => {
+    expect(
+      chatPortForwardSchema.safeParse({ ...CHAT_PORT_FORWARD, state: "active" })
+        .success,
+    ).toBe(true);
+    expect(
+      chatPortForwardSchema.safeParse({
+        ...CHAT_PORT_FORWARD,
+        state: "interrupted",
+      }).success,
+    ).toBe(true);
+  });
+
+  // Same guard one layer up: a `portForwardsChanged` frame carrying a
+  // four-value-shaped row must be rejected by the live server-frame union, not
+  // merely by the row schema in isolation.
+  it("rejects a portForwardsChanged frame whose row is 'binding', accepts 'active'", () => {
+    const bindingFrame = {
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      portForwards: [{ ...CHAT_PORT_FORWARD, state: "binding" }],
+    };
+    const activeFrame = {
+      ...bindingFrame,
+      portForwards: [{ ...CHAT_PORT_FORWARD, state: "active" }],
+    };
+
+    expect(
+      chatSubscribeV114.serverFrameSchema.safeParse(bindingFrame).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV114.serverFrameSchema.safeParse(activeFrame).success,
+    ).toBe(true);
+  });
+
+  // The 1.14 windowed snapshot's own `portForwards` array carries the same
+  // row schema. Fixture shape follows `subscribe-windowed-line.test.ts`'s
+  // `baseWindowedSnapshot()` / `windowedSnapshotFrame()` helpers - the minimal
+  // valid windowed snapshot that file already proves parses on this line.
+  function baseChatRecord(): Record<string, unknown> {
+    return {
+      parentId: null,
+      id: "chat-1",
+      userId: "user-1",
+      hostId: "host-1",
+      title: "Chat",
+      createdAt: 1000,
+      updatedAt: 1000,
+      isTitleEditedByUser: false,
+    };
+  }
+
+  function windowedSnapshotWithPortForwards(
+    portForwards: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      chat: baseChatRecord(),
+      access: { role: "owner", ownerUserId: "user-1", canAct: true },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      transcriptEpoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+      derived: {
+        latestAssistantUsage: null,
+        pinnedTodo: null,
+        pinnedTaskTodoItems: [],
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption: null,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
+      },
+      portForwards,
+    };
+  }
+
+  function windowedSnapshotFrame(
+    snapshot: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot,
+    };
+  }
+
+  it("rejects a 1.14 windowed snapshot whose portForwards[0].state is 'stopped', accepts 'interrupted'", () => {
+    const stoppedFrame = windowedSnapshotFrame(
+      windowedSnapshotWithPortForwards([
+        { ...CHAT_PORT_FORWARD, state: "stopped" },
+      ]),
+    );
+    const interruptedFrame = windowedSnapshotFrame(
+      windowedSnapshotWithPortForwards([
+        { ...CHAT_PORT_FORWARD, state: "interrupted" },
+      ]),
+    );
+
+    expect(
+      chatSubscribeV114.serverFrameSchema.safeParse(stoppedFrame).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV114.serverFrameSchema.safeParse(interruptedFrame).success,
+    ).toBe(true);
+  });
+});

@@ -675,17 +675,19 @@ export type ChatQueuedManagedCommandItem = z.infer<
  * projection OMITS it, from the queue and from the queue events alike, since
  * there is no sibling shape to degrade it into.
  */
-export const chatQueuedPortForwardItemSchema = z.object({
-  kind: z.literal("port-forward"),
-  queueItemId: z.string(),
-  forwardId: z.string(),
-  description: z.string(),
-  delivery: chatQueueItemDeliverySchema.default("next_turn"),
-  targetTurnId: z.string().nullable().default(null),
-  status: z.enum(["pending", "steering", "paused"]).default("pending"),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-});
+export const chatQueuedPortForwardItemSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("port-forward"),
+    queueItemId: z.string(),
+    forwardId: z.string(),
+    description: z.string(),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    targetTurnId: z.string().nullable().default(null),
+    status: z.enum(["pending", "steering", "paused"]).default("pending"),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+  }),
+);
 export type ChatQueuedPortForwardItem = z.infer<
   typeof chatQueuedPortForwardItemSchema
 >;
@@ -719,14 +721,15 @@ export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
 // that existed before `1.14` added the port-forward item. Written out as its
 // own union, NOT derived from the live one, so a later arm cannot reach `1.13`
 // through it. Bound to that line's snapshot and `queueChanged` frames.
-const chatQueuedItemSchemaPrePortForward = z.union([
-  chatQueuedManagedCommandItemSchema,
-  chatQueuedPromptItemSchema,
-]);
-const chatQueueStateSchemaPrePortForward = z.object({
-  status: z.enum(["idle", "running", "paused"]),
-  items: z.array(chatQueuedItemSchemaPrePortForward),
-});
+const chatQueuedItemSchemaPrePortForward = lazySchema(() =>
+  z.union([chatQueuedManagedCommandItemSchema, chatQueuedPromptItemSchema]),
+);
+const chatQueueStateSchemaPrePortForward = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(chatQueuedItemSchemaPrePortForward),
+  }),
+);
 
 // Wire-freeze copy of the managed-command queue item as every line from
 // `chat.subscribe@1.6` through `@1.10` ships it - the live item without the
@@ -2022,14 +2025,16 @@ const chatSubscribeManagedCommandsChangedServerFrameSchema = lazySchema(() =>
  * Never sent to a peer that negotiated <=1.13: it has no variant for this
  * kind, and the host's per-minor projection drops the frame.
  */
-const chatSubscribePortForwardsChangedServerFrameSchema = z.object({
-  kind: z.literal("portForwardsChanged"),
-  ...textFrameFields,
-  ...chatReferenceFields,
-  // Defaulted for the same reason as the snapshot's field: a consumer reads
-  // one array shape on both channels and never null-checks either.
-  portForwards: z.array(chatPortForwardSchema).default([]),
-});
+const chatSubscribePortForwardsChangedServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("portForwardsChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    // Defaulted for the same reason as the snapshot's field: a consumer reads
+    // one array shape on both channels and never null-checks either.
+    portForwards: z.array(chatPortForwardSchema).default([]),
+  }),
+);
 
 // `1.6` shipped (cli-v1.2.0) binding the command shape as it then was, so it
 // is pinned to the pre-relaunch literal: the live schema's
@@ -4859,19 +4864,21 @@ const chatSubscribeServerFrameSchemaV112 = lazySchema(() =>
 // the port-forward surface - no `portForwardsChanged` arm, no
 // `snapshot.portForwards`, and a queue (on the snapshot and on `queueChanged`)
 // that cannot carry the port-forward item.
-const chatSubscribeServerFrameSchemaV113 = z.discriminatedUnion("kind", [
-  chatSubscribeWindowedSnapshotServerFrameSchema.extend({
-    snapshot: chatWindowedSnapshotSchemaV113,
-  }),
-  chatSubscribeSkeletonChunkServerFrameSchema,
-  chatSubscribeAccumulatedChangesServerFrameSchema,
-  chatSubscribeIndexChangedServerFrameSchema,
-  chatSubscribeRangeServerFrameSchema,
-  chatSubscribeTurnStateChangedServerFrameSchema,
-  chatSubscribeManagedCommandsChangedServerFrameSchema,
-  chatSubscribeHeldUpdatesChangedServerFrameSchema,
-  ...chatSubscribeSharedServerFrameSchemasV113,
-]);
+const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV113,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV113,
+  ]),
+);
 
 /**
  * Frozen windowed server frame as `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`.

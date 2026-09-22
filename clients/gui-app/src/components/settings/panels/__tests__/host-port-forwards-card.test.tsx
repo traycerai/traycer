@@ -391,6 +391,110 @@ describe("<HostPortForwardsCard />", () => {
         expect(listCallCount(fixture.messenger)).toBe(2);
       });
     });
+
+    it("shows Binding with a requested-port badge (no bound port yet, no counters, no bare port badge)", async () => {
+      const fixture = createCardFixture();
+      fixture.setListResponse({
+        owned: [
+          ownedForward({
+            forwardId: "owned-1",
+            state: "binding",
+            listen: { hostId: HOST_ID, requestedPort: 9090, boundPort: null },
+          }),
+        ],
+        held: [],
+      });
+      renderCard(fixture, {});
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-port-forward-owned-owned-1"),
+        ).toBeTruthy();
+      });
+      const row = screen.getByTestId("host-port-forward-owned-owned-1");
+      expect(row.textContent).toContain("requested :9090");
+      expect(row.textContent).toContain("Binding");
+      expect(row.textContent).toContain("Nothing is listening yet");
+      expect(row.textContent).not.toContain("open connection");
+      expect(row.textContent).not.toContain(" in · ");
+      // The only occurrence of `:9090` anywhere in the row's text must be the
+      // one inside "requested :9090" - stripping that phrase out must leave no
+      // bare `:9090` badge behind.
+      expect(row.textContent.replace("requested :9090", "")).not.toContain(
+        ":9090",
+      );
+      expect(
+        screen.getByTestId("host-port-forward-stop-owned-1").textContent,
+      ).toBe("Stop");
+    });
+
+    it("shows Stopped with its stateReason, no counters, and a Clear button", async () => {
+      const fixture = createCardFixture();
+      fixture.setListResponse({
+        owned: [
+          ownedForward({
+            forwardId: "owned-1",
+            state: "stopped",
+            stateReason: "the user stopped it",
+          }),
+        ],
+        held: [],
+      });
+      renderCard(fixture, {});
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-port-forward-owned-owned-1"),
+        ).toBeTruthy();
+      });
+      const row = screen.getByTestId("host-port-forward-owned-owned-1");
+      expect(row.textContent).toContain("Stopped");
+      expect(row.textContent).toContain("the user stopped it");
+      expect(row.textContent).not.toContain("open connection");
+      expect(
+        screen.getByTestId("host-port-forward-stop-owned-1").textContent,
+      ).toBe("Clear");
+    });
+
+    it("stamps each row's data-state with its own owned state", async () => {
+      const fixture = createCardFixture();
+      fixture.setListResponse({
+        owned: [
+          ownedForward({ forwardId: "binding-1", state: "binding" }),
+          ownedForward({ forwardId: "active-1", state: "active" }),
+          ownedForward({ forwardId: "interrupted-1", state: "interrupted" }),
+          ownedForward({ forwardId: "stopped-1", state: "stopped" }),
+        ],
+        held: [],
+      });
+      renderCard(fixture, {});
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-port-forward-owned-binding-1"),
+        ).toBeTruthy();
+      });
+      expect(
+        screen
+          .getByTestId("host-port-forward-owned-binding-1")
+          .getAttribute("data-state"),
+      ).toBe("binding");
+      expect(
+        screen
+          .getByTestId("host-port-forward-owned-active-1")
+          .getAttribute("data-state"),
+      ).toBe("active");
+      expect(
+        screen
+          .getByTestId("host-port-forward-owned-interrupted-1")
+          .getAttribute("data-state"),
+      ).toBe("interrupted");
+      expect(
+        screen
+          .getByTestId("host-port-forward-owned-stopped-1")
+          .getAttribute("data-state"),
+      ).toBe("stopped");
+    });
   });
 
   describe("held lease rows", () => {
