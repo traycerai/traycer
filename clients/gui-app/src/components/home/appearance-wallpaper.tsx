@@ -8,6 +8,7 @@ import {
 } from "@/lib/appearance/appearance-image-processing";
 import { type StartPageWallpaper } from "@/stores/settings/settings-store";
 import { useThemeRevision } from "@/providers/use-theme-revision";
+import { cn } from "@/lib/utils";
 import "./appearance-wallpaper.css";
 
 /** One dither cell, in CSS px: the canvas is the element at 1/CELL scale. */
@@ -74,7 +75,18 @@ export function AppearanceWallpaper(props: {
   };
   return (
     <div
-      className="appearance-wallpaper pointer-events-none absolute inset-0 overflow-hidden"
+      // `appearance-wallpaper` carries `isolation: isolate; contain: strict`
+      // (appearance-wallpaper.css): the page's own stacking context for the
+      // veil's blend, and containment for a full-page canvas. Neither serves a
+      // tile, and in the mobile Settings scroller they cost it the picture -
+      // iOS WebKit stops compositing the loaded image inside a contained,
+      // isolated absolute box in an overflow scroller, while the same box in a
+      // portalled dialog paints. So the class is the page surface's alone.
+      className={cn(
+        "pointer-events-none absolute inset-0 overflow-hidden",
+        onPage && "appearance-wallpaper",
+      )}
+      data-wallpaper-surface={surface}
       aria-hidden="true"
       style={scrim}
     >
