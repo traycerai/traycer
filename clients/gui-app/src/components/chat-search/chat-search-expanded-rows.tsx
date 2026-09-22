@@ -25,6 +25,7 @@ export function ChatSearchExpandedRows(
     base,
     best,
     chatId,
+    chatTitle,
     client,
     epicId,
     expanded,
@@ -56,6 +57,7 @@ export function ChatSearchExpandedRows(
         <ChatSearchMessageRow
           key={JSON.stringify([representative.messageId, representative.tier])}
           hit={representative}
+          chatTitle={chatTitle}
           count={count}
           onOpenMessage={onOpenMessage}
           variant={variant}
@@ -97,6 +99,7 @@ export function ChatSearchExpandedRows(
               >
                 <ChatSearchMessageRow
                   hit={representative}
+                  chatTitle={chatTitle}
                   count={count}
                   onOpenMessage={onOpenMessage}
                   variant={variant}
