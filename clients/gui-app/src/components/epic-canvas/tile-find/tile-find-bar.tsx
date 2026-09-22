@@ -32,6 +32,13 @@ const TYPED_FIND_QUERY_DEBOUNCE_MS = 80;
 
 interface TileFindBarProps {
   readonly tileInstanceId: string;
+  readonly placement?: "overlay" | "row";
+}
+
+function placementClass(placement: TileFindBarProps["placement"]): string {
+  return placement === "row"
+    ? "relative m-2 max-w-full shrink-0 self-end"
+    : "absolute right-3 top-3 max-w-[min(92vw,42rem)]";
 }
 
 export function TileFindBar(props: TileFindBarProps) {
@@ -275,7 +282,8 @@ export function TileFindBar(props: TileFindBarProps) {
     <search
       data-testid="tile-find-bar"
       className={cn(
-        "pointer-events-auto absolute right-3 top-3 z-30 flex max-w-[min(92vw,42rem)] gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
+        "pointer-events-auto z-30 flex gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
+        placementClass(props.placement),
         replaceEnabled ? "items-start" : "flex-wrap items-center",
       )}
       aria-label="Find in tile"

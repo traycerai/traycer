@@ -1,4 +1,8 @@
 /**
+ * Reserved for a future explicit local-only history mode. Current graph,
+ * office, and Communication panel surfaces use the cloud registry exclusively.
+ * This registry must never be acquired as an availability-driven fallback.
+ *
  * ONE `epic.communicationGraph.subscribe` fan-in per epic, shared by however
  * many surfaces are looking at it.
  *
