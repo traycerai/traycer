@@ -1,3 +1,4 @@
+import type { ChatMessageDeliveryState } from "@traycer/protocol/host/agent/gui/message-delivery";
 import { memo, type ReactElement } from "react";
 import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,7 @@ interface ChatMessageProps {
 export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
 
 export interface ChatMessageEditing {
+  readonly submitLabel?: "Save" | "Send";
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
   readonly pending: boolean;
@@ -71,6 +73,13 @@ export interface ChatMessageForkAction {
 
 export interface ChatMessageUserActions {
   readonly type: "user";
+  readonly delivery?: {
+    readonly state: ChatMessageDeliveryState;
+    readonly pending: boolean;
+    readonly canAct: boolean;
+    readonly onRetry: () => void;
+    readonly onCancel: () => void;
+  };
   readonly enabled: boolean;
   readonly confirmingDelete: boolean;
   readonly editing: ChatMessageEditing | null;

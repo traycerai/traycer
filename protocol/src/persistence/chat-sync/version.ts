@@ -110,7 +110,10 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // claiming the exposure does not exist.
 // (Renumbered from 1.4 on the merge to main, which had taken that minor for
 // the delivery-placement field above.)
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 5 } as const;
+// 1.6 carries the negative provider-history marker on accepted but unsent
+// messages. Publications containing that fact require a 1.6 reader: an older
+// host cloning them must not silently treat the excluded row as instructions.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 6 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

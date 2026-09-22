@@ -485,6 +485,31 @@ function renderRenderedMessages(patch: Partial<RenderedMessagesInput>) {
 }
 
 describe("useRenderedMessages", () => {
+  it("keeps a message-delivery accepted row (providerHistory: excluded) as the canonical visible row, not hidden or duplicated", () => {
+    // `providerHistory: "excluded"` is a PROVIDER-context fact (this row is
+    // withheld from the model until the delivery reaches `started`) - it must
+    // never be read as a UI visibility flag. The row is the one and only
+    // representation of this prompt in the transcript; there is no separate
+    // queue-derived bubble for it to collide with.
+    const accepted = {
+      ...userMessage("message-1"),
+      providerHistory: "excluded" as const,
+    };
+    const driver = renderRenderedMessages({ messages: [accepted] });
+
+    expect(driver.result.current).toHaveLength(1);
+    const row = driver.result.current.at(0);
+    expect(row?.persistentMessageId).toBe("message-1");
+    expect(row?.providerHistory).toBe("excluded");
+  });
+
+  it("renders an ordinary user row (no exclusion marker) with providerHistory left unset", () => {
+    const driver = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+    });
+    expect(driver.result.current.at(0)?.providerHistory).toBeUndefined();
+  });
+
   it("projects an explicitly anchored send failure into a stable inline error row", () => {
     const failure = {
       eventId: "queued-preparation-failure",

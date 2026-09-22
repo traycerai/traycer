@@ -1,3 +1,4 @@
+import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   addAcceptedAction,
   confirmAcceptedSendByMessageId,
@@ -422,6 +423,7 @@ type ChatWindowedSnapshotFrame = Parameters<
 type DeferredWindowedSnapshotAux = Pick<
   ChatWindowedSnapshotFrame["snapshot"],
   | "queue"
+  | "messageDelivery"
   | "runStatus"
   | "activeTurn"
   | "turnInProgress"
@@ -455,6 +457,7 @@ function deferredWindowedSnapshotAuxOf(
 ): DeferredWindowedSnapshotAux {
   return {
     queue: snapshot.queue,
+    messageDelivery: snapshot.messageDelivery,
     runStatus: snapshot.runStatus,
     activeTurn: snapshot.activeTurn,
     turnInProgress: snapshot.turnInProgress,
@@ -1105,6 +1108,7 @@ export interface ChatSessionState {
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
   readonly queue: ChatQueueState;
+  readonly messageDelivery: ChatMessageDelivery | null;
   /**
    * Host-owned chat run state (`idle | running | stopping`). The single
    * source of truth the GUI reads for its in-progress indicators (response
@@ -1797,6 +1801,20 @@ export interface ChatSessionState {
   stopBackgroundSession: () => string | null;
   pauseQueue: () => string | null;
   resumeQueue: () => string | null;
+  messageDeliveryEdit: (input: {
+    readonly messageId: string;
+    readonly expectedRevision: number;
+    readonly content: JsonContent;
+    readonly browserAnnotations: Extract<
+      ChatOwnerActionFrame,
+      { kind: "messageDeliveryEdit" }
+    >["browserAnnotations"];
+  }) => { readonly clientActionId: string; readonly messageId: string } | null;
+  messageDeliveryRetry: (
+    delivery: ChatMessageDelivery,
+    settings: ChatRunSettings,
+  ) => string | null;
+  messageDeliveryCancel: (delivery: ChatMessageDelivery) => string | null;
   queueEdit: (queueItemId: string, content: JsonContent) => string | null;
   queueCancel: (queueItemId: string) => string | null;
   queueReorder: (
@@ -3776,6 +3794,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // neighbours take: for these two `undefined` is a value ("no
           // traversal", "no offer") rather than an omission, and it is the one
           // that clears the card. See `ChatSessionState.pendingFallback`.
+          messageDelivery: frame.snapshot.messageDelivery ?? null,
           pendingFallback: frame.snapshot.pendingFallback,
           pendingReturn: frame.snapshot.pendingReturn,
           lastFailedAttempt: frame.snapshot.lastFailedAttempt,
@@ -5474,6 +5493,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           },
           access: frame.snapshot.access,
           queue: current.queue,
+          messageDelivery: current.messageDelivery,
           runStatus: current.runStatus,
           activeTurn: current.activeTurn,
           pendingApprovals: current.pendingApprovals,
@@ -5547,6 +5567,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             : null;
         set({
           ...aux,
+          messageDelivery:
+            (heldAux ?? deferredWindowedSnapshotAuxOf(frame.snapshot))
+              .messageDelivery ?? null,
           lastFallbackOutcome: (
             heldAux ?? deferredWindowedSnapshotAuxOf(frame.snapshot)
           ).lastFallbackOutcome,
@@ -7651,6 +7674,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         // message landing means the same thing on either line.
         commitLegacyTranscriptBudget();
       },
+      onMessageDeliveryChanged: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId))
+          return;
+        set({ messageDelivery: frame.delivery });
+        advanceDeferredSnapshotAux(() => ({ messageDelivery: frame.delivery }));
+      },
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
@@ -8622,6 +8651,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         onActionAck: guarded(callbacks.onActionAck),
         onMessageAccepted: guarded(callbacks.onMessageAccepted),
         onQueueChanged: guarded(callbacks.onQueueChanged),
+        onMessageDeliveryChanged: guarded(callbacks.onMessageDeliveryChanged),
         onTurnStateChanged: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
           callbacks.onTurnStateChanged(frame);
@@ -8751,6 +8781,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       messages: [],
       events: [],
       queue: EMPTY_QUEUE,
+      messageDelivery: null,
       runStatus: "idle",
       activeTurn: null,
       turnLifecycleRevision: 0,
@@ -9708,6 +9739,63 @@ export function createChatSessionStoreWithNotificationDependencies(
           get,
           frame,
           pending: basicPending(clientActionId, "resumeQueue"),
+          pendingUserMessage: null,
+        });
+      },
+      messageDeliveryEdit: (input) => {
+        const clientActionId = uuidv4();
+        const sent = sendAction({
+          set,
+          get,
+          frame: {
+            kind: "messageDeliveryEdit",
+            hasBinaryPayload: false,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            clientActionId,
+            ...input,
+          },
+          pending: basicPending(clientActionId, "messageDeliveryEdit"),
+          pendingUserMessage: null,
+        });
+        return sent === null
+          ? null
+          : { clientActionId, messageId: input.messageId };
+      },
+      messageDeliveryRetry: (delivery, settings) => {
+        const clientActionId = uuidv4();
+        return sendAction({
+          set,
+          get,
+          frame: {
+            kind: "messageDeliveryRetry",
+            hasBinaryPayload: false,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            clientActionId,
+            messageId: delivery.messageId,
+            expectedRevision: delivery.revision,
+            settings,
+          },
+          pending: basicPending(clientActionId, "messageDeliveryRetry"),
+          pendingUserMessage: null,
+        });
+      },
+      messageDeliveryCancel: (delivery) => {
+        const clientActionId = uuidv4();
+        return sendAction({
+          set,
+          get,
+          frame: {
+            kind: "messageDeliveryCancel",
+            hasBinaryPayload: false,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            clientActionId,
+            messageId: delivery.messageId,
+            expectedRevision: delivery.revision,
+          },
+          pending: basicPending(clientActionId, "messageDeliveryCancel"),
           pendingUserMessage: null,
         });
       },

@@ -18,7 +18,12 @@
  *   is the queue and approval-card shape, pinned in `chat-subscribe.test.ts`;
  * - `1.14` is the port-forward surface, minted above `1.13`: the agent's
  *   forwards on the snapshot, the `portForwardsChanged` frame, and the queue
- *   item that reports one going `interrupted`.
+ *   item that reports one going `interrupted`;
+ * - `1.15` is the message-delivery surface, minted above `1.14`: the
+ *   `messageDeliveryEdit`/`Retry`/`Cancel` client actions and the
+ *   `messageDeliveryChanged` push. Its own shape/freeze coverage lives in
+ *   `chat-subscribe-message-delivery-v115.test.ts`; it is listed here only so
+ *   the line-count and ceiling assertions below stay truthful.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -45,7 +50,8 @@ const SHELL_HOST_MINOR = 11;
 const DRAFT_IMAGE_CAUSE_MINOR = 12;
 const AUTO_MINOR = 13;
 const PORT_FORWARD_MINOR = 14;
-const LIVE_MINOR = PORT_FORWARD_MINOR;
+const MESSAGE_DELIVERY_MINOR = 15;
+const LIVE_MINOR = MESSAGE_DELIVERY_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -172,11 +178,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.14 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.15 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(MINORS).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 

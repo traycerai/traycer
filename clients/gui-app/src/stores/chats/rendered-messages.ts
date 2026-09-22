@@ -3521,6 +3521,7 @@ function renderUserMessage(
     completedAt: null,
     stopped: null,
     persistentMessageId: message.messageId,
+    providerHistory: message.providerHistory,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     assistantMeta: null,
     statusLabel: null,

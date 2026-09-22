@@ -44,6 +44,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "messageAccepted" }
     >,
   ) => void;
+  readonly onMessageDeliveryChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "messageDeliveryChanged" }
+    >,
+  ) => void;
   readonly onQueueChanged: (
     frame: Extract<ChatSubscribeServerFrame, { readonly kind: "queueChanged" }>,
   ) => void;
@@ -480,6 +486,10 @@ export class ChatStreamClient {
         this.callbacks.onMessageAccepted(frame);
         return;
       }
+      case "messageDeliveryChanged": {
+        this.callbacks.onMessageDeliveryChanged(frame);
+        return;
+      }
       case "queueChanged": {
         this.callbacks.onQueueChanged(frame);
         return;
@@ -730,6 +740,10 @@ export class ChatStreamClient {
       }
       case "messageAccepted": {
         this.callbacks.onMessageAccepted(frame);
+        return;
+      }
+      case "messageDeliveryChanged": {
+        this.callbacks.onMessageDeliveryChanged(frame);
         return;
       }
       case "queueChanged": {

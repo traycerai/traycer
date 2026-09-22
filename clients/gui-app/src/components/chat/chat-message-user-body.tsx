@@ -201,6 +201,7 @@ export function UserMessageBody({
           agentSenderInfo={message.agentSenderInfo}
           sentAt={message.sentAt ?? message.createdAt}
         />
+        <MessageDeliveryFooter message={message} actions={actions} />
       </>
     );
   }
@@ -462,6 +463,7 @@ function UserMessageDisplayView({
           structuredContent={message.structuredContent}
         />
       </div>
+      <MessageDeliveryFooter message={message} actions={actions} />
       {profileProvenance !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
           profileId={tombstoneIdentity.profileId}
@@ -470,6 +472,67 @@ function UserMessageDisplayView({
           label={profileProvenance.label}
           removed={profileProvenance.removedOnThisHost}
         />
+      ) : null}
+    </div>
+  );
+}
+
+function MessageDeliveryFooter({ message, actions }: UserBodyProps): ReactNode {
+  const delivery = actions?.delivery;
+  if (delivery === undefined) {
+    return message.providerHistory === "excluded" ? (
+      <span className="mt-1 text-ui-xs text-muted-foreground">Not sent</span>
+    ) : null;
+  }
+  const state = delivery.state;
+  if (state.phase === "started") return null;
+  let label: string;
+  switch (state.phase) {
+    case "pending":
+      label = "Waiting to start";
+      break;
+    case "preparing":
+      label = "Preparing";
+      break;
+    case "paused":
+      label = state.reason;
+      break;
+    case "cancelled":
+      label = "Cancelled · Not sent";
+      break;
+  }
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center justify-end gap-2 text-ui-xs text-muted-foreground"
+      role="status"
+    >
+      <span>{label}</span>
+      {delivery.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {state.phase === "paused" ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={!delivery.canAct}
+          onClick={delivery.onRetry}
+        >
+          Retry
+        </Button>
+      ) : null}
+      {state.phase === "pending" || state.phase === "paused" ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={!delivery.canAct}
+          onClick={delivery.onCancel}
+        >
+          Cancel
+        </Button>
       ) : null}
     </div>
   );
@@ -900,7 +963,7 @@ function InlineUserMessageEditor({
           Cancel
         </MessageActionButton>
         <MessageActionButton
-          label="Send edit"
+          label={editing.submitLabel === "Save" ? "Save edit" : "Send edit"}
           variant="default"
           size="default"
           tooltip
@@ -915,7 +978,7 @@ function InlineUserMessageEditor({
               variant={undefined}
             />
           ) : null}
-          Send
+          {editing.submitLabel ?? "Send"}
         </MessageActionButton>
       </div>
     ),
@@ -923,6 +986,7 @@ function InlineUserMessageEditor({
       cancel,
       editing.canSubmit,
       editing.pending,
+      editing.submitLabel,
       handleImageChange,
       openImagePicker,
       attachmentPending,
@@ -993,17 +1057,19 @@ function MessageActionBar({
       >
         <Pencil className="size-3.5" aria-hidden />
       </MessageActionButton>
-      <MessageActionButton
-        label="Delete message"
-        variant="destructive-ghost"
-        size="icon-sm"
-        tooltip={false}
-        disabled={!actions.enabled}
-        className={undefined}
-        onClick={actions.onDeleteRequest}
-      >
-        <Trash2 className="size-3.5" aria-hidden />
-      </MessageActionButton>
+      {actions.delivery === undefined ? (
+        <MessageActionButton
+          label="Delete message"
+          variant="destructive-ghost"
+          size="icon-sm"
+          tooltip={false}
+          disabled={!actions.enabled}
+          className={undefined}
+          onClick={actions.onDeleteRequest}
+        >
+          <Trash2 className="size-3.5" aria-hidden />
+        </MessageActionButton>
+      ) : null}
     </>
   );
 }
@@ -1267,7 +1333,7 @@ function UserMessageTouchMenu({
               Copy
             </DropdownMenuItem>
           ) : null}
-          {canModify ? (
+          {canModify && actions.delivery === undefined ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem
