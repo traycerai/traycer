@@ -141,6 +141,7 @@ function emitSnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: undefined,
       pendingReturn: undefined,
       lastFallbackOutcome: undefined,

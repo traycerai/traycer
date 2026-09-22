@@ -184,6 +184,7 @@ import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
 import type {
   BackgroundItem,
   ChatAccess,
@@ -432,6 +433,7 @@ type DeferredWindowedSnapshotAux = Pick<
   | "missingWorktreePaths"
   | "managedCommands"
   | "heldUpdates"
+  | "portForwards"
   // All four fallback DTOs qualify under this type's own rule: they are on the
   // windowed snapshot AND `turnStateChanged` supersedes them. Omitting them
   // here would not merely replay a stale value - it would replay it
@@ -464,6 +466,7 @@ function deferredWindowedSnapshotAuxOf(
     missingWorktreePaths: snapshot.missingWorktreePaths,
     managedCommands: snapshot.managedCommands,
     heldUpdates: snapshot.heldUpdates,
+    portForwards: snapshot.portForwards,
     pendingFallback: snapshot.pendingFallback,
     pendingReturn: snapshot.pendingReturn,
     lastFailedAttempt: snapshot.lastFailedAttempt,
@@ -1358,6 +1361,21 @@ export interface ChatSessionState {
    * either, so `[]` is the truth and not a fallback.
    */
   readonly heldUpdates: ReadonlyArray<HeldManagedCommandUpdate>;
+  /**
+   * This agent's port forwards (`chat.subscribe@1.14`). Carried whole by every
+   * snapshot and every `portForwardsChanged` frame, so keeping it current is
+   * one assignment - the same contract {@link managedCommands} has, and `[]`
+   * for the same reason: a host too old to send the field cannot forward a
+   * port, so "none" is the truth and not a fallback.
+   *
+   * The row has no byte or connection counters on purpose (they would re-send
+   * this whole set per packet); those live on the host-level listing.
+   *
+   * Not one of the budgeted whole-set slices, like {@link heldUpdates}: a
+   * forward is a deliberate act and its row is a few short strings, so the set
+   * cannot grow into something the chat-windows accountant needs to see.
+   */
+  readonly portForwards: ReadonlyArray<ChatPortForward>;
   /**
    * In-flight per-item background stops, keyed by `taskId` → the
    * `clientActionId` of the stop frame that was sent. An entry exists from the
@@ -3772,6 +3790,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           ),
           managedCommands: frame.snapshot.managedCommands,
           heldUpdates: frame.snapshot.heldUpdates,
+          portForwards: frame.snapshot.portForwards,
           // Drop per-item stops whose task has left the running-only list
           // (its terminal landed) and clear the stop-all flag once nothing
           // is left running, so settled rows never stay disabled. A stop
@@ -5466,6 +5485,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           backgroundItems: current.backgroundItems,
           managedCommands: current.managedCommands,
           heldUpdates: current.heldUpdates,
+          portForwards: current.portForwards,
           turnInProgress: current.turnInProgress,
           pendingFallback: current.pendingFallback,
           pendingReturn: current.pendingReturn,
@@ -6625,6 +6645,17 @@ export function createChatSessionStoreWithNotificationDependencies(
         // host has no reason to send.
         set({ heldUpdates: frame.heldUpdates });
         advanceDeferredSnapshotAux(() => ({ heldUpdates: frame.heldUpdates }));
+      },
+      onPortForwardsChanged: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // Whole set, same as the two above: a stopped forward is the ABSENCE
+        // of a row, so there is no removal frame to lose.
+        set({ portForwards: frame.portForwards });
+        advanceDeferredSnapshotAux(() => ({
+          portForwards: frame.portForwards,
+        }));
       },
       // ─── The windowed line (`chat.subscribe@1.8`) ────────────────────────
       //
@@ -8579,6 +8610,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         onWorktreeStateChanged: guarded(callbacks.onWorktreeStateChanged),
         onManagedCommandsChanged: guarded(callbacks.onManagedCommandsChanged),
         onHeldUpdatesChanged: guarded(callbacks.onHeldUpdatesChanged),
+        onPortForwardsChanged: guarded(callbacks.onPortForwardsChanged),
         // Guarded like every frame above rather than passed through: whatever
         // binds these must not apply a hydration response from a stream
         // generation this store has already replaced.
@@ -8748,6 +8780,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       lastFallbackOutcome: undefined,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       fallbackChoiceLease: null,
       confirmedManualFallbackAction: null,
       unattendedFallbackOutcome: null,

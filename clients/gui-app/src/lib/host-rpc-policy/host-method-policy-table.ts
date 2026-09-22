@@ -923,6 +923,66 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dial-only lease verbs: one host calls these on another, never the
+  // renderer. Here because this table is exhaustive over the registry. `fifo`
+  // because each acquires, releases or ends a lease and must never coalesce.
+  "host.portForward.acquireLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.releaseLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.leaseEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The host-level forwards listing: only the newest answer means anything.
+  "portForward.listForHost": { ...LATEST_SCHEDULING, poll: null },
+  // Stopping a forward and cutting a lease both tear down live sockets.
+  "portForward.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "portForward.cutLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only, like `host.agent.createFromRemoteSender` below: the agent's
+  // host calls these on the machine its browser realm lives on, never the
+  // renderer. They are here because this table is exhaustive over the
+  // registry. `fifo` for both - a cell is a side-effecting script and a
+  // release retires a realm, so neither may be coalesced with another call.
+  "browser.repl.runCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.releaseRealm": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.stopCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only in the other direction: the machine running a browser realm
+  // asks the agent's host for a person's decision. Never the renderer; here
+  // for exhaustiveness. `fifo` - each question is its own card and must
+  // never be coalesced with another.
+  "browser.repl.requestApproval": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Dial-only: one host calls this on another, never the renderer. It is here
   // because this table is exhaustive over the registry, not because the GUI
   // has a caller. `fifo` matches `agent.create`, whose effect it shares -

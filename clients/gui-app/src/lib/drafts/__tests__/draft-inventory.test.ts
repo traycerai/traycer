@@ -304,7 +304,7 @@ describe("chat rows", () => {
     });
   });
 
-  it("falls back to Chat / Epic for a row no local composer has named", () => {
+  it("falls back to Chat / Task for a row no local composer has named", () => {
     const [row] = list({
       scope: LANDING_SCOPE,
       filter: "all",
@@ -317,7 +317,7 @@ describe("chat rows", () => {
       },
     });
     expect(row.kind).toBe("chat");
-    expect(row).toMatchObject({ chatTitle: "Chat", epicTitle: "Epic" });
+    expect(row).toMatchObject({ chatTitle: "Chat", epicTitle: "Task" });
   });
 });
 
@@ -390,7 +390,7 @@ describe("new-chat rows", () => {
     expect(row).toMatchObject({ open: false, foreign: false });
   });
 
-  it("falls back to Epic when no modal has recorded a title", () => {
+  it("falls back to Task when no modal has recorded a title", () => {
     const [row] = list({
       scope: LANDING_SCOPE,
       filter: "all",
@@ -398,7 +398,7 @@ describe("new-chat rows", () => {
         "epic-1": newChatPatch({ draftId: "draft-modal", epicTitle: null }),
       },
     });
-    expect(row).toMatchObject({ epicTitle: "Epic" });
+    expect(row).toMatchObject({ epicTitle: "Task" });
   });
 });
 

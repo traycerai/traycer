@@ -18,6 +18,7 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
+import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   chatRunSettingsStrictSchema,
   tuiHarnessIdSchema,
@@ -749,4 +750,290 @@ export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
   // warnings. The caller briefs it with `agent.sendMessage`, which already
   // routes cross-host.
   responseSchema: createAgentResponseSchema,
+});
+
+/**
+ * Which A2A registration a routed browser cell belongs to, as claims.
+ *
+ * The target REBUILDS the caller's registration key from `sessionKeyTag` plus
+ * `chatId` with the same tagged constructors the origin used, rather than
+ * accepting a composed key on the wire: that key is the namespace deciding
+ * which realm a cell enters, and a peer able to spell one directly could name
+ * another registration's realm. `chatId` is the bare id both tagged
+ * constructors take — a GUI chat's id, or a terminal agent's id — and the
+ * origin proves that before it dials by rebuilding the key and comparing it
+ * with the one it holds.
+ *
+ * `userId` and the origin host id are NOT here: both come from the dialed
+ * session's principal, never from the request.
+ */
+export const browserReplCallerSchema = lazySchema(() =>
+  z.object({
+    sessionKeyTag: z.enum(["chat", "terminal-agent"]),
+    chatId: z.string().min(1),
+    agentRunId: z.string().nullable(),
+  }),
+);
+export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
+
+/**
+ * One realm's identity, minted by the ORIGIN at realm birth and carried on
+ * every call about that realm.
+ *
+ * It is the fence that lets the target tell a straggler from new work, which
+ * the owner key alone cannot: a unary call issued before a release can arrive
+ * after it, and re-admitting it would resurrect a realm whose credential is
+ * already revoked.
+ *
+ * ORDERED rather than opaque, so the target can keep one "highest seen"
+ * number per owner key instead of a set of tombstones with a lifetime. A
+ * lifetime would be a guess about how long a straggler can live, and a call
+ * parked in a role check on the origin can outlive any such guess.
+ *
+ * `incarnation` is a RANDOM id minted once per origin process, deliberately
+ * not a boot timestamp: a wall clock that steps backwards between two
+ * restarts would make every epoch of the newer process look older than the
+ * dead one's, and the target would refuse the live agent forever. Ordering is
+ * never compared across incarnations: the target adopts an incarnation it has
+ * not seen as current for that owner, retiring whatever it held, and refuses
+ * every incarnation it has moved on from - so a restarted origin is admitted
+ * on its first call and the dead process's stragglers are fenced for good.
+ * Whether an unseen incarnation is really the newer process is answered by
+ * its carrying session, which the target checks last. `counter` orders
+ * realms within one incarnation.
+ */
+const browserRealmEpochSchema = lazySchema(() =>
+  z.object({
+    incarnation: z.string().min(1),
+    counter: z.number().int().positive(),
+  }),
+);
+export type BrowserRealmEpochWire = z.infer<typeof browserRealmEpochSchema>;
+
+/**
+ * Which cell within the epoch. A stop must name the cell it means: a stop the
+ * caller gave up on stays alive in the session (the transport races a call
+ * against a signal, it does not cancel it) and can arrive after the cell it
+ * named has finished, where it would otherwise interrupt that cell's
+ * successor.
+ */
+const browserReplCellSequenceSchema = lazySchema(() =>
+  z.number().int().positive(),
+);
+
+export const browserReplRunCellRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    title: z.string().min(1),
+    code: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+    cellSequence: browserReplCellSequenceSchema,
+  }),
+);
+export type BrowserReplRunCellRequest = z.infer<
+  typeof browserReplRunCellRequestSchema
+>;
+
+/**
+ * One block of the cell's `CallToolResult`, carried verbatim so the agent's
+ * host re-emits what the browser's host produced rather than re-rendering it.
+ * The MCP result has exactly these two block kinds on this path: the text
+ * block (cell output plus its `[hint]` / `[notice]` / `[state]` lines) and the
+ * screenshot attachments.
+ */
+export const browserReplCellContentSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("text"), text: z.string() }),
+    z.object({
+      type: z.literal("image"),
+      data: z.string(),
+      mimeType: z.string().min(1),
+    }),
+  ]),
+);
+export type BrowserReplCellContent = z.infer<
+  typeof browserReplCellContentSchema
+>;
+
+/**
+ * `sessionsUsed` exists because `onSessionUsed` cannot run on the target: it
+ * writes a reference into the AGENT'S chat, which lives on the origin host.
+ * The references are collected here and written there, already stamped with
+ * this host's `hostId` — a session id is host-local, so the stamp is what
+ * makes the reference resolvable at all.
+ */
+export const browserReplRunCellResponseSchema = lazySchema(() =>
+  z.object({
+    content: z.array(browserReplCellContentSchema),
+    isError: z.boolean(),
+    sessionsUsed: z.array(browserSessionReferenceSchema),
+    /** How this host names itself, for the `[state]` line the agent reads. */
+    machineName: z.string().min(1),
+  }),
+);
+export type BrowserReplRunCellResponse = z.infer<
+  typeof browserReplRunCellResponseSchema
+>;
+
+export const browserReplRunCellV10 = defineRpcContract({
+  method: "browser.repl.runCell",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplRunCellRequestSchema,
+  responseSchema: browserReplRunCellResponseSchema,
+});
+
+/**
+ * Retires a routed realm on the browser's host: context, adapters, tab leases
+ * and the cell child process. Sent when the agent's A2A registration is
+ * released, which is the same deterministic signal a local realm is retired
+ * on.
+ *
+ * Idempotent, and that is load-bearing rather than merely tidy: the origin
+ * keeps owed releases until one is ANSWERED, and retries them against targets
+ * that may have restarted or already released. An unknown epoch is therefore
+ * a success — the obligation is discharged either way — so `released` reports
+ * whether this call found a live realm, never whether the caller may stop
+ * asking.
+ *
+ * It is also a FLOOR rather than a tombstone for one value: it retires every
+ * epoch at or below `realmEpoch` for that owner key, whether or not that epoch
+ * ever reached this machine, so nothing below it can execute afterwards.
+ */
+export const browserReplReleaseRealmRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+  }),
+);
+export type BrowserReplReleaseRealmRequest = z.infer<
+  typeof browserReplReleaseRealmRequestSchema
+>;
+
+export const browserReplReleaseRealmResponseSchema = lazySchema(() =>
+  z.object({
+    released: z.boolean(),
+  }),
+);
+export type BrowserReplReleaseRealmResponse = z.infer<
+  typeof browserReplReleaseRealmResponseSchema
+>;
+
+export const browserReplReleaseRealmV10 = defineRpcContract({
+  method: "browser.repl.releaseRealm",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplReleaseRealmRequestSchema,
+  responseSchema: browserReplReleaseRealmResponseSchema,
+});
+
+/**
+ * Interrupts the cell running in a routed realm, so the Stop the user presses
+ * on the agent's machine reaches the machine the cell is actually on.
+ *
+ * Without it Stop reports `idle` — truthfully about the agent's own host,
+ * which holds no owner for a routed realm — while the cell keeps driving a
+ * browser in front of the user. That is worse than not routing at all, which
+ * is why this is the third verb rather than a follow-up.
+ *
+ * The response is the target's OWN stop status, unchanged: `idle` (nothing was
+ * running), `stopped` (the cell was interrupted and nothing is still in an
+ * adapter call), `outcome_unknown` (interrupted, but a raw adapter call may
+ * still be in flight there). There is deliberately no fourth value here for
+ * "the machine could not be reached": that is not something the target can
+ * ever say about itself, so it is minted by the ORIGIN when this dial fails
+ * and never travels on the wire.
+ */
+export const browserReplStopCellRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+    /** The cell this stop means; see {@link browserReplCellSequenceSchema}. */
+    cellSequence: browserReplCellSequenceSchema,
+  }),
+);
+export type BrowserReplStopCellRequest = z.infer<
+  typeof browserReplStopCellRequestSchema
+>;
+
+export const browserReplStopCellResponseSchema = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "stopped", "outcome_unknown"]),
+  }),
+);
+export type BrowserReplStopCellResponse = z.infer<
+  typeof browserReplStopCellResponseSchema
+>;
+
+export const browserReplStopCellV10 = defineRpcContract({
+  method: "browser.repl.stopCell",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplStopCellRequestSchema,
+  responseSchema: browserReplStopCellResponseSchema,
+});
+
+/**
+ * The dial BACK: a cell suspended on the browser's host asks the agent's host
+ * for a person's decision, because the approval card belongs in the agent's
+ * chat and that chat lives on the agent's machine. The browser's host is the
+ * caller here and the agent's host resolves it, the reverse of every other
+ * verb in this family.
+ *
+ * The request names the cell asking - the same `(caller, realmEpoch,
+ * cellSequence)` the cell verb carried in - and the agent's host answers only
+ * for the cell it currently has in flight on the asking host. A realm it has
+ * already re-homed or released cannot raise a card, however late its question
+ * arrives.
+ *
+ * The cell stays suspended on the browser's host until this answers, bounded
+ * by the cell's own deadline there rather than by anything of its own: the
+ * approval wait has no deadline of its own on a local realm either.
+ */
+export const browserReplApprovalSchema = lazySchema(() =>
+  z.object({
+    approvalId: z.string().min(1),
+    toolName: z.string().min(1),
+    description: z.string(),
+    /** The card's input, as the confirmation surface on the origin renders it. */
+    input: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
+export type BrowserReplApproval = z.infer<typeof browserReplApprovalSchema>;
+
+export const browserReplRequestApprovalRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+    /** The cell asking; see {@link browserReplCellSequenceSchema}. */
+    cellSequence: browserReplCellSequenceSchema,
+    approval: browserReplApprovalSchema,
+  }),
+);
+export type BrowserReplRequestApprovalRequest = z.infer<
+  typeof browserReplRequestApprovalRequestSchema
+>;
+
+/**
+ * A DELIVERED decision. `approved: false` is a person's (or the origin's
+ * policy's) "no"; a question the origin will not answer at all - no such cell
+ * in flight, the registration gone - is a refusal thrown on the wire, never
+ * a fabricated decision.
+ */
+export const browserReplRequestApprovalResponseSchema = lazySchema(() =>
+  z.object({
+    approved: z.boolean(),
+    reason: z.string().nullable(),
+  }),
+);
+export type BrowserReplRequestApprovalResponse = z.infer<
+  typeof browserReplRequestApprovalResponseSchema
+>;
+
+export const browserReplRequestApprovalV10 = defineRpcContract({
+  method: "browser.repl.requestApproval",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplRequestApprovalRequestSchema,
+  responseSchema: browserReplRequestApprovalResponseSchema,
 });

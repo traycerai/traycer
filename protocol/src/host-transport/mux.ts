@@ -552,6 +552,17 @@ export const SESSION_CAPABILITY_BODY_COMPRESSION = "bodyCompression.deflate";
 export const SESSION_CAPABILITY_FINE_CREDITS = "flowControl.fineCredits";
 
 /**
+ * Advertised in `openAck.capabilities` by a host that serves tunnel streams
+ * (`host.tunnel.open`, see `host-transport/remote/tunnel-stream.ts`). A tunnel rides
+ * the ordinary SUBSCRIBE / STREAM_FRAME / CLOSE frames, so the tag changes no
+ * frame format; what it declares is the per-stream credit discipline inside
+ * that stream. A dialer refuses to open a tunnel against a host that did not
+ * send it, with a typed `INCOMPATIBLE` whose guidance names the host, before
+ * any SUBSCRIBE goes out.
+ */
+export const SESSION_CAPABILITY_TUNNEL_STREAMS = "tunnel.streams";
+
+/**
  * The negotiated credit window, single-sourced here so the two peers cannot
  * drift by hand (the same reason `BULK_CHUNK_SIZE_BYTES` lives in
  * `chunking.ts` rather than in two hand-mirrored configs).

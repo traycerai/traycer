@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
+  chatSubscribeV113,
+  chatSubscribeV114,
   chatSubscribeV16,
   chatSubscribeV18,
   chatSubscribeWindowedClientFrameSchema,
@@ -147,6 +149,53 @@ describe("chatSubscribeWindowedServerFrameSchema's snapshot variant", () => {
   });
 });
 
+// ─── Group 1b: the 1.14 port-forward line's windowed snapshot ──────────────
+//
+// Reuses `baseWindowedSnapshot()` / `windowedSnapshotFrame()` above rather
+// than hand-building a second snapshot fixture.
+describe("chatSubscribeV113 vs chatSubscribeV114: snapshot.portForwards", () => {
+  // Catches: `chatWindowedSnapshotSchema.portForwards` losing its
+  // `.default([])`, which would make an old-host snapshot (no `portForwards`
+  // key at all) fail to parse on the live line instead of reading as "none".
+  it("1.14 defaults an omitted snapshot.portForwards to []", () => {
+    const parsed = chatSubscribeV114.serverFrameSchema.parse(
+      windowedSnapshotFrame(baseWindowedSnapshot()),
+    );
+
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.portForwards).toEqual([]);
+  });
+
+  // Catches: `chatWindowedSnapshotSchemaV113` (the frozen tier `1.13` binds)
+  // gaining a `portForwards` key - it must strip an unknown key rather than
+  // grow one, exactly like `chat-subscribe-held-updates.test.ts` proves for
+  // the `1.5` line and `heldUpdates`.
+  it("1.13's parsed snapshot has no portForwards key, even when the input carries one", () => {
+    const snapshotWithPortForwards = {
+      ...baseWindowedSnapshot(),
+      portForwards: [
+        {
+          forwardId: "forward-1",
+          description: "8080 → laptop:8080",
+          target: { hostId: "host-b", port: 8080 },
+          listen: { hostId: "host-a", requestedPort: 8080, boundPort: 8080 },
+          state: "active",
+          stateReason: null,
+          createdAtMs: 10,
+          recentEvents: [],
+        },
+      ],
+    };
+
+    const parsed = chatSubscribeV113.serverFrameSchema.parse(
+      windowedSnapshotFrame(snapshotWithPortForwards),
+    );
+
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot).not.toHaveProperty("portForwards");
+  });
+});
+
 // ─── Group 2: the 1.6 freeze is real ────────────────────────────────────────
 
 describe("the chat.subscribe@1.6 freeze", () => {
@@ -273,6 +322,8 @@ describe("chatSubscribeWindowedServerFrameSchema's frame kinds", () => {
     "turnStateChanged",
     "managedCommandsChanged",
     "heldUpdatesChanged",
+    // `1.14`: the agent's port forwards, whole-set like the two above.
+    "portForwardsChanged",
     "actionAck",
     "messageAccepted",
     "queueChanged",

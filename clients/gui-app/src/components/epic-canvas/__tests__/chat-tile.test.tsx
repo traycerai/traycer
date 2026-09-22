@@ -738,6 +738,7 @@ function emitChatSnapshotWithMessages(input: {
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }

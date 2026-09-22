@@ -19,6 +19,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -73,6 +74,16 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // runtime-event schemas by reference (the two `**.grokPromptIndex` entries in
 // `compat-exceptions.json` record why that is tolerated), and 1.9 onward carry
 // the field live.
+//
+// 1.13 is captured ON TIME, the way the rule asks: taken from the tree at OSS
+// commit c18aba718, before the port-forward surface took 1.14 above it, and
+// re-taken after the freeze to confirm the two agree. It is the first entry
+// since 1.10 that proves the freeze rather than merely starting one. Then
+// re-captured with 1.7–1.12 above when the grok anchor gained
+// `grokPromptIndex`: main made that change on its live line, which is 1.13,
+// so the frozen copy here (which reaches the anchor by reference) moved with
+// it. The values below are main's own live-1.13 digests at that merge, and
+// the frozen copy on the merged tree reproduces them exactly.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -126,6 +137,10 @@ const SERVER_FRAME_DIGESTS = {
     "1de46aa26aebc0b902d91cf0b108e9b34cb0906bbd8a03dee5a60627c9e135d3",
     "882f4af25ef15550956d59c48c622c0c592f3c313b15b44b337e4a5b398bb809",
   ],
+  13: [
+    "0b21bf15572d520c23bc7d78428b1b5abf4b78970f07bea3accae6295082c1e4",
+    "4b319e48d65e2493146748cb326a652cdb204d78f647cf8c41defbfef503de6b",
+  ],
 } as const;
 
 const contracts = [
@@ -142,10 +157,11 @@ const contracts = [
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.12 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.13 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([
