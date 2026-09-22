@@ -2815,4 +2815,153 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       ).toBeNull();
     },
   );
+
+  // PR2069 (CodeRabbit): disconnecting demotes a live view to
+  // `unknown`/`lastKnownKind` with the same attemptId, and the completion
+  // hook used to resolve an id only off `view.kind` — so a retained success
+  // lost its dismiss/timer, and a fresh dismissal stopped matching once the
+  // kind changed and the card reappeared.
+  describe("retained (stale) success — PR2069 regression", () => {
+    function bindDisconnectable(operation: HostStatusUpdateOperation): {
+      readonly disconnect: () => void;
+    } {
+      const fixture = buildOverviewHostFixture({
+        hostId: HOST_ID,
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => statusWith(operation),
+        },
+      });
+      recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      const connectedScope = scopeFrom(HOST_ID, fixture);
+      scopeOverrides.current = connectedScope;
+      return {
+        disconnect: () => {
+          scopeOverrides.current = { ...connectedScope, status: "unreachable" };
+        },
+      };
+    }
+
+    it("a retained (stale) completed attempt can still be manually dismissed", async () => {
+      const { disconnect } = bindDisconnectable(
+        completeOperation("attempt-retained-dismiss"),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Updated to v2.1.0");
+      });
+
+      disconnect();
+      panel.rerender();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Last seen: Updated to v2.1.0");
+      });
+
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).toContain("attempt-retained-dismiss");
+    });
+
+    it("a FRESH dismissal stays hidden once the view demotes to retained/stale — it does not reappear on disconnect", async () => {
+      const { disconnect } = bindDisconnectable(
+        completeOperation("attempt-fresh-then-retained"),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
+
+      // Same transition the sibling test above renders "Last seen: …" for
+      // when not dismissed; here it must not resurrect a dismissed card.
+      disconnect();
+      panel.rerender();
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+
+    it("a retained (stale) FAILED attempt stays visible with no dismiss offered", async () => {
+      // A terminal `failed` phase: staleness retains the raw phase, so only
+      // a phase that already IS "failed" retains as failed.
+      const { disconnect } = bindDisconnectable(
+        attemptOperation({
+          attemptId: "attempt-retained-failed",
+          phase: "failed",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Update failed");
+      });
+
+      disconnect();
+      panel.rerender();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Last seen: Update failed");
+      });
+      expect(screen.getByTestId("host-overview-operation-card")).toBeTruthy();
+      expect(
+        screen.queryByTestId("host-overview-operation-dismiss"),
+      ).toBeNull();
+    });
+
+    it("a fresh success that demotes to retained mid-window still auto-collapses at the original deadline, not a restarted one", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const { disconnect } = bindDisconnectable(
+        completeOperation("attempt-deadline"),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+
+      // Disconnect mid-window: same attemptId, so the timer isn't re-armed.
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS / 2,
+      );
+      disconnect();
+      panel.rerender();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Last seen: Updated to v2.1.0");
+      });
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).not.toContain("attempt-deadline");
+
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS / 2 + 100,
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).toContain("attempt-deadline");
+    });
+  });
 });

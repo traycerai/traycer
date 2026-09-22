@@ -742,6 +742,40 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     // Visible, though: this is a card, not a quiet state.
     expect(isQuietUpdateView(view)).toBe(false);
   });
+
+  // PR2069 (CodeRabbit): the `stale` branch used to read only the raw phase,
+  // so a wire that had concluded finalizing-record lost that conclusion the
+  // instant it expired and fell back to the bare `verifying` phase.
+  it("a stale wire read that concluded finalizing-record keeps that as its retained kind, not bare verifying", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("finalizing-record");
+    expect(view.lastKnownKind).not.toBe("verifying");
+    expect(view.qualified).toBe(true);
+  });
+
+  it("a stale wire read at the old running version still decays to bare verifying — staleness alone does not manufacture a success", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.0.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("verifying");
+    expect(view.lastKnownKind).not.toBe("finalizing-record");
+  });
 });
 
 /**

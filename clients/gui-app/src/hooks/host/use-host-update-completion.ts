@@ -14,8 +14,10 @@ interface HostUpdateCompletion {
 export function useHostUpdateCompletion(
   view: FleetUpdateView,
 ): HostUpdateCompletion {
+  const completionKind =
+    view.kind === "unknown" ? view.lastKnownKind : view.kind;
   const attemptId =
-    view.kind === "complete" || view.kind === "finalizing-record"
+    completionKind === "complete" || completionKind === "finalizing-record"
       ? view.attemptId
       : null;
   const dismissed = useHostUpdateBannerStore(
