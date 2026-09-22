@@ -131,6 +131,22 @@ describe("toastFromHostError", () => {
     );
   });
 
+  it("names the team plan when the cloud refused a team share for lack of one", () => {
+    // The cloud's refusal is a plan matter, not a role matter, and its fixed
+    // phrase is the only signal on the wire; a reader told "no permission"
+    // would go looking for an access setting that does not exist.
+    toastFromHostError(
+      makeError(
+        "FORBIDDEN",
+        "Sharing with this team requires a paid team plan",
+      ),
+      "fallback",
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "This team needs the Sync plan before it can share tasks.",
+    );
+  });
+
   it("shows sign-in copy for UNAUTHORIZED", () => {
     toastFromHostError(makeError("UNAUTHORIZED", "test error"), "fallback");
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
