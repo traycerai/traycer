@@ -15,6 +15,7 @@
  * None of them is wire surface: they are constructor inputs to the engine.
  */
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type {
   AuthorityIdentitySource,
   HostFleetEntry,
@@ -239,6 +240,13 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private localIdentitySeq = 0;
   private adoptedLocalIdentitySeq = 0;
   private readonly listeners = new Set<(snapshot: HostFleetSnapshot) => void>();
+  /**
+   * Set only by the local-host inventory subscription; read only by the
+   * registry cadence. Not part of the snapshot and deliberately not published
+   * anywhere: it says who is READING the registry, which is nobody's business
+   * but the reader's.
+   */
+  private pushActive = false;
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
   private disposed = false;
@@ -319,7 +327,71 @@ export class DesktopHostFleetSource implements HostFleetSource {
     }
   }
 
+  /**
+   * The same adoption, for rows this process did not fetch.
+   *
+   * The local host reads `GET /api/v3/hosts` for its own reasons and can push
+   * the answer (`local-host-inventory-subscription.ts`), which is one fewer
+   * read of the same lease. What arrives is a registry RESPONSE, identical in
+   * shape and provenance to the one `listRegisteredHosts` returns - so it goes
+   * through the same path rather than a second, subtly different one: the same
+   * identity generation captured before the local-identity read, the same
+   * `refreshSeq` ordering against a poll that may be in flight, the same
+   * signed-out and unverified branches, the same publish-then-adopt order.
+   *
+   * TOTAL, like {@link refresh}: its caller is a stream callback with nobody
+   * to reject to.
+   */
+  async acceptPushedRows(response: HostListResponse): Promise<void> {
+    if (this.disposed) return;
+    try {
+      await this.adoptRegistryResponse(response);
+    } catch (error: unknown) {
+      this.options.log.warn("[selection-fleet] pushed registry adopt threw", {
+        error: String(error),
+      });
+    }
+  }
+
+  /**
+   * Whether a push plane is currently covering the registry, for the cadence
+   * that would otherwise fetch it.
+   *
+   * Only the subscription may set this, and it says `false` for every way its
+   * stream can be less than healthy - including a snapshot the host itself
+   * marked stale. The poll reads it per tick rather than being stopped and
+   * restarted, so the failure mode of this flag getting stuck is a redundant
+   * read, never a fleet that stops being refreshed.
+   */
+  setPushActive(active: boolean): void {
+    this.pushActive = active;
+  }
+
+  isPushActive(): boolean {
+    return this.pushActive && !this.disposed;
+  }
+
   private async refreshOrThrow(): Promise<void> {
+    await this.refreshWith(null);
+  }
+
+  private async adoptRegistryResponse(
+    response: HostListResponse,
+  ): Promise<void> {
+    await this.refreshWith(response);
+  }
+
+  /**
+   * One refresh, from a response this call fetches (`pushed === null`) or one
+   * the local host already read for us.
+   *
+   * The two share everything but the fetch, and that is the point: every race
+   * rule this port has - the generation captured before the local-identity
+   * read, `refreshSeq` ordering a push against a poll in flight, the
+   * signed-out and unverified branches, publishing before adopting - is a rule
+   * about ADOPTING registry rows, not about who read them.
+   */
+  private async refreshWith(pushed: HostListResponse | null): Promise<void> {
     // Stamped at fetch START (contract: "the generation this snapshot was
     // FETCHED under"), so a completion that lands after an account switch is
     // recognisably stale. The identity KEY is captured in the same read for
@@ -371,6 +443,22 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return;
     }
+    if (pushed !== null) {
+      // The host has already made the read this branch would make. It arrives
+      // with no `kind` to check because a snapshot IS the host's successful
+      // read - a host that could not read sends nothing, and a host serving
+      // rows it could not refresh marks them stale, which the subscription
+      // handles by standing the poll back up rather than by withholding rows.
+      this.publishAndAdopt(
+        identity,
+        generation,
+        seq,
+        identitySeq,
+        localHostId,
+        pushed,
+      );
+      return;
+    }
     let result: HostListFetchResult;
     try {
       result = await this.options.listRegisteredHosts(
@@ -397,22 +485,42 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return;
     }
-    // Published BEFORE the id projection is adopted, and published even when
-    // `applyFetched` declines to adopt (a late completion for a retired
-    // identity). Both are deliberate: the push carries the identity it was
-    // FETCHED under, so a renderer on another account drops it by the same
-    // rule the engine rejects the snapshot by - one stamp, two readers, no
-    // second staleness policy.
+    this.publishAndAdopt(
+      identity,
+      generation,
+      seq,
+      identitySeq,
+      localHostId,
+      result.response,
+    );
+  }
+
+  /**
+   * Published BEFORE the id projection is adopted, and published even when
+   * `applyFetched` declines to adopt (a late completion for a retired
+   * identity). Both are deliberate: the push carries the identity it was
+   * FETCHED under, so a renderer on another account drops it by the same
+   * rule the engine rejects the snapshot by - one stamp, two readers, no
+   * second staleness policy.
+   */
+  private publishAndAdopt(
+    identity: { readonly identityKey: string | null },
+    generation: number,
+    seq: number,
+    identitySeq: number,
+    localHostId: string | null,
+    response: HostListResponse,
+  ): void {
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
-      response: result.response,
+      response,
     });
     this.applyFetched(
       generation,
       seq,
       identitySeq,
       localHostId,
-      result.response.hosts.map((row) => row.hostId),
+      response.hosts.map((row) => row.hostId),
     );
   }
 

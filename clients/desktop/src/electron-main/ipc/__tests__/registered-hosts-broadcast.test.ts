@@ -120,6 +120,43 @@ describe("registerRegisteredHostsBroadcast", () => {
     await vi.advanceTimersByTimeAsync(180_000);
     expect(refreshSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("B1: skips the tick while the fleet's push plane is active - no refresh() call at all", async () => {
+    const bridge: RegisteredHostsBroadcastBridge = {
+      disposeFns: [],
+      fanOut: vi.fn(),
+    };
+    const fleet = buildFleet();
+    const refreshSpy = vi.spyOn(fleet, "refresh").mockResolvedValue(undefined);
+    fleet.setPushActive(true);
+
+    registerRegisteredHostsBroadcast(bridge, fleet);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it("B2: the cadence is SKIPPED, not cancelled - the very next tick refreshes once push goes inactive again", async () => {
+    const bridge: RegisteredHostsBroadcastBridge = {
+      disposeFns: [],
+      fanOut: vi.fn(),
+    };
+    const fleet = buildFleet();
+    const refreshSpy = vi.spyOn(fleet, "refresh").mockResolvedValue(undefined);
+    fleet.setPushActive(true);
+
+    registerRegisteredHostsBroadcast(bridge, fleet);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshSpy).not.toHaveBeenCalled();
+
+    fleet.setPushActive(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("createRegisteredHostsPublisher", () => {

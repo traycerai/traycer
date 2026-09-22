@@ -1551,6 +1551,142 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
 });
 
 // ---------------------------------------------------------------------------
+// DesktopHostFleetSource / acceptPushedRows (local-host inventory push)
+// ---------------------------------------------------------------------------
+
+describe("DesktopHostFleetSource acceptPushedRows", () => {
+  it("C1: publishes through publishRegistryResponse with the CURRENT identity key, and the fleet snapshot carries the pushed host ids - without ever calling listRegisteredHosts", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const pushedRows = [
+      buildHostListItem("local-host"),
+      buildHostListItem("remote-host"),
+    ];
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error(
+          "must not be called - acceptPushedRows adopts rows it is handed, it does not fetch",
+        );
+      },
+    });
+
+    await fleet.acceptPushedRows({ hosts: pushedRows });
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: pushedRows },
+    });
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["local-host", "remote-host"]);
+    fleet.dispose();
+  });
+
+  it("C2: applies the signed-out rule exactly like refresh() does - publishes nothing and the fleet stays empty", async () => {
+    const authSession = new DesktopAuthSession();
+    const identity = new FakeIdentitySource(null, 0);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await fleet.acceptPushedRows({ hosts: [buildHostListItem("remote-host")] });
+
+    expect(published).toEqual([]);
+    expect(fleet.snapshot()).toMatchObject({ localHostId: null, hosts: [] });
+    fleet.dispose();
+  });
+
+  it("C3: applies the unverified rule exactly like refresh() does - keeps the local host, publishes nothing", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    // The terminal verdict loss a renderer reports; main keeps the session.
+    authSession.revokeVerification("token-1");
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called on an unverified session");
+      },
+    });
+
+    await fleet.acceptPushedRows({ hosts: [buildHostListItem("remote-host")] });
+
+    expect(published).toEqual([]);
+    // Not an empty fleet: the local host stays addressable, same as refresh().
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "local-host",
+    ]);
+    fleet.dispose();
+  });
+
+  it("C4: is TOTAL - a throwing publishRegistryResponse still resolves rather than rejecting, and logs a warning", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const warnCalls: Array<{
+      readonly message: string;
+      readonly detail: Record<string, unknown>;
+    }> = [];
+    const fleet = new DesktopHostFleetSource({
+      authnBaseUrl: "http://localhost:5005",
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called - acceptPushedRows does not fetch");
+      },
+      publishRegistryResponse: () => {
+        throw new Error("publish boom");
+      },
+      log: {
+        debug: () => undefined,
+        warn: (message, detail) => {
+          warnCalls.push({ message, detail });
+        },
+      },
+    });
+
+    await expect(
+      fleet.acceptPushedRows({ hosts: [buildHostListItem("remote-host")] }),
+    ).resolves.toBeUndefined();
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]?.message).toBe(
+      "[selection-fleet] pushed registry adopt threw",
+    );
+    fleet.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // DesktopLocalHostOutageSignal
 // ---------------------------------------------------------------------------
 
