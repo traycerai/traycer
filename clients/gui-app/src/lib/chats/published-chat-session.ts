@@ -327,6 +327,7 @@ export function publishedChatSessionState(
     // a placeholder: rendering a Deliver affordance on a copy would offer an
     // action that cannot be sent.
     heldUpdates: [],
+    portForwards: [],
     runStatus: "idle",
     activeTurn: null,
     turnLifecycleRevision: 0,

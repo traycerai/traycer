@@ -28,6 +28,7 @@ import {
   HostOverviewNotice,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
+import { HostPortForwardsCard } from "@/components/settings/panels/host-port-forwards-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
@@ -1715,6 +1716,14 @@ export function HostOverviewPanel(props: {
             />
           )
         }
+      />
+
+      <HostPortForwardsCard
+        client={client}
+        hostId={host.hostId}
+        hostName={displayName}
+        hosts={scope.hosts}
+        usable={usable}
       />
 
       <ArtifactVersionSettingsSection

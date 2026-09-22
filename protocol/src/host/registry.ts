@@ -273,6 +273,7 @@ import {
   chatSubscribeV111,
   chatSubscribeV112,
   chatSubscribeV113,
+  chatSubscribeV114,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -423,6 +424,14 @@ import {
   browserReplRunCellV10,
   browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
+import {
+  hostPortForwardAcquireLeaseV10,
+  hostPortForwardLeaseEndedV10,
+  hostPortForwardReleaseLeaseV10,
+  portForwardCutLeaseV10,
+  portForwardListForHostV10,
+  portForwardStopV10,
+} from "@traycer/protocol/host/port-forward";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -8828,6 +8837,84 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.portForward.acquireLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardAcquireLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.releaseLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardReleaseLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.leaseEnded": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardLeaseEndedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.listForHost": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardListForHostV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.cutLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardCutLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.oneOffShell.run": {
     degrade: { kind: "unsupported" },
     1: {
@@ -11914,7 +12001,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 13,
+      latestMinor: 14,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11982,9 +12069,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         12: {
           contract: chatSubscribeV112,
         },
-        // @1.13 is the `auto` line, and the live one.
+        // @1.13 is the `auto` line. Frozen without the port-forward surface.
         13: {
           contract: chatSubscribeV113,
+        },
+        // @1.14 is the port-forward line, and the live one: the agent's
+        // forwards on the snapshot, `portForwardsChanged`, and the queue item
+        // that reports one going `interrupted`. The host PROJECTS all three
+        // away below this minor rather than refusing the subscribe.
+        14: {
+          contract: chatSubscribeV114,
         },
       },
     },
