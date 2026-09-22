@@ -166,6 +166,16 @@ export function startLocalHostInventorySubscription(
   let stream: HostInventoryStreamClient | null = null;
   let unsubscribeSupport: (() => void) | null = null;
   let attachedHostId: string | null = null;
+  /**
+   * Identity of the stream that is currently THIS subscription's, for the
+   * callbacks to test themselves against.
+   *
+   * A closed stream's callbacks are not guaranteed to be silent - a frame
+   * already in flight, a status the transport reports on the way down - and
+   * `pushActive` is one shared flag for the whole subscription. A retired
+   * stream arming it speaks for a stream nobody is listening to any more.
+   */
+  let currentStreamToken: object | null = null;
   let openedUserId: string | null = null;
   let pushActive = false;
   let disposed = false;
@@ -179,6 +189,7 @@ export function startLocalHostInventorySubscription(
   const teardown = (reason: string): void => {
     stream?.close();
     stream = null;
+    currentStreamToken = null;
     unsubscribeSupport?.();
     unsubscribeSupport = null;
     client?.close(reason);
@@ -204,27 +215,57 @@ export function startLocalHostInventorySubscription(
       setPushActive(false);
       return;
     }
+    // Assigned BEFORE the client is constructed: it subscribes in its own
+    // constructor, so a frame can be delivered before the assignment below
+    // would have run.
+    const token = {};
+    currentStreamToken = token;
+    /**
+     * Whether this callback still speaks for the subscription.
+     *
+     * Two conditions, and they fail in different situations: the token catches
+     * a stream that has been torn down or replaced, and the generation catches
+     * an account change that has not reached the teardown yet. Only arming
+     * needs this - `setPushActive(false)` is always safe, since the worst it
+     * costs is a poll nobody needed.
+     */
+    const speaksForTheSubscription = (): boolean =>
+      currentStreamToken === token &&
+      deps.identity().generation === generationAtOpen;
     stream = new HostInventoryStreamClient({
       wsStreamClient: client,
       callbacks: {
         onSnapshot: (snapshot) => {
           if (disposed) return;
-          // Adopted whatever its staleness: rows the host could not refresh
-          // are still rows, and dropping them would leave this process on
-          // something older. Coverage is the separate question.
+          // Forwarded whatever its staleness, and whatever stream it came
+          // from: rows the host could not refresh are still rows, and a
+          // retired stream's rows are fenced by the generation they carry, at
+          // the consumer, where the comparison has the account to compare
+          // against. Coverage is the separate question, and it is the one this
+          // callback can get wrong on its own.
           deps.onRows({
             response: { hosts: [...snapshot.hosts] },
             readAtMs: snapshot.fetchedAtMs,
             openedAtGeneration: generationAtOpen,
           });
-          setPushActive(!snapshot.stale);
+          if (snapshot.stale) {
+            setPushActive(false);
+            return;
+          }
+          // Arming is a claim that the POLL can stand down, made on one shared
+          // flag. A retired stream making it - a late frame after an account
+          // switch, whose rows the consumer has just rejected - would leave
+          // the new account with no snapshot and no poll either.
+          if (!speaksForTheSubscription()) return;
+          setPushActive(true);
         },
         onConnectionStatus: (status) => {
           if (disposed) return;
           // Only `open` arms it, and `open` alone does not: a stream that is
           // connected but has said nothing yet is not covering anything. The
           // first snapshot arms it (the host sends one on subscribe), and any
-          // other status disarms it immediately.
+          // other status disarms it immediately - from any stream, because
+          // withdrawing coverage is never the unsafe direction.
           if (status !== "open") setPushActive(false);
         },
       },
@@ -276,6 +317,7 @@ export function startLocalHostInventorySubscription(
       if (client?.getMethodSupport(INVENTORY_METHOD) === "unsupported") {
         stream.close();
         stream = null;
+        currentStreamToken = null;
         setPushActive(false);
       }
     });

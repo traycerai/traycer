@@ -622,6 +622,33 @@ export class DesktopHostFleetSource implements HostFleetSource {
       );
       return;
     }
+    if (
+      generation === this.options.identity.current().generation &&
+      seq < this.adoptedSeq
+    ) {
+      // Same-identity ordering, applied to the PUBLISH as well as the
+      // adoption. `applyFetched` has always declined an older request, but it
+      // declines it after this method has already told every window what that
+      // request found - and read-time ordering made that reachable: a poll
+      // that STARTED before a push's read completes after it, passes the
+      // read-time check (it did observe the registry later), publishes its
+      // rows, and is then refused on seq. Windows would be showing a fleet the
+      // authority had just rejected.
+      //
+      // Gated on the generation matching, which is what keeps the retired-
+      // identity path below intact: a late completion for an account this
+      // process has left is still published, stamped with the generation it
+      // was fetched under, precisely so the renderer can drop it by the same
+      // rule the engine does.
+      this.options.log.debug(
+        "[selection-fleet] dropped a superseded registry read before publish",
+        {
+          seq,
+          adopted: this.adoptedSeq,
+        },
+      );
+      return;
+    }
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
       response,

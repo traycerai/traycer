@@ -1821,6 +1821,110 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     fleet.dispose();
   });
 
+  it("T3: a poll that STARTS first but completes LAST is refused on seq before it ever publishes", async () => {
+    // The bug this closes: the same-identity seq fence used to run only
+    // inside `applyFetched`, AFTER `publishRegistryResponse` had already been
+    // called from `publishAndAdopt`. A poll that starts before a push but
+    // completes after it passes the READ-TIME check (its own `readAtMs` is
+    // genuinely newer than what the push adopted) and so reached the publish
+    // call before the seq check downstream ever got to refuse it - windows
+    // saw one fleet, the authority adopted another. The fix moved the seq
+    // fence up into `publishAndAdopt`, before the publish.
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const rowA = buildHostListItem("host-a");
+    const rowB = buildHostListItem("host-b");
+    const rowC = buildHostListItem("host-c");
+    const poll = deferred<HostListFetchResult>();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => poll.promise,
+    });
+
+    // a. Nothing adopted yet.
+    expect(published).toEqual([]);
+
+    // b. The poll starts - it takes seq 1 and stamps readAtMs = T1_MS (the
+    // clock at fetch start). Its promise does not resolve until this test
+    // releases it below.
+    setNow(T1_MS);
+    const refreshing = fleet.refresh();
+
+    // c. A push arrives with readAtMs = T0_MS, strictly before T1_MS. It
+    // takes seq 2. It passes the read-time check (nothing adopted yet), is
+    // published, and is adopted - adoptedSeq is now 2.
+    await fleet.acceptPushedRows({
+      response: { hosts: [rowA, rowB, rowC] },
+      readAtMs: T0_MS,
+      openedAtGeneration: 0,
+    });
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: [rowA, rowB, rowC] },
+    });
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b", "host-c"]);
+
+    // d. The poll's promise resolves. Its readAtMs (T1_MS) is NEWER than the
+    // read time already adopted (T0_MS), so the read-time check alone would
+    // let it through - but the same-identity seq fence (seq 1 < adoptedSeq 2)
+    // must refuse it BEFORE the publish. Resolved with a DIFFERENT row set -
+    // "host-a" only - so any leak of the poll's rows into the publisher or
+    // the snapshot is unmistakable.
+    poll.resolve({
+      kind: "ok",
+      response: { hosts: [rowA] },
+    });
+    await refreshing;
+
+    // The publisher was called exactly once IN TOTAL - only the push's
+    // publish. The push's rows are still what the fleet snapshot carries;
+    // the poll's [A]-only set never appeared in either place.
+    expect(published).toHaveLength(1);
+    expect(published[0]?.response.hosts).toEqual([rowA, rowB, rowC]);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b", "host-c"]);
+    fleet.dispose();
+
+    // Reverse control: a poll that completes and IS the newest by both seq
+    // and read time still publishes - the fix must not have turned the seq
+    // fence into a blanket refusal.
+    const controlIdentity = new FakeIdentitySource("user-a", 0);
+    const controlHost = new FakeHostLifecycle();
+    const control = buildFleetSourceWithPublisher({
+      identity: controlIdentity,
+      authSession,
+      host: controlHost,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [rowA] },
+      }),
+    });
+    control.setNow(T2_MS);
+    await control.fleet.refresh();
+
+    expect(control.published).toHaveLength(1);
+    expect(control.published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: [rowA] },
+    });
+    control.fleet.dispose();
+  });
+
   // Task C: the generation fence on `acceptPushedRows` itself - distinct from
   // T1/T2's readAtMs ordering above. Named C5/C6 rather than C1/C2 to avoid
   // colliding with the existing C1-C4 titles in this describe block.

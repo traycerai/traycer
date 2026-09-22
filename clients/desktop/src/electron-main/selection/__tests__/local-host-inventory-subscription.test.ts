@@ -603,6 +603,69 @@ describe("startLocalHostInventorySubscription", () => {
       },
     ]);
 
+    // The late frame must not gain a `true` on top of the teardown's `false`:
+    // arming coverage from a retired stream would leave the new account
+    // believing its registry is covered when no usable snapshot for IT has
+    // ever arrived - the new account's poll must keep running.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  it("B7: a late frame on the OLD session cannot arm coverage before the NEW stream has produced a snapshot of its own - the new account's poll keeps running", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstSession = harness.clients[0]?.sessions[0];
+    if (firstSession === undefined) throw new Error("no session opened");
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+    // The teardown withdrew coverage, and the NEW session (opened by the
+    // same identity change) has not produced a snapshot of its own yet.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    expect(harness.clients).toHaveLength(2);
+    const secondSession = harness.clients[1]?.sessions[0];
+    if (secondSession === undefined) {
+      throw new Error("no second session opened");
+    }
+
+    // A late, healthy (non-stale) frame lands on the OLD, torn-down session
+    // before the new one has said anything at all.
+    firstSession.emitSnapshot([buildRow("host-1")], false, 9_000);
+
+    // Coverage must still read false: the new account has no usable snapshot
+    // of its own, so its poll must still be the one serving the registry -
+    // arming here would strand it with neither a snapshot nor a poll.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    expect(harness.pushActiveCalls.at(-1)).toBe(false);
+
+    subscription.dispose();
+  });
+
+  it("B8: after the identity change, a fresh snapshot on the NEW session DOES arm coverage - the control for B7", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstSession = harness.clients[0]?.sessions[0];
+    if (firstSession === undefined) throw new Error("no session opened");
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    const secondSession = harness.clients[1]?.sessions[0];
+    if (secondSession === undefined) {
+      throw new Error("no second session opened");
+    }
+
+    // A fresh (non-stale) snapshot on the NEW session, which speaks for the
+    // NEW identity it was opened under.
+    secondSession.emitSnapshot([buildRow("host-1")], false, 5_000);
+
+    expect(harness.pushActiveCalls).toEqual([true, false, true]);
+
     subscription.dispose();
   });
 
