@@ -182,6 +182,22 @@ export function encodeMuxMessageBody(
   return body;
 }
 
+/**
+ * Exact length of the body {@link encodeMuxMessageBody} would produce, without
+ * building it. For a sender that must account for what it queued in the same
+ * unit the schedulers report debt in (remaining BODY bytes).
+ */
+export function muxMessageBodySize(
+  json: Record<string, unknown> | null,
+  binary: Uint8Array | null,
+): number {
+  return (
+    BODY_HEADER_LEN +
+    (json === null ? 0 : textEncoder.encode(JSON.stringify(json)).length) +
+    (binary === null ? 0 : binary.length)
+  );
+}
+
 export interface DecodedMessageBody {
   readonly json: Record<string, unknown> | null;
   readonly binary: Uint8Array | null;
@@ -517,6 +533,55 @@ export class ChunkSequenceMismatchError extends ChunkReassemblyError {
     super(message);
     this.name = "ChunkSequenceMismatchError";
   }
+}
+
+/** Wire code for {@link StreamFrameNotAllowedError}; the same word on both peers' logs. */
+export const STREAM_FRAME_NOT_ALLOWED_CODE = "STREAM_FRAME_NOT_ALLOWED";
+
+/**
+ * Thrown for a frame its stream's method forbids outright (see
+ * {@link unchunkedStreamFrameViolation}). A `ChunkReassemblyError` so it takes
+ * the existing per-stream recovery route; distinguished so it surfaces under
+ * its own code rather than as a reassembly fault, which it is not - nothing
+ * was reassembled.
+ */
+export class StreamFrameNotAllowedError extends ChunkReassemblyError {
+  constructor(message: string) {
+    super(message);
+    this.name = "StreamFrameNotAllowedError";
+  }
+}
+
+/**
+ * The frame rule for a stream whose method never chunks (a tunnel): EVERY mux
+ * frame on it - data, and equally its CLOSE, FATAL or anything else - is one
+ * whole message whose WHOLE encoded length (header, body header, json and
+ * binary together) fits one chunk. Returns the violation, or `null`.
+ *
+ * Callers apply it only to a stream they have already identified as such; it
+ * deliberately does not look at the frame type, because the reassembler
+ * accumulates a chunked CLOSE exactly as readily as a chunked STREAM_FRAME.
+ *
+ * Checked on the raw decrypted frame, BEFORE the reassembler sees it. That
+ * position is the point: past it a chunk sequence accumulates toward the
+ * generic 512 MiB message cap and the session-wide reassembly budget, neither
+ * of which a byte tunnel has any business reaching, and an unchunked frame
+ * padded in its JSON section would hand the consumer a small view pinning a
+ * frame-sized backing buffer. Bounding the whole frame bounds that pin to one
+ * chunk per frame.
+ */
+export function unchunkedStreamFrameViolation(
+  frame: MuxFrame,
+  encodedFrameBytes: number,
+): string | null {
+  if (frame.chunked) {
+    return `chunked frame on stream ${frame.streamId}, whose method never chunks`;
+  }
+  const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+  if (encodedFrameBytes > maxFrameBytes) {
+    return `frame of ${encodedFrameBytes} bytes on stream ${frame.streamId} exceeds the ${maxFrameBytes}-byte bound for its method`;
+  }
+  return null;
 }
 
 interface StreamAccumulator {
