@@ -43,8 +43,26 @@ import {
   buildSystemdUnit,
   createLinuxController,
   setRestartStopGracesForTests,
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+  SYSTEMD_UNIT_SERVICE_DIRECTIVES,
+  type ProcessRunner,
 } from "../linux";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  type RunOptions,
+  type RunResult,
+} from "../../process-runner";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+  STDERR_FLUSH_TIMEOUT_MS,
+} from "../../../host/crash-diagnostics";
 import type { ServiceLabel } from "../../label";
 import type { ServiceController } from "../../index";
 
@@ -575,11 +593,11 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
   });
 
   it("the user-facing `host stop` still uses the manager's stop verb - this round does not change that path", async () => {
-    // Repointed from a vacuous assertion (cold review B): the absent
+    // Repointed from a vacuous assertion (cold review B): the unit's
     // `TimeoutStopSec` is not a ceiling the update's ladder sits under, since
     // `systemctl kill` runs no stop job. It IS a live dependency of the plain
     // `host stop` path, which keeps `systemctl stop` and therefore keeps
-    // depending on systemd's 90s default. Pinning that the two paths diverged
+    // depending on the unit's stop bound. Pinning that the two paths diverged
     // is the true proposition.
     const { controller, commands } = recordingController();
 
@@ -664,5 +682,316 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
 
     const flat = commands.map((c) => c.join(" "));
     expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(false);
+  });
+});
+
+// The recycle timeout fix: `systemctl restart`/`start` wait for the job
+// they queue, and a `restart` job's stop half can run the whole
+// `TimeoutStopSec` before the start even begins - so the runner timeout for
+// these calls must outlive that bound, not the old flat 15s. A runner
+// TIMEOUT past the new budget is reported unconfirmed (`systemctlJobFailure`),
+// never as a failed restart/start, because killing `systemctl` withdraws
+// nothing systemd already queued.
+describe("recycle timeout (systemctl restart / start)", () => {
+  interface RecordedRunCall {
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly options: RunOptions;
+  }
+
+  function stageRecycleRunner(
+    verb: "restart" | "start",
+    behavior: (
+      args: readonly string[],
+      options: RunOptions,
+    ) => Promise<RunResult>,
+  ): { calls: RecordedRunCall[]; controller: ServiceController } {
+    const calls: RecordedRunCall[] = [];
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === "systemctl" && args[1] === verb)
+        return behavior(args, options);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    return { calls, controller: createLinuxController(runner) };
+  }
+
+  async function resolveSuccess(): Promise<RunResult> {
+    return { stdout: "", stderr: "", exitCode: 0 };
+  }
+
+  // (b) A simulated duration between the old 15s bound and the new one.
+  async function simulatedTwentySeconds(
+    args: readonly string[],
+    options: RunOptions,
+  ): Promise<RunResult> {
+    const simulatedDurationMs = 20_000;
+    if (simulatedDurationMs > options.timeoutMs) {
+      throw new ProcessRunError(
+        `systemctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+        "systemctl",
+        args,
+        -1,
+        "",
+        "",
+      );
+    }
+    return { stdout: "", stderr: "", exitCode: 0 };
+  }
+
+  // (c) CONTROL: systemd's own answer, not a timeout.
+  async function genuineFailure(
+    verb: string,
+    unit: string,
+    args: readonly string[],
+  ): Promise<RunResult> {
+    throw new ProcessRunError(
+      `systemctl ${args.join(" ")} exited with code 1: Job for ${unit} failed.\n`,
+      "systemctl",
+      args,
+      1,
+      "",
+      `Job for ${unit} failed.\n`,
+    );
+  }
+
+  // (e) PAST THE BOUND: the runner's own timer killed systemctl.
+  async function pastTheBound(args: readonly string[]): Promise<RunResult> {
+    throw new ProcessTimeoutError(
+      `systemctl ${args.join(" ")} timed out after 52000ms (killed via SIGTERM): `,
+      "systemctl",
+      args,
+      -1,
+      "",
+      "",
+      52_000,
+    );
+  }
+
+  const independentFloorMs =
+    SHUTDOWN_FORCE_EXIT_MS +
+    STDERR_END_WAIT_TIMEOUT_MS +
+    STDERR_FLUSH_TIMEOUT_MS +
+    CRASH_REPORT_SCAN_TIMEOUT_MS +
+    STOP_EXIT_GRACE_MARGIN_MS +
+    15_000;
+  const pinnedTimeoutMs = SYSTEMD_TIMEOUT_STOP_SECONDS * 1_000 + 15_000;
+
+  describe("controller.restart / relaunchAfterRestart(forcedRecycle: true)", () => {
+    it("gives systemctl restart a timeout past the stop-job bound", async () => {
+      const { calls, controller } = stageRecycleRunner(
+        "restart",
+        resolveSuccess,
+      );
+
+      await expect(
+        controller.restart(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+
+      const restartCall = calls.find(
+        (c) => c.command === "systemctl" && c.args[1] === "restart",
+      );
+      expect(restartCall?.args).toEqual([
+        "--user",
+        "restart",
+        "ai.traycer.host.dev.service",
+      ]);
+      const timeoutMs = restartCall?.options.timeoutMs;
+      // Independent floor, built only from symbols that exist on the
+      // unmodified code (protocol lifecycle constants + crash-diagnostics
+      // waits + the 15s the start half always had).
+      expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+      expect(timeoutMs).toBe(pinnedTimeoutMs);
+    });
+
+    it("relaunchAfterRestart(forcedRecycle: true) gives systemctl restart the same timeout", async () => {
+      const { calls, controller } = stageRecycleRunner(
+        "restart",
+        resolveSuccess,
+      );
+
+      await expect(
+        controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+          forcedRecycle: true,
+        }),
+      ).resolves.toBeUndefined();
+
+      const restartCall = calls.find(
+        (c) => c.command === "systemctl" && c.args[1] === "restart",
+      );
+      const timeoutMs = restartCall?.options.timeoutMs;
+      expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+      expect(timeoutMs).toBe(pinnedTimeoutMs);
+    });
+
+    it("a restart slower than the old 15s bound but inside the new one still resolves", async () => {
+      const { controller } = stageRecycleRunner(
+        "restart",
+        simulatedTwentySeconds,
+      );
+
+      await expect(
+        controller.restart(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a genuine systemd failure still reports the restart as failed", async () => {
+      const { controller } = stageRecycleRunner("restart", (args) =>
+        genuineFailure("restart", "ai.traycer.host.dev.service", args),
+      );
+
+      await expect(
+        controller.restart(labelFor("ai.traycer.host.dev")),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("systemctl restart failed for"),
+      });
+    });
+
+    it("a runner timeout past the new bound reports the restart as unconfirmed, not failed", async () => {
+      const { controller } = stageRecycleRunner("restart", pastTheBound);
+
+      const rejection: unknown = await controller
+        .restart(labelFor("ai.traycer.host.dev"))
+        .then(() => null)
+        .catch((error: unknown) => error);
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("did not return within 52000ms"),
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("unconfirmed"),
+      });
+      expect(rejection).not.toMatchObject({
+        message: expect.stringContaining("failed for"),
+      });
+      expect(rejection).toMatchObject({
+        details: expect.objectContaining({ timedOut: true, timeoutMs: 52_000 }),
+      });
+    });
+  });
+
+  describe("controller.start", () => {
+    it("gives systemctl start the same timeout as restart", async () => {
+      const { calls, controller } = stageRecycleRunner("start", resolveSuccess);
+
+      await expect(
+        controller.start(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+
+      const startCall = calls.find(
+        (c) => c.command === "systemctl" && c.args[1] === "start",
+      );
+      expect(startCall?.args).toEqual([
+        "--user",
+        "start",
+        "ai.traycer.host.dev.service",
+      ]);
+      const timeoutMs = startCall?.options.timeoutMs;
+      expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+      expect(timeoutMs).toBe(pinnedTimeoutMs);
+    });
+
+    it("a start slower than the old 15s bound but inside the new one still resolves", async () => {
+      const { controller } = stageRecycleRunner(
+        "start",
+        simulatedTwentySeconds,
+      );
+
+      await expect(
+        controller.start(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a genuine systemd failure still reports the start as failed", async () => {
+      const { controller } = stageRecycleRunner("start", (args) =>
+        genuineFailure("start", "ai.traycer.host.dev.service", args),
+      );
+
+      await expect(
+        controller.start(labelFor("ai.traycer.host.dev")),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("systemctl start failed for"),
+      });
+    });
+
+    it("a runner timeout past the new bound reports the start as unconfirmed, not failed", async () => {
+      const { controller } = stageRecycleRunner("start", pastTheBound);
+
+      const rejection: unknown = await controller
+        .start(labelFor("ai.traycer.host.dev"))
+        .then(() => null)
+        .catch((error: unknown) => error);
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("did not return within 52000ms"),
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("unconfirmed"),
+      });
+      expect(rejection).not.toMatchObject({
+        message: expect.stringContaining("failed for"),
+      });
+      expect(rejection).toMatchObject({
+        details: expect.objectContaining({ timedOut: true, timeoutMs: 52_000 }),
+      });
+    });
+  });
+});
+
+// UNIT-TEXT PIN: the exact `[Service]` directives `buildSystemdUnit` emits,
+// in emission order. The internal host's unit reader
+// (`traycer-host/src/domain/update/cli-invocation/legacy-linux.ts`
+// `EMITTED_SERVICE_KEYS` / `EMITTED_SERVICE_VALUES`) mirrors this list and
+// admits nothing else, so a change here needs the same change there.
+describe("systemd unit — [Service] directive pin", () => {
+  it("buildSystemdUnit emits TimeoutStopSec=37 inside [Service]", () => {
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+
+    expect(unit).toContain("\nTimeoutStopSec=37\n");
+
+    const serviceSection = unit
+      .split(/\n\[Service\]\n/)[1]
+      ?.split(/\n\[Install\]/)[0];
+    expect(serviceSection).toBeDefined();
+    const keys = (serviceSection ?? "")
+      .split("\n")
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => line.split("=")[0]);
+
+    expect(keys).toEqual([
+      "Type",
+      "SyslogIdentifier",
+      "ExecStart",
+      "OOMPolicy",
+      "Restart",
+      "RestartSec",
+      "TimeoutStopSec",
+    ]);
+  });
+
+  it("SYSTEMD_UNIT_SERVICE_DIRECTIVES pins the fixed values and their order", () => {
+    expect(SYSTEMD_UNIT_SERVICE_DIRECTIVES).toEqual({
+      Type: "simple",
+      SyslogIdentifier: null,
+      ExecStart: null,
+      OOMPolicy: "continue",
+      Restart: "on-failure",
+      RestartSec: "5",
+      TimeoutStopSec: "37",
+    });
+    expect(Object.keys(SYSTEMD_UNIT_SERVICE_DIRECTIVES)).toEqual([
+      "Type",
+      "SyslogIdentifier",
+      "ExecStart",
+      "OOMPolicy",
+      "Restart",
+      "RestartSec",
+      "TimeoutStopSec",
+    ]);
   });
 });

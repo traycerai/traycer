@@ -10,7 +10,7 @@ import {
 import { hostPidMetadataPath } from "../../store/paths";
 import { probeHostHealth } from "../health-probe";
 import { createCliLogger } from "../../logger";
-import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError, type CliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import {
   getPublishedProcessIdentityVerdict,
@@ -60,6 +60,7 @@ import {
 import {
   ProcessRunError,
   ProcessSpawnError,
+  ProcessTimeoutError,
   runCommand,
   type RunOptions,
   type RunResult,
@@ -2003,18 +2004,50 @@ async function kickstartDesktopAgent(
     await run("launchctl", args, {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      // Only the recycle waits for an old instance to exit; a plain
+      // kickstart has none to wait for.
+      timeoutMs: forcedRecycle ? LAUNCHCTL_RECYCLE_TIMEOUT_MS : 10_000,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
+    if (forcedRecycle) throw recycleFailure(agent.agentLabelId, cause);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `launchctl ${forcedRecycle ? "kickstart -k" : "kickstart"} failed for ${agent.agentLabelId}: ${describeCause(cause)}`,
+      message: `launchctl kickstart failed for ${agent.agentLabelId}: ${describeCause(cause)}`,
       details: { label: agent.agentLabelId, cause: describeCause(cause) },
       exitCode: 1,
     });
   }
+}
+
+// The error for a recycle (`kickstart -k`) that did not complete. Only a
+// runner TIMEOUT is special: launchd may already have accepted the request,
+// and killing `launchctl` withdraws nothing, so the recycle can still finish -
+// which is how the field case ended. Past `LAUNCHCTL_RECYCLE_TIMEOUT_MS` that
+// is an anomaly worth failing on, but the CLI cannot claim the restart FAILED;
+// it can only say it is unconfirmed. Anything else is launchctl's own answer
+// and still reads as a failure.
+function recycleFailure(labelId: string, cause: unknown): CliError {
+  if (cause instanceof ProcessTimeoutError) {
+    return cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `launchctl kickstart -k for ${labelId} did not return within ${cause.timeoutMs}ms, longer than launchd's own bound for stopping and restarting the job; the restart is unconfirmed and launchd may still complete it. Check 'traycer host status' before retrying.`,
+      details: {
+        label: labelId,
+        timedOut: true,
+        timeoutMs: cause.timeoutMs,
+        cause: describeCause(cause),
+      },
+      exitCode: 1,
+    });
+  }
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message: `launchctl kickstart -k failed for ${labelId}: ${describeCause(cause)}`,
+    details: { label: labelId, cause: describeCause(cause) },
+    exitCode: 1,
+  });
 }
 
 // Whether the competing CLI manifest is there. `unreadable` is distinct from
@@ -2732,17 +2765,12 @@ async function restartService(
     await run("launchctl", ["kickstart", "-k", `${guiDomain()}/${label.id}`], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: LAUNCHCTL_RECYCLE_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `launchctl kickstart -k failed for ${label.id}: ${describeCause(cause)}`,
-      details: { label: label.id, cause: describeCause(cause) },
-      exitCode: 1,
-    });
+    throw recycleFailure(label.id, cause);
   }
 }
 
@@ -2800,6 +2828,61 @@ const DESKTOP_APP_BUNDLE_ID = "ai.traycer.desktop";
  * two places writing `10` can, and silently.
  */
 export const LAUNCHD_THROTTLE_INTERVAL_SECONDS = 10;
+
+/**
+ * The most launchd may wait, in SECONDS, between the SIGTERM a recycle sends
+ * the job and the SIGKILL it escalates to: the job's `ExitTimeOut`.
+ *
+ * Neither plist that registers the host sets that key - `buildPlist` below,
+ * and Desktop's SMAppService plist (`inject-host-launch-agent.cjs`) - so the
+ * job runs on launchd's default, which Apple documents only as
+ * "system-defined". Current launchd prints `exit timeout = 5` for these jobs
+ * (the captured `launchctl print` fixtures in `clients/shared/host-lifecycle`,
+ * our own SMAppService agent among them); the open-source launchd's default
+ * was 20. So 20 is a CEILING, not the observed value: a release that moves the
+ * default back toward it must not reopen a false failure.
+ */
+const LAUNCHD_EXIT_TIMEOUT_CEILING_SECONDS = 20;
+
+/**
+ * Headroom above launchd's own bounds for `launchctl` itself to spawn, reach
+ * launchd over XPC and return - the same 10s every other launchctl call in
+ * this file is given in full.
+ */
+const LAUNCHCTL_RECYCLE_MARGIN_MS = 10_000;
+
+/**
+ * The runner timeout for a recycle (`launchctl kickstart -k`), derived from
+ * what launchd itself may make that call wait for.
+ *
+ * `kickstart -k` does the whole recycle before it returns: it SIGTERMs the
+ * running job, waits for it to exit - SIGKILL at `ExitTimeOut` - and then
+ * starts it again, a start launchd may hold back by up to `ThrottleInterval`
+ * (why `installService` avoids `-k` on a healthy host). The job's process is
+ * the `host start` supervisor, so on a restart there is always an exit to
+ * wait for: the stop leaves the supervisor either mid post-mortem, or already
+ * relaunched by `KeepAlive` - a `restart` stop intent makes it exit non-zero
+ * (`RESTART_OWED_EXIT_CODE` in host-start.ts) so the manager owes the
+ * comeback - and a relaunched job is inside its throttle window when the
+ * recycle's start comes due.
+ *
+ * (20s ExitTimeOut ceiling + 10s ThrottleInterval) + 10s margin = 40s. It
+ * also sits inside the 60s host-start adoption window every relaunch
+ * publishes (`HOST_START_ADOPTION_MAX_AGE_MS`), so the supervisor the recycle
+ * starts still finds its grant.
+ *
+ * It was 10s - shorter than launchd's own bound. When that fired, the CLI
+ * killed `launchctl`, which withdraws nothing launchd had accepted, and
+ * reported a failed restart that launchd then finished (field, 2026-09-22:
+ * `kickstart -k` timed out at 10s and the new host was up 3s later). A
+ * timeout past THIS budget is not launchd being slow within its rules, so it
+ * stays a failure - but one reported as unconfirmed, never as a restart that
+ * failed (`recycleFailure`).
+ */
+export const LAUNCHCTL_RECYCLE_TIMEOUT_MS =
+  (LAUNCHD_EXIT_TIMEOUT_CEILING_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
+    1_000 +
+  LAUNCHCTL_RECYCLE_MARGIN_MS;
 
 /**
  * The PATH to bake into the host's LaunchAgent. launchd would otherwise

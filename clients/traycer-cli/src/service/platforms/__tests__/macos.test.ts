@@ -23,6 +23,8 @@ import {
   classifyLaunchdPrintOutput,
   createMacosController,
   isSmAppServiceLaunchAgentPath,
+  LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+  LAUNCHD_THROTTLE_INTERVAL_SECONDS,
   readRegisteredCliInvocation,
   type ProcessRunner,
 } from "../macos";
@@ -33,6 +35,8 @@ import {
 import {
   ProcessRunError,
   ProcessSpawnError,
+  ProcessTimeoutError,
+  type RunOptions,
   type RunResult,
 } from "../../process-runner";
 import type { ServiceController } from "../../index";
@@ -2284,6 +2288,321 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         controller.relaunchAfterRestart(label, { forcedRecycle: false }),
       ).resolves.toBeUndefined();
       expect(calls[1]?.args).toEqual(["kickstart", agentTarget]);
+    });
+  });
+
+  // The recycle timeout fix: `kickstart -k` does the whole stop-then-start
+  // before it returns, so its runner timeout must outlive launchd's own
+  // kill bound (`ExitTimeOut`) plus the throttle the restarted job may then
+  // sit behind - not the old CLI-owned 10s. `LAUNCHCTL_RECYCLE_TIMEOUT_MS`
+  // is the pinned budget; a runner TIMEOUT past it is reported unconfirmed
+  // (`recycleFailure`), never as a failed restart, because killing
+  // `launchctl` withdraws nothing launchd already accepted.
+  describe("recycle timeout (launchctl kickstart -k)", () => {
+    const cliOwnedTarget = `gui/${process.getuid?.() ?? 0}/${label.id}`;
+    const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
+
+    interface RecordedRunCall {
+      readonly command: string;
+      readonly args: readonly string[];
+      readonly options: RunOptions;
+    }
+
+    function isRecycleCall(command: string, args: readonly string[]): boolean {
+      return (
+        command === "launchctl" && args[0] === "kickstart" && args[1] === "-k"
+      );
+    }
+
+    // CLI-owned: no `.agent` label is loaded, so `probeDesktopAgentOwnership`
+    // reads "not Desktop's" from every `print` and every arm goes straight
+    // to `launchctl kickstart -k gui/<uid>/<label.id>`.
+    function stageCliOwnedRecycleRunner(
+      recycleBehavior: (
+        args: readonly string[],
+        options: RunOptions,
+      ) => Promise<RunResult>,
+    ): { calls: RecordedRunCall[]; controller: ServiceController } {
+      const calls: RecordedRunCall[] = [];
+      const runner: ProcessRunner = async (command, args, options) => {
+        calls.push({ command, args, options });
+        if (isRecycleCall(command, args)) return recycleBehavior(args, options);
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    // Desktop-managed: the `.agent` label reads as Desktop's SMAppService
+    // registration, so restart/relaunch route through `kickstartDesktopAgent`
+    // against `gui/<uid>/<label.id>.agent` instead.
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    function stageDesktopManagedRecycleRunner(
+      recycleBehavior: (
+        args: readonly string[],
+        options: RunOptions,
+      ) => Promise<RunResult>,
+    ): { calls: RecordedRunCall[]; controller: ServiceController } {
+      const calls: RecordedRunCall[] = [];
+      const runner: ProcessRunner = async (command, args, options) => {
+        calls.push({ command, args, options });
+        if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+          return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+        }
+        if (isRecycleCall(command, args)) return recycleBehavior(args, options);
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    async function resolveSuccess(): Promise<RunResult> {
+      return buildSuccessResult();
+    }
+
+    // (b) SLOW BUT INSIDE THE BOUND: models what execFile itself would do -
+    // reject with the runner's own timeout wording only if the simulated
+    // duration exceeds the timeout it was actually given.
+    async function slowButWithinBound(
+      args: readonly string[],
+      options: RunOptions,
+    ): Promise<RunResult> {
+      const simulatedDurationMs = 13_000;
+      if (simulatedDurationMs > options.timeoutMs) {
+        throw new ProcessRunError(
+          `launchctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+          "launchctl",
+          args,
+          -1,
+          "",
+          "",
+        );
+      }
+      return buildSuccessResult();
+    }
+
+    // (c) CONTROL: a genuine launchctl failure, not a timeout.
+    async function genuineFailure(args: readonly string[]): Promise<RunResult> {
+      throw buildLaunchctlError({
+        stderr: "Could not kickstart service: 5\n",
+        stdout: "",
+        exitCode: 5,
+        command: "launchctl",
+        cmdArgs: args,
+      });
+    }
+
+    // (e) PAST THE BOUND: the runner's own timer killed the child.
+    async function pastTheBound(args: readonly string[]): Promise<RunResult> {
+      throw new ProcessTimeoutError(
+        `launchctl ${args.join(" ")} timed out after 40000ms (killed via SIGTERM): `,
+        "launchctl",
+        args,
+        -1,
+        "",
+        "",
+        40_000,
+      );
+    }
+
+    describe("CLI-owned path", () => {
+      it("controller.restart gives kickstart -k a timeout past launchd's own bound", async () => {
+        const { calls, controller } =
+          stageCliOwnedRecycleRunner(resolveSuccess);
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", cliOwnedTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        // Independent floor, built only from symbols that exist on the
+        // unmodified code: 20s launchd ExitTimeOut ceiling + ThrottleInterval.
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      it("relaunchAfterRestart(forcedRecycle: true) gives kickstart -k the same timeout", async () => {
+        const { calls, controller } =
+          stageCliOwnedRecycleRunner(resolveSuccess);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", cliOwnedTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - restart()", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(slowButWithinBound);
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - relaunchAfterRestart()", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(slowButWithinBound);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+      });
+
+      it("a genuine launchctl failure still reports the restart as failed", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(genuineFailure);
+
+        await expect(controller.restart(label)).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("launchctl kickstart -k failed for"),
+        });
+      });
+
+      it("a runner timeout past the new bound reports the restart as unconfirmed, not failed", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(pastTheBound);
+
+        const rejection: unknown = await controller
+          .restart(label)
+          .then(() => null)
+          .catch((error: unknown) => error);
+        expect(rejection).toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("did not return within 40000ms"),
+        });
+        expect(rejection).toMatchObject({
+          message: expect.stringContaining("unconfirmed"),
+        });
+        expect(rejection).not.toMatchObject({
+          message: expect.stringContaining("failed for"),
+        });
+        expect(rejection).toMatchObject({
+          details: expect.objectContaining({
+            timedOut: true,
+            timeoutMs: 40_000,
+          }),
+        });
+      });
+    });
+
+    describe("Desktop-managed path", () => {
+      it("restart of an unreachable host gives kickstart -k a timeout past launchd's own bound", async () => {
+        const { calls, controller } =
+          stageDesktopManagedRecycleRunner(resolveSuccess);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", agentTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      it("relaunchAfterRestart(forcedRecycle: true) gives kickstart -k the same timeout", async () => {
+        const { calls, controller } =
+          stageDesktopManagedRecycleRunner(resolveSuccess);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", agentTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      // Control: a plain kickstart (the cooperative "already stopped"
+      // restart) has no old instance to wait for, so it keeps the 10s bound
+      // - only a recycle's timeout moved.
+      it("a plain kickstart (cooperative restart) keeps the 10s timeout", async () => {
+        const { calls, controller } =
+          stageDesktopManagedRecycleRunner(resolveSuccess);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        const plainKickstartCall = calls.find(
+          (c) => c.command === "launchctl" && c.args[0] === "kickstart",
+        );
+        expect(plainKickstartCall?.args).toEqual(["kickstart", agentTarget]);
+        expect(plainKickstartCall?.options.timeoutMs).toBe(10_000);
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - restart()", async () => {
+        const { controller } =
+          stageDesktopManagedRecycleRunner(slowButWithinBound);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - relaunchAfterRestart()", async () => {
+        const { controller } =
+          stageDesktopManagedRecycleRunner(slowButWithinBound);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+      });
+
+      it("a genuine launchctl failure still reports the restart as failed", async () => {
+        const { controller } = stageDesktopManagedRecycleRunner(genuineFailure);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        await expect(controller.restart(label)).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("launchctl kickstart -k failed for"),
+        });
+      });
+
+      it("a runner timeout past the new bound reports the restart as unconfirmed, not failed", async () => {
+        const { controller } = stageDesktopManagedRecycleRunner(pastTheBound);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        const rejection: unknown = await controller
+          .restart(label)
+          .then(() => null)
+          .catch((error: unknown) => error);
+        expect(rejection).toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("did not return within 40000ms"),
+        });
+        expect(rejection).toMatchObject({
+          message: expect.stringContaining("unconfirmed"),
+        });
+        expect(rejection).not.toMatchObject({
+          message: expect.stringContaining("failed for"),
+        });
+        expect(rejection).toMatchObject({
+          details: expect.objectContaining({
+            timedOut: true,
+            timeoutMs: 40_000,
+          }),
+        });
+      });
     });
   });
 

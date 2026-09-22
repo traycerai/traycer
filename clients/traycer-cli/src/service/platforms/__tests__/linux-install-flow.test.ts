@@ -14,10 +14,25 @@ import {
 import {
   createLinuxController,
   setRestartStopGracesForTests,
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
   type ProcessRunner,
 } from "../linux";
 import { serviceManifestPath, type ServiceLabel } from "../../label";
-import { ProcessRunError, type RunResult } from "../../process-runner";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  type RunOptions,
+  type RunResult,
+} from "../../process-runner";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+  STDERR_FLUSH_TIMEOUT_MS,
+} from "../../../host/crash-diagnostics";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
 
@@ -305,9 +320,109 @@ describe("linux service install flow", () => {
   });
 });
 
+// The recycle timeout fix, on the `enable --now` leg of install: it queues
+// the same kind of start job `start`/`restart` do, so it needs the same
+// widened runner timeout - not the old flat 15s.
+describe("linux service install — enable --now recycle timeout", () => {
+  interface RecordedCallWithOptions extends RecordedCall {
+    readonly options: RunOptions;
+  }
+
+  function stageEnableNowRunner(
+    behavior: (
+      args: readonly string[],
+      options: RunOptions,
+    ) => Promise<RunResult>,
+  ): { calls: RecordedCallWithOptions[]; runner: ProcessRunner } {
+    const calls: RecordedCallWithOptions[] = [];
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === "systemctl" && args[1] === "enable") {
+        return behavior(args, options);
+      }
+      return ok();
+    };
+    return { calls, runner };
+  }
+
+  const independentFloorMs =
+    SHUTDOWN_FORCE_EXIT_MS +
+    STDERR_END_WAIT_TIMEOUT_MS +
+    STDERR_FLUSH_TIMEOUT_MS +
+    CRASH_REPORT_SCAN_TIMEOUT_MS +
+    STOP_EXIT_GRACE_MARGIN_MS +
+    15_000;
+  const pinnedTimeoutMs = SYSTEMD_TIMEOUT_STOP_SECONDS * 1_000 + 15_000;
+
+  it("gives enable --now a timeout past the stop-job bound", async () => {
+    const { calls, runner } = stageEnableNowRunner(async () => ok());
+
+    await installWith(runner);
+
+    const enableCall = calls.find(
+      (c) => c.command === "systemctl" && c.args[1] === "enable",
+    );
+    expect(enableCall?.args).toEqual([
+      "--user",
+      "enable",
+      "--now",
+      `${label.id}.service`,
+    ]);
+    const timeoutMs = enableCall?.options.timeoutMs;
+    // Independent floor, built only from symbols that exist on the
+    // unmodified code (protocol lifecycle constants + crash-diagnostics
+    // waits + the 15s the start half always had).
+    expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+    expect(timeoutMs).toBe(pinnedTimeoutMs);
+  });
+
+  it("an enable --now slower than the old 15s bound but inside the new one still resolves", async () => {
+    const { runner } = stageEnableNowRunner(async (args, options) => {
+      const simulatedDurationMs = 20_000;
+      if (simulatedDurationMs > options.timeoutMs) {
+        throw new ProcessRunError(
+          `systemctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+          "systemctl",
+          args,
+          -1,
+          "",
+          "",
+        );
+      }
+      return ok();
+    });
+
+    await expect(installWith(runner)).resolves.toBeUndefined();
+  });
+
+  it("a runner timeout past the new bound still fails the install (rollback, not 'unconfirmed')", async () => {
+    // `enable --now`'s catch is install's own rollback path
+    // (SERVICE_INSTALL_FAILED), not `systemctlJobFailure` - a partially
+    // registered unit must not be left behind just because the failure was
+    // a timeout rather than systemd's own answer.
+    const { runner } = stageEnableNowRunner(async (args) => {
+      throw new ProcessTimeoutError(
+        `systemctl ${args.join(" ")} timed out after 52000ms (killed via SIGTERM): `,
+        "systemctl",
+        args,
+        -1,
+        "",
+        "",
+        52_000,
+      );
+    });
+
+    await expect(installWith(runner)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(await fileExists(unitFile())).toBe(false);
+  });
+});
+
 // `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN
-// when it returns (the runner caps the subprocess at 15s; the unit inherits
-// systemd's 90s default TimeoutStopSec), so force confirms through the
+// when it returns (the runner caps the subprocess at 15s; the unit's stop job
+// may run for its whole TimeoutStopSec - 37s, or systemd's 90s default on a
+// unit not yet re-registered), so force confirms through the
 // unit's OWN state - `systemctl is-active`, never a pid - and escalates to
 // `systemctl kill --signal=SIGKILL` when the plain stop does not settle it
 // in time. Graces mirror the macOS/desktop-agent force-stop margins
