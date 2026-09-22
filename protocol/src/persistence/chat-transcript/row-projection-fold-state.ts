@@ -324,37 +324,42 @@ export function transcriptMessageFoldFactsEqual(
 export const TRANSCRIPT_FOLD_STATE_VERSION = 1;
 
 /**
- * The span of the record walk the increment re-runs.
+ * Where the record walk the increment re-runs starts.
  *
  * The session anchor and the legacy anchor timestamp are running values over
  * user records, and the profile walk counts dispatch attempts per span between
  * user records. None of them can be continued from the end of the chat when a
- * record in the middle changes - so the state keeps the walk's inputs as of a
- * user record near the tail, and everything from that record on is re-walked
- * whenever its walk facts move. A walk fact changing BEFORE it is the one case
- * the increment cannot absorb, and it declines.
+ * record in the middle changes - so the state keeps the walk's running values
+ * as of a record near the tail, and everything from that record on is
+ * re-walked, over fold facts and never bodies, whenever a walk fact there
+ * moves. A walk fact moving BEFORE it widens that walk to the whole chat -
+ * still facts only - rather than declining the increment; only the turns whose
+ * walked state then differs from their stored state are re-described.
+ *
+ * The region never splits a turn: every record of a turn is on one side of
+ * {@link TranscriptWalkRegion.from}. A new record for a turn that started
+ * before it widens the walk too.
  */
 export interface TranscriptWalkRegion {
-  /**
-   * The position of the live user record that opens the region, or `null` for
-   * a region that is the whole chat (no user record has been walked past yet).
-   */
+  /** The position the region starts at, or `null` for the whole chat. */
   readonly from: number | null;
   /** The session anchor in effect just before {@link from}. */
   readonly anchorBefore: ChatSessionAnchor | null;
   /** `lastUserTimestamp` just before {@link from}. */
   readonly lastUserTimestampBefore: number | null;
   /**
-   * Turns with records on BOTH sides of {@link from}, each with whether a span
-   * before it already marked the turn as sharing its user row with another
-   * attempt. A span before the region is never re-walked, so its marks are
-   * carried here.
-   *
-   * A turn absent from this map had no record at or after {@link from} when
-   * the region was set; if it gains one, its stored unit state is what says
-   * whether an earlier span marked it (see `foldTranscriptRows`).
+   * The attempt turn keys the span {@link from} falls in collected before it,
+   * in first-seen order. Records at or after {@link from} can still add
+   * attempts to that span, and two or more mark every turn in it - these
+   * included.
    */
-  readonly straddling: Readonly<Record<string, boolean>>;
+  readonly spanKeysBefore: readonly string[];
+  /**
+   * Which of {@link spanKeysBefore} an EARLIER span marked. Every record of
+   * those turns is before {@link from}, so this never moves; it is what lets
+   * the span's own mark be re-decided for them without walking back.
+   */
+  readonly spanKeysMarkedElsewhere: readonly string[];
 }
 
 export interface TranscriptFoldState {
@@ -399,7 +404,8 @@ export const EMPTY_TRANSCRIPT_FOLD_STATE: TranscriptFoldState = {
     from: null,
     anchorBefore: null,
     lastUserTimestampBefore: null,
-    straddling: {},
+    spanKeysBefore: [],
+    spanKeysMarkedElsewhere: [],
   },
   openTurnKeys: [],
   steerTargets: {},
@@ -483,9 +489,17 @@ export interface StoredTranscriptRow {
  */
 export type TranscriptFoldLoad =
   | {
-      /** Messages at or after `position`; every message when `null`. */
-      readonly kind: "messages-from";
+      /**
+       * The stored fold facts of every message at or after `position`; of
+       * every message when `null`.
+       */
+      readonly kind: "facts-from";
       readonly position: number | null;
+    }
+  | {
+      /** The stored fold facts of every message of these turns. */
+      readonly kind: "facts-of-turns";
+      readonly turnKeys: readonly string[];
     }
   | {
       /** Every message whose `assistantTurnKey` is one of these. */
@@ -536,8 +550,16 @@ export interface PositionedTurnEvent extends PositionedEvent {
   readonly rowTurnKey: string;
 }
 
+/** A message's fold facts as the store holds them. */
+export interface PositionedMessageFacts {
+  readonly position: number;
+  readonly messageId: string;
+  readonly facts: TranscriptMessageFoldFacts;
+}
+
 export type TranscriptFoldLoadResult =
   | { readonly kind: "messages"; readonly messages: readonly PositionedMessage[] }
+  | { readonly kind: "facts"; readonly facts: readonly PositionedMessageFacts[] }
   | { readonly kind: "events"; readonly events: readonly PositionedEvent[] }
   | {
       /** The answer to `events-of-turns`. */

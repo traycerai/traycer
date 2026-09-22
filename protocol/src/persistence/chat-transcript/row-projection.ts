@@ -50,6 +50,7 @@ import {
   userRowUnitKey,
   type PositionedEvent,
   type PositionedMessage,
+  type PositionedMessageFacts,
   type PositionedTurnEvent,
   type StoredTranscriptRow,
   type TranscriptFoldChange,
@@ -1006,19 +1007,38 @@ export function foldTranscriptRowsInMemory(
     }
     held.push(positioned);
   }
+  const factsByPosition = new Map<number, PositionedMessageFacts>();
+  const factsOf = (positioned: PositionedMessage): PositionedMessageFacts => {
+    const held = factsByPosition.get(positioned.position);
+    if (held !== undefined) return held;
+    const facts: PositionedMessageFacts = {
+      position: positioned.position,
+      messageId: positioned.message.messageId,
+      facts: transcriptMessageFoldFacts(positioned.message),
+    };
+    factsByPosition.set(positioned.position, facts);
+    return facts;
+  };
   const answer = (load: TranscriptFoldLoad): TranscriptFoldLoadResult => {
     switch (load.kind) {
-      case "messages-from":
+      case "facts-from": {
+        const from = load.position;
         return {
-          kind: "messages",
-          messages:
-            load.position === null
-              ? input.messages
-              : input.messages.filter(
-                  (positioned) =>
-                    load.position !== null &&
-                    positioned.position >= load.position,
-                ),
+          kind: "facts",
+          facts: input.messages.flatMap((positioned) =>
+            from === null || positioned.position >= from
+              ? [factsOf(positioned)]
+              : [],
+          ),
+        };
+      }
+      case "facts-of-turns":
+        return {
+          kind: "facts",
+          facts: load.turnKeys
+            .flatMap((turnKey) => messagesByTurnKey.get(turnKey) ?? [])
+            .sort((a, b) => a.position - b.position)
+            .map(factsOf),
         };
       case "messages-of-turns":
         return {
@@ -1172,47 +1192,62 @@ const ROW_RELEVANT_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
 ]);
 
 /**
- * How many user records the walk region may span before a turn that never
- * reached a terminal event stops holding it open. The region is re-walked on
- * every change to its records' walk facts, so an abandoned turn must not pin
- * it forever; releasing one only means a later walk-fact change to its records
- * is answered by a full run.
+ * How many turns may start after a turn that never reached a terminal event
+ * before it stops holding the walk region open. An abandoned turn must not pin
+ * the region forever; releasing one only means a later record of it widens
+ * one walk to the whole chat.
  */
-const MAX_WALK_REGION_USER_RECORDS = 32;
+const MAX_TURNS_AFTER_OPEN_TURN = 32;
 
-interface FoldTurnRecords {
-  readonly turn: DurableTurnAccumulator;
-  readonly records: readonly PositionedMessage[];
+/**
+ * How many turns may start after the last user record for the region to still
+ * reach back to it. A provider fallback re-dispatches the last user message and
+ * then rewrites that record's session anchor, so the region covers it while the
+ * chat is still answering it - but an agent chat whose last user message was
+ * followed by many autonomous turns would otherwise re-walk all of them on
+ * every change.
+ */
+const MAX_TURNS_AFTER_LAST_USER = 8;
+
+/** What the walk reads of one turn, folded from its records' fold facts. */
+interface FoldTurnFacts {
   readonly firstPosition: number;
+  readonly lastPosition: number;
+  /** Classified from the turn's first block-bearing record, as the profile walk does. */
   readonly autonomous: boolean;
+  /** Whether any record of the turn states its own profile. */
   readonly recorded: boolean;
+  /** Every user message a steer block of the turn names. */
+  readonly steerTargets: ReadonlySet<string>;
 }
 
-function foldTurnRecords(
-  turnKey: string,
-  records: readonly PositionedMessage[],
-): FoldTurnRecords | null {
-  const assistants: AssistantMessage[] = [];
-  for (const positioned of records) {
-    if (positioned.message.role === "assistant") {
-      assistants.push(positioned.message);
+function foldTurnFacts(
+  records: readonly PositionedMessageFacts[],
+): FoldTurnFacts | null {
+  const ordered = [...records].sort((a, b) => a.position - b.position);
+  let firstPosition: number | null = null;
+  let lastPosition = 0;
+  let autonomous: boolean | null = null;
+  let recorded = false;
+  const steerTargets = new Set<string>();
+  for (const positioned of ordered) {
+    const facts = positioned.facts;
+    if (facts.role !== "assistant") continue;
+    if (firstPosition === null) firstPosition = positioned.position;
+    lastPosition = positioned.position;
+    if (facts.hasTurnProfile) recorded = true;
+    if (autonomous === null && facts.hasBlocks) {
+      autonomous = facts.opensAutonomous;
     }
+    for (const messageId of facts.steerTargets) steerTargets.add(messageId);
   }
-  const first = records.at(0);
-  if (first === undefined) return null;
-  const turn = accumulateDurableTurns(assistants).get(turnKey);
-  if (turn === undefined) return null;
-  const firstBlockBearing = assistants.find(
-    (message) => message.blocks.length > 0,
-  );
+  if (firstPosition === null) return null;
   return {
-    turn,
-    records,
-    firstPosition: first.position,
-    autonomous:
-      firstBlockBearing !== undefined &&
-      turnOpensWithAutonomousResume(firstBlockBearing.blocks),
-    recorded: assistants.some((message) => message.turnProfile !== undefined),
+    firstPosition,
+    lastPosition,
+    autonomous: autonomous ?? false,
+    recorded,
+    steerTargets,
   };
 }
 
@@ -1228,6 +1263,20 @@ function* loadMessages(
     throw new Error(`row fold: ${load.kind} answered with ${result.kind}`);
   }
   return result.messages;
+}
+
+function* loadFacts(
+  load: TranscriptFoldLoad,
+): Generator<
+  TranscriptFoldLoad,
+  readonly PositionedMessageFacts[],
+  TranscriptFoldLoadResult
+> {
+  const result = yield load;
+  if (result.kind !== "facts") {
+    throw new Error(`row fold: ${load.kind} answered with ${result.kind}`);
+  }
+  return result.facts;
 }
 
 function* loadEvents(
@@ -1287,15 +1336,13 @@ function addToList(
   lists: Map<string, string[]>,
   key: string,
   value: string,
-): boolean {
+): void {
   const held = lists.get(key);
   if (held === undefined) {
     lists.set(key, [value]);
-    return true;
+    return;
   }
-  if (held.includes(value)) return false;
-  held.push(value);
-  return true;
+  if (!held.includes(value)) held.push(value);
 }
 
 function removeFromList(
@@ -1350,6 +1397,18 @@ function wovenOrder(input: {
   };
 }
 
+function assistantTurnKeysOf(
+  facts: readonly PositionedMessageFacts[],
+): ReadonlySet<string> {
+  const turnKeys = new Set<string>();
+  for (const positioned of facts) {
+    if (positioned.facts.role === "assistant") {
+      turnKeys.add(positioned.facts.turnKey);
+    }
+  }
+  return turnKeys;
+}
+
 interface WalkEntry {
   readonly sessionAnchor: ChatSessionAnchor | null;
   readonly lastUserTimestamp: number | null;
@@ -1366,16 +1425,22 @@ interface WalkEntry {
  * badge reaches that row because the retracted set is state, not because
  * anything searched for it.
  *
+ * The record walk - session anchor, legacy anchor timestamp, the profile
+ * walk's attempt spans - runs over fold facts from the state's
+ * {@link TranscriptWalkRegion}, and widens to the whole chat (facts only)
+ * when a change reaches before it. Only the turns whose walked state then
+ * differs from what their rows were projected with are re-described.
+ *
  * Sans-IO: records it does not hold it asks for by yielding a
  * {@link TranscriptFoldLoad}, and the driver resumes it with the answer. The
  * in-memory driver ({@link foldTranscriptRowsInMemory}) answers from arrays; a
  * store answers from its tables.
  *
- * It DECLINES (`continued: false`) - and the caller runs the full fold - when
- * the change reaches a part of history whose running values it no longer
- * holds: a record before the walk region removed or given different walk
- * facts, a steer target before it gaining or losing its nesting, a
- * row-relevant event rewritten in place, or state written by another version.
+ * It DECLINES (`continued: false`) - and the caller runs the full fold - only
+ * on what no running value can absorb: a record inserted below the positions
+ * already folded or moved in place, a row-relevant event rewritten in place,
+ * state or fold facts written by another version, and a turn with rows but no
+ * stored walk state (a corrupt index).
  */
 export function* foldTranscriptRows(
   prior: TranscriptFoldState,
@@ -1393,18 +1458,19 @@ export function* foldTranscriptRows(
   }
 
   const region = prior.region;
-  const inRegion = (position: number): boolean =>
-    region.from === null || position >= region.from;
+  const regionFrom = region.from;
+  const beforeRegion = (position: number): boolean =>
+    regionFrom !== null && position < regionFrom;
 
+  // Units whose rows this change re-describes.
   const touchedTurns = new Set<string>();
   const touchedUsers = new Set<string>();
-  // Users whose record appeared or disappeared: the rows that only EXIST when
-  // a user record does (steer rows naming it, stopped rows it triggered) move.
-  const existenceChangedUsers = new Set<string>();
   // Turns whose records this change wrote - live activity, which holds the
   // walk region open as `turn.started` does.
   const recordTouchedTurns = new Set<string>();
   let walkNeeded = false;
+  // Whether the walk has to start before the region.
+  let widen = false;
   let messagesThrough = prior.messagesThrough;
 
   const noteFacts = (
@@ -1421,7 +1487,6 @@ export function* foldTranscriptRows(
 
   for (const touch of change.upsertedMessages) {
     const facts = transcriptMessageFoldFacts(touch.message);
-    const messageId = touch.message.messageId;
     if (touch.previous === null) {
       if (
         prior.messagesThrough !== null &&
@@ -1430,7 +1495,6 @@ export function* foldTranscriptRows(
         return notContinued("a message was inserted below the folded positions");
       }
       walkNeeded = true;
-      if (facts.role === "user") existenceChangedUsers.add(messageId);
     } else {
       if (touch.previous.facts.v !== TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION) {
         return notContinued("a message's stored fold facts are another version");
@@ -1439,31 +1503,21 @@ export function* foldTranscriptRows(
         return notContinued("a message changed position in place");
       }
       if (!transcriptMessageFoldFactsEqual(touch.previous.facts, facts)) {
-        if (!inRegion(touch.position)) {
-          return notContinued("walk facts changed before the walk region");
-        }
         walkNeeded = true;
-        noteFacts(touch.previous.facts, messageId);
+        if (beforeRegion(touch.position)) widen = true;
+        noteFacts(touch.previous.facts, touch.message.messageId);
       }
     }
-    noteFacts(facts, messageId);
+    noteFacts(facts, touch.message.messageId);
     messagesThrough = maxPosition(messagesThrough, touch.position);
   }
   for (const removal of change.removedMessages) {
     if (removal.facts.v !== TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION) {
       return notContinued("a message's stored fold facts are another version");
     }
-    if (!inRegion(removal.position)) {
-      return notContinued("a message before the walk region was removed");
-    }
-    if (region.from !== null && removal.position === region.from) {
-      return notContinued("the walk region's opening record was removed");
-    }
     walkNeeded = true;
+    if (beforeRegion(removal.position)) widen = true;
     noteFacts(removal.facts, removal.messageId);
-    if (removal.facts.role === "user") {
-      existenceChangedUsers.add(removal.messageId);
-    }
   }
 
   // --- Events: every event-side fold continues from its persisted value. ---
@@ -1597,97 +1651,76 @@ export function* foldTranscriptRows(
     if (change.activeTurnId !== null) touchedTurns.add(change.activeTurnId);
   }
 
-  // --- Records. ---
-  const liveUsers = new Map<string, PositionedMessage>();
-  const absentUsers = new Set<string>();
-  const turnRecords = new Map<string, readonly PositionedMessage[]>();
-  let regionMessages: readonly PositionedMessage[] = [];
-  const regionTurnKeys = new Set<string>();
-  if (walkNeeded) {
-    regionMessages = yield* loadMessages({
-      kind: "messages-from",
-      position: region.from,
+  // --- Turn facts, and the steer targets they name. ---
+  const turnFacts = new Map<string, FoldTurnFacts | null>();
+  const loadTurnFacts = function* (
+    turnKeys: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(turnKeys)].filter(
+      (turnKey) => !turnFacts.has(turnKey),
+    );
+    if (missing.length === 0) return;
+    const byTurn = new Map<string, PositionedMessageFacts[]>();
+    for (const turnKey of missing) byTurn.set(turnKey, []);
+    const loaded = yield* loadFacts({
+      kind: "facts-of-turns",
+      turnKeys: missing,
     });
-    if (region.from !== null) {
-      const opener = regionMessages.at(0);
-      if (
-        opener === undefined ||
-        opener.position !== region.from ||
-        opener.message.role !== "user"
-      ) {
-        return notContinued("the walk region's opening record is missing");
-      }
+    for (const positioned of loaded) {
+      if (positioned.facts.role !== "assistant") continue;
+      byTurn.get(positioned.facts.turnKey)?.push(positioned);
     }
-    for (const positioned of regionMessages) {
-      const message = positioned.message;
-      if (message.role === "user") {
-        liveUsers.set(message.messageId, positioned);
-        touchedUsers.add(message.messageId);
-        continue;
-      }
-      const turnKey = assistantTurnKey(message);
-      regionTurnKeys.add(turnKey);
-      touchedTurns.add(turnKey);
+    for (const [turnKey, records] of byTurn) {
+      turnFacts.set(turnKey, foldTurnFacts(records));
     }
-  }
+  };
 
   // Steer targets move with the turns whose records moved, and every turn a
-  // touched user is steered into or stopped by has to be re-described with
-  // it. Expanding one can expand the other, so run to a fixpoint.
+  // touched user is steered into or stopped by is re-described with it -
+  // those rows render the user record. Expanding one can expand the other, so
+  // run to a fixpoint. A turn whose records did not move keeps its targets.
   const steerTargets = listsFrom(prior.steerTargets);
-  const targetsByTurn = new Map<string, Set<string>>();
+  const targetsByTurn = new Map<string, ReadonlySet<string>>();
   for (const [messageId, turnKeys] of steerTargets) {
     for (const turnKey of turnKeys) {
-      const held = targetsByTurn.get(turnKey);
-      if (held === undefined) {
-        targetsByTurn.set(turnKey, new Set([messageId]));
-      } else {
-        held.add(messageId);
-      }
+      targetsByTurn.set(
+        turnKey,
+        new Set([...(targetsByTurn.get(turnKey) ?? []), messageId]),
+      );
     }
   }
+  const isNested = (messageId: string): boolean =>
+    (steerTargets.get(messageId)?.length ?? 0) > 0;
+  const wasNested = (messageId: string): boolean =>
+    (prior.steerTargets[messageId]?.length ?? 0) > 0;
+  const retargeted = new Set<string>();
   const nestingCandidates = new Set<string>();
   const expandedUsers = new Set<string>();
   for (;;) {
-    const missing = [...touchedTurns].filter((key) => !turnRecords.has(key));
-    if (missing.length > 0) {
-      const loaded = yield* loadMessages({
-        kind: "messages-of-turns",
-        turnKeys: missing,
-      });
-      const byTurn = new Map<string, PositionedMessage[]>();
-      for (const turnKey of missing) byTurn.set(turnKey, []);
-      for (const positioned of loaded) {
-        if (positioned.message.role !== "assistant") continue;
-        byTurn.get(assistantTurnKey(positioned.message))?.push(positioned);
+    yield* loadTurnFacts(touchedTurns);
+    for (const turnKey of touchedTurns) {
+      if (retargeted.has(turnKey)) continue;
+      retargeted.add(turnKey);
+      const next = turnFacts.get(turnKey)?.steerTargets ?? new Set<string>();
+      const before = targetsByTurn.get(turnKey) ?? new Set<string>();
+      for (const messageId of before) {
+        if (next.has(messageId)) continue;
+        removeFromList(steerTargets, messageId, turnKey);
+        nestingCandidates.add(messageId);
       }
-      for (const [turnKey, records] of byTurn) {
-        turnRecords.set(turnKey, records);
-        const next = new Set<string>();
-        for (const positioned of records) {
-          if (positioned.message.role !== "assistant") continue;
-          for (const block of positioned.message.blocks) {
-            if (block.type === "steer") next.add(block.messageId);
-          }
-        }
-        const before = targetsByTurn.get(turnKey) ?? new Set<string>();
-        for (const messageId of before) {
-          if (next.has(messageId)) continue;
-          removeFromList(steerTargets, messageId, turnKey);
-          nestingCandidates.add(messageId);
-        }
-        for (const messageId of next) {
-          if (before.has(messageId)) continue;
-          addToList(steerTargets, messageId, turnKey);
-          nestingCandidates.add(messageId);
-        }
-        targetsByTurn.set(turnKey, next);
+      for (const messageId of next) {
+        if (before.has(messageId)) continue;
+        addToList(steerTargets, messageId, turnKey);
+        nestingCandidates.add(messageId);
       }
+      targetsByTurn.set(turnKey, next);
     }
+    // A user record that became, or stopped being, a nested steer gains or
+    // loses its own row.
     for (const messageId of nestingCandidates) {
-      const wasNested = (prior.steerTargets[messageId]?.length ?? 0) > 0;
-      const isNested = (steerTargets.get(messageId)?.length ?? 0) > 0;
-      if (wasNested !== isNested) touchedUsers.add(messageId);
+      if (wasNested(messageId) !== isNested(messageId)) {
+        touchedUsers.add(messageId);
+      }
     }
     let grew = false;
     for (const messageId of touchedUsers) {
@@ -1696,9 +1729,7 @@ export function* foldTranscriptRows(
       const related = [
         ...(prior.steerTargets[messageId] ?? []),
         ...(steerTargets.get(messageId) ?? []),
-        ...(existenceChangedUsers.has(messageId)
-          ? (stopTriggers.get(messageId) ?? [])
-          : []),
+        ...(stopTriggers.get(messageId) ?? []),
       ];
       for (const turnKey of related) {
         if (touchedTurns.has(turnKey)) continue;
@@ -1706,28 +1737,302 @@ export function* foldTranscriptRows(
         grew = true;
       }
     }
-    if (!grew && [...touchedTurns].every((key) => turnRecords.has(key))) {
-      break;
+    if (!grew) break;
+  }
+
+  // --- User records. ---
+  const liveUsers = new Map<string, PositionedMessage>();
+  const absentUsers = new Set<string>();
+  const loadUsers = function* (
+    messageIds: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(messageIds)].filter(
+      (messageId) => !liveUsers.has(messageId) && !absentUsers.has(messageId),
+    );
+    if (missing.length === 0) return;
+    const loaded = yield* loadMessages({
+      kind: "messages-by-id",
+      messageIds: missing,
+    });
+    for (const positioned of loaded) {
+      if (positioned.message.role !== "user") continue;
+      liveUsers.set(positioned.message.messageId, positioned);
+    }
+    for (const messageId of missing) {
+      if (!liveUsers.has(messageId)) absentUsers.add(messageId);
+    }
+  };
+  yield* loadUsers(touchedUsers);
+
+  // A user record whose nesting flipped moves the running `lastUserTimestamp`
+  // from its position on.
+  for (const messageId of nestingCandidates) {
+    if (wasNested(messageId) === isNested(messageId)) continue;
+    const record = liveUsers.get(messageId);
+    if (record === undefined) continue;
+    walkNeeded = true;
+    if (beforeRegion(record.position)) widen = true;
+  }
+
+  // --- The walk, over fold facts. ---
+  const walkedEntries = new Map<string, WalkEntry>();
+  const walkedUnprovable = new Map<string, boolean>();
+  let nextRegion: TranscriptWalkRegion = region;
+  let nextOpenTurns: readonly string[] = [...openTurns];
+  if (walkNeeded) {
+    let walkRegion: TranscriptWalkRegion = widen
+      ? EMPTY_TRANSCRIPT_FOLD_STATE.region
+      : region;
+    let walkFacts = yield* loadFacts({
+      kind: "facts-from",
+      position: walkRegion.from,
+    });
+    let walkTurnKeys = assistantTurnKeysOf(walkFacts);
+    yield* loadTurnFacts([
+      ...walkTurnKeys,
+      ...walkRegion.spanKeysBefore,
+      ...openTurns,
+    ]);
+    const walkFrom = walkRegion.from;
+    if (
+      walkFrom !== null &&
+      [...walkTurnKeys].some(
+        (turnKey) => (turnFacts.get(turnKey)?.firstPosition ?? walkFrom) < walkFrom,
+      )
+    ) {
+      // A turn that started before the region gained a record there.
+      walkRegion = EMPTY_TRANSCRIPT_FOLD_STATE.region;
+      walkFacts = yield* loadFacts({ kind: "facts-from", position: null });
+      walkTurnKeys = assistantTurnKeysOf(walkFacts);
+      yield* loadTurnFacts(walkTurnKeys);
+    }
+
+    // Where the next region starts: as late as the tail allows, and never
+    // inside a turn.
+    const turnsByFirst = [...walkTurnKeys]
+      .flatMap((turnKey) => {
+        const folded = turnFacts.get(turnKey) ?? null;
+        return folded === null ? [] : [{ turnKey, folded }];
+      })
+      .sort((a, b) => a.folded.firstPosition - b.folded.firstPosition);
+    const turnsStartingAfter = (position: number): number =>
+      turnsByFirst.filter((turn) => turn.folded.firstPosition > position)
+        .length;
+    let seat = Number.POSITIVE_INFINITY;
+    // The last two turns, so a retry or a late record of either stays inside.
+    const keptTurn = turnsByFirst.at(-2) ?? turnsByFirst.at(-1);
+    if (keptTurn !== undefined) {
+      seat = Math.min(seat, keptTurn.folded.firstPosition);
+    }
+    let lastUserPosition: number | null = null;
+    for (const positioned of walkFacts) {
+      if (positioned.facts.role === "user") {
+        lastUserPosition = positioned.position;
+      }
+    }
+    if (
+      lastUserPosition !== null &&
+      turnsStartingAfter(lastUserPosition) <= MAX_TURNS_AFTER_LAST_USER
+    ) {
+      seat = Math.min(seat, lastUserPosition);
+    }
+    const releasedTurns = new Set<string>();
+    for (const turnKey of new Set([...openTurns, ...recordTouchedTurns])) {
+      const folded = turnFacts.get(turnKey) ?? null;
+      if (folded === null || !walkTurnKeys.has(turnKey)) continue;
+      if (
+        openTurns.has(turnKey) &&
+        turnsStartingAfter(folded.firstPosition) > MAX_TURNS_AFTER_OPEN_TURN
+      ) {
+        releasedTurns.add(turnKey);
+        continue;
+      }
+      seat = Math.min(seat, folded.firstPosition);
+    }
+    for (let moved = true; moved; ) {
+      moved = false;
+      for (const { folded } of turnsByFirst) {
+        if (folded.firstPosition < seat && folded.lastPosition >= seat) {
+          seat = folded.firstPosition;
+          moved = true;
+        }
+      }
+    }
+
+    let sessionAnchor = walkRegion.anchorBefore;
+    let lastUserTimestamp = walkRegion.lastUserTimestampBefore;
+    // Attempt turn keys per span; the first continues the region's span.
+    const spans: string[][] = [[...walkRegion.spanKeysBefore]];
+    let seated: {
+      readonly entry: WalkEntry;
+      readonly spanIndex: number;
+      readonly keysBefore: number;
+    } | null = null;
+    for (const positioned of walkFacts) {
+      const facts = positioned.facts;
+      const span = spans[spans.length - 1];
+      if (positioned.position === seat) {
+        seated = {
+          entry: { sessionAnchor, lastUserTimestamp },
+          spanIndex: spans.length - 1,
+          keysBefore: span.length,
+        };
+      }
+      if (facts.role === "user") {
+        if (facts.sessionAnchor !== null) sessionAnchor = facts.sessionAnchor;
+        // A nested steer does not move the legacy anchor - see the renderer
+        // walk in `turnKeysWithUnprovableProfileWalk`'s callers.
+        if (!isNested(positioned.messageId)) {
+          lastUserTimestamp = facts.timestamp;
+        }
+        // Every user record closes a span, nested or not.
+        spans.push([]);
+        continue;
+      }
+      const folded = turnFacts.get(facts.turnKey) ?? null;
+      if (folded === null) continue;
+      if (folded.firstPosition === positioned.position) {
+        walkedEntries.set(facts.turnKey, { sessionAnchor, lastUserTimestamp });
+      }
+      if (!facts.hasBlocks || folded.autonomous) continue;
+      if (!span.includes(facts.turnKey)) span.push(facts.turnKey);
+    }
+
+    const markingSpans = new Map<string, number[]>();
+    spans.forEach((keys, index) => {
+      if (keys.length < 2) return;
+      for (const turnKey of keys) {
+        markingSpans.set(turnKey, [...(markingSpans.get(turnKey) ?? []), index]);
+      }
+    });
+    const markedElsewhere = new Set(walkRegion.spanKeysMarkedElsewhere);
+    for (const turnKey of walkTurnKeys) {
+      const folded = turnFacts.get(turnKey) ?? null;
+      if (folded === null) continue;
+      walkedUnprovable.set(
+        turnKey,
+        (folded.autonomous || markingSpans.has(turnKey)) && !folded.recorded,
+      );
+    }
+    // The turns before the region in the span it continues: only that span's
+    // mark can have moved for them.
+    for (const turnKey of walkRegion.spanKeysBefore) {
+      const folded = turnFacts.get(turnKey) ?? null;
+      if (folded === null) continue;
+      walkedUnprovable.set(
+        turnKey,
+        (markingSpans.has(turnKey) || markedElsewhere.has(turnKey)) &&
+          !folded.recorded,
+      );
+    }
+
+    nextRegion = walkRegion;
+    if (
+      seated !== null &&
+      (walkRegion.from === null || seat > walkRegion.from)
+    ) {
+      const spanIndex = seated.spanIndex;
+      const keysBefore = spans[spanIndex].slice(0, seated.keysBefore);
+      nextRegion = {
+        from: seat,
+        anchorBefore: seated.entry.sessionAnchor,
+        lastUserTimestampBefore: seated.entry.lastUserTimestamp,
+        spanKeysBefore: keysBefore,
+        spanKeysMarkedElsewhere: keysBefore.filter(
+          (turnKey) =>
+            markedElsewhere.has(turnKey) ||
+            (markingSpans.get(turnKey) ?? []).some(
+              (index) => index !== spanIndex,
+            ),
+        ),
+      };
+    }
+    // A turn the region no longer covers cannot hold it open. One with no
+    // record yet is kept: its first record lands after every seat.
+    const nextFrom = nextRegion.from;
+    nextOpenTurns = [...openTurns].filter((turnKey) => {
+      if (releasedTurns.has(turnKey)) return false;
+      const folded = turnFacts.get(turnKey) ?? null;
+      return (
+        folded === null || nextFrom === null || folded.firstPosition >= nextFrom
+      );
+    });
+  }
+
+  // --- Stored rows of every unit that may be re-described. ---
+  const storedRows = new Map<string, StoredTranscriptRow[]>();
+  const unitStates = new Map<string, TranscriptTurnUnitState>();
+  {
+    const turnByUnitKey = new Map<string, string>();
+    for (const turnKey of [...touchedTurns, ...walkedUnprovable.keys()]) {
+      turnByUnitKey.set(turnRowUnitKey(turnKey), turnKey);
+    }
+    const unitKeys = [
+      ...turnByUnitKey.keys(),
+      ...[...touchedUsers].map(userRowUnitKey),
+      ...[...eventUnits.keys()].map(eventRowUnitKey),
+    ];
+    if (unitKeys.length > 0) {
+      for (const row of yield* loadRows({ kind: "unit-rows", unitKeys })) {
+        const held = storedRows.get(row.unitKey);
+        if (held === undefined) {
+          storedRows.set(row.unitKey, [row]);
+        } else {
+          held.push(row);
+        }
+        const turnKey = turnByUnitKey.get(row.unitKey);
+        if (turnKey !== undefined && row.unitState !== null) {
+          unitStates.set(turnKey, row.unitState);
+        }
+      }
     }
   }
-  const isNested = (messageId: string): boolean =>
-    (steerTargets.get(messageId)?.length ?? 0) > 0;
-
-  const turnFolds = new Map<string, FoldTurnRecords | null>();
-  const turnFoldOf = (turnKey: string): FoldTurnRecords | null => {
-    if (turnFolds.has(turnKey)) return turnFolds.get(turnKey) ?? null;
-    const folded = foldTurnRecords(turnKey, turnRecords.get(turnKey) ?? []);
-    turnFolds.set(turnKey, folded);
-    return folded;
+  const unitStateOf = (turnKey: string): TranscriptTurnUnitState | null => {
+    const stored = unitStates.get(turnKey);
+    const entry = walkedEntries.get(turnKey) ?? stored;
+    const profileWalkUnprovable =
+      walkedUnprovable.get(turnKey) ?? stored?.profileWalkUnprovable;
+    if (entry === undefined || profileWalkUnprovable === undefined) {
+      return null;
+    }
+    return {
+      lastUserTimestamp: entry.lastUserTimestamp,
+      sessionAnchor: entry.sessionAnchor,
+      profileWalkUnprovable,
+    };
   };
+  // A walked turn whose state moved is re-described with it.
+  for (const turnKey of walkedUnprovable.keys()) {
+    const stored = unitStates.get(turnKey);
+    const next = unitStateOf(turnKey);
+    if (
+      stored === undefined ||
+      next === null ||
+      canonicalFoldJson(stored) !== canonicalFoldJson(next)
+    ) {
+      touchedTurns.add(turnKey);
+    }
+  }
 
+  // --- Bodies of what is re-described. ---
+  const turnBodies = new Map<string, PositionedMessage[]>();
+  if (touchedTurns.size > 0) {
+    for (const turnKey of touchedTurns) turnBodies.set(turnKey, []);
+    const loaded = yield* loadMessages({
+      kind: "messages-of-turns",
+      turnKeys: [...touchedTurns],
+    });
+    for (const positioned of loaded) {
+      if (positioned.message.role !== "assistant") continue;
+      turnBodies.get(assistantTurnKey(positioned.message))?.push(positioned);
+    }
+  }
 
-  // The events decorating every touched turn: those persisted before this
-  // change, under the turn the store recorded them as decorating, plus the
-  // ones this change appended, in event order.
+  // The events decorating every re-described turn: those persisted before
+  // this change, under the turn the store recorded them as decorating, plus
+  // the ones this change appended, in event order.
   const decoratingByTurn = new Map<string, PositionedEvent[]>();
   if (touchedTurns.size > 0) {
-    const persisted = yield* loadTurnEvents([...touchedTurns]);
     const placed = new Set<string>();
     const place = (turnKey: string, positioned: PositionedEvent): void => {
       const identity = `${turnKey}\u0000${positioned.event.eventId}`;
@@ -1740,8 +2045,11 @@ export function* foldTranscriptRows(
       }
       held.push(positioned);
     };
-    for (const stored of persisted) {
-      place(stored.rowTurnKey, { position: stored.position, event: stored.event });
+    for (const stored of yield* loadTurnEvents([...touchedTurns])) {
+      place(stored.rowTurnKey, {
+        position: stored.position,
+        event: stored.event,
+      });
     }
     for (const [turnKey, events] of changeEventsByTurn) {
       for (const positioned of events) place(turnKey, positioned);
@@ -1755,245 +2063,25 @@ export function* foldTranscriptRows(
       (positioned) => positioned.event.type === "turn.stopped",
     );
 
-  // Every user record a re-described row reads: touched users, the targets of
-  // touched turns' steer blocks, and the messages their stops name.
-  const neededUsers = new Set<string>(touchedUsers);
-  for (const turnKey of touchedTurns) {
-    for (const messageId of targetsByTurn.get(turnKey) ?? []) {
-      neededUsers.add(messageId);
-    }
-    const lastStop = stopsOf(turnKey).at(-1);
-    if (lastStop !== undefined && lastStop.event.messageId !== null) {
-      neededUsers.add(lastStop.event.messageId);
-    }
-  }
-  const missingUsers = [...neededUsers].filter(
-    (messageId) => !liveUsers.has(messageId) && !absentUsers.has(messageId),
-  );
-  if (missingUsers.length > 0) {
-    const loaded = yield* loadMessages({
-      kind: "messages-by-id",
-      messageIds: missingUsers,
-    });
-    for (const positioned of loaded) {
-      if (positioned.message.role !== "user") continue;
-      liveUsers.set(positioned.message.messageId, positioned);
-    }
-    for (const messageId of missingUsers) {
-      if (!liveUsers.has(messageId)) absentUsers.add(messageId);
-    }
-  }
-
-  // A user record whose nesting flipped moves the running `lastUserTimestamp`
-  // from its position on. Inside the region the walk below absorbs that;
-  // before it, the running value is not held.
-  for (const messageId of nestingCandidates) {
-    const wasNested = (prior.steerTargets[messageId]?.length ?? 0) > 0;
-    if (wasNested === isNested(messageId)) continue;
-    const record = liveUsers.get(messageId);
-    if (record === undefined) continue;
-    if (!inRegion(record.position)) {
-      return notContinued("a steer target before the walk region changed its nesting");
-    }
-    if (!walkNeeded) {
-      return notContinued("a steer target's nesting moved without a walk");
-    }
-  }
-
-  // --- Stored rows of every unit about to be replaced. ---
-  const turnKeyByUnitKey = new Map<string, string>();
-  for (const turnKey of touchedTurns) {
-    turnKeyByUnitKey.set(turnRowUnitKey(turnKey), turnKey);
-  }
-  const unitKeys = [
-    ...turnKeyByUnitKey.keys(),
-    ...[...touchedUsers].map(userRowUnitKey),
-    ...[...eventUnits.keys()].map(eventRowUnitKey),
-  ];
-  const previousRows: StoredTranscriptRow[] = [];
-  const unitStates = new Map<string, TranscriptTurnUnitState>();
-  if (unitKeys.length > 0) {
-    const stored = yield* loadRows({ kind: "unit-rows", unitKeys });
-    for (const row of stored) {
-      previousRows.push(row);
-      const turnKey = turnKeyByUnitKey.get(row.unitKey);
-      if (turnKey !== undefined && row.unitState !== null) {
-        unitStates.set(turnKey, row.unitState);
+  // Every other user record a re-described row reads: the targets of
+  // re-described turns' steer blocks, and the message their last stop names.
+  {
+    const neededUsers: string[] = [];
+    for (const turnKey of touchedTurns) {
+      neededUsers.push(...(targetsByTurn.get(turnKey) ?? []));
+      const lastStop = stopsOf(turnKey).at(-1);
+      if (lastStop !== undefined && lastStop.event.messageId !== null) {
+        neededUsers.push(lastStop.event.messageId);
       }
     }
-  }
-
-  // --- The walk. ---
-  const entryByTurn = new Map<string, WalkEntry>();
-  const walkedUnprovable = new Map<string, boolean>();
-  let nextRegion: TranscriptWalkRegion = region;
-  const nextOpenTurns = new Set(openTurns);
-  if (walkNeeded) {
-    const regionFrom = region.from;
-    const hasRegionRecord = (folded: FoldTurnRecords): boolean =>
-      regionFrom === null ||
-      folded.records.some((positioned) => positioned.position >= regionFrom);
-    // Whether a span BEFORE the region marked this turn. `null` when that
-    // cannot be known, which only a corrupt index produces.
-    const markedBeforeRegion = (turnKey: string): boolean | null => {
-      const folded = turnFoldOf(turnKey);
-      if (
-        folded === null ||
-        regionFrom === null ||
-        folded.firstPosition >= regionFrom
-      ) {
-        return false;
-      }
-      const carried = region.straddling[turnKey];
-      if (carried !== undefined) return carried;
-      // Newly straddling: every record it had before this change was before
-      // the region, so its stored verdict saw every span that could mark it.
-      // A turn stating its own profile is never refused, whatever marked it.
-      const recordedBefore = folded.records.some(
-        (positioned) =>
-          positioned.position < regionFrom &&
-          positioned.message.role === "assistant" &&
-          positioned.message.turnProfile !== undefined,
-      );
-      if (recordedBefore) return false;
-      const stored = unitStates.get(turnKey);
-      return stored === undefined ? null : stored.profileWalkUnprovable;
-    };
-
-    let sessionAnchor = region.anchorBefore;
-    let lastUserTimestamp = region.lastUserTimestampBefore;
-    const spans: { readonly start: number | null; readonly keys: string[] }[] =
-      regionFrom === null ? [{ start: null, keys: [] }] : [];
-    const userStops: {
-      readonly position: number;
-      readonly entry: WalkEntry;
-      readonly spanIndex: number;
-    }[] = [];
-    for (const positioned of regionMessages) {
-      const message = positioned.message;
-      if (message.role === "user") {
-        userStops.push({
-          position: positioned.position,
-          entry: { sessionAnchor, lastUserTimestamp },
-          spanIndex: spans.length,
-        });
-        if (message.sessionAnchor !== null) {
-          sessionAnchor = message.sessionAnchor;
-        }
-        if (!isNested(message.messageId)) {
-          lastUserTimestamp = message.timestamp;
-        }
-        spans.push({ start: positioned.position, keys: [] });
-        continue;
-      }
-      const turnKey = assistantTurnKey(message);
-      const folded = turnFoldOf(turnKey);
-      if (folded === null) continue;
-      if (folded.firstPosition === positioned.position) {
-        entryByTurn.set(turnKey, { sessionAnchor, lastUserTimestamp });
-      }
-      if (message.blocks.length === 0 || folded.autonomous) continue;
-      const span = spans.at(-1);
-      if (span === undefined) continue;
-      if (!span.keys.includes(turnKey)) span.keys.push(turnKey);
-    }
-    const spanMarked = new Set<string>();
-    for (const span of spans) {
-      if (span.keys.length < 2) continue;
-      for (const turnKey of span.keys) spanMarked.add(turnKey);
-    }
-
-    const straddlingNow: Record<string, boolean> = { ...region.straddling };
-    for (const turnKey of turnRecords.keys()) {
-      const folded = turnFoldOf(turnKey);
-      if (folded === null) continue;
-      const carried = region.straddling[turnKey] !== undefined;
-      if (!carried && !hasRegionRecord(folded)) continue;
-      const before = markedBeforeRegion(turnKey);
-      if (before === null) {
-        return notContinued("a turn newly straddling the walk region has no stored state");
-      }
-      if (
-        regionFrom !== null &&
-        !carried &&
-        folded.firstPosition < regionFrom
-      ) {
-        straddlingNow[turnKey] = before;
-      }
-      walkedUnprovable.set(
-        turnKey,
-        (folded.autonomous || before || spanMarked.has(turnKey)) &&
-          !folded.recorded,
-      );
-    }
-    nextRegion = { ...region, straddling: straddlingNow };
-
-    // Advance the region to the latest user record no live turn started
-    // before - so the next walk re-reads only the tail.
-    const lastStopIndex = userStops.length - 1;
-    if (lastStopIndex >= 0) {
-      let limit = Number.POSITIVE_INFINITY;
-      for (const turnKey of [...openTurns, ...recordTouchedTurns]) {
-        if (!regionTurnKeys.has(turnKey)) continue;
-        const folded = turnFoldOf(turnKey);
-        if (folded !== null) limit = Math.min(limit, folded.firstPosition);
-      }
-      let chosen = -1;
-      for (let index = lastStopIndex; index >= 0; index -= 1) {
-        if (userStops[index].position <= limit) {
-          chosen = index;
-          break;
-        }
-      }
-      const floor = userStops.length - MAX_WALK_REGION_USER_RECORDS;
-      if (chosen < floor) chosen = floor;
-      const stop = chosen >= 0 ? userStops[chosen] : undefined;
-      if (
-        stop !== undefined &&
-        (regionFrom === null || stop.position > regionFrom)
-      ) {
-        const straddling: Record<string, boolean> = {};
-        for (const turnKey of regionTurnKeys) {
-          const folded = turnFoldOf(turnKey);
-          if (folded === null) continue;
-          const hasBefore = folded.firstPosition < stop.position;
-          const hasAfter = folded.records.some(
-            (positioned) => positioned.position >= stop.position,
-          );
-          if (!hasBefore || !hasAfter) continue;
-          let isMarked = markedBeforeRegion(turnKey) === true;
-          for (let index = 0; index < stop.spanIndex; index += 1) {
-            const span = spans[index];
-            if (span.keys.length >= 2 && span.keys.includes(turnKey)) {
-              isMarked = true;
-            }
-          }
-          straddling[turnKey] = isMarked;
-        }
-        nextRegion = {
-          from: stop.position,
-          anchorBefore: stop.entry.sessionAnchor,
-          lastUserTimestampBefore: stop.entry.lastUserTimestamp,
-          straddling,
-        };
-        // A turn the region no longer covers cannot hold it open.
-        for (const turnKey of [...nextOpenTurns]) {
-          const folded = regionTurnKeys.has(turnKey)
-            ? turnFoldOf(turnKey)
-            : null;
-          if (folded !== null && folded.firstPosition < stop.position) {
-            nextOpenTurns.delete(turnKey);
-          }
-        }
-      }
-    }
+    yield* loadUsers(neededUsers);
   }
 
   // --- Re-describe every touched unit. ---
   const units: TranscriptFoldUnit[] = [];
   for (const turnKey of touchedTurns) {
     const unitKey = turnRowUnitKey(turnKey);
-    const folded = turnFoldOf(turnKey);
+    const records = turnBodies.get(turnKey) ?? [];
     const decorating = decoratingByTurn.get(turnKey) ?? [];
     const stops = stopsOf(turnKey);
     const firstStop = stops.at(0);
@@ -2007,19 +2095,17 @@ export function* foldTranscriptRows(
             messageId: lastStop.event.messageId,
             eventId: lastStop.event.eventId,
           };
-    if (folded !== null) {
-      const stored = unitStates.get(turnKey);
-      const entry: WalkEntry | undefined =
-        entryByTurn.get(turnKey) ??
-        (stored === undefined
-          ? undefined
-          : {
-              sessionAnchor: stored.sessionAnchor,
-              lastUserTimestamp: stored.lastUserTimestamp,
-            });
-      const profileWalkUnprovable =
-        walkedUnprovable.get(turnKey) ?? stored?.profileWalkUnprovable;
-      if (entry === undefined || profileWalkUnprovable === undefined) {
+    const assistants: AssistantMessage[] = [];
+    for (const positioned of records) {
+      if (positioned.message.role === "assistant") {
+        assistants.push(positioned.message);
+      }
+    }
+    const turn = accumulateDurableTurns(assistants).get(turnKey);
+    const firstRecord = records.at(0);
+    if (turn !== undefined && firstRecord !== undefined) {
+      const unitState = unitStateOf(turnKey);
+      if (unitState === null) {
         return notContinued("an assistant turn has no stored walk state");
       }
       const usersById = new Map<string, UserMessage>();
@@ -2030,39 +2116,33 @@ export function* foldTranscriptRows(
         }
       }
       const descriptors = describeTurnRows({
-        turn: folded.turn,
+        turn,
         usersById,
-        lastUserTimestamp: entry.lastUserTimestamp,
+        lastUserTimestamp: unitState.lastUserTimestamp,
         activeTurnId: change.activeTurnId,
         stopped,
         decoratingEventIdsByTurnKey: new Map([
           [turnKey, decorating.map((positioned) => positioned.event.eventId)],
         ]),
-        profileWalkUnprovable,
-        sessionAnchor: profileWalkUnprovable ? null : entry.sessionAnchor,
+        profileWalkUnprovable: unitState.profileWalkUnprovable,
+        sessionAnchor: unitState.profileWalkUnprovable
+          ? null
+          : unitState.sessionAnchor,
         hasLaterOverlappingChanges: overlapping.has(turnKey),
       });
-      const unitState: TranscriptTurnUnitState = {
-        lastUserTimestamp: entry.lastUserTimestamp,
-        sessionAnchor: entry.sessionAnchor,
-        profileWalkUnprovable,
-      };
       units.push({
         unitKey,
         rows: descriptors.map((descriptor, index) => ({
           order: wovenOrder({
             createdAt: descriptor.createdAt,
             pass: TRANSCRIPT_ROW_PASS.walk,
-            position: folded.firstPosition,
+            position: firstRecord.position,
             entry: index,
           }),
           descriptor,
           unitState,
         })),
-        messages: [
-          ...folded.records.map((positioned) => positioned.message),
-          ...usersById.values(),
-        ],
+        messages: [...assistants, ...usersById.values()],
         events: decorating.map((positioned) => positioned.event),
       });
       continue;
@@ -2155,6 +2235,11 @@ export function* foldTranscriptRows(
       messages: [],
       events: [positioned.event],
     });
+  }
+
+  const previousRows: StoredTranscriptRow[] = [];
+  for (const unit of units) {
+    previousRows.push(...(storedRows.get(unit.unitKey) ?? []));
   }
 
   // --- Setup cards. ---
