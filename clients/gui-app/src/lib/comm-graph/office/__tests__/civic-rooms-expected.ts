@@ -147,10 +147,27 @@ export const AMBULANCE_RIDER_SETS_THE_DWELL: Readonly<
   city: false,
 };
 
-/** The four rooms every enrolled storey owes, in no particular order. */
-export const CIVIC_KINDS: ReadonlyArray<OfficeCivicKind> = [
-  "infirmary",
-  "waiting-room",
-  "help-desk",
-  "archive",
-];
+/**
+ * WHICH ROOMS EACH ENROLLED VIEW OWES, in no particular order.
+ *
+ * Four for every enrolled view but two: Building and Towers share one plaza
+ * builder, and it no longer stands up a waiting room - an awaiting agent keeps
+ * an ordinary desk instead, a deliberate simplification (the room read as
+ * confusing beside agents that visibly exchange envelopes while they wait).
+ * The other four enrolled views plan their own waiting room independently and
+ * are untouched.
+ */
+export const CIVIC_KINDS_EXPECTED: Readonly<
+  Record<OfficeViewId, ReadonlyArray<OfficeCivicKind>>
+> = {
+  floor: ["infirmary", "waiting-room", "help-desk", "archive"],
+  towers: ["infirmary", "help-desk", "archive"],
+  building: ["infirmary", "help-desk", "archive"],
+  "mission-control": ["infirmary", "waiting-room", "help-desk", "archive"],
+  campus: ["infirmary", "waiting-room", "help-desk", "archive"],
+  city: ["infirmary", "waiting-room", "help-desk", "archive"],
+};
+
+/** Building and Towers' own room list, for the oblique plaza suite. */
+export const OBLIQUE_CIVIC_KINDS: ReadonlyArray<OfficeCivicKind> =
+  CIVIC_KINDS_EXPECTED.building;
