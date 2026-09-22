@@ -116,8 +116,9 @@ const dialogMocks = vi.hoisted(() => ({
   capabilityProbeHostIds: new Set<string>(),
   /** False models the window after a retarget, before the catalog answers. */
   modelsLoaded: true,
-  /** The one row the loaded catalog lists; `SETTINGS_SEED.model` by default. */
-  catalogSlug: "claude-opus-4-7",
+  /** The one row the loaded catalog lists (`SETTINGS_SEED.model` by default),
+   *  or `null` for a catalog that loads EMPTY. */
+  catalogSlug: "claude-opus-4-7" as string | null,
   publicationQuery: { data: undefined as PublicationStateResponse | undefined },
   publicationQueryEnabled: false,
   publicationQueryIsError: false,
@@ -399,21 +400,24 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     // retarget lands in before the new host's models arrive.
     data: dialogMocks.modelsLoaded
       ? {
-          models: [
-            {
-              harnessId: "claude",
-              slug: dialogMocks.catalogSlug,
-              label: "Claude Opus",
-              description: null,
-              contextWindow: null,
-              maxOutputTokens: null,
-              defaultReasoningEffort: null,
-              supportedReasoningEfforts: [],
-              defaultServiceTier: null,
-              supportedServiceTiers: [],
-              metadata: {},
-            },
-          ],
+          models:
+            dialogMocks.catalogSlug === null
+              ? []
+              : [
+                  {
+                    harnessId: "claude",
+                    slug: dialogMocks.catalogSlug,
+                    label: "Claude Opus",
+                    description: null,
+                    contextWindow: null,
+                    maxOutputTokens: null,
+                    defaultReasoningEffort: null,
+                    supportedReasoningEfforts: [],
+                    defaultServiceTier: null,
+                    supportedServiceTiers: [],
+                    metadata: {},
+                  },
+                ],
         }
       : undefined,
     isPending: !dialogMocks.modelsLoaded,
@@ -985,6 +989,25 @@ describe("ChatForkDialog cross-host routing", () => {
     const input = await submitFork();
     expect(input.hostId).toBe(OTHER_HOST_ID);
     expect(input.settings.model).toBe("claude-sonnet-5");
+  });
+
+  it("a catalog that loads EMPTY still blocks a CROSS-HOST fork", () => {
+    // No first row to present: the slug resolves to "", which the store also
+    // reports as a substitution, and `chatRunSettingsSchema` refuses an empty
+    // model. The gate has to hold on the slug, not only on the catalog answer.
+    dialogMocks.catalogSlug = null;
+    renderDialog(forkTarget({}), ignoreOpenChange);
+    fillTitle();
+
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind).toBe("selected");
+    if (scope?.kind === "selected") {
+      act(() => {
+        scope.onSelect(OTHER_HOST_ID);
+      });
+    }
+
+    expect(forkButton().disabled).toBe(true);
   });
 
   it("a 1.0 refusal flips to selectable after the host is recorded at 1.1, with no interaction", () => {

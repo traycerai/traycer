@@ -448,7 +448,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // substitute is what the picker shows and what `submit` sends (it reads the
   // derived selection), so Fork goes by the row on screen rather than by a
   // model the target never listed - gating on the latter held Fork shut with
-  // nothing on screen to say why. Only a catalog that has not answered blocks.
+  // nothing on screen to say why. What still blocks: a catalog that has not
+  // answered, and one that answered EMPTY - there is no first row to present,
+  // the slug resolves to "" (which the store also reports as a substitution),
+  // and `chatRunSettingsSchema` refuses an empty model. Hence the slug check
+  // on both arms.
   //
   // Same-host keeps the length check every sibling surface uses (the composer's
   // own Send, `terminal-agent-fork-dialog`), because there the slug came from
@@ -472,9 +476,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
-  const modelResolved = isCrossHost
-    ? catalogConfirmed || catalogSubstituted
-    : modelSlugPresent;
+  const modelResolved =
+    modelSlugPresent &&
+    (!isCrossHost || catalogConfirmed || catalogSubstituted);
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"
