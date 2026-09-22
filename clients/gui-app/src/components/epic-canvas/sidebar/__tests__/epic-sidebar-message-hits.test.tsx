@@ -364,7 +364,11 @@ describe("EpicSidebarMessageHits", () => {
       />,
     );
 
-    await user.click(screen.getByText("title-c1"));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open chat title-c1 at its best match",
+      }),
+    );
 
     expect(openResultMock).toHaveBeenCalledTimes(1);
     const [, target, context] = openResultMock.mock.calls[0];
@@ -413,7 +417,11 @@ describe("EpicSidebarMessageHits", () => {
       />,
     );
 
-    await user.click(screen.getByText("title-c1"));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open chat title-c1 at its best match",
+      }),
+    );
 
     // The route declines to park for a tile it may have to open fresh, because
     // from a notification that tile could be on any host. From here it is this
@@ -440,7 +448,11 @@ describe("EpicSidebarMessageHits", () => {
       />,
     );
 
-    await user.click(screen.getByText("title-c1"));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open chat title-c1 at its best match",
+      }),
+    );
 
     expect(openResultMock).toHaveBeenCalledTimes(1);
     expect(
