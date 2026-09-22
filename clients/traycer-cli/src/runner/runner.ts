@@ -1,6 +1,10 @@
 import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, toCliError } from "./errors";
+import {
+  CLI_ERROR_CODES,
+  EXPECTED_CLI_ERROR_CODES,
+  toCliError,
+} from "./errors";
 import {
   finishAndExit,
   isProcessFatal,
@@ -84,8 +88,21 @@ export async function runCommand(
     result = await fn(ctx);
   } catch (err) {
     markCommandSettled();
-    Sentry.captureException(err);
     const cliErr = toCliError(err);
+    // Classify BEFORE reporting. An expired token, a missing argument or a
+    // busy host is a typed outcome this command already answers for, and
+    // reporting those made the CLI a quarter of the account's error volume.
+    // A skipped code still leaves a breadcrumb, so an unexpected capture
+    // later in the same process shows what preceded it.
+    if (EXPECTED_CLI_ERROR_CODES.has(cliErr.code)) {
+      Sentry.addBreadcrumb({
+        category: "cli",
+        message: "CLI command failed with an expected code",
+        data: { code: cliErr.code },
+      });
+    } else {
+      Sentry.captureException(err);
+    }
     runtime.logger.error(
       "CLI command failed",
       {
