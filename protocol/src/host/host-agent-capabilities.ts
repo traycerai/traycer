@@ -767,11 +767,13 @@ export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
  * `userId` and the origin host id are NOT here: both come from the dialed
  * session's principal, never from the request.
  */
-export const browserReplCallerSchema = z.object({
-  sessionKeyTag: z.enum(["chat", "terminal-agent"]),
-  chatId: z.string().min(1),
-  agentRunId: z.string().nullable(),
-});
+export const browserReplCallerSchema = lazySchema(() =>
+  z.object({
+    sessionKeyTag: z.enum(["chat", "terminal-agent"]),
+    chatId: z.string().min(1),
+    agentRunId: z.string().nullable(),
+  }),
+);
 export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
 
 /**
@@ -800,10 +802,12 @@ export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
  * its carrying session, which the target checks last. `counter` orders
  * realms within one incarnation.
  */
-const browserRealmEpochSchema = z.object({
-  incarnation: z.string().min(1),
-  counter: z.number().int().positive(),
-});
+const browserRealmEpochSchema = lazySchema(() =>
+  z.object({
+    incarnation: z.string().min(1),
+    counter: z.number().int().positive(),
+  }),
+);
 export type BrowserRealmEpochWire = z.infer<typeof browserRealmEpochSchema>;
 
 /**
@@ -813,16 +817,20 @@ export type BrowserRealmEpochWire = z.infer<typeof browserRealmEpochSchema>;
  * named has finished, where it would otherwise interrupt that cell's
  * successor.
  */
-const browserReplCellSequenceSchema = z.number().int().positive();
+const browserReplCellSequenceSchema = lazySchema(() =>
+  z.number().int().positive(),
+);
 
-export const browserReplRunCellRequestSchema = z.object({
-  epicId: z.string().min(1),
-  title: z.string().min(1),
-  code: z.string().min(1),
-  caller: browserReplCallerSchema,
-  realmEpoch: browserRealmEpochSchema,
-  cellSequence: browserReplCellSequenceSchema,
-});
+export const browserReplRunCellRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    title: z.string().min(1),
+    code: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+    cellSequence: browserReplCellSequenceSchema,
+  }),
+);
 export type BrowserReplRunCellRequest = z.infer<
   typeof browserReplRunCellRequestSchema
 >;
@@ -834,14 +842,16 @@ export type BrowserReplRunCellRequest = z.infer<
  * block (cell output plus its `[hint]` / `[notice]` / `[state]` lines) and the
  * screenshot attachments.
  */
-export const browserReplCellContentSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), text: z.string() }),
-  z.object({
-    type: z.literal("image"),
-    data: z.string(),
-    mimeType: z.string().min(1),
-  }),
-]);
+export const browserReplCellContentSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("text"), text: z.string() }),
+    z.object({
+      type: z.literal("image"),
+      data: z.string(),
+      mimeType: z.string().min(1),
+    }),
+  ]),
+);
 export type BrowserReplCellContent = z.infer<
   typeof browserReplCellContentSchema
 >;
@@ -853,13 +863,15 @@ export type BrowserReplCellContent = z.infer<
  * this host's `hostId` — a session id is host-local, so the stamp is what
  * makes the reference resolvable at all.
  */
-export const browserReplRunCellResponseSchema = z.object({
-  content: z.array(browserReplCellContentSchema),
-  isError: z.boolean(),
-  sessionsUsed: z.array(browserSessionReferenceSchema),
-  /** How this host names itself, for the `[state]` line the agent reads. */
-  machineName: z.string().min(1),
-});
+export const browserReplRunCellResponseSchema = lazySchema(() =>
+  z.object({
+    content: z.array(browserReplCellContentSchema),
+    isError: z.boolean(),
+    sessionsUsed: z.array(browserSessionReferenceSchema),
+    /** How this host names itself, for the `[state]` line the agent reads. */
+    machineName: z.string().min(1),
+  }),
+);
 export type BrowserReplRunCellResponse = z.infer<
   typeof browserReplRunCellResponseSchema
 >;
@@ -888,18 +900,22 @@ export const browserReplRunCellV10 = defineRpcContract({
  * epoch at or below `realmEpoch` for that owner key, whether or not that epoch
  * ever reached this machine, so nothing below it can execute afterwards.
  */
-export const browserReplReleaseRealmRequestSchema = z.object({
-  epicId: z.string().min(1),
-  caller: browserReplCallerSchema,
-  realmEpoch: browserRealmEpochSchema,
-});
+export const browserReplReleaseRealmRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+  }),
+);
 export type BrowserReplReleaseRealmRequest = z.infer<
   typeof browserReplReleaseRealmRequestSchema
 >;
 
-export const browserReplReleaseRealmResponseSchema = z.object({
-  released: z.boolean(),
-});
+export const browserReplReleaseRealmResponseSchema = lazySchema(() =>
+  z.object({
+    released: z.boolean(),
+  }),
+);
 export type BrowserReplReleaseRealmResponse = z.infer<
   typeof browserReplReleaseRealmResponseSchema
 >;
@@ -928,20 +944,24 @@ export const browserReplReleaseRealmV10 = defineRpcContract({
  * ever say about itself, so it is minted by the ORIGIN when this dial fails
  * and never travels on the wire.
  */
-export const browserReplStopCellRequestSchema = z.object({
-  epicId: z.string().min(1),
-  caller: browserReplCallerSchema,
-  realmEpoch: browserRealmEpochSchema,
-  /** The cell this stop means; see {@link browserReplCellSequenceSchema}. */
-  cellSequence: browserReplCellSequenceSchema,
-});
+export const browserReplStopCellRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+    /** The cell this stop means; see {@link browserReplCellSequenceSchema}. */
+    cellSequence: browserReplCellSequenceSchema,
+  }),
+);
 export type BrowserReplStopCellRequest = z.infer<
   typeof browserReplStopCellRequestSchema
 >;
 
-export const browserReplStopCellResponseSchema = z.object({
-  status: z.enum(["idle", "stopped", "outcome_unknown"]),
-});
+export const browserReplStopCellResponseSchema = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "stopped", "outcome_unknown"]),
+  }),
+);
 export type BrowserReplStopCellResponse = z.infer<
   typeof browserReplStopCellResponseSchema
 >;
@@ -970,23 +990,27 @@ export const browserReplStopCellV10 = defineRpcContract({
  * by the cell's own deadline there rather than by anything of its own: the
  * approval wait has no deadline of its own on a local realm either.
  */
-export const browserReplApprovalSchema = z.object({
-  approvalId: z.string().min(1),
-  toolName: z.string().min(1),
-  description: z.string(),
-  /** The card's input, as the confirmation surface on the origin renders it. */
-  input: z.record(z.string(), z.unknown()).nullable(),
-});
+export const browserReplApprovalSchema = lazySchema(() =>
+  z.object({
+    approvalId: z.string().min(1),
+    toolName: z.string().min(1),
+    description: z.string(),
+    /** The card's input, as the confirmation surface on the origin renders it. */
+    input: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 export type BrowserReplApproval = z.infer<typeof browserReplApprovalSchema>;
 
-export const browserReplRequestApprovalRequestSchema = z.object({
-  epicId: z.string().min(1),
-  caller: browserReplCallerSchema,
-  realmEpoch: browserRealmEpochSchema,
-  /** The cell asking; see {@link browserReplCellSequenceSchema}. */
-  cellSequence: browserReplCellSequenceSchema,
-  approval: browserReplApprovalSchema,
-});
+export const browserReplRequestApprovalRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    caller: browserReplCallerSchema,
+    realmEpoch: browserRealmEpochSchema,
+    /** The cell asking; see {@link browserReplCellSequenceSchema}. */
+    cellSequence: browserReplCellSequenceSchema,
+    approval: browserReplApprovalSchema,
+  }),
+);
 export type BrowserReplRequestApprovalRequest = z.infer<
   typeof browserReplRequestApprovalRequestSchema
 >;
@@ -997,10 +1021,12 @@ export type BrowserReplRequestApprovalRequest = z.infer<
  * in flight, the registration gone - is a refusal thrown on the wire, never
  * a fabricated decision.
  */
-export const browserReplRequestApprovalResponseSchema = z.object({
-  approved: z.boolean(),
-  reason: z.string().nullable(),
-});
+export const browserReplRequestApprovalResponseSchema = lazySchema(() =>
+  z.object({
+    approved: z.boolean(),
+    reason: z.string().nullable(),
+  }),
+);
 export type BrowserReplRequestApprovalResponse = z.infer<
   typeof browserReplRequestApprovalResponseSchema
 >;
