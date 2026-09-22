@@ -100,8 +100,20 @@ export interface LocalHostInventorySubscriptionDeps {
   readonly openStreamClient: (
     endpoint: LocalHostEndpoint,
   ) => IHostStreamClient<HostStreamRpcRegistry>;
-  /** One pushed registry answer, for the fleet source's push path. */
-  readonly onRows: (response: HostListResponse) => void;
+  /**
+   * One pushed registry answer, with the host's own clock at the read that
+   * produced it.
+   *
+   * The read time travels with the rows because the consumer orders adoption
+   * on it: a snapshot handed over when this subscription opens can carry rows
+   * the host read up to a full interval ago, so it arrives newest and was
+   * observed oldest. The host runs on THIS machine, so its `fetchedAtMs` and
+   * the consumer's own clock are the same clock.
+   */
+  readonly onRows: (read: {
+    readonly response: HostListResponse;
+    readonly readAtMs: number;
+  }) => void;
   /**
    * Whether the push is currently covering the registry. `false` is a
    * statement that the poll must keep running, and it is made whenever this
@@ -166,7 +178,10 @@ export function startLocalHostInventorySubscription(
           // Adopted whatever its staleness: rows the host could not refresh
           // are still rows, and dropping them would leave this process on
           // something older. Coverage is the separate question.
-          deps.onRows({ hosts: [...snapshot.hosts] });
+          deps.onRows({
+            response: { hosts: [...snapshot.hosts] },
+            readAtMs: snapshot.fetchedAtMs,
+          });
           setPushActive(!snapshot.stale);
         },
         onConnectionStatus: (status) => {

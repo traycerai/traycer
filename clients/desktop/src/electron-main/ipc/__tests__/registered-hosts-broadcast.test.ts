@@ -69,6 +69,7 @@ function buildFleet(): DesktopHostFleetSource {
       );
     },
     publishRegistryResponse: () => undefined,
+    now: () => Date.now(),
     log: silentLog,
   });
 }

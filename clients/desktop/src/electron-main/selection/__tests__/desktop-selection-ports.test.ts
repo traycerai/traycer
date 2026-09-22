@@ -418,6 +418,11 @@ function buildFleetSource(overrides: {
   // a real sink rather than a silently-dropping one. Tests that DO care what
   // was published use `buildFleetSourceWithPublisher` below instead.
   const published: RegisteredHostsPush[] = [];
+  // A controllable clock, not `Date.now()`: none of this builder's own tests
+  // exercise the `readAtMs` ordering, but keeping the same shape as
+  // `buildFleetSourceWithPublisher` below means a future ordering test never
+  // has to migrate builders to get one.
+  let currentNow = 1_000;
   return new DesktopHostFleetSource({
     authnBaseUrl: "http://localhost:5005",
     identity: overrides.identity,
@@ -427,6 +432,7 @@ function buildFleetSource(overrides: {
     publishRegistryResponse: (push) => {
       published.push(push);
     },
+    now: () => currentNow,
     log: silentLog,
   });
 }
@@ -436,6 +442,11 @@ function buildFleetSource(overrides: {
  * array too - for the P4.1/F22 `publishRegistryResponse` assertions, which
  * need to inspect what actually got published rather than just that the
  * option was wired.
+ *
+ * The clock is a CONTROLLABLE double (`setNow`), not `Date.now()`: the
+ * `acceptPushedRows` ordering rule (a push's `readAtMs` versus a poll's own
+ * fetch-start stamp) is only testable against a clock the test can position
+ * precisely on both sides of the comparison.
  */
 function buildFleetSourceWithPublisher(overrides: {
   identity: AuthorityIdentitySource;
@@ -448,8 +459,10 @@ function buildFleetSourceWithPublisher(overrides: {
 }): {
   readonly fleet: DesktopHostFleetSource;
   readonly published: RegisteredHostsPush[];
+  readonly setNow: (value: number) => void;
 } {
   const published: RegisteredHostsPush[] = [];
+  let currentNow = 1_000;
   const fleet = new DesktopHostFleetSource({
     authnBaseUrl: "http://localhost:5005",
     identity: overrides.identity,
@@ -459,9 +472,16 @@ function buildFleetSourceWithPublisher(overrides: {
     publishRegistryResponse: (push) => {
       published.push(push);
     },
+    now: () => currentNow,
     log: silentLog,
   });
-  return { fleet, published };
+  return {
+    fleet,
+    published,
+    setNow: (value) => {
+      currentNow = value;
+    },
+  };
 }
 
 describe("DesktopHostFleetSource", () => {
@@ -1578,7 +1598,10 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
       },
     });
 
-    await fleet.acceptPushedRows({ hosts: pushedRows });
+    await fleet.acceptPushedRows({
+      response: { hosts: pushedRows },
+      readAtMs: 1_000,
+    });
 
     expect(published).toHaveLength(1);
     expect(published[0]).toEqual({
@@ -1607,7 +1630,10 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
       },
     });
 
-    await fleet.acceptPushedRows({ hosts: [buildHostListItem("remote-host")] });
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+    });
 
     expect(published).toEqual([]);
     expect(fleet.snapshot()).toMatchObject({ localHostId: null, hosts: [] });
@@ -1633,7 +1659,10 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
       },
     });
 
-    await fleet.acceptPushedRows({ hosts: [buildHostListItem("remote-host")] });
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+    });
 
     expect(published).toEqual([]);
     // Not an empty fleet: the local host stays addressable, same as refresh().
@@ -1666,6 +1695,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
       publishRegistryResponse: () => {
         throw new Error("publish boom");
       },
+      now: () => 1_000,
       log: {
         debug: () => undefined,
         warn: (message, detail) => {
@@ -1675,13 +1705,113 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     });
 
     await expect(
-      fleet.acceptPushedRows({ hosts: [buildHostListItem("remote-host")] }),
+      fleet.acceptPushedRows({
+        response: { hosts: [buildHostListItem("remote-host")] },
+        readAtMs: 1_000,
+      }),
     ).resolves.toBeUndefined();
 
     expect(warnCalls).toHaveLength(1);
     expect(warnCalls[0]?.message).toBe(
       "[selection-fleet] pushed registry adopt threw",
     );
+    fleet.dispose();
+  });
+
+  // Explicit, distinct read times for the two ordering cases below - the
+  // whole point of T1/T2 is which side of an already-adopted poll's own
+  // fetch-start stamp (T1_MS) a push's `readAtMs` falls on.
+  const T0_MS = 500;
+  const T1_MS = 1_000;
+  const T2_MS = 2_000;
+
+  it("T1: a push whose rows were READ before an already-adopted poll is rejected", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const rowA = buildHostListItem("host-a");
+    const rowB = buildHostListItem("host-b");
+    const rowC = buildHostListItem("host-c");
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [rowA, rowB] },
+      }),
+    });
+
+    // The poll observed the registry at T1_MS and its rows were adopted.
+    setNow(T1_MS);
+    await fleet.refresh();
+    expect(published).toHaveLength(1);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b"]);
+
+    // The push's rows were read at T0_MS - STRICTLY BEFORE the poll already
+    // adopted above (T0_MS < T1_MS).
+    await fleet.acceptPushedRows({
+      response: { hosts: [rowA, rowB, rowC] },
+      readAtMs: T0_MS,
+    });
+
+    // Declined before the publish - the renderer must not be shown a fleet
+    // the authority has refused - so the count stays at the poll's one call,
+    // and the snapshot is still the poll's rows: no "host-c".
+    expect(published).toHaveLength(1);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b"]);
+    fleet.dispose();
+  });
+
+  it("T2: the reverse order adopts the push", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const rowA = buildHostListItem("host-a");
+    const rowB = buildHostListItem("host-b");
+    const rowC = buildHostListItem("host-c");
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [rowA, rowB] },
+      }),
+    });
+
+    // The poll observed the registry at T1_MS and its rows were adopted.
+    setNow(T1_MS);
+    await fleet.refresh();
+    expect(published).toHaveLength(1);
+
+    // The push's rows were read at T2_MS - STRICTLY AFTER the poll above
+    // (T2_MS > T1_MS).
+    await fleet.acceptPushedRows({
+      response: { hosts: [rowA, rowB, rowC] },
+      readAtMs: T2_MS,
+    });
+
+    // Adopted: the publisher fires again and the snapshot carries "host-c".
+    expect(published).toHaveLength(2);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b", "host-c"]);
     fleet.dispose();
   });
 });

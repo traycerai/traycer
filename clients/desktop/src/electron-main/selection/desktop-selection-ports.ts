@@ -106,6 +106,25 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
     : null;
 }
 
+/**
+ * One registry answer, with the time of the read that PRODUCED it.
+ *
+ * `readAtMs` is metadata beside the response, never inside it: the response is
+ * the cloud's own body and has no business carrying a reader's clock.
+ *
+ * The two producers stamp it from the same source, which is what makes the
+ * comparison meaningful. A local fetch stamps `now()` when it STARTS - not
+ * when it lands, because the question is which read OBSERVED the registry
+ * first. A pushed snapshot carries `fetchedAtMs`, which is the local host's
+ * clock at its own read: the host runs on THIS machine, so the two stamps come
+ * from one clock and are directly comparable. A remote host's clock would not
+ * be, and nothing here accepts one.
+ */
+export interface RegistryRead {
+  readonly response: HostListResponse;
+  readonly readAtMs: number;
+}
+
 export interface DesktopHostFleetSourceOptions {
   readonly authnBaseUrl: string;
   readonly identity: AuthorityIdentitySource;
@@ -136,6 +155,14 @@ export interface DesktopHostFleetSourceOptions {
    * not a failure anything reports.
    */
   readonly publishRegistryResponse: (push: RegisteredHostsPush) => void;
+  /**
+   * This machine's clock, for stamping when a registry read started.
+   *
+   * A port rather than a bare `Date.now()` because the ordering rule it feeds
+   * - a read that observed the registry EARLIER never overwrites one that
+   * observed it later - is otherwise only testable against wall time.
+   */
+  readonly now: () => number;
   readonly log: AuthorityLog;
 }
 
@@ -246,6 +273,30 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * anywhere: it says who is READING the registry, which is nobody's business
    * but the reader's.
    */
+  /**
+   * The read TIME of the newest registry answer this port has adopted.
+   *
+   * `refreshSeq` orders answers by when they were REQUESTED here, which is the
+   * right rule for two of this port's own fetches and the wrong one the moment
+   * a second reader appears. A pushed snapshot is handed over when the
+   * subscription opens, and the rows in it were read by the host up to a full
+   * interval earlier: it arrives newest and observed oldest. Ordering on
+   * arrival let it overwrite a poll that had already landed, so a host
+   * deregistered in between came back until the host's next read.
+   *
+   * So adoption is ordered by when the registry was OBSERVED, and both rules
+   * stand: this one rejects an older observation, `refreshSeq` still rejects
+   * an older request. Advanced only where rows are actually adopted.
+   *
+   * NOT reset on an identity change, deliberately. Resetting would re-open the
+   * hole across an account switch - a push carrying rows read in the previous
+   * account's era could win again - and what not resetting costs is bounded
+   * and covered: a newly signed-in account whose host replays a snapshot older
+   * than the last adopted read is declined, and the poll, which is running
+   * precisely because that push is not covering anything yet, serves the fleet
+   * until the host's next read supersedes it.
+   */
+  private adoptedReadAtMs = Number.NEGATIVE_INFINITY;
   private pushActive = false;
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
@@ -342,10 +393,10 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * TOTAL, like {@link refresh}: its caller is a stream callback with nobody
    * to reject to.
    */
-  async acceptPushedRows(response: HostListResponse): Promise<void> {
+  async acceptPushedRows(read: RegistryRead): Promise<void> {
     if (this.disposed) return;
     try {
-      await this.adoptRegistryResponse(response);
+      await this.adoptRegistryResponse(read);
     } catch (error: unknown) {
       this.options.log.warn("[selection-fleet] pushed registry adopt threw", {
         error: String(error),
@@ -375,10 +426,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
     await this.refreshWith(null);
   }
 
-  private async adoptRegistryResponse(
-    response: HostListResponse,
-  ): Promise<void> {
-    await this.refreshWith(response);
+  private async adoptRegistryResponse(read: RegistryRead): Promise<void> {
+    await this.refreshWith(read);
   }
 
   /**
@@ -391,7 +440,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * signed-out and unverified branches, publishing before adopting - is a rule
    * about ADOPTING registry rows, not about who read them.
    */
-  private async refreshWith(pushed: HostListResponse | null): Promise<void> {
+  private async refreshWith(pushed: RegistryRead | null): Promise<void> {
     // Stamped at fetch START (contract: "the generation this snapshot was
     // FETCHED under"), so a completion that lands after an account switch is
     // recognisably stale. The identity KEY is captured in the same read for
@@ -402,6 +451,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
     const generation = identity.generation;
     this.refreshSeq += 1;
     const seq = this.refreshSeq;
+    // The time the registry was OBSERVED, which is what adoption is ordered
+    // on. A fetch of our own is stamped HERE - at its start, before the await
+    // - so it is the moment this process went to look, not the moment the
+    // answer happened to land. A push brings the host's own read time with it.
+    const readAtMs = pushed === null ? this.options.now() : pushed.readAtMs;
     // ONE read of the snapshot, not two: `token` and `verified` are committed
     // together and a second `get()` could straddle a revoke, spending a bearer
     // this snapshot had already disowned.
@@ -413,7 +467,17 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // other observation so it supersedes an identity read still in flight,
       // rather than being overwritten by one that started before the sign-out.
       this.localIdentitySeq += 1;
-      this.applyFetched(generation, seq, this.localIdentitySeq, null, []);
+      // `readAtMs` here is this observation's own time, not a registry read's:
+      // signing out is a fact about the account learned right now, and it must
+      // supersede any read that observed the fleet before it.
+      this.applyFetched(
+        generation,
+        seq,
+        this.localIdentitySeq,
+        null,
+        [],
+        readAtMs,
+      );
       return;
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
@@ -455,7 +519,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
         seq,
         identitySeq,
         localHostId,
-        pushed,
+        pushed.response,
+        readAtMs,
       );
       return;
     }
@@ -492,6 +557,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       identitySeq,
       localHostId,
       result.response,
+      readAtMs,
     );
   }
 
@@ -510,7 +576,22 @@ export class DesktopHostFleetSource implements HostFleetSource {
     identitySeq: number,
     localHostId: string | null,
     response: HostListResponse,
+    readAtMs: number,
   ): void {
+    if (readAtMs < this.adoptedReadAtMs) {
+      // An answer that observed the registry EARLIER than one already adopted.
+      // Declined before the publish, not just before the adoption: the renderer
+      // push is the display half of the same fact, and showing windows a fleet
+      // the authority has refused is the same bug with a different surface.
+      this.options.log.debug(
+        "[selection-fleet] dropped an older registry read",
+        {
+          readAtMs,
+          adopted: this.adoptedReadAtMs,
+        },
+      );
+      return;
+    }
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
       response,
@@ -521,6 +602,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       identitySeq,
       localHostId,
       response.hosts.map((row) => row.hostId),
+      readAtMs,
     );
   }
 
@@ -626,6 +708,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     identitySeq: number,
     localHostId: string | null,
     rows: readonly string[],
+    readAtMs: number,
   ): void {
     if (this.disposed) return;
     if (generation !== this.options.identity.current().generation) {
@@ -651,6 +734,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
       return;
     }
     this.adoptedSeq = seq;
+    // Advanced HERE and nowhere else: the watermark means "the newest read
+    // whose rows are the ones this port is serving", so a completion declined
+    // above - or one that never reached this method - must not raise it and
+    // lock out the read that should win.
+    this.adoptedReadAtMs = Math.max(this.adoptedReadAtMs, readAtMs);
     this.rows = rows;
     // The ID is fenced SEPARATELY from the rows: this refresh's row projection
     // can be the current one while the id it read before the fetch has since

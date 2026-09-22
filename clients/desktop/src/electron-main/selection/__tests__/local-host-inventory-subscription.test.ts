@@ -208,11 +208,16 @@ function buildRow(hostId: string): HostListItem {
   };
 }
 
+interface RowsCall {
+  readonly response: HostListResponse;
+  readonly readAtMs: number;
+}
+
 interface Harness {
   readonly deps: LocalHostInventorySubscriptionDeps;
   /** Every `FakeInventoryStreamClient` this harness has opened, in order. */
   readonly clients: FakeInventoryStreamClient[];
-  readonly rowsCalls: HostListResponse[];
+  readonly rowsCalls: RowsCall[];
   readonly pushActiveCalls: boolean[];
   /**
    * Sets the machine's published host and fires `onLocalHostChanged`
@@ -230,7 +235,7 @@ function buildHarness(): Harness {
   let nextClientIndex = 0;
   const localHostChangeListeners = new Set<() => void>();
   const clients: FakeInventoryStreamClient[] = [];
-  const rowsCalls: HostListResponse[] = [];
+  const rowsCalls: RowsCall[] = [];
   const pushActiveCalls: boolean[] = [];
 
   const deps: LocalHostInventorySubscriptionDeps = {
@@ -250,8 +255,8 @@ function buildHarness(): Harness {
       clients.push(client);
       return client;
     },
-    onRows: (response) => {
-      rowsCalls.push(response);
+    onRows: (read) => {
+      rowsCalls.push(read);
     },
     onPushActiveChanged: (active) => {
       pushActiveCalls.push(active);
@@ -324,7 +329,9 @@ describe("startLocalHostInventorySubscription", () => {
 
     session.emitSnapshot([buildRow("host-1")], false, 1_000);
 
-    expect(harness.rowsCalls).toEqual([{ hosts: [buildRow("host-1")] }]);
+    expect(harness.rowsCalls).toEqual([
+      { response: { hosts: [buildRow("host-1")] }, readAtMs: 1_000 },
+    ]);
     expect(harness.pushActiveCalls).toEqual([true]);
 
     subscription.dispose();
@@ -346,8 +353,8 @@ describe("startLocalHostInventorySubscription", () => {
 
     // Rows are still adopted - they are the freshest anyone has.
     expect(harness.rowsCalls).toEqual([
-      { hosts: [buildRow("host-1")] },
-      { hosts: [buildRow("host-1")] },
+      { response: { hosts: [buildRow("host-1")] }, readAtMs: 1_000 },
+      { response: { hosts: [buildRow("host-1")] }, readAtMs: 2_000 },
     ]);
     // Coverage is withdrawn.
     expect(harness.pushActiveCalls).toEqual([true, false]);
@@ -384,6 +391,9 @@ describe("startLocalHostInventorySubscription", () => {
     session.emitSnapshot([buildRow("host-1")], false, 2_000);
 
     expect(harness.rowsCalls).toHaveLength(2);
+    expect(harness.rowsCalls.map((call) => call.readAtMs)).toEqual([
+      1_000, 2_000,
+    ]);
     // One true, not two, even though two healthy snapshots landed.
     expect(harness.pushActiveCalls).toEqual([true]);
 

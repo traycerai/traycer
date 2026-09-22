@@ -100,6 +100,7 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     // Every window hears the rows this port just fetched, so the app makes ONE
     // registry request per tick instead of one per window (P4.1/F22).
     publishRegistryResponse: createRegisteredHostsPublisher(bridge),
+    now: () => Date.now(),
     log: authorityLog,
   });
   const localOutage = new DesktopLocalHostOutageSignal({
@@ -170,8 +171,8 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
         };
       },
     }),
-    onRows: (response) => {
-      void fleet.acceptPushedRows(response);
+    onRows: (read) => {
+      void fleet.acceptPushedRows(read);
     },
     onPushActiveChanged: (active) => {
       fleet.setPushActive(active);
