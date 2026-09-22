@@ -457,15 +457,6 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       expectedPhrase: /Verifying updated host to v2\.1\.0/,
     },
     {
-      name: "complete",
-      operation: baseAttempt({
-        phase: "complete",
-        execution: "terminal",
-        liveness: "terminal",
-      }),
-      expectedPhrase: /Updated to v2\.1\.0/,
-    },
-    {
       name: "failed (via liveness interrupted)",
       operation: baseAttempt({
         phase: "downloading",
@@ -1066,14 +1057,154 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       renderBanner(undefined);
       await screen.findByTestId("host-update-banner");
     });
+  });
 
-    it("a completed attempt auto-collapses after HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS", async () => {
+  // G9 — the landing page never shows a success view at all. Product decision
+  // (superseding G7's now-removed auto-collapse test and the "complete" case
+  // in STATE_CASES above): a completed or finalizing-record update is
+  // Settings-only. Landing shows nothing for it, on first read, once retained
+  // as a stale record, and across a genuine live transition into it — and it
+  // never writes to the shared acknowledgement store that Settings owns.
+  describe("G9 — landing shows no success view for a completed/finalizing-record update", () => {
+    it("a FRESH completed attempt shows no banner", async () => {
+      const hostStatus = vi.fn(() =>
+        attemptStatus(
+          baseAttempt({
+            attemptId: "attempt-fresh-complete",
+            phase: "complete",
+            execution: "terminal",
+            liveness: "terminal",
+          }),
+        ),
+      );
+      bindLocalHost({ "host.status": hostStatus });
+      const queryClient = renderBanner(undefined);
+      // Settle the read before asserting absence — otherwise this passes
+      // vacuously on the initial loading frame, before the `complete`
+      // attempt was ever fetched. `bindLocalHost`'s override REPLACES the
+      // fixture's own handler, so its `hostStatusCalls()` counter never
+      // increments for an overridden method — the handler's own `vi.fn()`
+      // is what has to be awaited here.
+      await waitFor(() => {
+        expect(hostStatus).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(queryClient.isFetching()).toBe(0);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    });
+
+    it("a FINALIZING-RECORD attempt (refused completion write, host running the target) shows no banner", async () => {
+      const hostStatus = vi.fn(() =>
+        attemptStatus(
+          baseAttempt({
+            attemptId: "attempt-finalizing",
+            phase: "verifying",
+            liveness: "interrupted",
+            // `attemptStatus` fixes the reply's `hostVersion` at "1.5.0";
+            // `concludesAsFinalizingRecord` routes here only when the
+            // target matches the version the host is already running.
+            targetVersion: "1.5.0",
+          }),
+        ),
+      );
+      bindLocalHost({ "host.status": hostStatus });
+      const queryClient = renderBanner(undefined);
+      await waitFor(() => {
+        expect(hostStatus).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(queryClient.isFetching()).toBe(0);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    });
+
+    it("a STALE (retained) completed attempt — the host unreachable, last known phase complete — shows no banner", async () => {
+      bindLocalHost({
+        "host.status": () => {
+          throw new Error("host is not answering");
+        },
+      });
+      const staleCompleteStatus: HostControllerStatus = {
+        ...UP_TO_DATE_STATUS,
+        reachable: false,
+        localAttempt: {
+          attemptId: "attempt-stale-complete",
+          generation: 1,
+          sequence: 4,
+          targetVersion: "2.1.0",
+          phase: "complete",
+          continuation: null,
+          updatedAt: "2026-05-15T00:00:00Z",
+          error: null,
+          liveness: "unknown",
+          livenessObservedAtMs: null,
+        },
+      };
+      const getHostControllerStatus = vi.fn(() =>
+        Promise.resolve(staleCompleteStatus),
+      );
+      const queryClient = renderBanner(
+        createFakeRunnerHost({
+          hostManagement: { ...makeManagement(), getHostControllerStatus },
+        }),
+      );
+
+      // Await the retained `complete` localAttempt data itself, not just a
+      // settled query client that could still be mid-initial-fetch.
+      await waitFor(() => {
+        expect(getHostControllerStatus).toHaveBeenCalled();
+      });
+      await getHostControllerStatus.mock.results[0]?.value;
+      await waitFor(() => {
+        expect(queryClient.isFetching()).toBe(0);
+      });
+
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    });
+
+    it("a genuine live transition from active to complete removes the banner — a real success is not shown, not merely never rendered", async () => {
+      let calls = 0;
+      bindLocalHost({
+        "host.status": () => {
+          calls += 1;
+          if (calls === 1) {
+            return attemptStatus(
+              baseAttempt({
+                attemptId: "attempt-transition",
+                phase: "downloading",
+              }),
+            );
+          }
+          return attemptStatus(
+            baseAttempt({
+              attemptId: "attempt-transition",
+              phase: "complete",
+              execution: "terminal",
+              liveness: "terminal",
+            }),
+          );
+        },
+      });
+      const queryClient = renderBanner(undefined);
+      expect(await findPhaseText()).toMatch(/Downloading/);
+
+      await queryClient.refetchQueries({ type: "active" });
+      await waitFor(() => {
+        expect(calls).toBeGreaterThan(1);
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      });
+    });
+
+    it("landing writes no acknowledgement for a completed attempt, even past HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS — it never runs the completion hook at all", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       bindLocalHost({
         "host.status": () =>
           attemptStatus(
             baseAttempt({
-              attemptId: "attempt-complete-1",
+              attemptId: "attempt-no-ack",
               phase: "complete",
               execution: "terminal",
               liveness: "terminal",
@@ -1081,21 +1212,50 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           ),
       });
       renderBanner(undefined);
-      await screen.findByTestId("host-update-banner");
-      expect(
-        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
-      ).not.toContain("attempt-complete-1");
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      });
 
       await vi.advanceTimersByTimeAsync(
         HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS + 100,
       );
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("host-update-banner")).toBeNull();
-      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
       expect(
         useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
-      ).toContain("attempt-complete-1");
+      ).not.toContain("attempt-no-ack");
+    });
+
+    it("Settings shows a completed attempt while the landing banner (mounted beside it) shows nothing", async () => {
+      const fixture = bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              attemptId: "attempt-settings-only",
+              phase: "complete",
+              execution: "terminal",
+              liveness: "terminal",
+            }),
+          ),
+      });
+      recordNegotiatedHostMethods(LOCAL_HOST_ID, [
+        "host.status",
+        "host.identity.get",
+        "host.identity.set",
+        "host.getInstallationInfo",
+        "host.restart",
+        "host.doctor",
+        "host.update.check",
+        "host.update.install",
+        "diagnostics.logs.tail",
+      ]);
+      renderBannerWithRealOverview(fixture.client);
+
+      const card = await screen.findByTestId("host-overview-operation-card");
+      await waitFor(() => {
+        expect(card.textContent).toMatch(/Updated to v2\.1\.0/);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
     });
   });
 
