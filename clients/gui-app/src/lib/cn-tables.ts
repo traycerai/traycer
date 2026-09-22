@@ -11,7 +11,7 @@ const U = (s: string, o = 0): Int32Array => {
 }
 const PS = (counts: Int32Array): Int32Array => {
     const out = new Int32Array(counts.length + 1)
-    for (let i = 0; i < counts.length; i++) out[i + 1] = out[i] + counts[i]
+    for (let i = 0; i < counts.length; i++) out[i + 1] = out[i]! + counts[i]!
     return out
 }
 // zigzag-delta stream → running values
@@ -37,14 +37,14 @@ const edgeTarget = (() => {
     for (let i = N - 1; i >= 0; i--) {
         let s = 1
         let c = i + 1
-        for (let k = edgeStart[i]; k < edgeStart[i + 1]; k++) { s += sizes[c]; c += sizes[c] }
+        for (let k = edgeStart[i]!; k < edgeStart[i + 1]!; k++) { s += sizes[c]!; c += sizes[c]! }
         sizes[i] = s
     }
-    const out = new Int32Array(edgeStart[N])
+    const out = new Int32Array(edgeStart[N]!)
     let e = 0
     for (let i = 0; i < N; i++) {
         let c = i + 1
-        for (let k = edgeStart[i]; k < edgeStart[i + 1]; k++) { out[e++] = c; c += sizes[c] }
+        for (let k = edgeStart[i]!; k < edgeStart[i + 1]!; k++) { out[e++] = c; c += sizes[c]! }
     }
     return out
 })()
@@ -59,7 +59,7 @@ const nodeVlist = (() => {
     const out = new Int32Array(319).fill(-1)
     const A = DZ("02422242:222222242224222242442222222422222244442242226224222426222422442462222422622222222626222462242622422622422424242422222222422222222242422222222222222222622442224222222222222224424442262222222222222222222226224222424242422224422422422222")
     const V = DZ("02222222222222222222202222222222222222222222221422222222222222222222222222222222222Y\\222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222221422222222222222222222222222222222222222Ŀł222222222222222222")
-    for (let i = 0; i < A.length; i++) out[A[i]] = V[i]
+    for (let i = 0; i < A.length; i++) out[A[i]!] = V[i]!
     return out
 })()
 const SETS = "container |break-after- all auto avoid avoid-page column left page right|break-before- all auto avoid avoid-page column left page right|break-inside-a uto void void-column void-page|box-decoration- clone slice|box- border content| contents flow-root hidden table table-caption table-cell table-column table-column-group table-footer-group table-header-group table-row table-row-group| not-sr-only sr-only|float- end left none right start|clear- both end left none right start|isolat e ion-auto|overflow- auto clip hidden scroll visible|overflow-x- auto clip hidden scroll visible|overflow-y- auto clip hidden scroll visible|overscroll- auto contain none|overscroll-x- auto contain none|overscroll-y- auto contain none| absolute fixed relative static sticky| collapse invisible visible|justify- around baseline between center center-safe end end-safe evenly normal start stretch|justify-items- center center-safe end end-safe normal start stretch|justify-self- auto center center-safe end end-safe start stretch|items- baseline baseline-last center center-safe end end-safe start stretch|self- auto baseline baseline-last center center-safe end end-safe start stretch|place-content- around baseline between center center-safe end end-safe evenly start stretch|place-items- baseline center center-safe end end-safe start stretch|place-self- auto center center-safe end end-safe start stretch| antialiased subpixel-antialiased| italic not-italic|normal-nums |ordinal |slashed-zero | lining-nums oldstyle-nums| proportional-nums tabular-nums| diagonal-fractions stacked-fractions| no-underline overline| capitalize lowercase normal-case uppercase|truncate |whitespace- break-spaces normal nowrap pre pre-line pre-wrap|break- all keep normal words|wrap- anywhere break-word normal|hyphens- auto manual none|mix-blend- color color-burn color-dodge darken difference exclusion hard-light hue lighten luminosity multiply normal overlay plus-darker plus-lighter saturation screen soft-light|table- auto fixed|caption- bottom top|backface- hidden visible|appearance- auto none|scheme- dark light light-dark normal only-dark only-light|field-sizing- content fixed|pointer-events- auto none|resize  -none -x -y|snap- align-none center end start|snap- always normal|snap- both none x y|snap- mandatory proximity|touch- auto manipulation none|touch-pan- left right x|touch-pan- down up y|touch-pinch-zoom |select- all auto none text|forced-color-adjust- auto none| normal size| baseline bottom middle sub super text-bottom text-top top| bounce none ping pulse spin| auto square video| auto fr max min px|none | auto full px| fixed local scroll|clip- border content padding text|origin- border content padding| bottom bottom-left bottom-right center left left-bottom left-top right right-bottom right-top top top-left top-right| no-repeat repeat repeat-round repeat-space repeat-x repeat-y| auto contain cover| gradient-to-b gradient-to-bl gradient-to-br gradient-to-l gradient-to-r gradient-to-t gradient-to-tl gradient-to-tr none|blend- color color-burn color-dodge darken difference exclusion hard-light hue lighten luminosity multiply normal overlay saturation screen soft-light|to- b bl br l r t tl tr| auto dvh fit full lh lvh max min px screen svh| dashed dotted double hidden none solid| collapse separate|px | auto full px safe-bottom safe-bottom-gutter safe-center-x safe-center-y safe-left safe-left-gutter safe-right safe-right-gutter safe-top safe-top-gutter|auto |full | content none strict| inline-size size|layout |paint |style | around baseline between center center-safe end end-safe evenly normal start stretch| alias all-scroll auto cell col-resize context-menu copy crosshair default e-resize ew-resize grab grabbing help move n-resize ne-resize nesw-resize no-drop none not-allowed ns-resize nw-resize nwse-resize pointer progress row-resize s-resize se-resize sw-resize text vertical-text w-resize wait zoom-in zoom-out| dashed dotted double solid wavy| auto from-font|reverse |initial | in in-out initial linear out| col col-reverse row row-reverse| nowrap wrap wrap-reverse| auto initial none| black bold extrabold extralight light medium normal semibold thin| condensed expanded extra-condensed extra-expanded normal semi-condensed semi-expanded ultra-condensed ultra-expanded|flow- col col-dense dense row row-dense| none subgrid| auto dvh dvw fit full lh lvh lvw max min px safe-dvh safe-svh screen svh svw| block flex grid table| auto dvw fit full lvw max min px screen svw| loose none normal px relaxed snug tight|through |item | inside outside| decimal disc none| auto px safe-bottom safe-bottom-gutter safe-left safe-left-gutter safe-right safe-right-gutter safe-top safe-top-gutter| clip-border clip-content clip-fill clip-padding clip-stroke clip-view no-clip| add exclude intersect subtract| alpha luminance match|origin- border content fill padding stroke view|type- alpha luminance| circle ellipse| closest-corner closest-side farthest-corner farthest-side|at- bottom bottom-left bottom-right center left left-bottom left-top right right-bottom right-top top top-left top-right| dvh fit full lh lvh max min none px screen svh| auto dvh dvw fit full lh lvh lvw max min none px safe-dvh safe-svh screen svh svw| dvw fit full lvw max min none px screen svw| auto dvh dvw fit full lvh lvw max min none prose px safe-dvw svh svw| auto px| auto dvh dvw fit full lvh lvw max min none px safe-dvw screen svh svw| contain cover fill none scale-down| first last none| px safe-bottom safe-bottom-gutter safe-left safe-left-gutter safe-right safe-right-gutter safe-top safe-top-gutter| distant dramatic midrange near none normal|inset | full none|3d | auto smooth|gutter- auto both stable| auto none thin| inner none| auto dvh dvw fit full lvh lvw max min px svh svw| badge base code code-sm code-xs display micro overline title-lg title-md title-sm title-xs ui ui-base ui-lg ui-md ui-sm ui-xs| center end justify left right start| clip ellipsis| balance nowrap pretty wrap| normal tight tighter wide wider widest| cpu gpu none| 3d flat| all colors none opacity shadow transform| discrete normal| full px| auto dvh dvw fit full lvh lvw max min px safe-dvw screen svh svw| auto contents scroll transform".split('|').map((s) => {
@@ -83,7 +83,7 @@ const poolOffsets = new Int32Array(1096)
     let nextRef = 0
     let e = 0
     for (let i = 0; i < AA.length; i++) {
-        for (const tail of SETS[AS[i]]) {
+        for (const tail of SETS[AS[i]!]!) {
             let r = tailRef.get(tail)
             if (r === undefined) {
                 r = nextRef++
@@ -92,8 +92,8 @@ const poolOffsets = new Int32Array(1096)
                 poolOffsets[r * 2 + 1] = tail.length
                 poolText += tail
             }
-            litAnchor[e] = AA[i]
-            litGroup[e] = AG[i]
+            litAnchor[e] = AA[i]!
+            litGroup[e] = AG[i]!
             litPool[e] = r
             e++
         }
