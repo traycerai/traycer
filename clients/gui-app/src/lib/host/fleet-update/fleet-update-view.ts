@@ -931,11 +931,9 @@ function attemptOperationView(input: {
   // FALL-BACK, NOT REPLACEMENT: the substitution applies to THIS CHOICE only.
   // With no park the attempt arm below still runs and still answers, so
   // `superseded` keeps projecting `idle` and - the case that makes the
-  // distinction load-bearing - `complete` keeps projecting `complete`. The
-  // landing banner renders a completion acknowledgement off that kind and
-  // auto-collapses it (`useLandingCompletionCollapse`), and ITS leg passes
-  // `legacyFacts: null`, so a blanket substitution would have deleted that
-  // surface outright rather than merely reordering it.
+  // distinction load-bearing - `complete` keeps projecting `complete`.
+  // Settings acknowledges that success; the landing banner omits it. Those
+  // presentation choices do not change what this projection knows.
   //
   // `failed` is excluded because its cause must render: it is the one terminal
   // state with something to say that the records cannot say for it. And a park

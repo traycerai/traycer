@@ -2178,15 +2178,9 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
   });
 
   it("(3) complete with installed == running keeps its COMPLETE kind - the acknowledgement is not spent to reach the rule", () => {
-    // The FALL-BACK half, and the reason the rule is not a replacement. With
-    // no park the attempt arm still answers, so the landing banner's
-    // completion acknowledgement (`useLandingCompletionCollapse`, keyed on
-    // `kind === "complete"` and the attempt id) survives. Its own leg passes
-    // `legacyFacts: null` — the fixture default here — so a substitution that
-    // returned `{kind:"none"}`'s answer outright would project `idle` and
-    // delete that surface. Falsification: make the fall-through return the
-    // `none` arm's result instead of falling back, and this reddens along
-    // with `host-update-banner-bound.test.tsx:437` and `:1001`.
+    // With no record-derived park, the attempt still projects `complete` for
+    // Settings to acknowledge. Landing suppresses only its presentation;
+    // replacing this result with `idle` would also remove the Settings notice.
     const view = projectFleetUpdateView({
       observation: observation({
         operation: attemptOperation({

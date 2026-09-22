@@ -85,6 +85,10 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
+import {
+  HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS,
+  useHostUpdateBannerStore,
+} from "@/stores/settings/host-update-banner-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
@@ -458,6 +462,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  useHostUpdateBannerStore.setState({ landingDismissedAttemptIds: [] });
   vi.useRealTimers();
 });
 
@@ -2582,4 +2587,232 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
   });
+});
+
+// `useHostUpdateCompletion` (`hooks/host/use-host-update-completion.ts`):
+// a completed/finalizing-record update is SETTINGS-ONLY. The landing banner
+// never renders that kind at all and never calls this hook (G9,
+// `host-update-banner-bound.test.tsx`), so there is no cross-surface contract
+// to pin here — this card owns the manual dismiss, the auto-collapse timer,
+// and its own write into `landingDismissedAttemptIds` for a success. That
+// store field stays failure-writable from landing too, but this card only
+// ever resolves an attempt id out of it for `complete`/`finalizing-record`,
+// never `failed`, which is what keeps a landing failure dismissal from
+// hiding a failure here.
+describe("HostOverviewOperationCard — success acknowledgement (Settings-only)", () => {
+  const HOST_ID = "host-a";
+
+  function completeOperation(attemptId: string): HostStatusUpdateOperation {
+    return attemptOperation({
+      attemptId,
+      phase: "complete",
+      execution: "terminal",
+      liveness: "terminal",
+    });
+  }
+
+  function bindComplete(attemptId: string): void {
+    const fixture = buildOverviewHostFixture({
+      hostId: HOST_ID,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => statusWith(completeOperation(attemptId)),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+  }
+
+  it("a completed attempt offers a manual Dismiss (host-overview-operation-dismiss), and clicking it hides the card immediately", async () => {
+    bindComplete("attempt-complete-a");
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Updated to v2\.1\.0/);
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-complete-a");
+  });
+
+  it("the Settings surface auto-collapses a completed attempt on its own after HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS, with no landing banner mounted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    bindComplete("attempt-complete-timer");
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).not.toContain("attempt-complete-timer");
+
+    await vi.advanceTimersByTimeAsync(
+      HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS + 100,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-complete-timer");
+  });
+
+  it("a finalizing-record view (a refused completion write, running the target version) is dismissible the same way", async () => {
+    // Same shape the "a refused completion write is not a failure" suite
+    // above uses to reach `finalizing-record`: an abandoned `verifying`
+    // executor, host running the target, coarse `{state:"updating"}` marker
+    // beside the untouched record.
+    const fixture = buildOverviewHostFixture({
+      hostId: HOST_ID,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ...statusWith(
+            attemptOperation({
+              attemptId: "attempt-finalizing-1",
+              phase: "verifying",
+              liveness: "interrupted",
+              targetVersion: "2.1.0",
+            }),
+          ),
+          hostVersion: "2.1.0",
+          updateProgress: { state: "updating", error: null },
+        }),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    await waitFor(() => {
+      expect(card.textContent).toMatch(/update record is still open/);
+    });
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-finalizing-1");
+  });
+
+  it("a dismissal survives a remount, and does not pre-dismiss a NEWER attempt id on the same host", async () => {
+    bindComplete("attempt-old-settings");
+    const queryClient1 = renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(queryClient1.isFetching()).toBe(0);
+    });
+
+    // Remount: unmount the tree and mount a fresh one, same attempt id. The
+    // dismissal is persisted zustand state (not component state), so it
+    // survives a genuine unmount/remount, not merely a rerender.
+    cleanup();
+    hostBindingMock.current = null;
+    bindComplete("attempt-old-settings");
+    renderPanel();
+    // Wait for a render derived from the status reply before asserting
+    // absence, same as the sibling "no coarse marker" test above.
+    await screen.findByText(/1\.5\.0/);
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    // A NEWER attempt id on the same host is not pre-dismissed.
+    cleanup();
+    hostBindingMock.current = null;
+    bindComplete("attempt-new-settings");
+    renderPanel();
+    await screen.findByTestId("host-overview-operation-card");
+  });
+
+  it("a FAILED attempt already dismissed (by id) on the landing banner still renders on Settings, with no dismiss control offered there", async () => {
+    // Simulates a prior landing dismissal writing this attempt id into the
+    // SAME store field this card's success dismissal uses.
+    // `useHostUpdateCompletion` resolves an attempt id only for
+    // `complete`/`finalizing-record`, so a `failed` view is never suppressed
+    // by it regardless of what the store holds under this id.
+    useHostUpdateBannerStore
+      .getState()
+      .dismissLandingAttempt("attempt-failed-shared");
+    const fixture = buildOverviewHostFixture({
+      hostId: HOST_ID,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () =>
+          statusWith(
+            attemptOperation({
+              attemptId: "attempt-failed-shared",
+              phase: "downloading",
+              liveness: "interrupted",
+            }),
+          ),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Update failed/);
+    expect(screen.queryByTestId("host-overview-operation-dismiss")).toBeNull();
+  });
+
+  const NON_TERMINAL_CASES: ReadonlyArray<{
+    readonly name: string;
+    readonly operation: HostStatusUpdateOperation;
+  }> = [
+    {
+      name: "active (downloading)",
+      operation: attemptOperation({ phase: "downloading" }),
+    },
+    {
+      name: "parked (waiting-for-work)",
+      operation: attemptOperation({
+        phase: "waiting-for-work",
+        execution: "parked",
+        busySessionCount: 2,
+      }),
+    },
+  ];
+
+  it.each(NON_TERMINAL_CASES)(
+    "offers no dismiss control for a $name attempt",
+    async ({ operation }) => {
+      const fixture = buildOverviewHostFixture({
+        hostId: HOST_ID,
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => statusWith(operation),
+        },
+      });
+      recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+      renderPanel();
+
+      await screen.findByTestId("host-overview-operation-card");
+      expect(
+        screen.queryByTestId("host-overview-operation-dismiss"),
+      ).toBeNull();
+    },
+  );
 });
