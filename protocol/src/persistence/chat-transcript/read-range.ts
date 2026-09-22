@@ -328,6 +328,139 @@ function recordBytes(
 }
 
 /**
+ * What the budget reads of the records: whether the authority holds one, and
+ * its `recordByteLength` - never its body.
+ *
+ * The slicers below are PLANNED over this and only then materialized, so a
+ * store that keeps each record's length in a column plans a span from those
+ * columns and reads just the bodies the plan names - the same rows, the same
+ * records and the same truncation point as an in-memory slice of the same
+ * transcript, because it is the same code deciding them.
+ */
+export interface TranscriptRecordSizes {
+  /** `undefined` when the authority does not hold the record. */
+  messageBytes(messageId: string): number | undefined;
+  eventBytes(eventId: string): number | undefined;
+}
+
+/** {@link TranscriptRecordSizes} over a lookup that holds the bodies. */
+export function transcriptRecordSizesOf(
+  lookup: TranscriptRecordLookup,
+  memo: RecordFingerprintMemo | null,
+): TranscriptRecordSizes {
+  return {
+    messageBytes: (messageId) => {
+      const message = lookup.messagesById.get(messageId);
+      return message === undefined ? undefined : recordBytes(memo, message);
+    },
+    eventBytes: (eventId) => {
+      const event = lookup.eventsById.get(eventId);
+      return event === undefined ? undefined : recordBytes(memo, event);
+    },
+  };
+}
+
+/** The part of a row the slicers read. */
+export type TranscriptPlannedRow = Pick<
+  TranscriptRowDescriptor,
+  "rowId" | "source" | "context"
+>;
+
+/**
+ * The rows a plan may read: `rowAt` answers every ordinal in
+ * `[firstOrdinal, rowCount)`. An in-memory transcript is the whole of it
+ * (`firstOrdinal` 0); a store hands over the stretch it loaded.
+ */
+export interface TranscriptRowWindow {
+  readonly rowCount: number;
+  readonly firstOrdinal: number;
+  rowAt(ordinal: number): TranscriptPlannedRow;
+}
+
+/** {@link TranscriptRowWindow} over a whole row list. */
+export function transcriptRowWindowOf(
+  rows: readonly TranscriptPlannedRow[],
+): TranscriptRowWindow {
+  return {
+    rowCount: rows.length,
+    firstOrdinal: 0,
+    rowAt: (ordinal) => rows[ordinal],
+  };
+}
+
+/** A range slice with its records named rather than carried. */
+export type TranscriptRangePlan = Omit<
+  TranscriptRangeSlice,
+  "messages" | "events"
+> & {
+  /** In the order the slice carries them. */
+  readonly messageIds: readonly string[];
+  readonly eventIds: readonly string[];
+};
+
+/** One row's charge: its cost, and the records it introduces. */
+interface PlannedRowCharge {
+  readonly cost: number;
+  readonly freshMessageIds: readonly string[];
+  readonly freshEventIds: readonly string[];
+  readonly recordsComplete: boolean;
+  readonly hasContext: boolean;
+}
+
+function planRowCharge(
+  row: TranscriptPlannedRow,
+  sizes: TranscriptRecordSizes,
+  seenMessageIds: ReadonlySet<string>,
+  seenEventIds: ReadonlySet<string>,
+): PlannedRowCharge {
+  const needed = rowRecordIds(row.source);
+  const freshMessageIds: string[] = [];
+  const freshEventIds: string[] = [];
+  // The row id is a serialized array element too - it costs its JSON string
+  // plus a separator. Charging only the records is what let 4,378 small rows
+  // overshoot a 1 MiB budget by 148 KB.
+  let cost = encodedElementBytes(row.rowId);
+  // Context is part of the frame, so it is part of the budget. Charged only
+  // when the row has some - an empty one is not serialized at all.
+  const hasContext = Object.keys(row.context).length > 0;
+  if (hasContext) {
+    cost +=
+      encodedMemberKeyBytes(row.rowId) +
+      utf8ByteLength(JSON.stringify(row.context));
+  }
+  let recordsComplete = true;
+  for (const messageId of needed.messageIds) {
+    const bytes = sizes.messageBytes(messageId);
+    // A row naming a record the authority no longer holds is served without
+    // it rather than dropped: the row still exists at this ordinal, and a
+    // hole in the ids would shift everything after it.
+    if (bytes === undefined) {
+      recordsComplete = false;
+      continue;
+    }
+    if (seenMessageIds.has(messageId) || freshMessageIds.includes(messageId)) {
+      continue;
+    }
+    freshMessageIds.push(messageId);
+    cost += bytes + ELEMENT_SEPARATOR_BYTES;
+  }
+  for (const eventId of needed.eventIds) {
+    const bytes = sizes.eventBytes(eventId);
+    if (bytes === undefined) {
+      recordsComplete = false;
+      continue;
+    }
+    if (seenEventIds.has(eventId) || freshEventIds.includes(eventId)) {
+      continue;
+    }
+    freshEventIds.push(eventId);
+    cost += bytes + ELEMENT_SEPARATOR_BYTES;
+  }
+  if (!recordsComplete) cost += encodedElementBytes(row.rowId);
+  return { cost, freshMessageIds, freshEventIds, recordsComplete, hasContext };
+}
+
+/**
  * Slices `[fromOrdinal, toOrdinal]` out of projection order, under a byte
  * budget.
  *
@@ -347,20 +480,59 @@ export function sliceTranscriptRange(
   request: TranscriptRangeRequest,
   memo: RecordFingerprintMemo | null,
 ): TranscriptRangeSlice {
-  const empty: TranscriptRangeSlice = {
+  const plan = planTranscriptRange(
+    transcriptRowWindowOf(rows),
+    transcriptRecordSizesOf(lookup, memo),
+    request,
+  );
+  return {
+    fromOrdinal: plan.fromOrdinal,
+    rowIds: plan.rowIds,
+    incompleteRowIds: plan.incompleteRowIds,
+    messages: materialize(plan.messageIds, lookup.messagesById),
+    events: materialize(plan.eventIds, lookup.eventsById),
+    rowContext: plan.rowContext,
+    reachedStart: plan.reachedStart,
+    reachedEnd: plan.reachedEnd,
+    truncatedAtOrdinal: plan.truncatedAtOrdinal,
+  };
+}
+
+function materialize<T>(
+  ids: readonly string[],
+  byId: ReadonlyMap<string, T>,
+): readonly T[] {
+  return ids.flatMap((id) => {
+    const record = byId.get(id);
+    return record === undefined ? [] : [record];
+  });
+}
+
+/**
+ * {@link sliceTranscriptRange}'s decision, over record sizes: which rows are
+ * served, which records they need, and where the budget ran out. The window
+ * must answer every ordinal from the clamped `fromOrdinal` to the clamped
+ * `toOrdinal`.
+ */
+export function planTranscriptRange(
+  window: TranscriptRowWindow,
+  sizes: TranscriptRecordSizes,
+  request: TranscriptRangeRequest,
+): TranscriptRangePlan {
+  const empty: TranscriptRangePlan = {
     fromOrdinal: 0,
     rowIds: [],
     incompleteRowIds: [],
-    messages: [],
-    events: [],
+    messageIds: [],
+    eventIds: [],
     rowContext: {},
     reachedStart: true,
     reachedEnd: true,
     truncatedAtOrdinal: undefined,
   };
-  if (rows.length === 0) return empty;
+  if (window.rowCount === 0) return empty;
 
-  const lastOrdinal = rows.length - 1;
+  const lastOrdinal = window.rowCount - 1;
   // A span entirely past the end is nothing, not the last row. Clamping
   // `fromOrdinal` down would serve a row the caller did not ask for and report
   // it under an ordinal it did not request.
@@ -376,8 +548,8 @@ export function sliceTranscriptRange(
 
   const rowIds: string[] = [];
   const incompleteRowIds: string[] = [];
-  const messages: Message[] = [];
-  const events: ChatEvent[] = [];
+  const messageIds: string[] = [];
+  const eventIds: string[] = [];
   const rowContext: Record<string, TranscriptRowContext> = {};
   const seenMessageIds = new Set<string>();
   const seenEventIds = new Set<string>();
@@ -394,60 +566,24 @@ export function sliceTranscriptRange(
     TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES;
 
   for (let ordinal = from; ordinal <= to; ordinal += 1) {
-    const needed = rowRecordIds(rows[ordinal].source);
-    const freshMessages: Message[] = [];
-    const freshEvents: ChatEvent[] = [];
-    // The row id is a serialized array element too - it costs its JSON string
-    // plus a separator. Charging only the records is what let 4,378 small rows
-    // overshoot a 1 MiB budget by 148 KB.
-    let cost = encodedElementBytes(rows[ordinal].rowId);
-    // Context is part of the frame, so it is part of the budget. Charged only
-    // when the row has some - an empty one is not serialized at all.
-    const context = rows[ordinal].context;
-    const hasContext = Object.keys(context).length > 0;
-    if (hasContext) {
-      cost +=
-        encodedMemberKeyBytes(rows[ordinal].rowId) +
-        utf8ByteLength(JSON.stringify(context));
-    }
-    for (const messageId of needed.messageIds) {
-      if (seenMessageIds.has(messageId)) continue;
-      const message = lookup.messagesById.get(messageId);
-      // A row naming a record the authority no longer holds is served without
-      // it rather than dropped: the row still exists at this ordinal, and a
-      // hole in the ids would shift everything after it.
-      if (message === undefined) continue;
-      freshMessages.push(message);
-      cost += recordBytes(memo, message) + ELEMENT_SEPARATOR_BYTES;
-    }
-    for (const eventId of needed.eventIds) {
-      if (seenEventIds.has(eventId)) continue;
-      const event = lookup.eventsById.get(eventId);
-      if (event === undefined) continue;
-      freshEvents.push(event);
-      cost += recordBytes(memo, event) + ELEMENT_SEPARATOR_BYTES;
-    }
-    const recordsComplete =
-      needed.messageIds.every((messageId) =>
-        lookup.messagesById.has(messageId),
-      ) && needed.eventIds.every((eventId) => lookup.eventsById.has(eventId));
-    if (!recordsComplete) cost += encodedElementBytes(rows[ordinal].rowId);
+    const row = window.rowAt(ordinal);
+    const charge = planRowCharge(row, sizes, seenMessageIds, seenEventIds);
     // The first row is always served, whatever it costs - see `maxBytes`.
-    if (rowIds.length > 0 && spent + cost > budget) {
+    if (rowIds.length > 0 && spent + charge.cost > budget) {
       truncatedAtOrdinal = ordinal;
       break;
     }
-    spent += cost;
-    rowIds.push(rows[ordinal].rowId);
-    if (!recordsComplete) incompleteRowIds.push(rows[ordinal].rowId);
-    if (hasContext) rowContext[rows[ordinal].rowId] = context;
-    for (const message of freshMessages) {
-      seenMessageIds.add(message.messageId);
-      messages.push(message);
+    spent += charge.cost;
+    rowIds.push(row.rowId);
+    if (!charge.recordsComplete) incompleteRowIds.push(row.rowId);
+    if (charge.hasContext) rowContext[row.rowId] = row.context;
+    for (const messageId of charge.freshMessageIds) {
+      seenMessageIds.add(messageId);
+      messageIds.push(messageId);
     }
-    for (const event of freshEvents) {
-      seenEventIds.add(event.eventId);
-      events.push(event);
+    for (const eventId of charge.freshEventIds) {
+      seenEventIds.add(eventId);
+      eventIds.push(eventId);
     }
   }
 
@@ -455,8 +591,8 @@ export function sliceTranscriptRange(
     fromOrdinal: from,
     rowIds,
     incompleteRowIds,
-    messages,
-    events,
+    messageIds,
+    eventIds,
     rowContext,
     reachedStart: from === 0,
     // Truncation means the span did not finish, so it cannot have reached the
@@ -489,6 +625,22 @@ export interface TranscriptTailSlice {
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
 }
+
+/** A tail slice with its records named rather than carried. */
+export type TranscriptTailPlan = Omit<
+  TranscriptTailSlice,
+  "messages" | "events"
+> & {
+  /** In the order the slice carries them. */
+  readonly messageIds: readonly string[];
+  readonly eventIds: readonly string[];
+  /**
+   * The walk reached the window's first row with budget left and rows below
+   * it: a store that loaded only part of the transcript widens the window and
+   * plans again. Always `false` over a whole transcript.
+   */
+  readonly windowExhausted: boolean;
+};
 
 /**
  * The last rows that fit in `maxBytes`, walking BACKWARD from the end.
@@ -544,6 +696,27 @@ export function sliceTranscriptTail(
   maxBytes: number,
   memo: RecordFingerprintMemo | null,
 ): TranscriptTailSlice {
+  const plan = planTranscriptTail(
+    transcriptRowWindowOf(rows),
+    transcriptRecordSizesOf(lookup, memo),
+    maxBytes,
+  );
+  return {
+    fromOrdinal: plan.fromOrdinal,
+    rowIds: plan.rowIds,
+    incompleteRowIds: plan.incompleteRowIds,
+    messages: materialize(plan.messageIds, lookup.messagesById),
+    events: materialize(plan.eventIds, lookup.eventsById),
+    rowContext: plan.rowContext,
+  };
+}
+
+/** {@link sliceTranscriptTail}'s decision, over record sizes. */
+export function planTranscriptTail(
+  window: TranscriptRowWindow,
+  sizes: TranscriptRecordSizes,
+  maxBytes: number,
+): TranscriptTailPlan {
   const budget = Math.max(
     0,
     Math.min(maxBytes, TRANSCRIPT_TAIL_MAX_BYTES) -
@@ -551,73 +724,57 @@ export function sliceTranscriptTail(
   );
   const rowIds: string[] = [];
   const incompleteRowIds: string[] = [];
-  const messages: Message[] = [];
-  const events: ChatEvent[] = [];
   const rowContext: Record<string, TranscriptRowContext> = {};
   const seenMessageIds = new Set<string>();
   const seenEventIds = new Set<string>();
+  // Each row's fresh records, newest row first; reversed as BLOCKS at the end.
+  const messageBlocks: (readonly string[])[] = [];
+  const eventBlocks: (readonly string[])[] = [];
   let spent = 0;
-  let fromOrdinal = rows.length;
+  let fromOrdinal = window.rowCount;
+  let stopped = false;
 
-  for (let ordinal = rows.length - 1; ordinal >= 0; ordinal -= 1) {
-    const needed = rowRecordIds(rows[ordinal].source);
-    const freshMessages: Message[] = [];
-    const freshEvents: ChatEvent[] = [];
-    let cost = encodedElementBytes(rows[ordinal].rowId);
+  for (
+    let ordinal = window.rowCount - 1;
+    ordinal >= window.firstOrdinal;
+    ordinal -= 1
+  ) {
+    const row = window.rowAt(ordinal);
     // Charged exactly as a range charges it - the tail's ceiling is HARD, so an
     // uncounted field here would push a snapshot past the frame invariant with
     // no over-budget exception to fall back on.
-    const context = rows[ordinal].context;
-    const hasContext = Object.keys(context).length > 0;
-    if (hasContext) {
-      cost +=
-        encodedMemberKeyBytes(rows[ordinal].rowId) +
-        utf8ByteLength(JSON.stringify(context));
-    }
-    for (const messageId of needed.messageIds) {
-      if (seenMessageIds.has(messageId)) continue;
-      const message = lookup.messagesById.get(messageId);
-      if (message === undefined) continue;
-      freshMessages.push(message);
-      cost += recordBytes(memo, message) + ELEMENT_SEPARATOR_BYTES;
-    }
-    for (const eventId of needed.eventIds) {
-      if (seenEventIds.has(eventId)) continue;
-      const event = lookup.eventsById.get(eventId);
-      if (event === undefined) continue;
-      freshEvents.push(event);
-      cost += recordBytes(memo, event) + ELEMENT_SEPARATOR_BYTES;
-    }
-    const recordsComplete =
-      needed.messageIds.every((messageId) =>
-        lookup.messagesById.has(messageId),
-      ) && needed.eventIds.every((eventId) => lookup.eventsById.has(eventId));
-    if (!recordsComplete) cost += encodedElementBytes(rows[ordinal].rowId);
+    const charge = planRowCharge(row, sizes, seenMessageIds, seenEventIds);
     // Hard ceiling, including for the very first row considered - see above.
-    if (spent + cost > budget) break;
-    spent += cost;
+    if (spent + charge.cost > budget) {
+      stopped = true;
+      break;
+    }
+    spent += charge.cost;
     fromOrdinal = ordinal;
-    rowIds.unshift(rows[ordinal].rowId);
-    if (!recordsComplete) incompleteRowIds.unshift(rows[ordinal].rowId);
-    if (hasContext) rowContext[rows[ordinal].rowId] = context;
-    // Unshift each row's fresh records as a BLOCK, not one at a time. Walking
-    // backward and unshifting individually reverses a row's own records, and
-    // record order is load-bearing: the client rebuilds a folded turn by
-    // walking the array and concatenating blocks in that order, so a reversed
-    // multi-record turn renders its content out of order. Caught by a test
-    // written for a different property.
-    for (const message of freshMessages) seenMessageIds.add(message.messageId);
-    messages.unshift(...freshMessages);
-    for (const event of freshEvents) seenEventIds.add(event.eventId);
-    events.unshift(...freshEvents);
+    rowIds.unshift(row.rowId);
+    if (!charge.recordsComplete) incompleteRowIds.unshift(row.rowId);
+    if (charge.hasContext) rowContext[row.rowId] = row.context;
+    // Each row's fresh records stay a BLOCK, not reversed one at a time.
+    // Walking backward and unshifting individually reverses a row's own
+    // records, and record order is load-bearing: the client rebuilds a folded
+    // turn by walking the array and concatenating blocks in that order, so a
+    // reversed multi-record turn renders its content out of order. Caught by a
+    // test written for a different property.
+    for (const messageId of charge.freshMessageIds) {
+      seenMessageIds.add(messageId);
+    }
+    for (const eventId of charge.freshEventIds) seenEventIds.add(eventId);
+    messageBlocks.unshift(charge.freshMessageIds);
+    eventBlocks.unshift(charge.freshEventIds);
   }
 
   return {
     fromOrdinal,
     rowIds,
     incompleteRowIds,
-    messages,
-    events,
+    messageIds: messageBlocks.flat(),
+    eventIds: eventBlocks.flat(),
     rowContext,
+    windowExhausted: !stopped && window.firstOrdinal > 0,
   };
 }
