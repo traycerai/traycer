@@ -43,14 +43,17 @@ import type { ServiceController } from "../../index";
 import {
   serviceLabelFor,
   serviceLauncherScriptPath,
+  serviceManifestPath,
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import {
   isServiceMutationAuthorityError,
   ServiceMutationAuthorityError,
+  withServiceMutationAuthority,
 } from "../../mutation-authority";
 import { didServiceRegistrationCommit } from "../../cli-invocation-record";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 
 const execFileAsync = promisify(execFile);
 
@@ -165,8 +168,18 @@ vi.mock("../../health-probe", () => ({
 // Redirect the manifest path to a private, uniquely-created temp dir so the
 // suite never touches real macOS service registration or follows a predictable
 // path another local user could pre-create.
+//
+// `serviceLauncherScriptPath` resolves through the same real `homedir()` to
+// `~/.traycer/service/<label>/traycer-host-start`, and `installService`
+// writes that file for real on every install this suite exercises - so it
+// gets the same redirection, into its own temp root, preserving the
+// `<root>/<label-id>/traycer-host-start` shape the production path checks
+// (label-id-as-directory) depend on.
 const TEST_LAUNCH_AGENTS_DIR = mkdtempSync(
   join(tmpdir(), "traycer-macos-service-test-"),
+);
+const TEST_LAUNCHER_ROOT = mkdtempSync(
+  join(tmpdir(), "traycer-macos-launcher-test-"),
 );
 vi.mock("../../label", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../label")>();
@@ -174,6 +187,8 @@ vi.mock("../../label", async (importOriginal) => {
     ...actual,
     serviceManifestPath: (label: { readonly id: string }) =>
       join(TEST_LAUNCH_AGENTS_DIR, `${label.id}.plist`),
+    serviceLauncherScriptPath: (label: { readonly id: string }) =>
+      join(TEST_LAUNCHER_ROOT, label.id, "traycer-host-start"),
   };
 });
 
@@ -525,6 +540,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
   afterAll(async () => {
     await rm(tempPlistDir, { recursive: true, force: true });
+    await rm(TEST_LAUNCHER_ROOT, { recursive: true, force: true });
   });
 
   it("on an existing registration runs print → bootout → bootstrap → kickstart and returns cleanly", async () => {
@@ -5357,5 +5373,413 @@ describe("Q13 convergence: the post-swap relaunch against a waiting supervisor",
     const kickstarts = calls.filter((c) => c.args[0] === "kickstart");
     expect(kickstarts).toHaveLength(1);
     expect(kickstarts[0]?.args).toContain("-k");
+  });
+});
+
+describe("macOS controller — spawn-edge placement", () => {
+  const label = serviceLabelFor("production");
+
+  // Every runner call and the publish spy push into ONE shared log, in the
+  // order they actually happen - so "publish sits at the edge" is a
+  // statement about a single timeline, not a comparison between two
+  // independently-kept ones.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function loggingRunner(log: string[]): ProcessRunner {
+    return async (_command, args) => {
+      log.push(args.join(" "));
+      return buildSuccessResult();
+    };
+  }
+
+  /** Asserts publish ran exactly once, with `spawnPredicate` matching the
+   * entry immediately after it and nothing before it. */
+  function expectEdgeImmediatelyPrecedesSpawn(
+    log: readonly string[],
+    spawnPredicate: (entry: string) => boolean,
+  ): void {
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(log.slice(0, publishIndex).some(spawnPredicate)).toBe(false);
+    const next = log[publishIndex + 1];
+    expect(next).toBeDefined();
+    expect(next !== undefined && spawnPredicate(next)).toBe(true);
+  }
+
+  it("install (normal): the ownership print/bootout precede publish, and bootstrap is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(log, (entry) =>
+      entry.startsWith("bootstrap"),
+    );
+    const publishIndex = log.indexOf("publish");
+    const preEdge = log.slice(0, publishIndex);
+    expect(preEdge.some((entry) => entry.startsWith("print"))).toBe(true);
+    expect(preEdge.some((entry) => entry.startsWith("bootout"))).toBe(true);
+  });
+
+  it("install through the bootstrap-reload race: publish sits right before the FIRST bootstrap, then two bootstraps and the kickstart follow with no second publish", async () => {
+    const { log, publish } = makeSharedLog();
+    const runner: ProcessRunner = async (_command, args) => {
+      log.push(args.join(" "));
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command: "launchctl",
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 37: Service is already loaded\n",
+          stdout: "",
+          exitCode: 37,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(log, (entry) =>
+      entry.startsWith("bootstrap"),
+    );
+    expect(log.filter((entry) => entry.startsWith("bootstrap"))).toHaveLength(
+      2,
+    );
+    expect(log.filter((entry) => entry.startsWith("kickstart"))).toHaveLength(
+      1,
+    );
+    // The kickstart, the third edge, runs after both bootstraps with no
+    // second publication in between.
+    expect(log[log.length - 1]?.startsWith("kickstart")).toBe(true);
+  });
+
+  it("install refusing an SMAppService-owned label reaches no edge: publish never runs and the error is unchanged", async () => {
+    const smPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
+    const runner: ProcessRunner = async (_command, args, options) => {
+      if (args[0] === "print" && options.tolerateNonZeroExit) {
+        return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const publish = vi.fn(async (): Promise<null> => null);
+    let error: unknown = null;
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).catch((cause: unknown) => {
+      error = cause;
+    });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+  });
+
+  it("install: a refused publication (plain error) rolls the plist and launcher back, and never bootstraps", async () => {
+    const calls: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const manifestPath = serviceManifestPath(label);
+    const launcherPath = serviceLauncherScriptPath(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    // Wrapped, not rethrown by identity: `atServiceSpawnEdgeReporting`
+    // reports the state the rollback leaves and the recovery command.
+    expect(rejection).not.toBe(publishError);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: {
+        cause: "proof write failed",
+        rollBackFailure: null,
+      },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toContain("proof write failed");
+    expect(message).toContain("is not registered");
+    expect(message).toContain("Run 'traycer host service install'");
+    expect(calls).not.toContain("bootstrap");
+    expect(existsSync(manifestPath)).toBe(false);
+    expect(existsSync(launcherPath)).toBe(false);
+  });
+
+  it("install: an authority refusal at the pre-publish check leaves the plist and launcher IN PLACE, and rejects with the authority error", async () => {
+    // Every probe (`print`/`bootout`, through the wrapped runner) and every
+    // explicit `verifyServiceMutationAuthority()` around the launcher and
+    // manifest writes consults the SAME verifier the edge's own pre-publish
+    // check does, so "which call number is the edge" is a fact about this
+    // runner shape, not a constant - derive it with a dry run instead of
+    // hardcoding a count that would silently point at the wrong call if an
+    // unrelated write elsewhere in `installService` gained or lost one.
+    const successRunner: ProcessRunner = async () => buildSuccessResult();
+    const dryRunOrder: string[] = [];
+    const dryRunPublish = vi.fn(async (): Promise<null> => {
+      dryRunOrder.push("publish");
+      return null;
+    });
+    await withServiceMutationAuthority(
+      async () => {
+        dryRunOrder.push("verify");
+      },
+      () =>
+        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
+          createMacosController(successRunner).install({
+            label,
+            cli: { command: "/usr/local/bin/traycer", args: [] },
+            enableLinger: false,
+          }),
+        ),
+    );
+    const preEdgeVerifyCalls = dryRunOrder
+      .slice(0, dryRunOrder.indexOf("publish"))
+      .filter((entry) => entry === "verify").length;
+
+    const calls: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const manifestPath = serviceManifestPath(label);
+    const launcherPath = serviceLauncherScriptPath(label);
+    const authorityError = new Error("mutation authority was lost");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
+    };
+    const publish = vi.fn(async (): Promise<null> => null);
+
+    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
+      runWithLeaseAtServiceSpawnEdge(publish, () =>
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+      ),
+    ).catch((cause: unknown) => cause);
+
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(calls).not.toContain("bootstrap");
+    expect(existsSync(manifestPath)).toBe(true);
+    expect(existsSync(launcherPath)).toBe(true);
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
+  });
+
+  it("start: the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.start(label),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && !entry.includes("-k"),
+    );
+    expect(log.slice(0, log.indexOf("publish"))).toContain(
+      `print gui/${process.getuid?.() ?? 0}/${label.id}.agent`,
+    );
+  });
+
+  it("restart (CLI-owned): the ownership print precedes publish, and kickstart -k is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && entry.includes("-k"),
+    );
+    const publishIndex = log.indexOf("publish");
+    expect(
+      log.slice(0, publishIndex).some((entry) => entry.startsWith("print")),
+    ).toBe(true);
+  });
+
+  it("restart (Desktop-managed): print-agent then the cooperative stand-down precede publish, and the plain kickstart of the agent label is the entry right after it", async () => {
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const log: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+        log.push("print-agent");
+        return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+      }
+      log.push(args.join(" "));
+      return buildSuccessResult();
+    };
+    MOCKS.requestCooperativeShutdown.mockImplementation(async () => {
+      log.push("stand-down");
+      return { kind: "stopped" };
+    });
+    const controller = createMacosController(runner);
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    );
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    const printAgentIndex = log.indexOf("print-agent");
+    const standDownIndex = log.indexOf("stand-down");
+    const publishIndex = log.indexOf("publish");
+    expect(printAgentIndex).toBeGreaterThanOrEqual(0);
+    expect(standDownIndex).toBeGreaterThan(printAgentIndex);
+    expect(publishIndex).toBeGreaterThan(standDownIndex);
+    expect(log[publishIndex + 1]?.startsWith("kickstart")).toBe(true);
+    expect(log[publishIndex + 1]?.includes("-k")).toBe(false);
+  });
+
+  it("relaunchAfterRestart forced (recycle): the ownership print precedes publish, and kickstart -k is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && entry.includes("-k"),
+    );
+  });
+
+  it("relaunchAfterRestart not forced (plain kickstart): the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && !entry.includes("-k"),
+    );
+  });
+
+  it("relaunchAfterRestart: a refused publication propagates raw, by identity - a restart intent means the manager owes the comeback", async () => {
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+  });
+
+  it("a busy Desktop stand-down (restart) reaches no edge: publish never runs and the error is unchanged", async () => {
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+        return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+    const controller = createMacosController(runner);
+    const publish = vi.fn(async (): Promise<null> => null);
+    let error: unknown = null;
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    ).catch((cause: unknown) => {
+      error = cause;
+    });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(error).toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+  });
+
+  it("relaunchAfterRestart(forcedRecycle: true) on a CLI-owned machine runs exactly one ownership probe before kickstart -k", async () => {
+    const calls: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await controller.relaunchAfterRestart(label, { forcedRecycle: true });
+
+    expect(calls.filter((c) => c === "print")).toHaveLength(1);
+    expect(calls.indexOf("print")).toBeLessThan(calls.indexOf("kickstart"));
+  });
+
+  it("relaunchAfterRestart(forcedRecycle: false) on a CLI-owned machine runs exactly one ownership probe before the plain kickstart", async () => {
+    const calls: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await controller.relaunchAfterRestart(label, { forcedRecycle: false });
+
+    expect(calls.filter((c) => c === "print")).toHaveLength(1);
+    expect(calls.indexOf("print")).toBeLessThan(calls.indexOf("kickstart"));
   });
 });

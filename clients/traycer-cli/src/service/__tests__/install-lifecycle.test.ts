@@ -15,6 +15,7 @@ import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
 import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
 import { epochMicrosNow } from "../platforms/windows";
+import { atServiceSpawnEdge } from "../spawn-edge";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -121,8 +122,15 @@ interface ControllerHarness {
 
 function makeController(initialState: HarnessServiceState): ControllerHarness {
   const currentState = initialState;
-  const install = vi.fn(async () => undefined);
-  const start = vi.fn(async () => undefined);
+  // The real controller awaits the spawn edge immediately before the call
+  // that launches the supervisor - these fakes model that so the adoption
+  // publisher (armed at the edge, not before the call) runs where it should.
+  const install = vi.fn(async () => {
+    await atServiceSpawnEdge();
+  });
+  const start = vi.fn(async () => {
+    await atServiceSpawnEdge();
+  });
   const restart = vi.fn(async () => undefined);
   // A real route reports a live host only when its own pid read finds one:
   // `running` and `externally-managed` fixtures model a host that is up, a
@@ -498,6 +506,46 @@ describe("service install lifecycle re-registration", () => {
   });
 
   it.runIf(process.platform === "darwin")(
+    "a refused publication at the post-swap relaunch (resolved stop): postSwapError carries the wrapped stopped-for-install wording",
+    async () => {
+      const harness = makeController("externally-managed");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+      const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+      if (setPublisher === undefined) {
+        throw new Error("install lifecycle exposes no adoption publisher seam");
+      }
+      const publishError = new Error("proof write failed");
+      setPublisher(async () => {
+        throw publishError;
+      });
+
+      await handle.lifecycle.beforeSwap();
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+      await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+
+      // `postSwapAction` is only ever set to "start" once the post-swap
+      // relaunch RESOLVES; a refused publication throws before that
+      // assignment runs, so it stays at its "none" default.
+      expect(handle.state.postSwapAction).toBe("none");
+      expect(handle.state.postSwapError).not.toBeNull();
+      expect(handle.state.postSwapError).toContain("proof write failed");
+      expect(handle.state.postSwapError).toContain(
+        "stopped for the install and is still stopped",
+      );
+      expect(handle.state.postSwapError).toContain(
+        "Run 'traycer host service start'",
+      );
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
     "force-stops the Desktop-managed host when force is set",
     async () => {
       // `--force` threads into the pre-swap `controller.stop` on the
@@ -598,6 +646,47 @@ describe("service install lifecycle re-registration", () => {
       expect(handle.state.postSwapAction).toBe("start");
       expect(harness.start).toHaveBeenCalledTimes(1);
       expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "a refused publication at the post-swap plain start (degraded stop): postSwapError equals the raw refusal message, unwrapped",
+    async () => {
+      const harness = makeController("externally-managed");
+      harness.stop.mockRejectedValue(
+        new CliError({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: "host stop: RPC endpoint unreachable (dial timeout)",
+          details: null,
+          exitCode: 1,
+        }),
+      );
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+      const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+      if (setPublisher === undefined) {
+        throw new Error("install lifecycle exposes no adoption publisher seam");
+      }
+      const publishError = new Error("proof write failed");
+      setPublisher(async () => {
+        throw publishError;
+      });
+
+      await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
+      expect(handle.state.stoppedBeforeSwap).toBe(false);
+
+      await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+
+      // Same as the resolved-stop variant above: the assignment to "start"
+      // never runs when the relaunch throws.
+      expect(handle.state.postSwapAction).toBe("none");
+      expect(handle.state.postSwapError).toBe(publishError.message);
     },
   );
 
@@ -851,6 +940,48 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     mocks.readRegisteredCliInvocationMock.mockResolvedValue(null);
   });
 
+  it("publishes the grant at the controller's spawn edge, after the call's pre-edge work", async () => {
+    // Publish-before-the-call (the old arrangement) and publish-at-the-edge
+    // (the new one) both yield the same `publish -> install` tail if the
+    // fake only records entry and exit. The "controller-entered" marker,
+    // pushed as soon as `install` is entered and BEFORE it reaches its own
+    // spawn edge, is what separates them: it can only land ahead of
+    // "publish" when the edge, not the call itself, triggers publication.
+    const events: string[] = [];
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      events.push("controller-entered");
+      await atServiceSpawnEdge();
+      events.push("install");
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => {
+      events.push("publish");
+      return lease;
+    });
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapError).toBeNull();
+    expect(events).toEqual(["controller-entered", "publish", "install"]);
+  });
+
   it("waits for the adoption lease before surfacing a committed-registration error", async () => {
     const lease = {
       waitForSpawn: vi.fn(async () => undefined),
@@ -868,6 +999,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     });
     const harness = makeController("running");
     harness.install.mockImplementation(async () => {
+      await atServiceSpawnEdge();
       throw committedError;
     });
     mocks.createServiceControllerMock.mockReturnValue(harness.controller);
@@ -903,6 +1035,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     const osError = new Error("os-failed");
     const harness = makeController("running");
     harness.install.mockImplementation(async () => {
+      await atServiceSpawnEdge();
       throw osError;
     });
     mocks.createServiceControllerMock.mockReturnValue(harness.controller);
@@ -945,6 +1078,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     };
     const harness = makeController("running");
     harness.install.mockImplementation(async () => {
+      await atServiceSpawnEdge();
       throw startError;
     });
     mocks.createServiceControllerMock.mockReturnValue(harness.controller);
@@ -1020,6 +1154,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
     });
     const harness = makeController("running");
     harness.install.mockImplementation(async () => {
+      await atServiceSpawnEdge();
       throw committedError;
     });
     mocks.createServiceControllerMock.mockReturnValue(harness.controller);
@@ -1299,6 +1434,69 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
       expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
         forcedRecycle: true,
       });
+    });
+
+    it("relaunchAfterRestart refused at its spawn edge: reported as SERVICE_CONTROL_FAILED naming the install-stopped-it wording, not the raw refusal", async () => {
+      const harness = makeController("running");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+      const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+      if (setPublisher === undefined) {
+        throw new Error("install lifecycle exposes no adoption publisher seam");
+      }
+      const publishError = new Error("proof write failed");
+      setPublisher(async () => {
+        throw publishError;
+      });
+
+      await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+
+      const rejection: unknown = await handle.lifecycle
+        .restartAfterAbortedSwap()
+        .catch((cause: unknown) => cause);
+
+      expect(rejection).not.toBe(publishError);
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      });
+      const message = rejection instanceof Error ? rejection.message : "";
+      expect(message).toContain(`relaunch of '${label.id}'`);
+      expect(message).toContain("proof write failed");
+      expect(message).toContain("stopped for the install and is still stopped");
+      expect(message).toContain("Run 'traycer host service start'");
+    });
+
+    it("relaunchAfterRestart throwing an ALREADY-reported CliError (a controller's own reporting edge) passes through unchanged", async () => {
+      const harness = makeController("running");
+      const alreadyReported = new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "start of the-task after its stop: already reported",
+        details: null,
+        exitCode: 1,
+      });
+      harness.relaunchAfterRestart.mockRejectedValue(alreadyReported);
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+
+      await expect(handle.lifecycle.restartAfterAbortedSwap()).rejects.toBe(
+        alreadyReported,
+      );
     });
 
     it("on Windows, never restarts a service the probe found STOPPED, even though the handle-kill stop still ran", async () => {

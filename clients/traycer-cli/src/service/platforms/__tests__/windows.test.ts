@@ -1,4 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { existsSync, mkdtempSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import {
   buildScheduledTaskXml,
@@ -35,10 +47,33 @@ import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { didServiceRegistrationCommit } from "../../cli-invocation-record";
+import { windowsTaskName } from "../../label";
 import {
   isServiceMutationAuthorityError,
   ServiceMutationAuthorityError,
+  withServiceMutationAuthority,
 } from "../../mutation-authority";
+import {
+  isUnreportedSpawnEdgeRefusal,
+  runWithLeaseAtServiceSpawnEdge,
+} from "../../spawn-edge";
+import { cliInstallHomeDir } from "../../../store/paths";
+import type { ServiceLabel } from "../../label";
+
+// Mirrors the private `hiddenHostLauncherPath` in `windows.ts` exactly - not
+// exported, so the rollback pins below reconstruct it from the same
+// (mocked) `cliInstallHomeDir` the production code calls.
+function hiddenHostLauncherPathForTest(label: ServiceLabel): string {
+  return join(cliInstallHomeDir(label.environment), "host-start-hidden.vbs");
+}
+
+/** Models `stageTaskDefinition`'s real write of the persistent launcher. */
+async function writeLeftoverLauncher(label: ServiceLabel): Promise<string> {
+  const launcherPath = hiddenHostLauncherPathForTest(label);
+  await mkdir(dirname(launcherPath), { recursive: true });
+  await writeFile(launcherPath, "leftover-launcher", "utf8");
+  return launcherPath;
+}
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
@@ -52,6 +87,29 @@ vi.mock("../../../host/pid-metadata", () => ({
   // asserts the report; an absent record keeps every fixture's stop silent.
   readHostPidMetadataEvidence: async () => ({ kind: "absent" as const }),
 }));
+
+// Test isolation: `hiddenHostLauncherPath(label)` resolves through
+// `cliInstallHomeDir` to `join(os.homedir(), ".traycer", "cli", ...)` (via
+// `@traycer/protocol/config/installation`), and `os.homedir()` ignores
+// `$HOME` here - same fact `macos.test.ts` documents for its own
+// `serviceManifestPath`/`serviceLauncherScriptPath` redirection. The install
+// rollback tests below `rm` this path for real, so it is redirected into a
+// private temp root instead of the developer's actual `~/.traycer/cli/...`.
+const TEST_CLI_INSTALL_HOME_ROOT = mkdtempSync(
+  join(tmpdir(), "traycer-windows-cli-install-home-test-"),
+);
+vi.mock("../../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../store/paths")>();
+  return {
+    ...actual,
+    cliInstallHomeDir: (environment: string) =>
+      join(TEST_CLI_INSTALL_HOME_ROOT, environment),
+  };
+});
+
+afterAll(async () => {
+  await rm(TEST_CLI_INSTALL_HOME_ROOT, { recursive: true, force: true });
+});
 
 interface RecordedCall {
   readonly command: string;
@@ -4668,5 +4726,391 @@ describe("Windows startService post-/Run spawn verification", () => {
     expect(caught).toBe(authorityError);
     expect(isServiceMutationAuthorityError(caught)).toBe(true);
     expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+});
+
+describe("Windows controller — spawn-edge placement", () => {
+  function stageEvidenceForImmediateStart(): void {
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => ({
+          kind: "starting-marker",
+          reason: "post-baseline starting marker",
+          marker: null,
+          pid: null,
+        }),
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 5_000,
+      verifyPollMs: 1,
+    });
+  }
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  // The publish spy and the runner push into ONE shared log, in the order
+  // they actually happen.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function expectPublishImmediatelyPrecedes(
+    log: readonly string[],
+    verb: string,
+  ): void {
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(log.slice(0, publishIndex)).not.toContain(verb);
+    expect(log[publishIndex + 1]).toBe(verb);
+  }
+
+  it("install: /Create precedes publish, and /Run is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const runner: ProcessRunner = async (command, args) => {
+      log.push(args[0] ?? command);
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "/Run");
+    expect(log.slice(0, log.indexOf("publish"))).toContain("/Create");
+  });
+
+  it("start: publish is immediately before /Run", async () => {
+    stageEvidenceForImmediateStart();
+    const { log, publish } = makeSharedLog();
+    const runner: ProcessRunner = async (command, args) => {
+      log.push(args[0] ?? command);
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.start(serviceLabelFor("staging")),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "/Run");
+  });
+
+  it("restart: /End and every kill-loop call precede publish, and /Run is the entry right after it", async () => {
+    stageEvidenceForImmediateStart();
+    const { runner } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
+    const { log, publish } = makeSharedLog();
+    const wrappedRunner: ProcessRunner = async (command, args, options) => {
+      log.push(args[0] ?? command);
+      return runner(command, args, options);
+    };
+    const controller = createWindowsController(wrappedRunner, noTimingDeps);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(serviceLabelFor("staging")),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "/Run");
+    const publishIndex = log.indexOf("publish");
+    const preEdge = log.slice(0, publishIndex);
+    expect(preEdge[0]).toBe("/End");
+    // Every schtasks/powershell call the kill loop issues ran before publish
+    // - none of it is on the grant's clock any more.
+    expect(preEdge.every((entry) => entry !== "/Run")).toBe(true);
+    expect(preEdge.length).toBeGreaterThan(1);
+  });
+
+  it("install: a refused publication rolls the task back - /Delete after /Create, /Create's exact args, no /Run - and rejects with a wrapped SERVICE_INSTALL_FAILED, not marked registration-committed", async () => {
+    interface RecordedCallWithOptions extends RecordedCall {
+      readonly tolerateNonZeroExit: boolean;
+    }
+    const calls: RecordedCallWithOptions[] = [];
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({
+        command,
+        args,
+        tolerateNonZeroExit: options.tolerateNonZeroExit,
+      });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    const controller = createWindowsController(runner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "C:\\traycer.exe", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).not.toBe(publishError);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { cause: "proof write failed", rollBackFailure: null },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toContain("proof write failed");
+    expect(message).toContain("is not registered and was not started");
+    expect(message).toContain("Run 'traycer host service install'");
+    const createIndex = calls.findIndex(
+      (c) => c.command === "schtasks" && c.args[0] === "/Create",
+    );
+    const deleteIndex = calls.findIndex(
+      (c) => c.command === "schtasks" && c.args[0] === "/Delete",
+    );
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteIndex).toBeGreaterThan(createIndex);
+    expect(calls[deleteIndex]?.args).toEqual([
+      "/Delete",
+      "/TN",
+      taskName,
+      "/F",
+    ]);
+    // Pin the addendum: the task was just /Create'd, so the rollback's own
+    // /Delete must not tolerate a non-zero exit - a failed delete means it
+    // is still registered.
+    expect(calls[deleteIndex]?.tolerateNonZeroExit).toBe(false);
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
+    ).toBe(false);
+    expect(didServiceRegistrationCommit(rejection)).toBe(false);
+    expect(existsSync(launcherPath)).toBe(false);
+  });
+
+  it("install: an authority refusal at the pre-publish check issues no /Delete, and rejects with the authority error itself", async () => {
+    // Derive the exact pre-edge verify-call count by dry run, the same
+    // technique the macOS and Linux install suites use: `installService`'s
+    // wrapped `run()` calls (the /Create probe among them) consult the SAME
+    // verifier the edge's own pre-publish check does.
+    const dryRunOrder: string[] = [];
+    const dryRunPublish = vi.fn(async (): Promise<null> => {
+      dryRunOrder.push("publish");
+      return null;
+    });
+    const dryRunLabel = serviceLabelFor("staging");
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    await withServiceMutationAuthority(
+      async () => {
+        dryRunOrder.push("verify");
+      },
+      () =>
+        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
+          createWindowsController(
+            async () => success(""),
+            noTimingDeps,
+          ).install({
+            label: dryRunLabel,
+            cli: { command: "C:\\traycer.exe", args: [] },
+            enableLinger: false,
+          }),
+        ),
+    );
+    const preEdgeVerifyCalls = dryRunOrder
+      .slice(0, dryRunOrder.indexOf("publish"))
+      .filter((entry) => entry === "verify").length;
+
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    const controller = createWindowsController(runner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const launcherPath = await writeLeftoverLauncher(label);
+    const authorityError = new Error("mutation authority was lost");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
+    };
+    const publish = vi.fn(async (): Promise<null> => null);
+
+    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
+      runWithLeaseAtServiceSpawnEdge(publish, () =>
+        controller.install({
+          label,
+          cli: { command: "C:\\traycer.exe", args: [] },
+          enableLinger: false,
+        }),
+      ),
+    ).catch((cause: unknown) => cause);
+
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Delete"),
+    ).toBe(false);
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
+    ).toBe(false);
+    expect(existsSync(launcherPath)).toBe(true);
+    await rm(launcherPath, { force: true });
+  });
+
+  it("install: a refused publication whose rollback /Delete itself fails gives the half-written wording, and leaves the launcher in place", async () => {
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Delete") {
+        throw new Error("access denied");
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    const controller = createWindowsController(runner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const launcherPath = await writeLeftoverLauncher(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "C:\\traycer.exe", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: {
+        cause: "proof write failed",
+        rollBackFailure: "access denied",
+      },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toContain(
+      "Undoing what it wrote before the launch failed too (access denied), so its registration may be half-written.",
+    );
+    // The rollback stops at the failed /Delete step - the launcher removal
+    // never runs.
+    expect(existsSync(launcherPath)).toBe(true);
+    await rm(launcherPath, { force: true });
+  });
+
+  it("restart: a refused publication issues /End (no /Run), and rejects with the exact SERVICE_CONTROL_FAILED stopped-host wording", async () => {
+    stageEvidenceForImmediateStart();
+    const { runner } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
+    const calls: RecordedCall[] = [];
+    const wrappedRunner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args });
+      return runner(command, args, options);
+    };
+    const controller = createWindowsController(wrappedRunner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const taskName = windowsTaskName(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.restart(label),
+    ).catch((cause: unknown) => cause);
+
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/End"),
+    ).toBe(true);
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
+    ).toBe(false);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start and is still stopped. Run 'traycer host service start' to start it again.`,
+    );
+  });
+
+  it("relaunchAfterRestart: a refused publication issues no /Run, and rejects with the SAME exact stopped-host wording restart uses", async () => {
+    stageEvidenceForImmediateStart();
+    const runner: ProcessRunner = async () => success("");
+    const controller = createWindowsController(runner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const taskName = windowsTaskName(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start and is still stopped. Run 'traycer host service start' to start it again.`,
+    );
+  });
+
+  it("start: a refused publication propagates raw, by identity - it wrote nothing before this edge, so there is nothing to roll back", async () => {
+    stageEvidenceForImmediateStart();
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.start(serviceLabelFor("staging")),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+    expect(isUnreportedSpawnEdgeRefusal(rejection)).toBe(true);
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
+    ).toBe(false);
   });
 });

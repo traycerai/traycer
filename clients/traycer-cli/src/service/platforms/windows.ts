@@ -4,6 +4,11 @@ import {
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
 import { markRegistrationCommitted } from "../cli-invocation-record";
+import {
+  atServiceSpawnEdge,
+  atServiceSpawnEdgeReporting,
+  type RefusedSpawnEdgeReport,
+} from "../spawn-edge";
 import { createCliLogger } from "../../logger";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -111,7 +116,8 @@ export function createWindowsController(
       await stopService(label, run, deps, null);
       return { forcedRecycle: false };
     },
-    relaunchAfterRestart: (label) => startService(label, run),
+    relaunchAfterRestart: (label) =>
+      runTaskAndVerifyStart(label, run, relaunchRefusedReport(label)),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with the Scheduled Task here.
     retireCompetingRegistration: () =>
@@ -272,7 +278,50 @@ async function installService(
   // Registration is also the recovery launch. Verify this exact `/Run` so
   // callers never baseline after it and mistake IgnoreNew's suppressed second
   // run for a failed repair.
-  await runTaskAndVerifyStart(options.label, run);
+  //
+  // A publication refused at that `/Run`'s spawn edge stops after `/Create`,
+  // and the task it leaves is not inert: its LogonTrigger runs it at the next
+  // logon. So the refusal deletes the task and the launcher it points at -
+  // the same pair `uninstallService` removes - leaving nothing registered,
+  // which the next install creates afresh.
+  await runTaskAndVerifyStart(options.label, run, {
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    operation: `service install for ${taskName}`,
+    rollBack: async () => {
+      // Not tolerant of a non-zero exit, unlike uninstall's: the task was
+      // `/Create`d a moment ago, so a failed `/Delete` means it is still
+      // registered, and the operator must not be told it was deleted.
+      await run("schtasks", ["/Delete", "/TN", taskName, "/F"], {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 30_000,
+        tolerateNonZeroExit: false,
+      });
+      await verifyServiceMutationAuthority();
+      await rm(hiddenHostLauncherPath(options.label), { force: true });
+    },
+    leaves: `The scheduled task it created and its launcher were deleted, so ${taskName} is not registered and was not started.`,
+    recovery: `Run 'traycer host service install' to register and start it again.`,
+  });
+}
+
+// The report for a start that follows this controller's own stop - `restart`
+// ends its `/End` + kill ladder here, and `relaunchAfterRestart` is only ever
+// called after that same ladder ran (`stopForRestart`, or the install
+// lifecycle's pre-swap `stop` on the aborted-swap path). Nothing on Windows owes
+// the host a comeback (the ladder kills the supervisor along with the host,
+// and the task's only trigger is a logon), so a refusal here leaves it
+// STOPPED - where, before the grant moved to the edge, a refused publication
+// came first and left it running.
+function relaunchRefusedReport(label: ServiceLabel): RefusedSpawnEdgeReport {
+  const taskName = windowsTaskName(label);
+  return {
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    operation: `start of ${taskName} after its stop`,
+    rollBack: null,
+    leaves: "The host was stopped before this start and is still stopped.",
+    recovery: `Run 'traycer host service start' to start it again.`,
+  };
 }
 
 /**
@@ -1020,18 +1069,51 @@ async function startService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  await runTaskAndVerifyStart(label, run);
+  // Writes nothing before its edge - the task is already registered - so a
+  // refused publication has nothing to roll back.
+  await runTaskAndVerifyStart(label, run, null);
 }
+
+/**
+ * The longest a Windows start can take to launch its supervisor after its
+ * spawn edge - the scheduler side of the host-start adoption window
+ * (`HOST_START_ADOPTION_MAX_AGE_MS`).
+ *
+ * `/Run` returns once the scheduler ACCEPTS the request; the launch itself is
+ * asynchronous. A start that succeeds has seen post-baseline spawn evidence
+ * inside the verify window, so its supervisor launched by then: `/Run`'s 30s
+ * + the 15s verify = 45s. A launch later than that has already failed the
+ * start, and its child can only be adopted inside the parent's ack wait, which
+ * ends before this window does.
+ *
+ * Everything before the edge - `/Create` on install, and on restart `/End`
+ * plus the whole scan-then-kill loop - no longer runs on the grant's clock.
+ */
+export const WINDOWS_RUN_SPAWN_EDGE_BOUND_MS =
+  WINDOWS_SCHTASKS_RUN_TIMEOUT_MS + WINDOWS_START_SPAWN_VERIFY_MS;
 
 async function runTaskAndVerifyStart(
   label: ServiceLabel,
   run: ProcessRunner,
+  // What a publication refused at this edge must undo and report, for a
+  // caller that changed something before it; `null` when it changed nothing
+  // (a plain start), and the refusal then propagates as itself.
+  edgeRefusal: RefusedSpawnEdgeReport | null,
 ): Promise<void> {
   const taskName = windowsTaskName(label);
   // Capture evidence baseline BEFORE /Run so a pre-existing pid.json or
   // stale host.log residue cannot count as "spawned this attempt".
   const baseline = await startEvidenceDeps.captureBaseline(label.environment);
   const evidenceReader = startEvidenceDeps.createEvidenceReader(baseline);
+  // A spawn edge - `/Run` is the only schtasks call that launches the task
+  // (the definition carries a logon trigger alone). Awaited outside the `try`
+  // on purpose: a refused publication issued no `/Run`, so no child is coming
+  // and the post-registration mark below would have a caller wait for one.
+  if (edgeRefusal === null) {
+    await atServiceSpawnEdge();
+  } else {
+    await atServiceSpawnEdgeReporting(edgeRefusal);
+  }
   try {
     await run("schtasks", ["/Run", "/TN", taskName], {
       env: undefined,
@@ -1200,7 +1282,7 @@ async function restartService(
   // Restart reuses the verified start path (baseline + post-/Run evidence)
   // so a stop-then-start that the scheduler accepts but never spawns fails
   // with Last Run Result instead of a silent no-op.
-  await startService(label, run);
+  await runTaskAndVerifyStart(label, run, relaunchRefusedReport(label));
 }
 
 function statusNotInstalled(): ServiceStatus {

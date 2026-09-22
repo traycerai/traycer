@@ -6,7 +6,11 @@ import type {
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
-import { didServiceRegistrationCommit } from "./cli-invocation-record";
+import {
+  isUnreportedSpawnEdgeRefusal,
+  refusedSpawnEdgeError,
+  runWithLeaseAtServiceSpawnEdge,
+} from "./spawn-edge";
 import { isSelfNamingCliInvocation } from "./cli-invocation-shape";
 import {
   createServiceController,
@@ -370,7 +374,9 @@ export function createServiceInstallLifecycle(
           async () =>
             controller.relaunchAfterRestart(label, { forcedRecycle: true }),
         ),
-      );
+      ).catch((cause: unknown) => {
+        throw reportRelaunchRefusedAfterInstallStop(label, cause);
+      });
     },
     afterSwap: async () => {
       // At the TOP, before every branch below: the bytes are committed and
@@ -491,8 +497,14 @@ export function createServiceInstallLifecycle(
               state.postSwapAction = "start";
             } catch (cause) {
               if (isServiceMutationAuthorityError(cause)) throw cause;
+              // Only a RESOLVED stop proves the host is down; after a
+              // degraded one it may still be live, and the refusal is
+              // reported as itself.
+              const reported = state.stoppedBeforeSwap
+                ? reportRelaunchRefusedAfterInstallStop(label, cause)
+                : cause;
               state.postSwapError =
-                cause instanceof Error ? cause.message : String(cause);
+                reported instanceof Error ? reported.message : String(reported);
             }
           }
           return;
@@ -734,6 +746,29 @@ async function registerService(opts: RegisterServiceOptions): Promise<void> {
   );
 }
 
+// A relaunch this lifecycle requests after its OWN stop - the pre-swap
+// `controller.stop`, whose intent is `stop`, so no service manager owes the
+// host a comeback. A publication refused at that relaunch's edge therefore
+// leaves the host stopped, and the error says so. Any other error, and a
+// refusal a controller already reported, is returned as itself.
+function reportRelaunchRefusedAfterInstallStop(
+  label: ServiceLabel,
+  cause: unknown,
+): unknown {
+  if (!isUnreportedSpawnEdgeRefusal(cause)) return cause;
+  return refusedSpawnEdgeError(
+    cause,
+    {
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      operation: `relaunch of '${label.id}' after the install stopped it`,
+      rollBack: null,
+      leaves: "The host was stopped for the install and is still stopped.",
+      recovery: "Run 'traycer host service start' to start it again.",
+    },
+    null,
+  );
+}
+
 async function runWithPublishedHostStartAdoption(
   publish: HostStartAdoptionPublisher,
   controller: Pick<ServiceController, "hostStartAdoptionLabel">,
@@ -741,25 +776,12 @@ async function runWithPublishedHostStartAdoption(
   start: () => Promise<void>,
 ): Promise<void> {
   const serviceLabel = await controller.hostStartAdoptionLabel(label);
-  const lease = await publish(serviceLabel);
-  try {
-    await start();
-    await lease?.waitForSpawn();
-  } catch (error) {
-    // The invocation-record decorator can reject AFTER the service manager
-    // accepted the registration and began launching the supervisor (record
-    // commit, lifecycle write, stale-marker clear). The supervisor is coming
-    // up and will present this lease; cancelling it now would refuse or kill
-    // an admitted child and leave a registered service hostless. So the lease
-    // is honoured first and the record error surfaces afterwards. A spawn
-    // wait that itself fails must not replace the error being reported.
-    if (didServiceRegistrationCommit(error)) {
-      await lease?.waitForSpawn().catch(() => undefined);
-    }
-    throw error;
-  } finally {
-    // cancel() propagating out of this `finally` would swap in its own error
-    // for the actuator or record error being reported.
-    await lease?.cancel().catch(() => undefined);
-  }
+  // Published at the controller's first spawn edge, not here - see
+  // `runWithLeaseAtServiceSpawnEdge`, which also honours a lease through the
+  // invocation-record decorator's post-registration rejections (record
+  // commit, lifecycle write, stale-marker clear) before surfacing them.
+  await runWithLeaseAtServiceSpawnEdge(async () => {
+    const lease = await publish(serviceLabel);
+    return lease === undefined ? null : lease;
+  }, start);
 }

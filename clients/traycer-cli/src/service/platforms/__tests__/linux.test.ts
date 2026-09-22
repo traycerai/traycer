@@ -58,6 +58,7 @@ import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
@@ -993,5 +994,114 @@ describe("systemd unit — [Service] directive pin", () => {
       "RestartSec",
       "TimeoutStopSec",
     ]);
+  });
+});
+
+describe("Linux controller — spawn-edge placement", () => {
+  const label = labelFor("ai.traycer.host.dev");
+
+  // The publish spy and the runner push into ONE shared log, in the order
+  // they actually happen.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function loggingRunner(log: string[]): ProcessRunner {
+    return async (_command, args) => {
+      log.push(args.join(" "));
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+  }
+
+  // `systemctl --user <verb> <unit>` - the verb is always the second token.
+  function verbOf(entry: string): string {
+    return entry.split(" ")[1] ?? "";
+  }
+
+  function expectPublishImmediatelyPrecedes(
+    log: readonly string[],
+    verb: string,
+  ): void {
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      log.slice(0, publishIndex).some((entry) => verbOf(entry) === verb),
+    ).toBe(false);
+    const next = log[publishIndex + 1];
+    expect(next).toBeDefined();
+    expect(next !== undefined && verbOf(next) === verb).toBe(true);
+  }
+
+  it("start: publish is immediately before the systemctl start verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.start(label),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "start");
+  });
+
+  it("restart: publish is immediately before the systemctl restart verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "restart");
+  });
+
+  it("relaunchAfterRestart (forced recycle): publish is immediately before the systemctl restart verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "restart");
+  });
+
+  it("relaunchAfterRestart (not forced): publish is immediately before the systemctl start verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "start");
+  });
+
+  it("relaunchAfterRestart: a refused publication propagates raw, by identity - a restart intent means the manager owes the comeback", async () => {
+    const runner: ProcessRunner = async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    const controller = createLinuxController(runner);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
   });
 });

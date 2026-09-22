@@ -9,11 +9,90 @@ import {
   type UpdateMutationCapabilityAdoption,
 } from "@traycer-clients/shared/host-update";
 import type { Environment } from "../runner/environment";
+import { SYSTEMCTL_JOB_TIMEOUT_MS } from "../service/platforms/linux";
+import {
+  LAUNCHCTL_CALL_TIMEOUT_MS,
+  LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
+  LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+} from "../service/platforms/macos";
+import { WINDOWS_RUN_SPAWN_EDGE_BOUND_MS } from "../service/platforms/windows";
 import { hostHomeDir } from "../store/paths";
 import type { WithCliUpdateContenderOptions } from "./update-contender";
 
 const HOST_START_ADOPTION_FILENAME = ".host-start-adoption.json";
-const HOST_START_ADOPTION_MAX_AGE_MS = 60_000;
+
+/**
+ * What one CLI cold start of the service launcher may cost. The dev wrapper
+ * exec's `bun src/index.ts`, and a bun cold start across ~2500 TS files "can
+ * comfortably exceed 10s on a loaded laptop" (the reason `installService`'s
+ * kickstart gets 30s in platforms/macos.ts); a packaged SEA takes about a
+ * second. The bound is the dev one, so a slow machine is not a false refusal.
+ */
+const LAUNCHER_CLI_COLD_START_MS = 10_000;
+
+/**
+ * CLI cold starts between the OS manager launching the service launcher and
+ * the supervisor consuming its grant, on the nonce-bearing path every launcher
+ * takes (`buildHostStartLauncherScript`, Desktop's
+ * `inject-host-launch-agent.cjs`, the Windows VBS): `host capabilities --has
+ * service-label`, `host capabilities --has host-start-adoption-v2`, `host
+ * adoption-nonce`, and `host start` itself.
+ */
+const LAUNCHER_CLI_COLD_STARTS = 4;
+
+/**
+ * From the supervisor's launch to its consume: 4 x 10s = 40s. The ONE source
+ * for the launch cost, used by both the grant window and the parent's ack
+ * wait below.
+ */
+export const SUPERVISOR_LAUNCH_MARGIN_MS =
+  LAUNCHER_CLI_COLD_STARTS * LAUNCHER_CLI_COLD_START_MS;
+
+/**
+ * From the consume to the acknowledgement: the supervisor's target resolution,
+ * its synchronous `spawn()` of the host, the parent-liveness re-check and the
+ * acknowledgement write. Local work inside the process that already paid its
+ * cold start.
+ */
+export const SUPERVISOR_SPAWN_ACK_MARGIN_MS = 10_000;
+
+/**
+ * The longest any controller call takes from its first spawn edge (where the
+ * grant is published, `service/spawn-edge.ts`) to the launch of the supervisor
+ * that consumes it: the max over every platform's spawn-edge bound.
+ *
+ *   macOS install (bootstrap-reload race, 3 edges)   80s  the max
+ *   Linux start / restart / enable --now job         52s
+ *   Windows `/Run` + spawn-evidence verify           45s
+ *   macOS recycle (`kickstart -k`)                   40s
+ *   macOS plain kickstart                            10s
+ *
+ * Everything a call does BEFORE its first edge - ownership probes, a Desktop
+ * host's cooperative stand-down, the Windows stop ladder, `/Create` - is off
+ * the grant's clock, which is what makes this bound finite at all.
+ */
+export const HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS = Math.max(
+  LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
+  SYSTEMCTL_JOB_TIMEOUT_MS,
+  WINDOWS_RUN_SPAWN_EDGE_BOUND_MS,
+  LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+  LAUNCHCTL_CALL_TIMEOUT_MS,
+);
+
+/**
+ * How long a published grant stays usable: 80s + 40s = 120s. Derived, not
+ * chosen - the latest a supervisor can be launched after its grant was
+ * published, plus what its launcher takes to consume it.
+ *
+ * It was 60s, and a longer window used to cost something: a proof whose
+ * publisher died refused every nonce-less launch until it expired, so doubling
+ * the window doubled that wedge. The consumer now reads a proof whose parent
+ * capability is not live as absent on exactly those paths (see
+ * `consumeHostStartAdoption`), so the window no longer bounds any refusal - it
+ * bounds only how long a LIVE publisher's grant can wait for its child.
+ */
+export const HOST_START_ADOPTION_MAX_AGE_MS =
+  HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS + SUPERVISOR_LAUNCH_MARGIN_MS;
 
 // The ONE grant-expiry predicate, shared by every reader of `issuedAtMs`.
 //
@@ -22,13 +101,23 @@ const HOST_START_ADOPTION_MAX_AGE_MS = 60_000;
 // after a backwards clock step - or with a corrupted `issuedAtMs` - would
 // read as an outstanding grant until the wall clock caught up, refusing
 // every launch for that whole window. A publisher and consumer live on the
-// same machine within the same minute, so any timestamp more than the grant
-// window AWAY from now, in either direction, is not a grant anyone can
-// still use.
+// same machine within one grant window of each other, so any timestamp more
+// than that window AWAY from now, in either direction, is not a grant anyone
+// can still use.
 function adoptionGrantExpired(issuedAtMs: number): boolean {
   return Math.abs(Date.now() - issuedAtMs) > HOST_START_ADOPTION_MAX_AGE_MS;
 }
-const HOST_START_ADOPTION_ACK_WAIT_MS = 30_000;
+
+/**
+ * How long the parent waits, after its controller call returns, for the
+ * supervisor to acknowledge its spawn: 40s + 10s = 50s. The call returns at or
+ * after the launch, so this has to cover the whole launcher and the
+ * supervisor's own spawn - and never be shorter than the launch margin the
+ * window above already grants. It was 30s: a launch the window admitted could
+ * miss it, and the parent then cancelled a child it had just started.
+ */
+export const HOST_START_ADOPTION_ACK_WAIT_MS =
+  SUPERVISOR_LAUNCH_MARGIN_MS + SUPERVISOR_SPAWN_ACK_MARGIN_MS;
 const HOST_START_ADOPTION_POLL_MS = 25;
 
 // Test-only synchronization point for the exact read-then-claim race.  The
@@ -208,7 +297,9 @@ export async function consumeHostStartAdoption(
   // capability and cannot steal the pending grant for a service child. If a
   // proof is outstanding, do not fall through to a fresh admission either:
   // that would recreate the parent-lock/child-lock cycle the proof exists to
-  // avoid. Only a genuinely absent proof permits standalone admission.
+  // avoid. Only a proof that is absent, expired, or orphaned (its parent no
+  // longer holds the capability - `readOrphanedProof`) permits standalone
+  // admission; none of those has a live parent to form that cycle with.
   if (serviceLabel === null || serviceLabel.length === 0) {
     const pending = await readPendingAdoption(path);
     if (pending.kind === "absent") return { kind: "absent" };
@@ -236,6 +327,10 @@ export async function consumeHostStartAdoption(
       adoptionGrantExpired(pending.file.issuedAtMs)
     ) {
       return { kind: "absent" };
+    }
+    if (pending.kind === "valid") {
+      const orphan = await readOrphanedProof(pending.file, home);
+      if (orphan !== null) return orphan;
     }
     return {
       kind: "refused",
@@ -284,6 +379,17 @@ export async function consumeHostStartAdoption(
     adoptionGrantExpired(pending.file.issuedAtMs)
   ) {
     return { kind: "absent" };
+  }
+  // The labelled launch WITHOUT a nonce is the other nonce-less path, and the
+  // one a dead publisher steers launches onto: `readHostStartAdoptionNonce`
+  // hands out no nonce for a proof whose parent is gone, so the launcher
+  // re-execs `host start --service-label` bare and lands here. See
+  // `readOrphanedProof`. Ahead of the label check for the reason expiry is:
+  // whose grant a dead parent's proof was is not a routing question. A LIVE
+  // parent still refuses below, nonce or no nonce.
+  if (pending.kind === "valid" && expectedNonce === null) {
+    const orphan = await readOrphanedProof(pending.file, home);
+    if (orphan !== null) return orphan;
   }
   if (pending.kind === "valid" && pending.file.serviceLabel !== serviceLabel) {
     return {
@@ -467,6 +573,53 @@ async function readPendingAdoption(path: string): Promise<PendingAdoptionRead> {
   if (read.kind === "unreadable") return { kind: "unreadable" };
   const file = parseAdoption(read.text);
   return file === null ? { kind: "malformed" } : { kind: "valid", file };
+}
+
+/**
+ * For a NONCE-LESS launch only: `absent` when the pending proof's publisher no
+ * longer holds the capability it was issued under, `error` when that could not
+ * be checked, `null` when the parent is live and the caller's refusal stands.
+ *
+ * A proof whose parent capability is not live cannot be a live publisher's
+ * intent. Reading it as ABSENT sends the launch down the ordinary admission
+ * path, which is exactly what a launch with no proof at all gets, so this
+ * removes a refusal without granting anything a proof-less launch does not
+ * already have. Without it, a publisher that died between publishing and its
+ * child's consume refused every nonce-less launch until the proof expired -
+ * and the grant window just doubled to 120s.
+ *
+ * Deliberately the predicate `readHostStartAdoptionNonce` applies before it
+ * hands a launcher a nonce, so a launch that got no nonce BECAUSE the parent
+ * was gone is not then refused for lacking one. "Not live" includes a lock
+ * that cannot be read or parsed; that is safe for the same reason as the rest:
+ * ordinary admission contends that very lock, so a live holder misread here
+ * still stops the launch there.
+ *
+ * A nonce-BEARING launch never comes here. It was handed that nonce by a live
+ * parent, and a mismatch against a live parent's proof still refuses.
+ *
+ * The proof is left in place. Removal belongs to its publisher's `cancel`,
+ * and a dead publisher's proof expires by age (and the next publish replaces
+ * it) - a consumer without the nonce that removed it could erase a NEWER
+ * publisher's proof (see `removeAdoptionIfNonce`).
+ */
+async function readOrphanedProof(
+  file: HostStartAdoptionFile,
+  home: string,
+): Promise<HostStartAdoptionConsumeResult | null> {
+  let parentLive: boolean;
+  try {
+    parentLive = await validateUpdateMutationCapabilityAdoption(
+      file.adoption,
+      home,
+    );
+  } catch {
+    return {
+      kind: "error",
+      reason: "host-start adoption parent could not be checked",
+    };
+  }
+  return parentLive ? null : { kind: "absent" };
 }
 
 async function readAcknowledgement(

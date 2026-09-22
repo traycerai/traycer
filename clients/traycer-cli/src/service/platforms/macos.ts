@@ -79,6 +79,7 @@ import {
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
 import { markRegistrationCommitted } from "../cli-invocation-record";
+import { atServiceSpawnEdge, atServiceSpawnEdgeReporting } from "../spawn-edge";
 
 // macOS service controller - CLI-owned launchctl. There is intentionally
 // no `SMAppService` path here (Decision 1 of the Tech Plan); the
@@ -667,7 +668,7 @@ async function probeLabelForTakeover(
     const value = await run("launchctl", ["print", target], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     });
     result = {
@@ -1131,7 +1132,7 @@ async function installService(
     await run("launchctl", ["bootout", serviceTarget], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     }).catch((cause: unknown) => {
       throw cliError({
@@ -1161,11 +1162,37 @@ async function installService(
   // recovery cards, so the previous blanket tolerance was masking real
   // bugs (the user saw a clean install + later a host-not-ready
   // failure with no service-install diagnostic to link them).
+  //
+  // A spawn edge: `RunAtLoad` launches the supervisor from `bootstrap`
+  // itself. Awaited outside the `try` so a refused publication is never
+  // classified as a bootstrap failure.
+  //
+  // It is also the FIRST edge, so it is the only one a publication can be
+  // refused at (the later two share its publication), and a refusal here
+  // stops after the launcher and plist are written and any loaded
+  // registration is booted out. That plist is not inert - launchd loads
+  // `~/Library/LaunchAgents` at the next login and `RunAtLoad` starts it - so
+  // both files are removed, leaving the label unloaded and unregistered: what
+  // `installService` next finds as `not-loaded` and writes afresh. The booted-
+  // out registration cannot be put back (its old plist was overwritten above);
+  // unregistered is the same end state Linux's rollback leaves.
+  await atServiceSpawnEdgeReporting({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    operation: `service install for '${options.label.id}'`,
+    rollBack: async () => {
+      await verifyServiceMutationAuthority();
+      await rm(manifestPath, { force: true });
+      await verifyServiceMutationAuthority();
+      await rm(launcherPath, { force: true });
+    },
+    leaves: `The launcher and LaunchAgent plist it wrote were removed, so '${options.label.id}' is not registered and its host is not running.`,
+    recovery: `Run 'traycer host service install' to register and start it again.`,
+  });
   try {
     await run("launchctl", ["bootstrap", guiTarget, manifestPath], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -1191,15 +1218,14 @@ async function installService(
       run,
     });
   }
+  // A spawn edge. Already published at the bootstrap above; this returns the
+  // same publication.
+  await atServiceSpawnEdge();
   try {
     await run("launchctl", ["kickstart", `${guiTarget}/${options.label.id}`], {
       env: undefined,
       cwd: undefined,
-      // 30s, not 10s: the dev wrapper at ~/.traycer/cli/dev/bin/traycer
-      // exec's `bun src/index.ts` - bun cold-start across ~2500 TS
-      // files plus the host's first-boot work can comfortably exceed
-      // 10s on a loaded laptop.
-      timeoutMs: 30_000,
+      timeoutMs: LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -1262,7 +1288,7 @@ async function reloadRegisteredService(
     await options.run("launchctl", ["bootout", options.serviceTarget], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -1282,6 +1308,9 @@ async function reloadRegisteredService(
       });
     }
   }
+  // A spawn edge, the second on this path (see
+  // `LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS`).
+  await atServiceSpawnEdge();
   try {
     await options.run(
       "launchctl",
@@ -1289,7 +1318,7 @@ async function reloadRegisteredService(
       {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 10_000,
+        timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       },
     );
@@ -1385,7 +1414,7 @@ async function inspectLaunchdOwnership(
   const result = await run("launchctl", ["print", serviceTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   if (result.exitCode !== 0) {
@@ -1996,28 +2025,53 @@ async function kickstartDesktopAgent(
   forcedRecycle: boolean,
   run: ProcessRunner,
 ): Promise<void> {
-  const target = `${guiDomain()}/${agent.agentLabelId}`;
-  const args = forcedRecycle
-    ? ["kickstart", "-k", target]
-    : ["kickstart", target];
+  if (forcedRecycle) {
+    await recycleJob(agent.agentLabelId, run);
+    return;
+  }
+  await kickstartJob(agent.agentLabelId, run);
+}
+
+// Start a loaded job: a spawn edge. Waits on no old instance, so it gets the
+// ordinary launchctl bound; against a job launchd considers running it is a
+// silent no-op (the hazard `forcedRecycle` names).
+async function kickstartJob(
+  labelId: string,
+  run: ProcessRunner,
+): Promise<void> {
+  await atServiceSpawnEdge();
   try {
-    await run("launchctl", args, {
+    await run("launchctl", ["kickstart", `${guiDomain()}/${labelId}`], {
       env: undefined,
       cwd: undefined,
-      // Only the recycle waits for an old instance to exit; a plain
-      // kickstart has none to wait for.
-      timeoutMs: forcedRecycle ? LAUNCHCTL_RECYCLE_TIMEOUT_MS : 10_000,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    if (forcedRecycle) throw recycleFailure(agent.agentLabelId, cause);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `launchctl kickstart failed for ${agent.agentLabelId}: ${describeCause(cause)}`,
-      details: { label: agent.agentLabelId, cause: describeCause(cause) },
+      message: `launchctl kickstart failed for ${labelId}: ${describeCause(cause)}`,
+      details: { label: labelId, cause: describeCause(cause) },
       exitCode: 1,
     });
+  }
+}
+
+// Recycle a job (`kickstart -k`): a spawn edge. Only the recycle waits for an
+// old instance to exit, so only it gets `LAUNCHCTL_RECYCLE_TIMEOUT_MS`.
+async function recycleJob(labelId: string, run: ProcessRunner): Promise<void> {
+  await atServiceSpawnEdge();
+  try {
+    await run("launchctl", ["kickstart", "-k", `${guiDomain()}/${labelId}`], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+      tolerateNonZeroExit: false,
+    });
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    throw recycleFailure(labelId, cause);
   }
 }
 
@@ -2138,7 +2192,7 @@ async function verifyAgentBootedOut(
   const result = await run("launchctl", ["print", agentTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   }).then(
     (value): ProbeCommandResult => ({
@@ -2188,7 +2242,7 @@ async function probeAgentWedge(
   const result = await run("launchctl", ["print", agentTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   }).then(
     (value): ProbeCommandResult => ({
@@ -2432,11 +2486,14 @@ async function retireCompetingRegistration(
   // `installService`'s refusals enforce.
   let agentStartRequested = false;
   if (bootedOut) {
+    // A spawn edge, awaited outside the `try` below: that catch downgrades a
+    // failed kickstart to a warning, and a refused publication must not be.
+    await atServiceSpawnEdge();
     try {
       await run("launchctl", ["kickstart", `${guiTarget}/${agentLabelId}`], {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 10_000,
+        timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       });
       agentStartRequested = true;
@@ -2543,7 +2600,7 @@ async function stopService(
   await run("launchctl", ["kill", "TERM", `${guiDomain()}/${label.id}`], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   // Nothing was published, so there is no exit to confirm and no host this
@@ -2674,24 +2731,10 @@ async function startService(
   // is the one launchd can start. Kickstart of an already-loaded job
   // mutates no registration, so this is safe on both worlds.
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
-  const targetLabelId =
-    desktopAgent === null ? label.id : desktopAgent.agentLabelId;
-  try {
-    await run("launchctl", ["kickstart", `${guiDomain()}/${targetLabelId}`], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: 10_000,
-      tolerateNonZeroExit: false,
-    });
-  } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `launchctl kickstart failed for ${targetLabelId}: ${describeCause(cause)}`,
-      details: { label: targetLabelId, cause: describeCause(cause) },
-      exitCode: 1,
-    });
-  }
+  await kickstartJob(
+    desktopAgent === null ? label.id : desktopAgent.agentLabelId,
+    run,
+  );
 }
 
 // `host restart`'s stop half. On a Desktop-managed machine an unreachable or
@@ -2740,16 +2783,22 @@ async function relaunchServiceAfterRestart(
   stop: RestartStop,
   run: ProcessRunner,
 ): Promise<void> {
+  // ONE ownership probe. This used to go on through `restartService` /
+  // `startService`, each of which probed again with nothing in between that
+  // could change the answer - a second `launchctl print` on every `host
+  // restart`. While the grant was published before the controller call, that
+  // probe also ran on the grant's clock: 10 + 10 + 40s, the whole old 60s
+  // window.
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent !== null) {
     await kickstartDesktopAgent(desktopAgent, stop.forcedRecycle, run);
     return;
   }
   if (stop.forcedRecycle) {
-    await restartService(label, run);
+    await recycleJob(label.id, run);
     return;
   }
-  await startService(label, run);
+  await kickstartJob(label.id, run);
 }
 
 async function restartService(
@@ -2761,17 +2810,7 @@ async function restartService(
     await restartDesktopManagedHost(label, desktopAgent, run);
     return;
   }
-  try {
-    await run("launchctl", ["kickstart", "-k", `${guiDomain()}/${label.id}`], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: LAUNCHCTL_RECYCLE_TIMEOUT_MS,
-      tolerateNonZeroExit: false,
-    });
-  } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-    throw recycleFailure(label.id, cause);
-  }
+  await recycleJob(label.id, run);
 }
 
 function guiDomain(): string {
@@ -2845,11 +2884,26 @@ export const LAUNCHD_THROTTLE_INTERVAL_SECONDS = 10;
 const LAUNCHD_EXIT_TIMEOUT_CEILING_SECONDS = 20;
 
 /**
+ * The runner timeout for a `launchctl` call that waits on no job's process -
+ * `print`, a bare `bootout`, `bootstrap`, a plain `kickstart`, `kill`: long
+ * enough for `launchctl` to spawn, reach launchd over XPC and return.
+ */
+export const LAUNCHCTL_CALL_TIMEOUT_MS = 10_000;
+
+/**
+ * `installService`'s kickstart. 30s, not 10s: the dev wrapper at
+ * ~/.traycer/cli/dev/bin/traycer exec's `bun src/index.ts` - bun cold-start
+ * across ~2500 TS files plus the host's first-boot work can comfortably
+ * exceed 10s on a loaded laptop.
+ */
+const LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS = 30_000;
+
+/**
  * Headroom above launchd's own bounds for `launchctl` itself to spawn, reach
- * launchd over XPC and return - the same 10s every other launchctl call in
+ * launchd over XPC and return - the same bound every other launchctl call in
  * this file is given in full.
  */
-const LAUNCHCTL_RECYCLE_MARGIN_MS = 10_000;
+const LAUNCHCTL_RECYCLE_MARGIN_MS = LAUNCHCTL_CALL_TIMEOUT_MS;
 
 /**
  * The runner timeout for a recycle (`launchctl kickstart -k`), derived from
@@ -2866,10 +2920,11 @@ const LAUNCHCTL_RECYCLE_MARGIN_MS = 10_000;
  * comeback - and a relaunched job is inside its throttle window when the
  * recycle's start comes due.
  *
- * (20s ExitTimeOut ceiling + 10s ThrottleInterval) + 10s margin = 40s. It
- * also sits inside the 60s host-start adoption window every relaunch
- * publishes (`HOST_START_ADOPTION_MAX_AGE_MS`), so the supervisor the recycle
- * starts still finds its grant.
+ * (20s ExitTimeOut ceiling + 10s ThrottleInterval) + 10s margin = 40s. The
+ * recycle is a spawn edge - the grant is published immediately before it - so
+ * this is one of the bounds the host-start adoption window is derived from
+ * (`HOST_START_ADOPTION_MAX_AGE_MS`), and the supervisor it starts finds its
+ * grant by construction.
  *
  * It was 10s - shorter than launchd's own bound. When that fired, the CLI
  * killed `launchctl`, which withdraws nothing launchd had accepted, and
@@ -2883,6 +2938,37 @@ export const LAUNCHCTL_RECYCLE_TIMEOUT_MS =
   (LAUNCHD_EXIT_TIMEOUT_CEILING_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
     1_000 +
   LAUNCHCTL_RECYCLE_MARGIN_MS;
+
+/**
+ * The longest `installService` can run from its FIRST spawn edge to the
+ * return of its last one - the launchd side of the host-start adoption window
+ * (`HOST_START_ADOPTION_MAX_AGE_MS`), and the longest macOS path to it.
+ *
+ * `bootstrap` is the first edge (`RunAtLoad` launches the supervisor). When it
+ * loses the reload race, `reloadRegisteredService` re-probes, boots out and
+ * bootstraps again (a second edge), and on a second benign failure probes once
+ * more; the kickstart that follows is the third edge. Every step runs to its
+ * own timeout in the worst case, so any of the three launches can come as late
+ * as the kickstart's return:
+ *
+ *     bootstrap              10s  (edge 1)
+ *   + print (race re-probe)  10s
+ *   + bootout                10s
+ *   + bootstrap              10s  (edge 2)
+ *   + print (post-race)      10s
+ *   + kickstart              30s  (edge 3)
+ *   = 80s
+ *
+ * The ownership probes, manifest writes and bare `bootout` before the first
+ * bootstrap are not counted: the grant is not published until that edge.
+ */
+export const LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS =
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS;
 
 /**
  * The PATH to bake into the host's LaunchAgent. launchd would otherwise

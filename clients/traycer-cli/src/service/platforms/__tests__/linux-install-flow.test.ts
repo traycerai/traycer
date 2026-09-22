@@ -35,6 +35,33 @@ import {
 } from "../../../host/crash-diagnostics";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
+import {
+  isServiceMutationAuthorityError,
+  withServiceMutationAuthority,
+} from "../../mutation-authority";
+
+// The rollback-failure pins need `rm(unitFile())` itself to reject, which a
+// real filesystem removal never does for a file this suite just wrote. Gate
+// it behind a per-test flag rather than mocking the whole module unavailable:
+// every other row in this file (including its own `afterEach` cleanup)
+// removes real files and must keep doing so.
+const RM_FAILURE = vi.hoisted(() => ({ message: null as string | null }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rm: (async (
+      path: Parameters<typeof actual.rm>[0],
+      options: Parameters<typeof actual.rm>[1],
+    ) => {
+      if (RM_FAILURE.message !== null && String(path).endsWith(".service")) {
+        throw new Error(RM_FAILURE.message);
+      }
+      return actual.rm(path, options);
+    }) as typeof actual.rm,
+  };
+});
 
 // `stop --force`'s confirmed-settle branches finish with the SAME
 // child-kill engine the macOS force paths use (`forceStopHostProcess`) -
@@ -1084,5 +1111,162 @@ describe("linux service stop --force", () => {
         expect(PID.goneCalls > 0).toBe(consultsIdentity);
       },
     );
+  });
+});
+
+describe("install — spawn-edge placement", () => {
+  it("show-environment and daemon-reload precede publish, and enable is the entry right after it", async () => {
+    // `publish` pushes into the SAME log `recordingRunner` fills, in the
+    // order things actually happen - not a separately-kept count.
+    const { calls, runner } = recordingRunner(() => false);
+    const publish = vi.fn(async (): Promise<null> => {
+      calls.push({ command: "publish", args: [] });
+      return null;
+    });
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () => installWith(runner));
+
+    const verbs = calls.map((call) =>
+      call.command === "publish" ? "publish" : verbOf(call),
+    );
+    expect(verbs.filter((verb) => verb === "publish")).toHaveLength(1);
+    const publishIndex = verbs.indexOf("publish");
+    expect(verbs.slice(0, publishIndex)).toEqual([
+      "show-environment",
+      "daemon-reload",
+    ]);
+    expect(verbs[publishIndex + 1]).toBe("enable");
+  });
+
+  it("a refused publication rolls the unit back and rejects with a wrapped SERVICE_INSTALL_FAILED, not the raw refusal", async () => {
+    const { calls, runner } = recordingRunner(() => false);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => installWith(runner),
+    ).catch((cause: unknown) => cause);
+
+    // Wrapped, not rethrown by identity: `atServiceSpawnEdgeReporting`
+    // reports the state the rollback leaves and the recovery command, the
+    // same as every other platform's install edge.
+    expect(rejection).not.toBe(publishError);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { cause: "proof write failed", rollBackFailure: null },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toContain("proof write failed");
+    expect(message).toContain("is not registered and not running");
+    expect(message).toContain("Run 'traycer host service install'");
+    // The unit rollback ran exactly as it does for a refused `enable --now`
+    // itself: `disable --now` then a re-reload, and the manifest removed.
+    // `enable` itself never ran - the edge rejected before it was issued.
+    expect(calls.map(verbOf)).toEqual([
+      "show-environment",
+      "daemon-reload",
+      "disable",
+      "daemon-reload",
+    ]);
+    expect(await fileExists(unitFile())).toBe(false);
+  });
+
+  it("an authority refusal at the pre-publish check leaves the rollback UNRUN - no disable, and the unit file still present - and rejects with the authority error", async () => {
+    // Derive the exact pre-edge verify-call count by dry run, the same
+    // technique `macos.test.ts` uses: `installService`'s own
+    // `verifyServiceMutationAuthority()` calls around the manifest write
+    // consult the SAME verifier the edge's pre-publish check does.
+    const dryRunOrder: string[] = [];
+    const dryRunPublish = vi.fn(async (): Promise<null> => {
+      dryRunOrder.push("publish");
+      return null;
+    });
+    const { runner: dryRunRunner } = recordingRunner(() => false);
+    await withServiceMutationAuthority(
+      async () => {
+        dryRunOrder.push("verify");
+      },
+      () =>
+        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
+          installWith(dryRunRunner),
+        ),
+    );
+    await rm(unitFile(), { force: true });
+    const preEdgeVerifyCalls = dryRunOrder
+      .slice(0, dryRunOrder.indexOf("publish"))
+      .filter((entry) => entry === "verify").length;
+
+    const { calls, runner } = recordingRunner(() => false);
+    const authorityError = new Error("mutation authority was lost");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
+    };
+    const publish = vi.fn(async (): Promise<null> => null);
+
+    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
+      runWithLeaseAtServiceSpawnEdge(publish, () => installWith(runner)),
+    ).catch((cause: unknown) => cause);
+
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("enable");
+    expect(await fileExists(unitFile())).toBe(true);
+  });
+
+  it("edge refusal plus a failing unit-file removal: the half-written wording, and details.rollBackFailure names the rm failure", async () => {
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "systemctl" && args[1] === "disable") {
+        return Promise.reject(busError(command, args));
+      }
+      return ok();
+    };
+    RM_FAILURE.message = "permission denied";
+
+    try {
+      const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+        publish,
+        () => installWith(runner),
+      ).catch((cause: unknown) => cause);
+
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        details: {
+          cause: "proof write failed",
+          rollBackFailure: "permission denied",
+        },
+      });
+      const message = rejection instanceof Error ? rejection.message : "";
+      expect(message).toContain(
+        "Undoing what it wrote before the launch failed too (permission denied), so its registration may be half-written.",
+      );
+    } finally {
+      RM_FAILURE.message = null;
+    }
+  });
+
+  it("enable --now failure plus a failing unit-file removal: the 'failed too' wording, not a claimed removal", async () => {
+    const { runner } = recordingRunner((call) => call.args[1] === "enable");
+    RM_FAILURE.message = "permission denied";
+
+    try {
+      await expect(installWith(runner)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "removing the partially-written unit file failed too: permission denied",
+        ),
+      });
+    } finally {
+      RM_FAILURE.message = null;
+    }
   });
 });

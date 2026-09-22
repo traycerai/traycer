@@ -178,6 +178,12 @@ export class ProcessSpawnError extends ProcessRunError {
  * withdraw a request the service manager has already accepted - it finishes
  * the job regardless - so such a caller must report a timeout as unconfirmed,
  * never as the operation having failed.
+ *
+ * The discriminator is that the child died BY the runner's timeout signal
+ * (`killed` with a `signal`). A child that traps SIGTERM and exits with a code
+ * of its own reads as an ordinary {@link ProcessRunError}, a genuine failure.
+ * That is right for `launchctl` and `systemctl`, which do not trap it, and is
+ * why this is not a general-purpose timeout class for any binary.
  */
 export class ProcessTimeoutError extends ProcessRunError {
   public readonly timeoutMs: number;

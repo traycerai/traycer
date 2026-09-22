@@ -42,9 +42,14 @@ import type { UpdateMutationCapabilityAdoption } from "./index";
 
 const ADOPTION_FILE_PREFIX = ".update-attempt-adoption";
 /**
- * Deliberately the same bound as `HOST_START_ADOPTION_MAX_AGE_MS`. A proof
- * only has to survive a spawn, and a short window is what stops a crashed
- * parent's leftover file from being consumable against a recycled pid later.
+ * A proof only has to survive a spawn the parent makes itself, and a short
+ * window is what stops a crashed parent's leftover file from being consumable
+ * against a recycled pid later.
+ *
+ * Not tied to the CLI's `HOST_START_ADOPTION_MAX_AGE_MS`, though both were
+ * once 60s. That grant waits on an OS service manager to launch a supervisor
+ * through four launcher cold starts, and its window is derived from those
+ * bounds (120s); nothing here goes through a service manager.
  */
 export const UPDATE_ADOPTION_MAX_AGE_MS = 60_000;
 

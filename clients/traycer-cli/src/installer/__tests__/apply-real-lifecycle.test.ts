@@ -165,12 +165,20 @@ vi.mock("../../service/platforms/macos", async (importOriginal) => {
   };
 });
 
-// Shell out to schtasks / powershell / taskkill.
-vi.mock("../../service/platforms/windows", () => ({
-  killLingeringSlotProcesses: async () => undefined,
-  describeSlotLockHolders: async () => [],
-  epochMicrosNow: () => 0,
-}));
+// Shell out to schtasks / powershell / taskkill. `host-start-adoption.ts`
+// imports `WINDOWS_RUN_SPAWN_EDGE_BOUND_MS` from this module for its window
+// derivation, so a wholesale replacement here breaks at import time on any
+// platform, not only Windows - spread the actual module instead.
+vi.mock("../../service/platforms/windows", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/windows")>();
+  return {
+    ...actual,
+    killLingeringSlotProcesses: async () => undefined,
+    describeSlotLockHolders: async () => [],
+    epochMicrosNow: () => 0,
+  };
+});
 
 vi.mock("../../store/paths", async () => {
   const actual =
@@ -207,6 +215,7 @@ import {
   type InstallPhaseHooks,
 } from "../install";
 import { createBytesOnlyInstallLifecycle } from "../../service/install-lifecycle";
+import { atServiceSpawnEdge } from "../../service/spawn-edge";
 import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
 import {
   writeHostInstallRecord,
@@ -317,6 +326,11 @@ function makeController(stopGate: Promise<void>): ControllerHarness {
     }),
     install: async () => {
       order.push("controller.install");
+      // The real controller awaits the spawn edge immediately before the
+      // call that launches the supervisor - this fake models that so the
+      // wrapper's adoption publisher (armed at the edge, not before the
+      // call) actually runs.
+      await atServiceSpawnEdge();
       registerEntered.release();
     },
     uninstall: async () => undefined,
@@ -327,12 +341,14 @@ function makeController(stopGate: Promise<void>): ControllerHarness {
     },
     start: async () => {
       order.push("controller.start");
+      await atServiceSpawnEdge();
       registerEntered.release();
     },
     restart: async () => undefined,
     stopForRestart: async () => ({ forcedRecycle: false }),
     relaunchAfterRestart: async () => {
       order.push("controller.relaunchAfterRestart");
+      await atServiceSpawnEdge();
       registerEntered.release();
     },
     hostStartAdoptionLabel: async (serviceLabel) => serviceLabel.id,
