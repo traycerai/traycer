@@ -1,3 +1,4 @@
+import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -73,11 +74,41 @@ import type {
   InlineEditState,
 } from "./chat-tile-session-state";
 
+function canEditMessageDelivery(input: {
+  readonly delivery: ChatMessageDelivery | null;
+  readonly canAct: boolean;
+  readonly deliveryPending: boolean;
+}): boolean {
+  return (
+    input.canAct &&
+    !input.deliveryPending &&
+    input.delivery !== null &&
+    (input.delivery.state.phase === "pending" ||
+      input.delivery.state.phase === "paused")
+  );
+}
+
+function canEditUserMessage(input: {
+  readonly message: ChatMessageModel;
+  readonly delivery: ChatMessageDelivery | null;
+  readonly canAct: boolean;
+  readonly deliveryPending: boolean;
+  readonly canModifyMessages: boolean;
+}): boolean {
+  if (input.message.agentSenderInfo !== null) return false;
+  if (input.delivery === null)
+    return (
+      input.message.providerHistory !== "excluded" && input.canModifyMessages
+    );
+  return canEditMessageDelivery(input);
+}
+
 export interface ChatMessageActionsInput {
   readonly dispatchUi: (action: ChatTileUiAction) => void;
   readonly activeInlineEdit: InlineEditState | null;
   readonly canModifyMessages: boolean;
   readonly canAct: boolean;
+  readonly messageDelivery?: ChatMessageDelivery | null;
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
@@ -221,6 +252,7 @@ const NO_DRAFT_IMAGE_BYTES: ReadonlyMap<string, string> = new Map<
 interface LiveInlineEdit {
   readonly sessionId: string;
   readonly targetMessageId: string;
+  readonly deliveryRevision: number | null;
   readonly initialContent: JsonContent;
   readonly content: JsonContent;
   readonly revision: number;
@@ -275,6 +307,7 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     canAct,
+    messageDelivery = null,
     interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
@@ -297,6 +330,12 @@ export function useChatMessageActions(
     worktreeBinding,
     getDraftBlobBridgeSupported,
   } = input;
+  const deliveryPending = Object.values(pendingActions).some(
+    (action) =>
+      action.action === "messageDeliveryEdit" ||
+      action.action === "messageDeliveryRetry" ||
+      action.action === "messageDeliveryCancel",
+  );
 
   /**
    * What a revert from the message being edited would touch.
@@ -359,6 +398,7 @@ export function useChatMessageActions(
     const adopted: LiveInlineEdit = {
       sessionId: committed.sessionId,
       targetMessageId: committed.targetMessageId,
+      deliveryRevision: committed.messageDeliveryRevision ?? null,
       initialContent: committed.initialContent,
       content: committed.currentContent,
       revision: committed.revision,
@@ -373,7 +413,21 @@ export function useChatMessageActions(
 
   const beginInlineEdit = useCallback(
     (message: ChatMessageModel) => {
-      if (!canModifyMessages) return;
+      const delivery =
+        messageDelivery?.messageId === message.persistentMessageId
+          ? messageDelivery
+          : null;
+      const canEditDelivery = canEditMessageDelivery({
+        delivery,
+        canAct,
+        deliveryPending,
+      });
+      if (
+        message.providerHistory === "excluded"
+          ? !canEditDelivery
+          : !canModifyMessages
+      )
+        return;
       if (message.persistentMessageId === null) return;
       if (message.structuredContent === null) return;
       const persistentMessageId = message.persistentMessageId;
@@ -391,6 +445,7 @@ export function useChatMessageActions(
       liveInlineEditRef.current = {
         sessionId,
         targetMessageId: persistentMessageId,
+        deliveryRevision: delivery?.revision ?? null,
         initialContent: content,
         content,
         revision: 0,
@@ -398,13 +453,21 @@ export function useChatMessageActions(
       };
       dispatchUi({
         type: "beginInlineEdit",
+        messageDeliveryRevision: delivery?.revision,
         sessionId,
         targetMessageId: persistentMessageId,
         originalMessage: message,
         initialContent: content,
       });
     },
-    [activeInlineEdit, canModifyMessages, dispatchUi],
+    [
+      activeInlineEdit,
+      canAct,
+      canModifyMessages,
+      deliveryPending,
+      dispatchUi,
+      messageDelivery,
+    ],
   );
 
   const updateInlineEdit = useCallback(
@@ -438,20 +501,50 @@ export function useChatMessageActions(
       revertFileChanges: boolean,
       revertArtifacts: boolean,
     ) => {
-      if (!canModifyMessages) return;
-      const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return;
-      const sent = chatActions.editUserMessage({
-        targetMessageId: edit.targetMessageId,
-        content: buildSubmittedChatJSONContent(
-          inlineHashOnlyImageBytes(edit.content, draftImageBase64ByHash),
-          slashCatalog,
-        ),
-        sender,
-        settings: editSettings,
-        revertFileChanges,
-        revertArtifacts,
-      });
+      const delivery =
+        messageDelivery?.messageId === edit.targetMessageId
+          ? messageDelivery
+          : null;
+      if (
+        edit.deliveryRevision !== null
+          ? delivery?.revision !== edit.deliveryRevision ||
+            !canEditMessageDelivery({
+              delivery,
+              canAct,
+              deliveryPending,
+            })
+          : !canModifyMessages
+      )
+        return;
+      const content = buildSubmittedChatJSONContent(
+        inlineHashOnlyImageBytes(edit.content, draftImageBase64ByHash),
+        slashCatalog,
+      );
+      const source = messages.find(
+        (message) => message.messageId === edit.targetMessageId,
+      );
+      const sent = (() => {
+        if (edit.deliveryRevision !== null)
+          return chatActions.messageDeliveryEdit({
+            messageId: edit.targetMessageId,
+            expectedRevision: edit.deliveryRevision,
+            content,
+            browserAnnotations:
+              source?.role === "user" && source.message.kind === "user"
+                ? source.message.browserAnnotations
+                : [],
+          });
+        const sender = userMessageSenderForProfile(profile);
+        if (sender === null) return null;
+        return chatActions.editUserMessage({
+          targetMessageId: edit.targetMessageId,
+          content,
+          sender,
+          settings: editSettings,
+          revertFileChanges,
+          revertArtifacts,
+        });
+      })();
       if (sent === null) return;
       // Before the dispatch, for the same reason the content is live at all:
       // this is what freezes the editor, and a value that only becomes true at
@@ -475,6 +568,10 @@ export function useChatMessageActions(
     },
     [
       canModifyMessages,
+      canAct,
+      deliveryPending,
+      messageDelivery,
+      messages,
       chatActions,
       dispatchUi,
       editSettings,
@@ -547,7 +644,16 @@ export function useChatMessageActions(
       // they always have. Only what the user added since is this client's to
       // supply. Re-inlining the inherited ones would put the whole screenshot
       // back on a wire that has been carrying a 64-character hash.
-      const inherited = new Set(blobHashesFromContent(live.initialContent));
+      const missing = new Set(
+        messageDelivery?.state.phase === "paused"
+          ? messageDelivery.state.missingHashes
+          : [],
+      );
+      const inherited = new Set(
+        blobHashesFromContent(live.initialContent).filter(
+          (hash) => !missing.has(hash),
+        ),
+      );
       // ...and what this client has since PUT on the host joins them, because a
       // digest the host acknowledges holding is a digest it can materialize.
       //
@@ -732,6 +838,7 @@ export function useChatMessageActions(
     },
     [
       currentLiveInlineEdit,
+      messageDelivery,
       dispatchUi,
       getDraftBlobBridgeSupported,
       submitPreparedEdit,
@@ -742,6 +849,10 @@ export function useChatMessageActions(
 
   const submitInlineEdit = useCallback(() => {
     if (activeInlineEdit === null) return;
+    if (activeInlineEdit.messageDeliveryRevision !== undefined) {
+      if (canAct) performEditSubmit(false, false);
+      return;
+    }
     if (!canModifyMessages) return;
     if (userMessageSenderForProfile(profile) === null) return;
     // Editing a previous message with reversible edits below it - or a history
@@ -759,6 +870,7 @@ export function useChatMessageActions(
   }, [
     activeInlineEdit,
     canModifyMessages,
+    canAct,
     dispatchUi,
     performEditSubmit,
     profile,
@@ -855,6 +967,120 @@ export function useChatMessageActions(
     ],
   );
 
+  const deliveryActions = useMemo(
+    () => ({
+      pending: deliveryPending,
+      onRetry: () => {
+        if (messageDelivery !== null)
+          chatActions.messageDeliveryRetry(
+            messageDelivery,
+            currentComposerSettings,
+          );
+      },
+      onCancel: () => {
+        if (messageDelivery !== null)
+          chatActions.messageDeliveryCancel(messageDelivery);
+      },
+    }),
+    [chatActions, currentComposerSettings, deliveryPending, messageDelivery],
+  );
+
+  const userMessageActionsFor = useCallback(
+    (message: ChatMessageModel): ChatMessageActions | null => {
+      const persistentMessageId = editablePersistentMessageId(message);
+      if (persistentMessageId === null) return null;
+      if (
+        inlineEditLocksMessageActions(activeInlineEdit, persistentMessageId)
+      ) {
+        return null;
+      }
+
+      const editing = inlineEditForPersistentMessage(
+        activeInlineEdit,
+        persistentMessageId,
+      );
+      const delivery =
+        messageDelivery?.messageId === persistentMessageId
+          ? messageDelivery
+          : null;
+      const canEdit = canEditUserMessage({
+        message,
+        delivery,
+        canAct,
+        deliveryPending,
+        canModifyMessages,
+      });
+      if (!canModifyMessages && editing === null && delivery === null)
+        return null;
+      const pending = inlineEditIsPending(editing);
+
+      return {
+        type: "user",
+        enabled: canEdit && !pending,
+        delivery:
+          delivery === null
+            ? undefined
+            : {
+                ...deliveryActions,
+                state: delivery.state,
+                canAct: canAct && !deliveryPending && !pending,
+              },
+        confirmingDelete: confirmingDeleteMessageId === persistentMessageId,
+        editing: chatMessageEditingForInlineEdit({
+          editing,
+          canModifyMessages: canEdit,
+          editSettings,
+          mentionRoots,
+          fallbackToGlobalMentionRoots,
+          currentEpicId,
+          onSnapshot: updateInlineEdit,
+          onSubmit: submitInlineEdit,
+          onCancel: () => {
+            if (pending) return;
+            liveInlineEditRef.current = null;
+            dispatchUi({ type: "clearInlineEdit" });
+          },
+        }),
+        onEdit: () => beginInlineEdit(message),
+        onDeleteRequest: () => {
+          liveInlineEditRef.current = null;
+          dispatchUi({ type: "clearInlineEdit" });
+          dispatchUi({
+            type: "setConfirmingDeleteMessageId",
+            confirmingDeleteMessageId: persistentMessageId,
+          });
+        },
+        onDeleteConfirm: () => {
+          deleteMessageSuffix(persistentMessageId);
+        },
+        onDeleteCancel: () => {
+          dispatchUi({
+            type: "setConfirmingDeleteMessageId",
+            confirmingDeleteMessageId: null,
+          });
+        },
+      };
+    },
+    [
+      activeInlineEdit,
+      beginInlineEdit,
+      canAct,
+      canModifyMessages,
+      confirmingDeleteMessageId,
+      currentEpicId,
+      deleteMessageSuffix,
+      deliveryActions,
+      deliveryPending,
+      dispatchUi,
+      editSettings,
+      fallbackToGlobalMentionRoots,
+      mentionRoots,
+      messageDelivery,
+      submitInlineEdit,
+      updateInlineEdit,
+    ],
+  );
+
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
       const interviewDeliveryRetry =
@@ -918,79 +1144,16 @@ export function useChatMessageActions(
           interviewDeliveryRetry,
         };
       }
-      const persistentMessageId = editablePersistentMessageId(message);
-      if (persistentMessageId === null) return null;
-      if (
-        inlineEditLocksMessageActions(activeInlineEdit, persistentMessageId)
-      ) {
-        return null;
-      }
-
-      const editing = inlineEditForPersistentMessage(
-        activeInlineEdit,
-        persistentMessageId,
-      );
-      if (!canModifyMessages && editing === null) return null;
-      const pending = inlineEditIsPending(editing);
-
-      return {
-        type: "user",
-        enabled: canModifyMessages && !pending,
-        confirmingDelete: confirmingDeleteMessageId === persistentMessageId,
-        editing: chatMessageEditingForInlineEdit({
-          editing,
-          canModifyMessages,
-          editSettings,
-          mentionRoots,
-          fallbackToGlobalMentionRoots,
-          currentEpicId,
-          onSnapshot: updateInlineEdit,
-          onSubmit: submitInlineEdit,
-          onCancel: () => {
-            if (pending) return;
-            liveInlineEditRef.current = null;
-            dispatchUi({ type: "clearInlineEdit" });
-          },
-        }),
-        onEdit: () => beginInlineEdit(message),
-        onDeleteRequest: () => {
-          liveInlineEditRef.current = null;
-          dispatchUi({ type: "clearInlineEdit" });
-          dispatchUi({
-            type: "setConfirmingDeleteMessageId",
-            confirmingDeleteMessageId: persistentMessageId,
-          });
-        },
-        onDeleteConfirm: () => {
-          deleteMessageSuffix(persistentMessageId);
-        },
-        onDeleteCancel: () => {
-          dispatchUi({
-            type: "setConfirmingDeleteMessageId",
-            confirmingDeleteMessageId: null,
-          });
-        },
-      };
+      return userMessageActionsFor(message);
     },
     [
-      activeInlineEdit,
-      beginInlineEdit,
       canAct,
-      canModifyMessages,
-      confirmingDeleteMessageId,
-      currentEpicId,
-      deleteMessageSuffix,
-      dispatchUi,
-      editSettings,
-      fallbackToGlobalMentionRoots,
-      forkAtAssistantMessage,
       interviewDeliveryRetryProtocolSupported,
-      mentionRoots,
       pendingActions,
       acceptedActions,
       chatActions,
-      submitInlineEdit,
-      updateInlineEdit,
+      forkAtAssistantMessage,
+      userMessageActionsFor,
     ],
   );
 

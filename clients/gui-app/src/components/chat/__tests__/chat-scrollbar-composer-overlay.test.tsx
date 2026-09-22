@@ -194,6 +194,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               chatId="chat-1"
               runningManagedCommandCount={0}
               heldManagedCommandCount={0}
+              portForwardCount={0}
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
@@ -264,6 +265,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               chatId="chat-1"
               runningManagedCommandCount={0}
               heldManagedCommandCount={0}
+              portForwardCount={0}
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
@@ -520,6 +522,12 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     autoPermissionModeProtocolSupported: null,
     getDraftBlobBridgeSupported: () => false,
     getActiveTurnForSteer: () => null,
+    // Unused by this suite - it covers composer/overlay layout, not Stop.
+    getStopConfirmationTarget: () => ({
+      turnId: null,
+      revision: 0,
+      connectionEpoch: 0,
+    }),
   };
   const interview: ChatLowerInterviewState = {
     pending: null,

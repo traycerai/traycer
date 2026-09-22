@@ -15,6 +15,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -340,6 +341,12 @@ const PROVIDERS_RESET_LANES: ReadonlySet<string> = new Set([
 const HARNESS_RESET_LANES: ReadonlySet<string> = new Set([
   HARNESS_ALL_AVAILABLE_POLL_LANE.id,
 ]);
+
+const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
+  id: "a2a-peer-pending",
+  initialDelayMs: 2 * SECOND_MS,
+  maxDelayMs: 5 * MINUTE_MS,
+};
 
 const LATEST_SCHEDULING = {
   mode: "latest",
@@ -832,6 +839,20 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.listHarnessModels": { ...LATEST_SCHEDULING, poll: null },
   "agent.list": { ...LATEST_SCHEDULING, poll: null },
+  "agent.resolveMessagePeer": {
+    ...LATEST_SCHEDULING,
+    // Once titled, live projection/remount refresh owns titles. A newly
+    // created peer may still be awaiting automatic title generation.
+    poll: defineConditionPolicy("agent.resolveMessagePeer", {
+      classify: (data) =>
+        data === undefined || data.peer === null || data.peer.title === null
+          ? A2A_PEER_PENDING_POLL_LANE
+          : false,
+      initialErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      staleDataErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
   // Sending a message enqueues it in the recipient's inbox.
   "agent.sendMessage": {
     mode: "fifo",
@@ -898,6 +919,66 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.oneOffShell.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only lease verbs: one host calls these on another, never the
+  // renderer. Here because this table is exhaustive over the registry. `fifo`
+  // because each acquires, releases or ends a lease and must never coalesce.
+  "host.portForward.acquireLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.releaseLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.leaseEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The host-level forwards listing: only the newest answer means anything.
+  "portForward.listForHost": { ...LATEST_SCHEDULING, poll: null },
+  // Stopping a forward and cutting a lease both tear down live sockets.
+  "portForward.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "portForward.cutLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only, like `host.agent.createFromRemoteSender` below: the agent's
+  // host calls these on the machine its browser realm lives on, never the
+  // renderer. They are here because this table is exhaustive over the
+  // registry. `fifo` for both - a cell is a side-effecting script and a
+  // release retires a realm, so neither may be coalesced with another call.
+  "browser.repl.runCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.releaseRealm": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.stopCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only in the other direction: the machine running a browser realm
+  // asks the agent's host for a person's decision. Never the renderer; here
+  // for exhaustiveness. `fifo` - each question is its own card and must
+  // never be coalesced with another.
+  "browser.repl.requestApproval": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2073,6 +2154,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // stuck pending forever with no other trigger (ticket-7 fixup-01).
   "host.usage.summary": {
     ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
 } satisfies HostMethodPolicyTable;

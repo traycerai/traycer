@@ -33,6 +33,10 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
+import {
+  queuedPromptMessageIds,
+  queueWithoutPersistedPrompts,
+} from "@/components/chat/chat-queue-utils";
 import { ChatMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import {
   ChatForkDialog,
@@ -134,6 +138,7 @@ import {
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
+import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -1829,6 +1834,7 @@ function useChatTileSessionViewModel(
       transcriptWindow: s.transcriptWindow,
       transcriptDerived: s.transcriptDerived,
       queue: s.queue,
+      messageDelivery: s.messageDelivery,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
@@ -1868,12 +1874,21 @@ function useChatTileSessionViewModel(
   );
   const projectedQueue = useMemo(
     () =>
-      projectQueueWithPendingCancellations(
-        state.queue,
-        state.pendingActions,
-        state.acceptedActions,
+      queueWithoutPersistedPrompts(
+        projectQueueWithPendingCancellations(
+          state.queue,
+          state.pendingActions,
+          state.acceptedActions,
+        ),
+        state.messages,
       ),
-    [state.queue, state.pendingActions, state.acceptedActions],
+    [state.acceptedActions, state.messages, state.pendingActions, state.queue],
+  );
+  // The raw queue, including a row a pending cancel has hidden from the panel.
+  // The optimistic chat row yields to any host queue item for the same prompt.
+  const queuedPromptIds = useMemo(
+    () => queuedPromptMessageIds(state.queue.items),
+    [state.queue],
   );
   const chatWorktreeStagingKeyId = useMemo(
     () =>
@@ -2048,6 +2063,7 @@ function useChatTileSessionViewModel(
       setupCardWindows:
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
+      queuedPromptMessageIds: queuedPromptIds,
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,
@@ -2580,6 +2596,7 @@ function useChatTileSessionViewModel(
       chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
+      messageDelivery: state.messageDelivery,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are
@@ -3305,6 +3322,15 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().activeTurn,
     [handle.store],
   );
+  const getStopConfirmationTarget =
+    useCallback((): ChatStopConfirmationTarget => {
+      const live = handle.store.getState();
+      return {
+        turnId: live.activeTurn?.turnId ?? null,
+        revision: live.turnLifecycleRevision,
+        connectionEpoch: live.connectionEpoch,
+      };
+    }, [handle.store]);
   const lowerTurn = useMemo(
     () => ({
       activeTurnStatus: composerActiveTurnStatus,
@@ -3313,6 +3339,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
@@ -3323,6 +3350,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       chatActions.stopTurn,
     ],

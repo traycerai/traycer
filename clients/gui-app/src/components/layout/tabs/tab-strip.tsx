@@ -1,3 +1,6 @@
+import { tabRefKey } from "@/stores/tabs/layout";
+import { HiddenTabsMenu } from "./hidden-tabs-menu";
+import { useHiddenHeaderTabs } from "./use-hidden-header-tabs";
 import { TabGroupChip } from "./tab-group-chip";
 import { stripItemGroupId } from "@/stores/tabs/tab-groups";
 import {
@@ -100,6 +103,20 @@ function TabStripBody() {
   const { close: closeModal } = useSystemTabModalActions();
   const modalActive = useAnySystemOverlayActive();
   const handleWheel = useHorizontalWheelScroll();
+  const taskTabLayout = useSettingsStore((state) => state.taskTabLayout);
+  const { setScrollElement, hiddenTabKeys, revealTab } =
+    useHiddenHeaderTabs(taskTabLayout);
+  const hiddenTabs = useMemo(() => {
+    const hidden = new Set(hiddenTabKeys);
+    return allTabs.filter((tab) => hidden.has(tabRefKey(tab)));
+  }, [allTabs, hiddenTabKeys]);
+  const handleActivateHiddenTab = useCallback(
+    (tab: HeaderTab) => {
+      navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
+      revealTab(tabRefKey(tab));
+    },
+    [navigate, revealTab],
+  );
   const activeItemId = useTabsStore((state) => state.activeItemId);
   const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   // `activeItemId === null` over a populated strip means Home holds the
@@ -204,6 +221,14 @@ function TabStripBody() {
     id: HEADER_TAB_TRAILING_SLOT_DROP_ID,
     data: trailingSlotData,
   });
+
+  const setStripRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      trailingSlotRef(element);
+      setScrollElement(element);
+    },
+    [trailingSlotRef, setScrollElement],
+  );
 
   const handleNewTab = useCallback(() => {
     navigateToTabIntent(navigate, openNewEpicIntent(), undefined);
@@ -345,7 +370,8 @@ function TabStripBody() {
           role="tablist"
           aria-label="Open tabs"
           data-testid="tab-strip"
-          className="relative flex min-w-0 flex-1 items-end"
+          data-tab-layout={taskTabLayout}
+          className="group/strip relative flex min-w-0 flex-1 items-end"
         >
           {/* Outside the scrollable list and before it: Home is fixed, so it
               must not scroll away with the task tabs, and it must not sit
@@ -358,9 +384,15 @@ function TabStripBody() {
             />
           ) : null}
           <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
+            {hiddenTabs.length > 0 ? (
+              <HiddenTabsMenu
+                tabs={hiddenTabs}
+                onActivate={handleActivateHiddenTab}
+              />
+            ) : null}
             <LayoutGroup id="header-tabs">
               <div
-                ref={trailingSlotRef}
+                ref={setStripRef}
                 data-testid="header-tab-strip-scroll"
                 onWheel={handleWheel}
                 className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"

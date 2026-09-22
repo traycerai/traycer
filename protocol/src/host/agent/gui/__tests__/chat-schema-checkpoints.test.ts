@@ -19,6 +19,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -67,6 +68,22 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // benign difference: `chatQueuedItemSchemaPreAuto`'s comment records that
 // `z.union` and `z.discriminatedUnion` render `anyOf` versus `oneOf` and move
 // every field path beneath them.
+// 1.7–1.12 were re-captured when the grok session anchor gained its nullable
+// `grokPromptIndex` (default null). 1.0–1.6 bind hand-frozen pre-index anchor
+// copies and did not move; 1.7 and 1.8 reach the live user-message and
+// runtime-event schemas by reference (the two `**.grokPromptIndex` entries in
+// `compat-exceptions.json` record why that is tolerated), and 1.9 onward carry
+// the field live.
+//
+// 1.13 is captured ON TIME, the way the rule asks: taken from the tree at OSS
+// commit c18aba718, before the port-forward surface took 1.14 above it, and
+// re-taken after the freeze to confirm the two agree. It is the first entry
+// since 1.10 that proves the freeze rather than merely starting one. Then
+// re-captured with 1.7–1.12 above when the grok anchor gained
+// `grokPromptIndex`: main made that change on its live line, which is 1.13,
+// so the frozen copy here (which reaches the anchor by reference) moved with
+// it. The values below are main's own live-1.13 digests at that merge, and
+// the frozen copy on the merged tree reproduces them exactly.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -97,28 +114,32 @@ const SERVER_FRAME_DIGESTS = {
     "c145b4fff10cde51da38b4ae9a844647353e2f29a3ec901922e6ca692f535d52",
   ],
   7: [
-    "9950f117e194865321eb0ea5e229bf72849205a0e63d308b07246ab336371990",
-    "87ce35a710cfd5a358cfeb83de08f9b75161a7f3fd464beae3e505df6740622d",
+    "035b1bdd21da66e03d29dae9fe140c0ca15b3688c4b8b6937a2bbf97979c4539",
+    "672452c0457e22f05f13eab07f73661639027b5c4ab9b4e029bd7ccccf5b0557",
   ],
   8: [
-    "fe0a42b6660c61c26917dbba891e4018638af0c65dec2135117c3397839f319e",
-    "b7fd5a157a82e94fb7f5235251bdcf9174211a54630c7e88b87fce5c22f702a4",
+    "7572ac8bdca83e79f94d67cd0e3bd6ae4521f5fa204976b6ffda2307c0384d7d",
+    "7489cce3dd9e1c6dbe5709c5f3d3d9b3905e08cbd769de00aa8bfdbd0c63af91",
   ],
   9: [
-    "118098db22304e8db4d261437b15535cd17bdfba5884142b743cbe3151749e9f",
-    "6eb5cbdc0a7814e35a38490dbc7259b25d21cf0ae414c6c2688a08ea160fe5ee",
+    "a236937293d40c46f02c34fcf4c156ee44b8a0c5d3b4d10613817fd82be44a30",
+    "669c98b7f46cd3a4d5a20c037cbc4b8b9ef055ad0a08750e395bf746e3932d54",
   ],
   10: [
-    "6ece105c4aa97932c5c9d9b3fc5ae079ac4935dd330405a1fc7554ed8bacc502",
-    "6e6ccab1ec5ed64063b61acdd6179657c672894083fcb2aa0da6ff533ff1c775",
+    "a50e4b67a7847bc2016ded46cc45ce0ae2ff6ff3166242fc1ba2421f76377a7f",
+    "49980dad9ffe9c9ff93146d285d5513745b5f231a70f7bc03911199bbb74fae8",
   ],
   11: [
-    "ce00f20988c52559e42d106beb08eb1b67383ccfa9f5d9efcf737882164bee1e",
-    "8230c4887d34ecd2d1eb8c73a03b7e94d3e8afc5fcc8c1f92b2cabf35f173099",
+    "ad656a7ced38c2e9194ef1633dff8d5c7f17047471751ba12deab114e1abb354",
+    "eb8902c993b15f4bdc9cf1bcf33b8d4d56ed6e074fc1b121e129371c218060fb",
   ],
   12: [
-    "1ec10f676481441ce71ed56103b4128077c6bbcc51a2c541f151643bbe6ae5b4",
-    "a17b8dbe7272b923796462c80c932481f4b2b87d28658d3e25999da32774b746",
+    "1de46aa26aebc0b902d91cf0b108e9b34cb0906bbd8a03dee5a60627c9e135d3",
+    "882f4af25ef15550956d59c48c622c0c592f3c313b15b44b337e4a5b398bb809",
+  ],
+  13: [
+    "0b21bf15572d520c23bc7d78428b1b5abf4b78970f07bea3accae6295082c1e4",
+    "4b319e48d65e2493146748cb326a652cdb204d78f647cf8c41defbfef503de6b",
   ],
 } as const;
 
@@ -136,10 +157,11 @@ const contracts = [
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.12 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.13 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

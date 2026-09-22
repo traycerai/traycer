@@ -319,6 +319,7 @@ export function publishedChatSessionState(
     },
     messages: input.conversion.messages,
     events: input.conversion.events,
+    messageDelivery: null,
     queue: { status: "idle", items: [] },
     // A copy has no live host stream, so no managed commands can ever arrive.
     managedCommands: [],
@@ -327,8 +328,10 @@ export function publishedChatSessionState(
     // a placeholder: rendering a Deliver affordance on a copy would offer an
     // action that cannot be sent.
     heldUpdates: [],
+    portForwards: [],
     runStatus: "idle",
     activeTurn: null,
+    turnLifecycleRevision: 0,
     steerProtocolSupported: false,
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
@@ -425,6 +428,9 @@ export function publishedChatSessionState(
     sendSeededUserMessage: () => null,
     deleteMessageSuffix: () => null,
     editUserMessage: () => null,
+    messageDeliveryEdit: () => null,
+    messageDeliveryRetry: () => null,
+    messageDeliveryCancel: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
     fallbackHoldForChoice: () => null,

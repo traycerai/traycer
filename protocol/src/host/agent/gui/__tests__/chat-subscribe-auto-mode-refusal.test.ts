@@ -8,7 +8,6 @@ import {
   permissionModeSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   projectChatClientFrameForVersion,
   supportsAutoPermissionMode,
@@ -143,8 +142,22 @@ const MODE_BEARING_FRAME_KINDS: ReadonlyArray<{
 // DERIVED, never restated. The auto line has been renumbered four times - to
 // `1.10`, `1.11`, `1.12` and now `1.13`, each time because main took the minor
 // first - and every one of those moves broke a file that had written the
-// number down. `latestMinor` cannot be redirected by a rename or a re-mint.
-const AUTO_MINOR = hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
+// number down.
+//
+// Derived from the production predicate's own cliff, NOT from the registry's
+// `latestMinor`: that was the same number only while the auto line was the
+// newest one, and the port-forward line (`1.14`) ended that. Read off the
+// ceiling, this would have slid to `14` and asserted that a `1.13` client -
+// the auto line itself - is refused.
+function smallestMinorWhereAutoPermissionModeIsSupported(): number {
+  for (let minor = 0; minor <= 50; minor += 1) {
+    if (supportsAutoPermissionMode({ major: 1, minor })) return minor;
+  }
+  throw new Error(
+    "supportsAutoPermissionMode never turned true within the scanned range",
+  );
+}
+const AUTO_MINOR = smallestMinorWhereAutoPermissionModeIsSupported();
 const AUTO_LINE: SchemaVersion = { major: 1, minor: AUTO_MINOR };
 
 // The two tiers immediately below the cliff, expressed as offsets so they move

@@ -10,6 +10,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
+  Cable,
   GripVertical,
   ChevronDown,
   Inbox,
@@ -31,6 +32,7 @@ import {
   type ReactNode,
 } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -712,6 +714,11 @@ function QueuedMessageRowContent(props: {
           />
         </div>
       ) : null}
+      {item.kind === "port-forward" ? (
+        <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
+          <PortForwardBadge />
+        </div>
+      ) : null}
       <div
         className="max-h-[3lh] overflow-y-auto pr-1 text-ui-sm leading-5 wrap-break-word"
         data-testid="queued-message-content-scroll"
@@ -738,7 +745,10 @@ function QueuedMessageRowContent(props: {
               />
             ) : null}
             {props.showManagedCommandCancel ? (
-              <ManagedCommandCancelButton onCancel={props.handleCancel} />
+              <ManagedCommandCancelButton
+                kind={item.kind === "port-forward" ? "port-forward" : "shell"}
+                onCancel={props.handleCancel}
+              />
             ) : null}
             {props.canAbortSteer ? (
               <QueuedMessageAbortSteerButton
@@ -747,15 +757,17 @@ function QueuedMessageRowContent(props: {
             ) : null}
           </QueuedMessageFloatingChrome>
         ) : null}
-        {item.kind === "managed-command" ? (
-          <span className="text-muted-foreground">{item.description}</span>
-        ) : (
+        {item.kind === "prompt" ? (
           <ComposerContentPreview
             content={item.message.content}
             emptyLabel="Queued message"
             testId="queued-message-content-preview"
             className={undefined}
           />
+        ) : (
+          // Both host-authored items (a shell's update, a forward's
+          // interruption) are content-free: the label is all they carry.
+          <span className="text-muted-foreground">{item.description}</span>
         )}
       </div>
     </div>
@@ -818,11 +830,41 @@ export function ManagedCommandBadge(props: {
 }
 
 /**
- * The only affordance a managed-command row offers. Cancelling is not
- * destructive to the underlying output: the host leaves the delivery cursor
- * where it is, so the next output from that command re-queues a fresh digest.
+ * Provenance marker for a port forward's one notification - it went
+ * `interrupted` - waiting to reach its agent.
+ *
+ * NOT a door, which is the whole reason this is its own queue item rather than
+ * a shell one under a borrowed key: a shell chip opens that shell's output
+ * window, and a forward has none. The forward's own row in the Background
+ * panel is where its reason and recent events are.
  */
-function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
+function PortForwardBadge() {
+  return (
+    <TooltipWrapper
+      label="A port forward was interrupted. The agent is told once, when this is delivered."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-port-forward-badge">
+        <Cable aria-hidden />
+        Port forward
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * The only affordance a host-authored row offers. For a shell, cancelling is
+ * not destructive to the underlying output: the host leaves the delivery
+ * cursor where it is, so the next output from that command re-queues a fresh
+ * digest. For a forward it IS final - the notice is raised once, so dismissing
+ * it means the agent is not told - and the copy says which.
+ */
+function ManagedCommandCancelButton(props: {
+  readonly kind: "shell" | "port-forward";
+  readonly onCancel: () => void;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -832,7 +874,11 @@ function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
             size="icon"
             variant="muted"
             className="size-7 shrink-0"
-            aria-label="Cancel queued command output"
+            aria-label={
+              props.kind === "shell"
+                ? "Cancel queued command output"
+                : "Dismiss port forward notice"
+            }
             onClick={props.onCancel}
           >
             <Trash2 className="size-3.5" />
@@ -840,7 +886,9 @@ function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
         </span>
       </TooltipTrigger>
       <TooltipContent sideOffset={6}>
-        Skip this delivery — later output still arrives
+        {props.kind === "shell"
+          ? "Skip this delivery — later output still arrives"
+          : "Dismiss this notice — the agent won't be told about the interruption"}
       </TooltipContent>
     </Tooltip>
   );
@@ -934,7 +982,9 @@ function queuedMessageRowActionState(
 
 function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (isOptimisticQueuedItem(item)) return "Queuing";
-  if (item.kind === "managed-command") {
+  if (item.kind !== "prompt") {
+    // Both host-authored kinds (a shell's output, a forward's interruption)
+    // speak the DELIVERY vocabulary: nobody steers them, they are delivered.
     // The badge is the row's provenance marker, so an ordinary next-turn
     // pending item needs no additional label. `steering` is the handover
     // window: the digest is being delivered into the running turn, and the

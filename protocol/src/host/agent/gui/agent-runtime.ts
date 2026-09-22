@@ -1369,6 +1369,24 @@ export const grokUserMessageAnchorResolvedSchema = lazySchema(() =>
     // The ACP session id the `grok agent stdio` process assigned for this turn.
     // Null until `session/new` resolves; used to resume the same ACP session.
     grokSessionId: z.string().nullable(),
+    // The grok `prompt_index` this turn's `session/prompt` consumed, computed by
+    // the adapter before the turn (0 for a fresh session, the session's on-disk
+    // prompt count for a resume). Null when the turn consumed no prompt (native
+    // compaction) or the count could not be read; persisted onto the message's
+    // grok session anchor as the rewind-fork truncation point.
+    grokPromptIndex: z.number().int().nonnegative().nullable().default(null),
+  }),
+);
+
+// Wire-freeze copy for the released `chat.subscribe@1.0–1.6` blockDelta frames:
+// no released line shipped `grokPromptIndex` (it rides the unreleased `@1.9`),
+// so the frozen anchor union below carries the grok arm without it. A hand copy,
+// NOT `.omit()`, so a future grok field cannot leak onto the frozen wire.
+const grokUserMessageAnchorResolvedSchemaPrePromptIndex = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("grok"),
+    sessionId: z.string(),
+    grokSessionId: z.string().nullable(),
   }),
 );
 
@@ -1562,7 +1580,7 @@ const userMessageAnchorResolvedEventSchemaPreReasonix = lazySchema(() =>
       cursorUserMessageAnchorResolvedSchema,
       traycerUserMessageAnchorResolvedSchema,
       openRouterUserMessageAnchorResolvedSchema,
-      grokUserMessageAnchorResolvedSchema,
+      grokUserMessageAnchorResolvedSchemaPrePromptIndex,
       qwenUserMessageAnchorResolvedSchema,
       kiroUserMessageAnchorResolvedSchema,
       droidUserMessageAnchorResolvedSchema,

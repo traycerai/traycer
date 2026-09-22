@@ -235,6 +235,7 @@ function emitSnapshot(harness: Harness): void {
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }

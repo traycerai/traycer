@@ -699,6 +699,12 @@ describe("<TabStrip />", () => {
       "var(--color-background)",
     );
     expect(center.style.getPropertyValue("--swatch-border")).toBe("#12ab34");
+    expect(
+      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke"),
+    ).toBe("#12ab34");
+    expect(
+      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke"),
+    ).toBe("#12ab34");
   });
 
   it("keeps the project color on an inactive tab", () => {
@@ -720,12 +726,24 @@ describe("<TabStrip />", () => {
         .getByTestId("tab-chrome-center")
         .style.getPropertyValue("--swatch-border"),
     ).toBe("#12ab34");
+    expect(
+      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke"),
+    ).toBe("#12ab34");
+    expect(
+      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke"),
+    ).toBe("#12ab34");
 
     rerender(<SplitMemberChrome focused color={null} />);
     expect(
       screen
         .getByTestId("tab-chrome-center")
         .style.getPropertyValue("--swatch-border"),
+    ).toBe("var(--color-primary)");
+    expect(
+      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke"),
+    ).toBe("var(--color-primary)");
+    expect(
+      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke"),
     ).toBe("var(--color-primary)");
 
     rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
@@ -1213,8 +1231,12 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
     expect(leftUnderline.className).toContain("bg-current");
     expect(rightUnderline.className).not.toContain("bg-current");
-    expect(leftTab.className).toContain("px-5");
-    expect(rightTab.className).toContain("px-5");
+    expect(leftTab.className).toContain(
+      "px-[var(--header-tab-padding,1.25rem)]",
+    );
+    expect(rightTab.className).toContain(
+      "px-[var(--header-tab-padding,1.25rem)]",
+    );
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(
       within(rightTab)

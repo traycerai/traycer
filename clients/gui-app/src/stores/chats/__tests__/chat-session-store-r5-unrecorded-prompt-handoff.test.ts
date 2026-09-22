@@ -236,6 +236,7 @@ function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }

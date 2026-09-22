@@ -203,6 +203,7 @@ function emitLegacySnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: undefined,
       pendingReturn: undefined,
       lastFallbackOutcome,
@@ -275,6 +276,7 @@ function deferredWindowedSnapshot(
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       // Unhydrated tail - `isTailHydrated` reads this false - so every case
       // below drives the DEFERRAL branch, not the ordinary fold.
       transcriptEpoch: 4,

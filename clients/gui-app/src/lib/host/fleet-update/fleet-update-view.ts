@@ -931,11 +931,9 @@ function attemptOperationView(input: {
   // FALL-BACK, NOT REPLACEMENT: the substitution applies to THIS CHOICE only.
   // With no park the attempt arm below still runs and still answers, so
   // `superseded` keeps projecting `idle` and - the case that makes the
-  // distinction load-bearing - `complete` keeps projecting `complete`. The
-  // landing banner renders a completion acknowledgement off that kind and
-  // auto-collapses it (`useLandingCompletionCollapse`), and ITS leg passes
-  // `legacyFacts: null`, so a blanket substitution would have deleted that
-  // surface outright rather than merely reordering it.
+  // distinction load-bearing - `complete` keeps projecting `complete`.
+  // Settings acknowledges that success; the landing banner omits it. Those
+  // presentation choices do not change what this projection knows.
   //
   // `failed` is excluded because its cause must render: it is the one terminal
   // state with something to say that the records cannot say for it. And a park
@@ -991,7 +989,11 @@ function attemptOperationView(input: {
       ...base,
       kind: "unknown",
       qualified: true,
-      lastKnownKind: phaseKind(operation.phase, input.connected),
+      // Keep the observed success after expiry; the record's verifying phase
+      // alone loses the running-version evidence from the same status read.
+      lastKnownKind: concludesAsFinalizingRecord(operation, observation)
+        ? "finalizing-record"
+        : phaseKind(operation.phase, input.connected),
       lastObservedAtMs: observation.observedAtMs,
     };
   }
@@ -1158,6 +1160,7 @@ function concludesAsFinalizingRecord(
   operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
   observation: FleetUpdateWireObservation,
 ): boolean {
+  if (operation.liveness !== "interrupted") return false;
   if (!FINALIZING_RECORD_PHASES.has(operation.phase)) return false;
   return observation.runningVersion === operation.targetVersion;
 }
@@ -1465,7 +1468,8 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
  * record arm exists for the host-down window. Once the wire read has gone stale
  * the record is better — it was read from this machine's disk just now, so it is
  * a current reading of a durable fact, where the stale wire observation is an
- * old reading of a live one.
+ * old reading of a live one. An unchanged, non-live record cannot replace a
+ * success already established by the wire's running-version evidence.
  *
  * Deliberately NOT expressed as "whichever was observed most recently". That
  * rule looks equivalent and is not: the record is re-read on every tick, so its
@@ -1506,10 +1510,10 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
  *  - **Same attempt** → `(generation, sequence)`, the writer's own monotone
  *    position. A record BEHIND the last wire frame is a lagging copy of a story
  *    the wire already told better, so the wire keeps it; at or ahead, the record
- *    wins and brings its liveness with it. Equality is the common case in the
- *    host-down window (both readers read the same last write) and it must go to
- *    the record, which is the only side that can still say anything about a
- *    holder.
+ *    wins and brings its liveness with it. Equality normally goes to the
+ *    record, which can still say something about a holder. The exception is
+ *    an unchanged finalizing record without a live holder: the wire keeps
+ *    its success evidence, explicitly qualified as stale.
  *  - **Different attempts**, or a wire frame naming no attempt at all → the
  *    record's own `updatedAt`, as a BOUND rather than as a comparison: there is
  *    nothing on the wire to compare it against (no timestamp crosses it, by
@@ -1538,6 +1542,20 @@ export function preferLiveOverRecord(
   if (clock.wireNowMs <= wire.freshUntilMs) return wire;
   const wireAttempt = wireAttemptPosition(wire);
   if (wireAttempt !== null && wireAttempt.attemptId === record.attemptId) {
+    const operation = wire.operation;
+    // An unchanged record cannot erase success established by the same
+    // position's status read. Retain that evidence as stale, while allowing
+    // a newer record or a live executor to supersede it.
+    if (
+      record.generation === wireAttempt.generation &&
+      record.sequence === wireAttempt.sequence &&
+      !localLivenessProofHolds(record, clock.recordNowMs) &&
+      operation?.kind === "attempt" &&
+      record.phase === operation.phase &&
+      concludesAsFinalizingRecord(operation, wire)
+    ) {
+      return wire;
+    }
     return recordIsBehind(record, wireAttempt) ? wire : record;
   }
   return recordTimestampIsSane(record, clock.recordNowMs) ? record : wire;

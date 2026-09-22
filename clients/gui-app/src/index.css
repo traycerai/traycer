@@ -1282,6 +1282,11 @@
  * for the composer's contenteditable root.
  */
 @layer components {
+  /* Shrinking tabs spend less room on padding as their own frame narrows. */
+  [data-tab-layout="shrink"] .group\/tab {
+    --header-tab-padding: min(10cqw, 1.25rem);
+  }
+
   .header-tab-trailing-slot {
     width: 0;
     opacity: 0;

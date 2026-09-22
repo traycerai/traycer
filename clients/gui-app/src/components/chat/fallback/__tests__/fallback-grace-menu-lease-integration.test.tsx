@@ -174,6 +174,7 @@ function emitSnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: pending,
       pendingReturn: undefined,
     },

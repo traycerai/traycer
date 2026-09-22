@@ -216,51 +216,57 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
   });
 
-  it("defaults the agent office default view to auto", () => {
-    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  it("defaults the agent office default view to floor", () => {
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
   });
 
-  it("persists and rehydrates the agent office default view for auto", async () => {
-    useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+  it("persists and rehydrates the agent office default view for a real choice", async () => {
+    useSettingsStore.getState().setAgentOfficeDefaultView("building");
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"auto"');
+    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"building"');
 
-    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    useSettingsStore.setState({ agentOfficeDefaultView: "floor" });
     if (persisted === null) throw new Error("expected persisted settings");
     window.localStorage.setItem("traycer-gui-app:settings", persisted);
     await useSettingsStore.persist.rehydrate();
 
-    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("building");
   });
 
-  it("persists and rehydrates the agent office default view for a real view id", async () => {
-    useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"towers"');
-
-    useSettingsStore.setState({ agentOfficeDefaultView: "auto" });
-    if (persisted === null) throw new Error("expected persisted settings");
-    window.localStorage.setItem("traycer-gui-app:settings", persisted);
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("towers");
-  });
-
-  it("repairs a non-string persisted agent office default view to auto", async () => {
-    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+  it("repairs a non-string persisted agent office default view to floor", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "building" });
     await rehydrateFrom({ agentOfficeDefaultView: 42 });
 
-    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
   });
 
-  it("repairs a persisted agent office default view naming an unregistered view to auto", async () => {
-    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+  it("repairs a persisted agent office default view naming an unregistered view to floor", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "building" });
     // Not in OFFICE_VIEW_IDS at any build - a value a newer one wrote and this
     // one cannot plan.
     await rehydrateFrom({ agentOfficeDefaultView: "atrium" });
 
-    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
   });
+
+  it("normalizes a persisted agent office default view of auto to floor - the retired automatic choice reads as its cheapest reading", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "building" });
+    await rehydrateFrom({ agentOfficeDefaultView: "auto" });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
+  });
+
+  it.each(["towers", "city"] as const)(
+    "normalizes a persisted agent office default view of %s to building - the retired view's stacked-density answer",
+    async (retired) => {
+      useSettingsStore.setState({ agentOfficeDefaultView: "floor" });
+      await rehydrateFrom({ agentOfficeDefaultView: retired });
+
+      expect(useSettingsStore.getState().agentOfficeDefaultView).toBe(
+        "building",
+      );
+    },
+  );
 
   it("keeps a valid persisted agent office default generation", async () => {
     useSettingsStore.setState({ agentOfficeDefaultViewGeneration: 0 });
@@ -299,11 +305,11 @@ describe("useSettingsStore", () => {
     const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
     try {
       useSettingsStore.setState({
-        agentOfficeDefaultView: "auto",
+        agentOfficeDefaultView: "floor",
         agentOfficeDefaultViewGeneration: 5,
       });
 
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
 
       const generation =
         useSettingsStore.getState().agentOfficeDefaultViewGeneration;
@@ -322,11 +328,11 @@ describe("useSettingsStore", () => {
     const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
     try {
       useSettingsStore.setState({
-        agentOfficeDefaultView: "towers",
+        agentOfficeDefaultView: "building",
         agentOfficeDefaultViewGeneration: 42,
       });
 
-      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      useSettingsStore.getState().setAgentOfficeDefaultView("building");
 
       expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
         42,
@@ -1424,5 +1430,47 @@ describe("useSettingsStore", () => {
 
     // Still false: the mismatched-key event must not have triggered a rehydrate.
     expect(useSettingsStore.getState().showGreeting).toBe(false);
+  });
+});
+
+describe("useSettingsStore task tab layout", () => {
+  beforeEach(() => {
+    resetSettingsStore();
+    useSettingsStore.setState({ taskTabLayout: "scroll" });
+  });
+  afterEach(() => {
+    resetSettingsStore();
+    useSettingsStore.setState({ taskTabLayout: "scroll" });
+  });
+
+  it("defaults to scroll", () => {
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
+  });
+
+  it("persists a chosen layout and rehydrates it", async () => {
+    useSettingsStore.getState().setTaskTabLayout("shrink");
+    const raw = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(raw).not.toBeNull();
+    const parsed: unknown = JSON.parse(raw ?? "{}");
+    expect(parsed).toMatchObject({ state: { taskTabLayout: "shrink" } });
+    // setState persists too, so restore the saved bytes before rehydrating.
+    useSettingsStore.setState({ taskTabLayout: "scroll" });
+    window.localStorage.setItem("traycer-gui-app:settings", raw ?? "");
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().taskTabLayout).toBe("shrink");
+  });
+
+  it.each([
+    { name: "an unknown string", value: "wrap" },
+    { name: "a non-string", value: 3 },
+    { name: "null", value: null },
+  ])("falls back to scroll for $name", async ({ value }) => {
+    await rehydrateFrom({ taskTabLayout: value });
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
+  });
+
+  it("uses scroll when a legacy payload has no taskTabLayout", async () => {
+    await rehydrateFrom({ homeTabEnabled: true });
+    expect(useSettingsStore.getState().taskTabLayout).toBe("scroll");
   });
 });

@@ -381,6 +381,7 @@ function emitOwnerSnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -520,6 +521,43 @@ afterEach(() => {
 });
 
 describe("chat session store - hash-only refusal (T5)", () => {
+  it("a refused accepted-message edit retracts the hashes it sent bare", async () => {
+    const hash = await seedConfirmedImage();
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks(), []);
+
+    const action = harness.handle.store.getState().messageDeliveryEdit({
+      messageId: "accepted-message-1",
+      expectedRevision: 1,
+      content: hashOnlyContent(hash),
+      browserAnnotations: [],
+    });
+    expect(action).not.toBeNull();
+    if (action === null) throw new Error("delivery edit was refused locally");
+    expect(
+      harness.handle.store.getState().pendingActions[action.clientActionId]
+        ?.sentContentHashes,
+    ).toEqual([hash]);
+
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: action.clientActionId,
+      action: "messageDeliveryEdit",
+      status: "rejected",
+      reason: "Host cannot decode this hash-only attachment.",
+      code: "MISSING_ATTACHMENT_BYTES",
+      cause: "unsupported-format",
+      backgroundStopTaskIds: [],
+      token: null,
+    });
+
+    expect(isDraftBlobConfirmed(HOST_ID, hash, OWNER_ID)).toBe(false);
+    expect(isDraftBlobUnbridgeable(HOST_ID, hash)).toBe(true);
+  });
+
   it("a rejected hash-only send invalidates the memo and retries inline exactly once, silently", async () => {
     // Pre-T5: `onActionAck` had no hash-only fork at all, so a
     // `MISSING_ATTACHMENT_BYTES` rejection fell straight to the ordinary

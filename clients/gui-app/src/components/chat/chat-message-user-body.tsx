@@ -11,7 +11,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { v4 as uuidv4 } from "uuid";
 import {
   use,
   useCallback,
@@ -48,7 +47,7 @@ import {
   useTabHostId,
 } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
 import {
   composerClipboardPlainText,
   copyComposerContentToClipboard,
@@ -60,7 +59,7 @@ import {
   inlineHashOnlyImageBytes,
   omitImageAtomsByHash,
 } from "@/lib/composer/image-atoms";
-import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
+import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -116,7 +115,6 @@ import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fe
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const NOOP: () => void = () => undefined;
 
@@ -203,6 +201,7 @@ export function UserMessageBody({
           agentSenderInfo={message.agentSenderInfo}
           sentAt={message.sentAt ?? message.createdAt}
         />
+        <MessageDeliveryFooter message={message} actions={actions} />
       </>
     );
   }
@@ -247,31 +246,13 @@ function AgentMessageDisplayView({
     [collapsibleKey, messageId, setFindForcedOpen, setOpen],
   );
 
-  const epicId = useOpenEpicId();
-  const { openTile } = useEpicTileNavigation();
-  const senderNode = useEpicArtifact(agentSenderInfo.agentId);
-  // Resolve the live sender from the epic projection. A chat or
-  // terminal-agent is openable as a tab; an absent node (e.g. a
-  // cross-host sender not in this projection) renders as plain text.
-  const openTarget = useMemo((): {
-    readonly type: "chat" | "terminal-agent";
-    readonly hostId: string;
-  } | null => {
-    if (senderNode === null) return null;
-    if ("harnessId" in senderNode) {
-      return { type: "terminal-agent", hostId: senderNode.hostId };
-    }
-    if ("kind" in senderNode) return null; // artifacts aren't agents
-    if (senderNode.hostId === null) return null;
-    return { type: "chat", hostId: senderNode.hostId };
-  }, [senderNode]);
-
-  const liveTitle =
-    senderNode !== null && "title" in senderNode && senderNode.title.length > 0
-      ? senderNode.title
-      : null;
+  const openPeer = useOpenA2AMessagePeer();
+  const sender = useA2AMessagePeer(agentSenderInfo.agentId, {
+    direction: "received",
+    messageId,
+  });
   const senderName =
-    liveTitle ??
+    sender?.title ??
     agentMessage?.senderTitle ??
     agentSenderInfo.senderTitle ??
     `${agentSenderInfo.agentId.slice(0, 8)}…`;
@@ -280,41 +261,20 @@ function AgentMessageDisplayView({
 
   const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const openSenderTab = useCallback(() => {
-    if (openTarget === null) return;
-    openTile(
-      tileIntent(
-        {
-          id: agentSenderInfo.agentId,
-          instanceId: uuidv4(),
-          type: openTarget.type,
-          name: senderName,
-          hostId: openTarget.hostId,
-        },
-        { epicId },
-        "explicit",
-        "direct_ui",
-      ),
-    );
+    if (sender === null) return;
+    openPeer(sender, senderName);
     // Mirror of the sent card's receiver link: park a jump for the sender's
     // tile, which picks it up whether it is already mounted or is being
     // opened by the call above. This row's own id IS the receipt the sender's
     // harness stamped on its send block, so the landing is the exact "Sent
     // message" card. A terminal-agent sender has no transcript, and a send
     // persisted before receipts existed just leaves the tile open at rest.
-    if (openTarget.type !== "chat") return;
-    requestJump(openTarget.hostId, agentSenderInfo.agentId, {
+    if (sender.surface !== "gui") return;
+    requestJump(sender.hostId, sender.agentId, {
       kind: "receipt",
       messageId,
     });
-  }, [
-    agentSenderInfo.agentId,
-    epicId,
-    messageId,
-    openTarget,
-    openTile,
-    requestJump,
-    senderName,
-  ]);
+  }, [messageId, sender, openPeer, requestJump, senderName]);
 
   // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
   // name is the only element allowed to shrink, so the direction words are
@@ -333,7 +293,7 @@ function AgentMessageDisplayView({
         <span className="shrink-0 text-muted-foreground">from</span>
         <AgentHeaderLink
           name={senderName}
-          onOpen={openTarget !== null ? openSenderTab : null}
+          onOpen={sender !== null ? openSenderTab : null}
         />
         {expectReply ? <ReplyExpectedIcon /> : null}
       </span>
@@ -503,6 +463,7 @@ function UserMessageDisplayView({
           structuredContent={message.structuredContent}
         />
       </div>
+      <MessageDeliveryFooter message={message} actions={actions} />
       {profileProvenance !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
           profileId={tombstoneIdentity.profileId}
@@ -511,6 +472,67 @@ function UserMessageDisplayView({
           label={profileProvenance.label}
           removed={profileProvenance.removedOnThisHost}
         />
+      ) : null}
+    </div>
+  );
+}
+
+function MessageDeliveryFooter({ message, actions }: UserBodyProps): ReactNode {
+  const delivery = actions?.delivery;
+  if (delivery === undefined) {
+    return message.providerHistory === "excluded" ? (
+      <span className="mt-1 text-ui-xs text-muted-foreground">Not sent</span>
+    ) : null;
+  }
+  const state = delivery.state;
+  if (state.phase === "started") return null;
+  let label: string;
+  switch (state.phase) {
+    case "pending":
+      label = "Waiting to start";
+      break;
+    case "preparing":
+      label = "Preparing";
+      break;
+    case "paused":
+      label = state.reason;
+      break;
+    case "cancelled":
+      label = "Cancelled · Not sent";
+      break;
+  }
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center justify-end gap-2 text-ui-xs text-muted-foreground"
+      role="status"
+    >
+      <span>{label}</span>
+      {delivery.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {state.phase === "paused" ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={!delivery.canAct}
+          onClick={delivery.onRetry}
+        >
+          Retry
+        </Button>
+      ) : null}
+      {state.phase === "pending" || state.phase === "paused" ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={!delivery.canAct}
+          onClick={delivery.onCancel}
+        >
+          Cancel
+        </Button>
       ) : null}
     </div>
   );
@@ -941,7 +963,7 @@ function InlineUserMessageEditor({
           Cancel
         </MessageActionButton>
         <MessageActionButton
-          label="Send edit"
+          label={editing.submitLabel === "Save" ? "Save edit" : "Send edit"}
           variant="default"
           size="default"
           tooltip
@@ -956,7 +978,7 @@ function InlineUserMessageEditor({
               variant={undefined}
             />
           ) : null}
-          Send
+          {editing.submitLabel ?? "Send"}
         </MessageActionButton>
       </div>
     ),
@@ -964,6 +986,7 @@ function InlineUserMessageEditor({
       cancel,
       editing.canSubmit,
       editing.pending,
+      editing.submitLabel,
       handleImageChange,
       openImagePicker,
       attachmentPending,
@@ -1034,17 +1057,19 @@ function MessageActionBar({
       >
         <Pencil className="size-3.5" aria-hidden />
       </MessageActionButton>
-      <MessageActionButton
-        label="Delete message"
-        variant="destructive-ghost"
-        size="icon-sm"
-        tooltip={false}
-        disabled={!actions.enabled}
-        className={undefined}
-        onClick={actions.onDeleteRequest}
-      >
-        <Trash2 className="size-3.5" aria-hidden />
-      </MessageActionButton>
+      {actions.delivery === undefined ? (
+        <MessageActionButton
+          label="Delete message"
+          variant="destructive-ghost"
+          size="icon-sm"
+          tooltip={false}
+          disabled={!actions.enabled}
+          className={undefined}
+          onClick={actions.onDeleteRequest}
+        >
+          <Trash2 className="size-3.5" aria-hidden />
+        </MessageActionButton>
+      ) : null}
     </>
   );
 }
@@ -1308,7 +1333,7 @@ function UserMessageTouchMenu({
               Copy
             </DropdownMenuItem>
           ) : null}
-          {canModify ? (
+          {canModify && actions.delivery === undefined ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem

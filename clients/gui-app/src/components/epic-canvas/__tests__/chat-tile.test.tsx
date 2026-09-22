@@ -738,6 +738,7 @@ function emitChatSnapshotWithMessages(input: {
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -3913,7 +3914,7 @@ describe("<ChatTile />", () => {
       Array.from({ length: 8 }, (_, index) => ({
         kind: "prompt" as const,
         queueItemId: `queue-${index}`,
-        messageId: `message-${index}`,
+        messageId: `scroll-message-${index}`,
         message: {
           kind: "user",
           content: QUEUED_CONTENT,

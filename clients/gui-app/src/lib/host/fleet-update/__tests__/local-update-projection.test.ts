@@ -221,3 +221,122 @@ describe("projectLocalUpdate — the wire leg is NOT aged by the record leg's ti
     expect(holdsLifecycleGate(projection.view)).toBe(false);
   });
 });
+
+// PR2069 (CodeRabbit) follow-up: at an equal position, `preferLiveOverRecord`
+// now keeps the WIRE (not the record) when the record is unchanged and has
+// no live holder proof, so a record with no `runningVersion` of its own can't
+// erase the wire's finalizing-record conclusion by winning precedence.
+describe("projectLocalUpdate — an unchanged, non-live record at the wire's own position does not erase its finalizing-record conclusion", () => {
+  function abandonedVerify(
+    overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
+  ): HostStatusUpdateOperation {
+    return attemptOperation({
+      phase: "verifying",
+      liveness: "interrupted",
+      targetVersion: "2.1.0",
+      ...overrides,
+    });
+  }
+
+  it("a record with no live holder proof, at the same position as the expired finalizing wire, keeps finalizing-record", () => {
+    const projection = projectLocalUpdate({
+      wire: wireObservation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      // Default attemptId/generation/sequence match the wire's default.
+      record: recordObservation({ phase: "verifying" }),
+      clock: { wireNowMs: NOW_MS, recordNowMs: NOW_MS },
+      connected: true,
+    });
+    // The wire stays authoritative, not the record.
+    expect(projection.observation?.source).toBe("selected");
+    expect(projection.view.kind).toBe("unknown");
+    expect(projection.view.lastKnownKind).toBe("finalizing-record");
+    expect(projection.view.lastKnownKind).not.toBe("verifying");
+  });
+
+  it("a record whose live holder proof has expired, at the same position, also keeps finalizing-record", () => {
+    // Distinct from the "unknown" case above: proof age, not just verdict.
+    const projection = projectLocalUpdate({
+      wire: wireObservation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      record: recordObservation({
+        phase: "verifying",
+        liveness: "live",
+        livenessObservedAtMs: NOW_MS - LOCAL_LIVENESS_PROOF_MS - 1,
+      }),
+      clock: { wireNowMs: NOW_MS, recordNowMs: NOW_MS },
+      connected: true,
+    });
+    expect(projection.observation?.source).toBe("selected");
+    expect(projection.view.kind).toBe("unknown");
+    expect(projection.view.lastKnownKind).toBe("finalizing-record");
+    expect(projection.view.lastKnownKind).not.toBe("verifying");
+  });
+
+  it("a fresh live holder proof at the same position stays authoritative — verifying, not finalizing-record", () => {
+    // A currently-live holder probe means the executor is genuinely still
+    // verifying, so it must not inherit the wire's stale conclusion.
+    const projection = projectLocalUpdate({
+      wire: wireObservation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      record: recordObservation({
+        phase: "verifying",
+        liveness: "live",
+        livenessObservedAtMs: NOW_MS,
+      }),
+      clock: { wireNowMs: NOW_MS, recordNowMs: NOW_MS },
+      connected: true,
+    });
+    expect(projection.observation?.source).toBe("durable-record");
+    expect(projection.view.kind).toBe("unknown");
+    expect(projection.view.lastKnownKind).toBe("verifying");
+    expect(projection.view.lastKnownKind).not.toBe("finalizing-record");
+  });
+
+  it("a newer sequence on the record is authoritative on its own — the wire's conclusion is not swallowed forward", () => {
+    const projection = projectLocalUpdate({
+      wire: wireObservation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      // One sequence ahead of the wire's position — a genuinely newer record.
+      record: recordObservation({ phase: "verifying", sequence: 2 }),
+      clock: { wireNowMs: NOW_MS, recordNowMs: NOW_MS },
+      connected: true,
+    });
+    expect(projection.observation?.source).toBe("durable-record");
+    expect(projection.view.kind).toBe("unknown");
+    expect(projection.view.lastKnownKind).toBe("verifying");
+    expect(projection.view.lastKnownKind).not.toBe("finalizing-record");
+  });
+
+  it("a different attempt's record is authoritative on its own", () => {
+    const projection = projectLocalUpdate({
+      wire: wireObservation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      record: recordObservation({
+        attemptId: "attempt-2",
+        phase: "verifying",
+      }),
+      clock: { wireNowMs: NOW_MS, recordNowMs: NOW_MS },
+      connected: true,
+    });
+    expect(projection.observation?.source).toBe("durable-record");
+    expect(projection.view.kind).toBe("unknown");
+    expect(projection.view.lastKnownKind).toBe("verifying");
+    expect(projection.view.lastKnownKind).not.toBe("finalizing-record");
+  });
+});
