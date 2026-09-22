@@ -813,7 +813,13 @@ describe("InterviewSegment", () => {
     );
 
     const detail = screen.getByText("Beta details");
-    expect(detail.getAttribute("data-chat-find-unit")).toBe(
+    // The description renders as markdown now, so the find anchor sits on the
+    // wrapper around the prose rather than on the text element itself.
+    expect(
+      detail
+        .closest("[data-chat-find-unit]")
+        ?.getAttribute("data-chat-find-unit"),
+    ).toBe(
       "interview:interview-details:question:0:option-description:option:1",
     );
     const detailButton = screen.getByRole("button", {
