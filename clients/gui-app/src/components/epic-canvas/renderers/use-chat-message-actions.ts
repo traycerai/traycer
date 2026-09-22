@@ -516,8 +516,6 @@ export function useChatMessageActions(
           : !canModifyMessages
       )
         return;
-      const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return;
       const content = buildSubmittedChatJSONContent(
         inlineHashOnlyImageBytes(edit.content, draftImageBase64ByHash),
         slashCatalog,
@@ -525,25 +523,28 @@ export function useChatMessageActions(
       const source = messages.find(
         (message) => message.messageId === edit.targetMessageId,
       );
-      const sent =
-        edit.deliveryRevision !== null
-          ? chatActions.messageDeliveryEdit({
-              messageId: edit.targetMessageId,
-              expectedRevision: edit.deliveryRevision,
-              content,
-              browserAnnotations:
-                source?.role === "user" && source.message.kind === "user"
-                  ? source.message.browserAnnotations
-                  : [],
-            })
-          : chatActions.editUserMessage({
-              targetMessageId: edit.targetMessageId,
-              content,
-              sender,
-              settings: editSettings,
-              revertFileChanges,
-              revertArtifacts,
-            });
+      const sent = (() => {
+        if (edit.deliveryRevision !== null)
+          return chatActions.messageDeliveryEdit({
+            messageId: edit.targetMessageId,
+            expectedRevision: edit.deliveryRevision,
+            content,
+            browserAnnotations:
+              source?.role === "user" && source.message.kind === "user"
+                ? source.message.browserAnnotations
+                : [],
+          });
+        const sender = userMessageSenderForProfile(profile);
+        if (sender === null) return null;
+        return chatActions.editUserMessage({
+          targetMessageId: edit.targetMessageId,
+          content,
+          sender,
+          settings: editSettings,
+          revertFileChanges,
+          revertArtifacts,
+        });
+      })();
       if (sent === null) return;
       // Before the dispatch, for the same reason the content is live at all:
       // this is what freezes the editor, and a value that only becomes true at

@@ -513,6 +513,36 @@ describe("useChatMessageActions: accepted-message action projection", () => {
 
     expect(messageDeliveryEdit).not.toHaveBeenCalled();
   });
+
+  it("submits a delivery edit without requiring a signed-in profile", () => {
+    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>(
+      () => ({ clientActionId: "delivery-edit-1", messageId: "edit-1" }),
+    );
+    const delivery: ChatMessageDelivery = {
+      messageId: TARGET_MESSAGE_ID,
+      revision: 1,
+      state: { phase: "pending" },
+    };
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
+            chatActions: {
+              ...fakeChatActions(() => null),
+              messageDeliveryEdit,
+            },
+            messageDelivery: delivery,
+            profile: null,
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => result.current.revertOnEdit.onDontRevert());
+
+    expect(messageDeliveryEdit).toHaveBeenCalledOnce();
+  });
 });
 
 describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
