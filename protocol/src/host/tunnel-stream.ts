@@ -35,6 +35,7 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const HOST_TUNNEL_OPEN_METHOD = "host.tunnel.open";
 
@@ -48,54 +49,70 @@ export function streamMethodForbidsChunking(method: string): boolean {
   return method === HOST_TUNNEL_OPEN_METHOD;
 }
 
-export const hostTunnelOpenRequestSchema = z.object({
-  /** The task the lease belongs to; the accepting host checks editor access on it. */
-  epicId: z.string().min(1),
-  /** The live lease this stream claims; re-checked per stream, not per session. */
-  leaseId: z.string().min(1),
-});
+export const hostTunnelOpenRequestSchema = lazySchema(() =>
+  z.object({
+    /** The task the lease belongs to; the accepting host checks editor access on it. */
+    epicId: z.string().min(1),
+    /** The live lease this stream claims; re-checked per stream, not per session. */
+    leaseId: z.string().min(1),
+  }),
+);
 export type HostTunnelOpenRequest = z.infer<typeof hostTunnelOpenRequestSchema>;
 
-const tunnelDataFrameSchema = z.object({
-  kind: z.literal("data"),
-  hasBinaryPayload: z.literal(true),
-});
+const tunnelDataFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("data"),
+    hasBinaryPayload: z.literal(true),
+  }),
+);
 
-const tunnelCreditFrameSchema = z.object({
-  kind: z.literal("credit"),
-  hasBinaryPayload: z.literal(false),
-  credits: z.number().int().positive(),
-});
+const tunnelCreditFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("credit"),
+    hasBinaryPayload: z.literal(false),
+    credits: z.number().int().positive(),
+  }),
+);
 
-const tunnelEndFrameSchema = z.object({
-  kind: z.literal("end"),
-  hasBinaryPayload: z.literal(false),
-});
+const tunnelEndFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("end"),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-const tunnelAcceptFrameSchema = z.object({
-  kind: z.literal("accept"),
-  hasBinaryPayload: z.literal(false),
-});
+const tunnelAcceptFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("accept"),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-const tunnelFinishedFrameSchema = z.object({
-  kind: z.literal("finished"),
-  hasBinaryPayload: z.literal(false),
-});
+const tunnelFinishedFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("finished"),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-export const hostTunnelServerFrameSchema = z.discriminatedUnion("kind", [
-  tunnelAcceptFrameSchema,
-  tunnelFinishedFrameSchema,
-  tunnelDataFrameSchema,
-  tunnelCreditFrameSchema,
-  tunnelEndFrameSchema,
-]);
+export const hostTunnelServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    tunnelAcceptFrameSchema,
+    tunnelFinishedFrameSchema,
+    tunnelDataFrameSchema,
+    tunnelCreditFrameSchema,
+    tunnelEndFrameSchema,
+  ]),
+);
 export type HostTunnelServerFrame = z.infer<typeof hostTunnelServerFrameSchema>;
 
-export const hostTunnelClientFrameSchema = z.discriminatedUnion("kind", [
-  tunnelDataFrameSchema,
-  tunnelCreditFrameSchema,
-  tunnelEndFrameSchema,
-]);
+export const hostTunnelClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    tunnelDataFrameSchema,
+    tunnelCreditFrameSchema,
+    tunnelEndFrameSchema,
+  ]),
+);
 export type HostTunnelClientFrame = z.infer<typeof hostTunnelClientFrameSchema>;
 
 export const hostTunnelOpenV10 = defineStreamRpcContract({
