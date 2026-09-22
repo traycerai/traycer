@@ -53,6 +53,9 @@ const textFrameFields = {
  * already has - otherwise a push plane would tick once a minute per client
  * with a poll's shape and none of a poll's honesty about it.
  *
+ * A `pong` rides the same union, because the transport's heartbeat IS a stream
+ * frame - see that member.
+ *
  * `fetchedAtMs` is the host's own clock at the read that produced these rows,
  * for a viewer that wants to say how old the answer is. `stale` says the most
  * recent read did NOT produce these rows - it failed, or its body did not
@@ -77,6 +80,20 @@ export const hostInventorySubscribeServerFrameSchemaV10 = lazySchema(() =>
       fetchedAtMs: z.number().int().nonnegative(),
       /** These are the last good rows; the most recent read did not refresh them. */
       stale: z.boolean(),
+    }),
+    /**
+     * The heartbeat's answer, and NOT optional decoration: the transport's
+     * liveness check is a stream frame, not a socket ping. `WsStreamSession`
+     * writes a `ping` CLIENT frame every `pingIntervalMs` and advances
+     * `lastPongAt` only on this frame; `pongTimeoutMs` is the drop cutoff
+     * measured from that timestamp. A stream contract without this kind is a
+     * stream every subscriber tears down and re-dials at the cutoff, forever,
+     * while the host sits there healthy - which is why every stream contract
+     * in this registry carries it.
+     */
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
     }),
   ]),
 );
