@@ -114,3 +114,39 @@ describe("the executable bit", () => {
     expect(epicFileEntrySchema).toBe(filePlaneEntrySchema);
   });
 });
+
+describe("the agent producer's evolution discriminator", () => {
+  it("round-trips when set and is absent when a writer omits it", () => {
+    const evolution = filePlaneObjectSchema.safeParse({
+      ...object,
+      producer: { type: "agent", chatId: "chat-1", evolution: true },
+    });
+    expect(evolution.success).toBe(true);
+    if (!evolution.success) {
+      return;
+    }
+    expect(evolution.data.producer).toEqual({
+      type: "agent",
+      chatId: "chat-1",
+      evolution: true,
+    });
+    const plain = filePlaneObjectSchema.safeParse({
+      ...object,
+      producer: { type: "agent", chatId: "chat-1" },
+    });
+    expect(plain.success).toBe(true);
+    if (!plain.success) {
+      return;
+    }
+    expect(plain.data.producer).toEqual({ type: "agent", chatId: "chat-1" });
+  });
+
+  it("is only ever true: a false value is refused rather than read as a kind", () => {
+    expect(
+      filePlaneObjectSchema.safeParse({
+        ...object,
+        producer: { type: "agent", chatId: "chat-1", evolution: false },
+      }).success,
+    ).toBe(false);
+  });
+});
