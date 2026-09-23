@@ -18,6 +18,13 @@ const UNLABELLED_INPUT_TYPES = new Set([
 // Input types whose `value` is the button's caption.
 const BUTTON_INPUT_TYPES = new Set(["button", "submit", "reset"]);
 
+// What Chromium writes on a submit or reset input that names no value; a
+// plain button without one is empty.
+const DEFAULT_BUTTON_CAPTIONS = new Map([
+  ["submit", "Submit"],
+  ["reset", "Reset"],
+]);
+
 /**
  * The words a person can read in a rendered wireframe.
  *
@@ -80,7 +87,13 @@ function inputCaption(input: HTMLInputElement): string | null {
   const type = input.type;
   if (UNLABELLED_INPUT_TYPES.has(type)) return null;
   const value = input.getAttribute("value");
-  if (BUTTON_INPUT_TYPES.has(type)) return value;
+  // A submit or reset input without a value draws the browser's own caption
+  // (the frame is Chromium, so these are its exact words); an explicitly
+  // empty value draws an empty button.
+  if (BUTTON_INPUT_TYPES.has(type)) {
+    if (value !== null) return value;
+    return DEFAULT_BUTTON_CAPTIONS.get(type) ?? null;
+  }
   // The placeholder shows only while the value is exactly empty; a
   // whitespace-only value hides it and draws nothing readable itself.
   if (value !== null && value.length > 0) return value;

@@ -96,6 +96,17 @@ describe("wireframeVisibleText", () => {
     expect(wireframeVisibleText(html)).toBe("Save Cancel Clear");
   });
 
+  it("uses the browser's default caption for a submit or reset input without a value, and nothing for an empty one", () => {
+    const html = [
+      '<input type="submit">',
+      '<input type="reset">',
+      '<input type="button">',
+      '<input type="submit" value="">',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Submit Reset");
+  });
+
   it("ignores a checkbox or radio input's value", () => {
     const html = [
       '<input type="checkbox" value="yes">',
