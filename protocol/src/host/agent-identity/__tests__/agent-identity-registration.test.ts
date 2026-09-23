@@ -13,7 +13,7 @@ import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fi
  * `released-surface-compat` already proves the general rule - every non-floor
  * method states a degrade - by sweeping the whole registry. This file pins the
  * FAMILY: that its member list is exactly what the contract says it is, that
- * every member opens at 1.0 with no bridges, and that not one of the sixteen
+ * every member opens at 1.0 with no bridges, and that not one of the seventeen
  * names leaked into a released baseline.
  *
  * The last point is the one a sweep cannot make. A name added to
@@ -28,6 +28,7 @@ const EXPECTED_UNARY_METHODS = [
   "agentIdentity.delete",
   "agentIdentity.files.add",
   "agentIdentity.files.delete",
+  "agentIdentity.files.readBlob",
   "agentIdentity.files.rename",
   "agentIdentity.files.uploadBlob",
   "agentIdentity.history.list",

@@ -26,6 +26,8 @@ import {
   agentIdentityFilesDeleteResponseSchema,
   agentIdentityFilesRenameRequestSchema,
   agentIdentityFilesRenameResponseSchema,
+  agentIdentityFilesReadBlobRequestSchema,
+  agentIdentityFilesReadBlobResponseSchema,
   agentIdentityFilesUploadBlobRequestSchema,
   agentIdentityFilesUploadBlobResponseSchema,
   agentIdentityHermesRunRequestSchema,
@@ -100,6 +102,13 @@ export const agentIdentityFilesUploadBlobV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentIdentityFilesUploadBlobRequestSchema,
   responseSchema: agentIdentityFilesUploadBlobResponseSchema,
+});
+
+export const agentIdentityFilesReadBlobV10 = defineRpcContract({
+  method: "agentIdentity.files.readBlob",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentIdentityFilesReadBlobRequestSchema,
+  responseSchema: agentIdentityFilesReadBlobResponseSchema,
 });
 
 export const agentIdentityHistoryListV10 = defineRpcContract({
