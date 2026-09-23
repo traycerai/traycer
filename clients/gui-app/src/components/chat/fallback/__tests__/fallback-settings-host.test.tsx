@@ -71,6 +71,8 @@ function assertSettingsLandedOnTabHost(): void {
     resetToGeneral: false,
     tab: null,
     draft: null,
+    // The host travels through the scope store above, not the intent.
+    hostId: null,
   });
 }
 

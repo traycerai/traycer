@@ -361,6 +361,7 @@ describe("<EpicUsageDialog />", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   });
 

@@ -1665,6 +1665,7 @@ describe("<ProviderReauthBanner />", () => {
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     });
 
@@ -1703,6 +1704,7 @@ describe("<ProviderReauthBanner />", () => {
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     });
 
@@ -1735,6 +1737,7 @@ describe("<ProviderReauthBanner />", () => {
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     });
   });

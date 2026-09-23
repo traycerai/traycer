@@ -4026,6 +4026,7 @@ describe("<HarnessModelPicker />", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   });
 
@@ -4075,6 +4076,7 @@ describe("<HarnessModelPicker />", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   });
 
@@ -4112,6 +4114,7 @@ describe("<HarnessModelPicker />", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   });
 
