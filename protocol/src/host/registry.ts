@@ -11,6 +11,24 @@ import {
   type VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  agentIdentityCreateV10,
+  agentIdentityDeleteV10,
+  agentIdentityFilesAddV10,
+  agentIdentityFilesDeleteV10,
+  agentIdentityFilesRenameV10,
+  agentIdentityFilesUploadBlobV10,
+  agentIdentityHistoryListV10,
+  agentIdentityHistoryRestoreV10,
+  agentIdentityImportHermesRunV10,
+  agentIdentityImportHermesScanV10,
+  agentIdentityListV10,
+  agentIdentitySkillsImportV10,
+  agentIdentitySkillsInspectV10,
+  agentIdentityUpdateV10,
+} from "@traycer/protocol/host/agent-identity/contracts";
+import { agentIdentityStateSubscribeV10 } from "@traycer/protocol/host/agent-identity/state-subscribe";
+import { agentIdentityFileSubscribeV10 } from "@traycer/protocol/host/agent-identity/file-subscribe";
+import {
   agentCreateV10,
   agentCreateV20,
   agentCreateV30,
@@ -5256,6 +5274,215 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostRestartV12,
           upgradeFromPreviousVersion: hostRestartUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // ─── agentIdentity.* ──────────────────────────────────────────────────────
+  //
+  // The whole family is OPTIONAL and opens at 1.0: none of these names has ever
+  // shipped, so none is on the released floor or in either released-name
+  // fixture, and none needs a frozen copy or a downgrade bridge. A host that
+  // predates the family answers `E_HOST_UNSUPPORTED` per call; the client hides
+  // the Identities section and the composer picker, and an `identityId` already
+  // on a chat is ignored by that host - the chat runs against the stock
+  // identity, exactly as it did before identities existed.
+  //
+  // The two `agentIdentity.*.subscribe` streams below are ONE capability with
+  // these: a client that finds either unsupported must treat the family as
+  // unsupported rather than render a section whose bodies it cannot open.
+  "agentIdentity.list": {
+    // The identities this caller may use. Nothing to degrade to: a host without the family holds no identities.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.create": {
+    // Mints the cloud row and the root room. Idempotent on the caller's `clientRequestId`, so a retried create returns the same identity rather than a twin.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityCreateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.update": {
+    // Whole-tuple replace of title, description and evolution settings.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityUpdateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.delete": {
+    // Soft delete. A chat that referenced the identity keeps its `identityId` and renders it as removed.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.files.add": {
+    // Index mutations go through the host, which is the only writer of `documents` and `files`.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityFilesAddV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.files.rename": {
+    // A new entry plus a fragment copy, then removal of the old - never a key edit in place.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityFilesRenameV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.files.delete": {
+    // Markdown clears its fragment; a blob is tombstoned and its local bytes removed.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityFilesDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.files.uploadBlob": {
+    // Chunked append keyed on a client-generated `uploadId`. One call for anything under the chunk cap.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityFilesUploadBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.history.list": {
+    // A thin wrapper over the artifact-version resolvers with the identity id in the container slot.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityHistoryListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.history.restore": {
+    // Same wrapper, and the artifact restore's own four-outcome response.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityHistoryRestoreV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.import.hermes.scan": {
+    // Reads a Hermes profile directory on THIS host - the profile lives on that host's disk.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityImportHermesScanV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.import.hermes.run": {
+    // Idempotent by path: re-running into the same identity replaces files and keeps the old versions in history.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityImportHermesRunV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.skills.inspect": {
+    // The provider installer's clone-scan-validate half, pointed at `<identityRoot>/skills`.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentitySkillsInspectV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.skills.import": {
+    // Installs the ticked candidates and waits for the projection's ingest to settle before answering.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentitySkillsImportV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -11220,6 +11447,32 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
+  // The identity INDEX lane. Mints the authority epoch every
+  // `agentIdentity.file.subscribe` attach has to name, so a client opens this
+  // one first and there is nowhere else to learn an epoch from.
+  "agentIdentity.state.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityStateSubscribeV10,
+        },
+      },
+    },
+  },
+  // One identity file's BODY, per open file. `artifact.subscribe`'s shape with
+  // `path` in place of `artifactId`; see that module's note for why the address
+  // is deliberately not generic across the two families.
+  "agentIdentity.file.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityFileSubscribeV10,
+        },
+      },
+    },
+  },
   "epic.subscribe": {
     1: {
       // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
