@@ -189,7 +189,7 @@ function sceneInputFor(args: {
 }
 
 import {
-  CIVIC_KINDS,
+  CIVIC_KINDS_EXPECTED,
   CIVIC_ROADS_EXPECTED,
   CIVIC_ROOMS_EXPECTED,
 } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
@@ -331,7 +331,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       const wantsRoad = CIVIC_ROADS_EXPECTED[viewId];
       for (const floor of withRooms) {
         expect([...floor.civic].map((room) => room.kind).sort()).toEqual(
-          [...CIVIC_KINDS].sort(),
+          [...CIVIC_KINDS_EXPECTED[viewId]].sort(),
         );
         hostsWithRooms.add(floor.hostId);
         // A street where the second table says so, and NO street where it does
@@ -361,7 +361,15 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
           return room === undefined ? 0 : room.seatIds.length;
         };
         expect(seatsOf("infirmary")).toBe(bounds.beds);
-        expect(seatsOf("waiting-room")).toBe(bounds.chairs);
+        // Towers and Building share one plaza builder that no longer stands
+        // up a waiting room at all (an awaiting agent keeps its own desk),
+        // so the capacity formula's chair count is not a room either of them
+        // owes - `CIVIC_KINDS_EXPECTED` is the one table that says so.
+        expect(seatsOf("waiting-room")).toBe(
+          CIVIC_KINDS_EXPECTED[viewId].includes("waiting-room")
+            ? bounds.chairs
+            : 0,
+        );
         // C5 and C7: a door with a counter and a counter with a queue. Neither
         // is a room anybody sits down in.
         expect(seatsOf("archive")).toBe(0);

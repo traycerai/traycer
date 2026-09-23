@@ -69,8 +69,20 @@ export interface ChatMessageForkAction {
   ) => void;
 }
 
+/**
+ * Where the host is with a row it has accepted and not yet started - the
+ * chat's opening prompt, while its worktree and session are set up.
+ */
+export type ChatMessageDeliveryPhase = "pending" | "preparing";
+
 export interface ChatMessageUserActions {
   readonly type: "user";
+  /**
+   * Set while the host is still delivering this row, `null` otherwise. Such a
+   * row shows its phase and offers copy only (`enabled` is false and nothing is
+   * being edited); it becomes an ordinary message when it starts.
+   */
+  readonly deliveryPhase: ChatMessageDeliveryPhase | null;
   readonly enabled: boolean;
   readonly confirmingDelete: boolean;
   readonly editing: ChatMessageEditing | null;

@@ -1,6 +1,6 @@
 /**
  * `deriveCommGraphFeedHealth` (pure) and `useCommGraphFeedHealth` (the
- * registry-backed hook) for the Epic header's feed-health dot - see
+ * cloud-registry-backed hook) for the Epic header's feed-health dot - see
  * `use-comm-graph-feed-health.ts` for why this rolls up per-host socket
  * status instead of captioning it onto every agent node.
  */
@@ -15,16 +15,15 @@ import type {
   CommGraphHostStatus,
 } from "@/lib/comm-graph/comm-graph-events";
 import {
-  __resetCommGraphRegistryForTests,
-  acquireCommGraphSubscription,
-  getCommGraphSubscriptionManager,
-  releaseCommGraphSubscription,
-} from "@/lib/comm-graph/comm-graph-registry";
-import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
+  __resetCommGraphCloudRegistryForTests,
+  acquireCommGraphCloudSubscription,
+  getCommGraphCloudSubscriptionManager,
+  releaseCommGraphCloudSubscription,
+} from "@/lib/comm-graph/comm-graph-cloud-registry";
 import type {
-  CommGraphSubscriptionHandlers,
-  CommGraphSubscriptionOpener,
-} from "@/lib/comm-graph/comm-graph-subscription";
+  CommGraphCloudSubscriptionHandlers,
+  CommGraphCloudSubscriptionOpener,
+} from "@/lib/comm-graph/comm-graph-cloud-subscription";
 
 function host(hostId: string, status: CommGraphHostStatus): CommGraphHostState {
   return { hostId, status, cursor: null, snapshotBoundary: null };
@@ -85,32 +84,30 @@ describe("deriveCommGraphFeedHealth", () => {
     expect(health?.tooltip).toBe(
       "Communication graph feed: reconnecting… (1 of 4 hosts); " +
         "host unreachable (1 of 4 hosts); connection failed (1 of 4 hosts); " +
-        "host has no edge data (update the host) (1 of 4 hosts)",
+        "cloud communication feed unsupported (1 of 4 hosts)",
     );
     expect(health?.ariaLabel).toBe(health?.tooltip);
   });
 });
 
 /**
- * Integrated against the REAL registries: only the stream boundary is faked,
- * exactly as `comm-graph-tile.test.tsx` and `comm-graph-registry.test.ts` do
- * for the subscription manager itself.
+ * Integrated against the REAL cloud registry: only the relay boundary is
+ * faked, exactly as `comm-graph-tile.test.tsx` does for the cloud
+ * subscription manager itself.
  *
- * The cloud manager is never acquired here, so `getAvailability()` stays at
- * its `"pending"` default (never `"available"`) and
- * `selectCommGraphAuthoritativeSnapshot` reads the LOCAL manager throughout -
- * the same authority rule `useCommGraphSnapshot` applies.
+ * The hook never acquires a claim of its own - it only observes - so every
+ * case here drives the manager through a separately acquired claim, the same
+ * way a mounted `useCommGraphSnapshot` caller would.
  */
 describe("useCommGraphFeedHealth", () => {
   afterEach(() => {
-    __resetCommGraphRegistryForTests();
     __resetCommGraphCloudRegistryForTests();
   });
 
   it("reports null before any claim, reflects a degraded status while attached, and reports null again once detached even though the last status was degraded", () => {
     const epicId = "epic-feed-health";
-    let handlers: CommGraphSubscriptionHandlers | null = null;
-    const opener: CommGraphSubscriptionOpener = (request) => {
+    let handlers: CommGraphCloudSubscriptionHandlers | null = null;
+    const opener: CommGraphCloudSubscriptionOpener = (request) => {
       handlers = request.handlers;
       return { close: () => undefined };
     };
@@ -118,11 +115,11 @@ describe("useCommGraphFeedHealth", () => {
 
     const { result } = renderHook(() => useCommGraphFeedHealth(epicId));
 
-    // No surface holds the feed open yet.
+    // No claim holds the relay open yet.
     expect(result.current).toBeNull();
 
     act(() => {
-      acquireCommGraphSubscription(epicId, claim, opener, ["host-a"]);
+      acquireCommGraphCloudSubscription(epicId, claim, opener, ["host-a"]);
     });
     // Freshly attached and still dialing ("connecting") - nothing to report.
     expect(result.current).toBeNull();
@@ -149,7 +146,7 @@ describe("useCommGraphFeedHealth", () => {
     expect(result.current).not.toBeNull();
 
     act(() => {
-      releaseCommGraphSubscription(epicId, claim);
+      releaseCommGraphCloudSubscription(epicId, claim);
     });
     expect(result.current).toBeNull();
   });
@@ -161,14 +158,14 @@ describe("useCommGraphFeedHealth", () => {
     // manager fetched after unmount for the same epic id must be a
     // DIFFERENT instance, and the original must report itself disposed.
     const epicId = "epic-feed-health-unmount-only";
-    const before = getCommGraphSubscriptionManager(epicId);
+    const before = getCommGraphCloudSubscriptionManager(epicId);
 
     const { unmount } = renderHook(() => useCommGraphFeedHealth(epicId));
     act(() => {
       unmount();
     });
 
-    const after = getCommGraphSubscriptionManager(epicId);
+    const after = getCommGraphCloudSubscriptionManager(epicId);
     expect(after).not.toBe(before);
     expect(before.isDisposed()).toBe(true);
   });

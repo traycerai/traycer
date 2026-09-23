@@ -328,6 +328,14 @@ export function projectChatClientFrameForVersion(
       'permissionMode "auto" requires chat.subscribe@1.13 or newer',
     );
   }
+  if (
+    frame.kind === "messageDeliveryRestored" &&
+    (negotiated === null || negotiated.major !== 1 || negotiated.minor < 15)
+  ) {
+    throw new Error(
+      "Message delivery acknowledgements require chat.subscribe@1.15 or newer",
+    );
+  }
   if (supportsV17(negotiated)) return frame;
 
   switch (frame.kind) {

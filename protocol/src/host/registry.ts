@@ -273,6 +273,8 @@ import {
   chatSubscribeV111,
   chatSubscribeV112,
   chatSubscribeV113,
+  chatSubscribeV114,
+  chatSubscribeV115,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -423,6 +425,14 @@ import {
   browserReplRunCellV10,
   browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
+import {
+  hostPortForwardAcquireLeaseV10,
+  hostPortForwardLeaseEndedV10,
+  hostPortForwardReleaseLeaseV10,
+  portForwardCutLeaseV10,
+  portForwardListForHostV10,
+  portForwardStopV10,
+} from "@traycer/protocol/host/port-forward";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -655,6 +665,7 @@ import {
   gitStreamFileAssetV11,
   gitStreamFileAssetV12,
 } from "@traycer/protocol/host/git-asset-stream";
+import { hostTunnelOpenV10 } from "@traycer/protocol/host/tunnel-stream";
 import {
   terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
@@ -828,6 +839,7 @@ import {
   hostCommunicationGraphCloudFeedSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
+import { hostInventorySubscribeV10 } from "@traycer/protocol/host/host-inventory";
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
@@ -8827,6 +8839,84 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.portForward.acquireLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardAcquireLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.releaseLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardReleaseLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.leaseEnded": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardLeaseEndedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.listForHost": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardListForHostV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.cutLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardCutLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.oneOffShell.run": {
     degrade: { kind: "unsupported" },
     1: {
@@ -11531,6 +11621,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // Host-to-host byte tunnel a port forward rides on - no degrade; rationale in `tunnel-stream.ts`'s file-level doc.
+  "host.tunnel.open": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostTunnelOpenV10,
+        },
+      },
+    },
+  },
   "resources.subscribe": {
     1: {
       latestMinor: 5,
@@ -11698,6 +11799,24 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // stay installed and FROZEN on their unstamped frames; the host gates
   // emission on the negotiated version exactly as it does for the @1.1 kinds,
   // the @1.2 cloud arm and the @1.3 head.
+  // Additive, post-v1.0.0 OPTIONAL stream method: the account's host registry,
+  // pushed by the viewer's own host instead of fetched by every window. The
+  // rows are the cloud's own `HostListItem`s, so a client keeps the projection
+  // it already runs. A host that predates it never advertises it and the
+  // client's subscription degrades to `unsupported`, whose contract is simply
+  // that the app's 60s `GET /api/v3/hosts` poll remains the directory's only
+  // refresh - one extra read per window, never a missing fleet. Never add it
+  // to the unary released floor - that list is fail-closed on the name set.
+  "host.hostInventory.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostInventorySubscribeV10,
+        },
+      },
+    },
+  },
   "host.chatRecords.subscribe": {
     1: {
       latestMinor: 4,
@@ -11902,7 +12021,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 13,
+      latestMinor: 15,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11970,9 +12089,19 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         12: {
           contract: chatSubscribeV112,
         },
-        // @1.13 is the `auto` line, and the live one.
+        // @1.13 is the `auto` line. Frozen without the port-forward surface.
         13: {
           contract: chatSubscribeV113,
+        },
+        // @1.14 is the port-forward line, and the live one: the agent's
+        // forwards on the snapshot, `portForwardsChanged`, and the queue item
+        // that reports one going `interrupted`. The host PROJECTS all three
+        // away below this minor rather than refusing the subscribe.
+        14: {
+          contract: chatSubscribeV114,
+        },
+        15: {
+          contract: chatSubscribeV115,
         },
       },
     },

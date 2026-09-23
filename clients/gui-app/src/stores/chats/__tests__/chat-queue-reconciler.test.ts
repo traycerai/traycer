@@ -412,6 +412,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -438,6 +439,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -461,6 +463,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -472,6 +475,73 @@ describe("chat-queue-reconciler", () => {
       expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
       expect(result.failedSendRestoration?.content).toEqual(CONTENT);
       expect(result.failedSendRestoration?.browserAnnotations).toEqual([]);
+    });
+
+    it("does not settle/restore an unconfirmed send from a dead connection while the delivery view names its message (WOULD fail without the gate: same fixture above builds failedSendRestoration)", () => {
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: "msg-1",
+        acceptedActions: {},
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.failedSendRestoration).toBeNull();
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+
+    it("does not settle a dead ACCEPTED send while the delivery view names its message (WOULD fail without the gate: the same fixture without deliveryViewMessageId settles it and builds a restoration)", () => {
+      const accepted = {
+        ...createSendAcceptedAction({
+          clientActionId: "action-1",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: false,
+        }),
+        messageId: "msg-1",
+        connectionEpoch: 0,
+      };
+      const input: ReconcileSnapshotInput = {
+        pendingActions: {},
+        pendingUserMessages: [],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: "msg-1",
+        acceptedActions: { "action-1": accepted },
+        nowMs: 5000,
+      };
+
+      // Positive control: the identical fixture with no delivery view DOES
+      // settle this dead accepted send and builds a restoration from it -
+      // proving the assertions below on the gated run would fail without it.
+      const controlResult = reconcileSnapshotChange({
+        ...input,
+        deliveryViewMessageId: null,
+      });
+      expect(controlResult.settledAcceptedActionIds.has("action-1")).toBe(true);
+      expect(controlResult.failedSendRestoration).not.toBeNull();
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.settledAcceptedActionIds.size).toBe(0);
+      expect(result.failedSendRestoration).toBeNull();
+      expect(result.appendedErrorNotices).toEqual([]);
     });
 
     it("keeps an unconfirmed send from the snapshot's own connection pending, without restoration", () => {
@@ -490,6 +560,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -520,6 +591,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -533,6 +605,7 @@ describe("chat-queue-reconciler", () => {
     it("preserves existing failedSendRestoration and does not overwrite", () => {
       const existingRestore = {
         clientActionId: "action-0",
+        messageId: null,
         content: CONTENT,
         browserAnnotations: [],
         reason: "Prior failure",
@@ -550,6 +623,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -584,6 +658,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -609,6 +684,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -647,6 +723,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -670,6 +747,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -742,6 +820,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -783,6 +862,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -827,6 +907,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -862,6 +943,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -931,6 +1013,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         nowMs: 5000,
       };
@@ -1236,6 +1319,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         ...overrides,
       };
@@ -1247,6 +1331,7 @@ describe("chat-queue-reconciler", () => {
       expect(result.pendingUserMessages).toEqual([]);
       expect(result.failedSendRestoration).toEqual({
         clientActionId: "action-1",
+        messageId: "msg-1",
         content: CONTENT,
         browserAnnotations: [],
         reason: "The message was not recorded before the turn stopped.",
@@ -1254,6 +1339,39 @@ describe("chat-queue-reconciler", () => {
           "The message was not recorded before the turn stopped.",
         stated: false,
       });
+    });
+
+    it("does not strand/restore an unrecorded send while the delivery view names its message (WOULD fail without the gate: the default fixture above strands it)", () => {
+      const input = settledInput({ deliveryViewMessageId: "msg-1" });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toEqual(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+
+    it("still strands an unrecorded send once the delivery view's message is confirmed in the transcript", () => {
+      // The exclusion above is only for the UNRESOLVED window - once the host
+      // has actually recorded the message, it is confirmed like any other and
+      // must go through the ordinary stranded-or-not accounting rather than
+      // being permanently exempted by a stale view.
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const input = settledInput({
+        deliveryViewMessageId: "msg-1",
+        messages: [confirmedMessage],
+      });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toEqual([]);
     });
 
     it("restores pre-submit content and annotation records, not wire crop atoms", () => {
@@ -1313,6 +1431,7 @@ describe("chat-queue-reconciler", () => {
 
       expect(result.failedSendRestoration).toEqual({
         clientActionId: "action-ann",
+        messageId: "msg-ann",
         content: editorContent,
         browserAnnotations: annotations,
         reason: "The message was not recorded before the turn stopped.",
@@ -1407,6 +1526,7 @@ describe("chat-queue-reconciler", () => {
       expect(result.pendingUserMessages).toEqual([]);
       expect(result.failedSendRestoration).toEqual({
         clientActionId: "action-2",
+        messageId: "msg-2",
         content: CONTENT_2,
         browserAnnotations: [],
         reason: "The message was not recorded before the turn stopped.",
@@ -1428,6 +1548,7 @@ describe("chat-queue-reconciler", () => {
     it("never overwrites an occupied failedSendRestoration slot", () => {
       const occupied = {
         clientActionId: "action-0",
+        messageId: null,
         content: CONTENT_2,
         browserAnnotations: [],
         reason: "Message was not accepted.",
@@ -1471,6 +1592,7 @@ describe("chat-queue-reconciler", () => {
           messages: [confirmedMessage],
           failedSendRestoration: {
             clientActionId: "action-0",
+            messageId: null,
             content: CONTENT_2,
             browserAnnotations: [],
             reason: "Message was not accepted.",
@@ -1550,6 +1672,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: { ...SETTINGS, model: "gpt-5.6" },
         currentAccountContext: { type: "TEAM", teamId: "team-7" },
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
         connectionEpoch: 1,
         nowMs: 5000,
@@ -1576,6 +1699,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" },
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        deliveryViewMessageId: null,
         acceptedActions: {},
       });
 

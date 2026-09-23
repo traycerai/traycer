@@ -237,10 +237,16 @@ export const userMessageSchemaV18 = lazySchema(() =>
     })
     .superRefine(userMessageSenderKindRefine),
 );
-// There is no user-message delta in 1.9, 1.10 or 1.11. Alias the frozen schema
-// until a newer contract needs its own extension (including the sender-kind
-// check).
-export const userMessageSchema = userMessageSchemaV18;
+// A negative history fact, independent of the host's live execution record.
+// Forks preserve it while discarding runnable obligations: an accepted but
+// unsubmitted prompt must never become fake provider context in a new chat.
+// Absence retains legacy semantics. Only the host's atomic execution claim
+// removes this marker; a client edit cannot decide that a message was sent.
+export const userMessageSchema = lazySchema(() =>
+  userMessageSchemaV18.safeExtend({
+    providerHistory: z.literal("excluded").optional(),
+  }),
+);
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
 /**
@@ -462,6 +468,11 @@ export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
 );
 export type Message = z.infer<typeof messageSchema>;
+
+/** The message union shipped on chat.subscribe through 1.14. */
+export const messageSchemaPreMessageDelivery = lazySchema(() =>
+  z.discriminatedUnion("role", [userMessageSchemaV18, assistantMessageSchema]),
+);
 
 // ── Wire-freeze variants (pre-Reasonix, LIVE shape) ─────────────────────────
 // Hand-frozen copies of the LIVE message schemas — every field the live shapes
@@ -712,7 +723,7 @@ export const assistantMessageSchemaPreFallback = lazySchema(() =>
 
 export const messageSchemaPreFallback = lazySchema(() =>
   z.discriminatedUnion("role", [
-    userMessageSchema,
+    userMessageSchemaV18,
     assistantMessageSchemaPreFallback,
   ]),
 );
@@ -748,7 +759,7 @@ export const assistantMessageSchemaPreShellHost = lazySchema(() =>
 
 export const messageSchemaPreShellHost = lazySchema(() =>
   z.discriminatedUnion("role", [
-    userMessageSchema,
+    userMessageSchemaV18,
     assistantMessageSchemaPreShellHost,
   ]),
 );
@@ -778,7 +789,7 @@ export const assistantMessageSchemaPreBrowser = lazySchema(() =>
 
 export const messageSchemaPreBrowser = lazySchema(() =>
   z.discriminatedUnion("role", [
-    userMessageSchema,
+    userMessageSchemaV18,
     assistantMessageSchemaPreBrowser,
   ]),
 );

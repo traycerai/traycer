@@ -11,6 +11,7 @@ export {
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
+  deliveryRestoreAckKey,
   epicCanvasKey,
   githubMentionFiltersKey,
   lastLocalHostIdKey,

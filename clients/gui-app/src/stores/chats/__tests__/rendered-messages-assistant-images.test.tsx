@@ -194,6 +194,7 @@ const CANONICAL_INPUT: RenderedMessagesInput = {
   events: [],
   rowContext: {},
   pendingUserMessages: [],
+  withdrawnMessageId: null,
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",

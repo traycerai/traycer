@@ -453,6 +453,7 @@ function windowedSnapshot(input: {
       accumulatedFileChangeCount: input.accumulatedFileChangeCount,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
       indexRevision: input.indexRevision ?? null,

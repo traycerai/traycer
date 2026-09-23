@@ -1,11 +1,14 @@
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type {
   ChatForkMode,
   ChatMessageActions,
+  ChatMessageDeliveryPhase,
+  ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
@@ -73,11 +76,67 @@ import type {
   InlineEditState,
 } from "./chat-tile-session-state";
 
+const NOOP = (): void => undefined;
+
+function deliveringUserMessageActions(
+  phase: ChatMessageDeliveryPhase,
+): ChatMessageUserActions {
+  return {
+    type: "user",
+    enabled: false,
+    deliveryPhase: phase,
+    confirmingDelete: false,
+    editing: null,
+    onEdit: NOOP,
+    onDeleteRequest: NOOP,
+    onDeleteConfirm: NOOP,
+    onDeleteCancel: NOOP,
+  };
+}
+
+/**
+ * The actions of a row the host is still delivering: the chat's opening prompt
+ * before it reaches the model. It offers copy and nothing else - no edit, no
+ * delete - and shows where it is. Once it starts it is an ordinary message; if
+ * it is withdrawn it leaves the transcript and its text goes back to the
+ * composer, so there is never a state in which it waits on the user.
+ *
+ * One object per phase, so a row whose phase has not moved keeps the same
+ * actions across renders.
+ */
+const DELIVERING_USER_MESSAGE_ACTIONS: Readonly<
+  Record<ChatMessageDeliveryPhase, ChatMessageUserActions>
+> = {
+  pending: deliveringUserMessageActions("pending"),
+  preparing: deliveringUserMessageActions("preparing"),
+};
+
+/**
+ * The phase of `messageId` while the host has accepted it and not started it,
+ * `null` for every other row. A withdrawn row is not asked about: it has already
+ * left the rendered transcript (`useRenderedMessages`).
+ */
+function unstartedDeliveryPhase(
+  delivery: ChatMessageDelivery | null,
+  messageId: string,
+): ChatMessageDeliveryPhase | null {
+  if (delivery === null || delivery.messageId !== messageId) return null;
+  const phase = delivery.state.phase;
+  return phase === "pending" || phase === "preparing" ? phase : null;
+}
+
 export interface ChatMessageActionsInput {
   readonly dispatchUi: (action: ChatTileUiAction) => void;
   readonly activeInlineEdit: InlineEditState | null;
   readonly canModifyMessages: boolean;
   readonly canAct: boolean;
+  /**
+   * The host's delivery view of this chat's opening prompt, or `null` when there
+   * is none - every chat past its opening, and every host older than
+   * `chat.subscribe@1.15`. It decides one row: the one it names, while that row
+   * has not started.
+   */
+  readonly messageDelivery: ChatMessageDelivery | null;
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
@@ -275,6 +334,7 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     canAct,
+    messageDelivery,
     interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
@@ -920,6 +980,15 @@ export function useChatMessageActions(
       }
       const persistentMessageId = editablePersistentMessageId(message);
       if (persistentMessageId === null) return null;
+      // Ahead of every gate below: the status shows whatever else is going on,
+      // and nothing below may offer this row an action while it lasts.
+      const deliveryPhase = unstartedDeliveryPhase(
+        messageDelivery,
+        persistentMessageId,
+      );
+      if (deliveryPhase !== null) {
+        return DELIVERING_USER_MESSAGE_ACTIONS[deliveryPhase];
+      }
       if (
         inlineEditLocksMessageActions(activeInlineEdit, persistentMessageId)
       ) {
@@ -936,6 +1005,7 @@ export function useChatMessageActions(
       return {
         type: "user",
         enabled: canModifyMessages && !pending,
+        deliveryPhase: null,
         confirmingDelete: confirmingDeleteMessageId === persistentMessageId,
         editing: chatMessageEditingForInlineEdit({
           editing,
@@ -986,6 +1056,7 @@ export function useChatMessageActions(
       forkAtAssistantMessage,
       interviewDeliveryRetryProtocolSupported,
       mentionRoots,
+      messageDelivery,
       pendingActions,
       acceptedActions,
       chatActions,

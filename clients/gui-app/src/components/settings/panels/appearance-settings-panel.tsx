@@ -57,7 +57,7 @@ import {
 } from "@/lib/analytics";
 
 function officeViewChoiceLabel(choice: OfficeViewChoice): string {
-  return choice === "auto" ? "Auto" : OFFICE_VIEW_LABELS[choice];
+  return OFFICE_VIEW_LABELS[choice];
 }
 
 function trackedAppearanceSetter<Value>(

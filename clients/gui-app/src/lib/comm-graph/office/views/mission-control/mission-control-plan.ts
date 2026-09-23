@@ -79,7 +79,6 @@ const PODIUM_FACING: OfficeFacing = "down";
 
 const QUEUE_LENGTH = 4;
 const ROOM_SIGN_WIDTH_TILES = 2;
-const HOST_SIGN_WIDTH_TILES = 2;
 
 export interface MissionControlTeamReserve {
   readonly teamId: string;
@@ -1663,15 +1662,6 @@ function queueTiles(request: {
   return tiles;
 }
 
-function uniqueHosts(input: OfficePlanInput): ReadonlyArray<string | null> {
-  const hosts: Array<string | null> = [];
-  for (const host of input.partition.hosts) {
-    hosts.push(host.hostId);
-  }
-  if (hosts.length === 0) hosts.push(null);
-  return hosts;
-}
-
 /**
  * ONE TEAM'S SEATS ON ONE TIER: the arc segment a plate is allowed to cover.
  *
@@ -1781,28 +1771,6 @@ function buildSigns(
       // and no plate at all where even the initials overflow the run - at
       // which point the team keeps the name its hover card has always carried.
       rungs: "name",
-    });
-  }
-  const hosts = uniqueHosts(input);
-  const stride = HOST_SIGN_WIDTH_TILES + 2;
-  const left = 1;
-  const maxStart = packing.cols - 1 - HOST_SIGN_WIDTH_TILES;
-  const perRow = Math.max(1, Math.floor((maxStart - left) / stride) + 1);
-  for (let i = 0; i < hosts.length; i += 1) {
-    const rowIndex = Math.floor(i / perRow);
-    const colIndex = i % perRow;
-    signs.push({
-      kind: "host",
-      tile: {
-        col: left + colIndex * stride,
-        row: packing.rows - 1 - rowIndex,
-      },
-      widthTiles: HOST_SIGN_WIDTH_TILES,
-      text: "",
-      ownerAgentId: null,
-      hostId: hosts[i],
-      agentIds: [],
-      civicRoomId: null,
     });
   }
   return signs;

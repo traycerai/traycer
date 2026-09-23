@@ -110,7 +110,15 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // claiming the exposure does not exist.
 // (Renumbered from 1.4 on the merge to main, which had taken that minor for
 // the delivery-placement field above.)
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 5 } as const;
+// 1.6 carries the negative provider-history marker (`providerHistory:
+// "excluded"`) on an accepted opening message that has not been sent yet.
+// Additive, and deliberately WITHOUT a reader floor (see the note above
+// `chatSyncReaderFloorForTranscriptEvents` in `head.ts`): an older reader
+// renders the row as the ordinary user message it is, and the marker's only
+// consumer is a host keeping the row out of provider history. Nor can an older
+// host clone the row into a new chat's history: every fork slices at an
+// assistant record, and nothing follows an unresolved opening.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 6 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

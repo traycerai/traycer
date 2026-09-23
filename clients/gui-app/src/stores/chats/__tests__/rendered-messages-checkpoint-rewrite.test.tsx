@@ -134,6 +134,7 @@ function inputWith(
     events: [...events],
     rowContext: {},
     pendingUserMessages: [],
+    withdrawnMessageId: null,
     liveAssistantMessage: null,
     activeTurn: null,
     runStatus: "idle",

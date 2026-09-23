@@ -588,6 +588,10 @@ describe("AppearanceWallpaper", () => {
       onPage.container.querySelector(".appearance-wallpaper-mask"),
     ).not.toBeNull();
     expect(onPage.container.querySelector("img")?.style.opacity).toBe("0.85");
+    // The page's stacking context + containment class is the page's alone.
+    expect(
+      onPage.container.querySelector(".appearance-wallpaper"),
+    ).not.toBeNull();
     onPage.unmount();
 
     const preview = render(
@@ -602,5 +606,9 @@ describe("AppearanceWallpaper", () => {
       preview.container.querySelector(".appearance-wallpaper-mask"),
     ).toBeNull();
     expect(preview.container.querySelector("img")?.style.opacity).toBe("1");
+    expect(preview.container.querySelector(".appearance-wallpaper")).toBeNull();
+    expect(
+      preview.container.querySelector('[data-wallpaper-surface="preview"]'),
+    ).not.toBeNull();
   });
 });

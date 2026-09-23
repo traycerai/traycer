@@ -139,7 +139,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
 
     const select = screen.getByRole("combobox", { name: "Default view" });
     expect(select.textContent).toBe(
-      DEFAULT_AGENT_OFFICE_VIEW === "auto" ? "Auto" : DEFAULT_AGENT_OFFICE_VIEW,
+      OFFICE_VIEW_LABELS[DEFAULT_AGENT_OFFICE_VIEW],
     );
 
     fireEvent.click(select);

@@ -90,12 +90,16 @@ export function useInitialChatHandoffDriver(
       acceptedActions: s.acceptedActions,
       messages: s.messages,
       failedSendRestoration: s.failedSendRestoration,
+      // The host's delivery view, narrowed to the message it names: the only
+      // thing about it this driver acts on is whether it names the handoff's.
+      deliveryMessageId: s.messageDelivery?.messageId ?? null,
     })),
   );
   const {
     acceptedActions,
     canAct,
     connectionStatus,
+    deliveryMessageId,
     failedSendRestoration,
     messages,
     snapshotLoaded,
@@ -115,6 +119,7 @@ export function useInitialChatHandoffDriver(
       acceptedActions,
       messages,
       failedSendRestoration,
+      deliveryMessageId,
     });
     applyInitialChatHandoffStep({
       handoff,
@@ -130,6 +135,7 @@ export function useInitialChatHandoffDriver(
     acceptedActions,
     canAct,
     connectionStatus,
+    deliveryMessageId,
     failedSendRestoration,
     handle.store,
     handoff,

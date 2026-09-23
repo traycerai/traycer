@@ -44,6 +44,11 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "undo",
       "disk space",
       "cache",
+      "port forward",
+      "port forwards",
+      "forwarded port",
+      "localhost",
+      "tunnel",
     ],
   },
   versionHistory: {
@@ -126,6 +131,18 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     kind: "group",
     search: { contributesTo: "page" },
     label: "Installation",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  // Rendered only on a host that serves `portForward.listForHost` AND has a
+  // forward or a held port to show, so like every card here it folds into the
+  // page rather than being a destination of its own.
+  portForwards: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Port forwards",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,

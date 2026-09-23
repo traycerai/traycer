@@ -339,6 +339,29 @@ export const CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR = {
   minor: 5,
 } as const;
 
+// ## No floor for `providerHistory: "excluded"`, and it is not an omission
+//
+// A user message carrying that marker used to stamp a `1.6` floor, on the
+// reading that an older reader would show a row it did not understand. It was
+// withdrawn with the lifecycle the marker belongs to, because both halves of
+// that reading turned out to be wrong.
+//
+// An older reader does not ACT on the marker - it renders an ordinary user
+// message, which is exactly what the row is and exactly what a newer reader
+// draws. The marker's only consumer is the host, which uses it to keep the row
+// out of the provider's history. Nothing a reader can do with it is wrong, so
+// `minReaderVersion`'s documented trigger - "a change that would make an old
+// reader act on a chat WRONGLY" - is simply not met. Contrast
+// `CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR` above, where the old reader
+// projects NO row and a refusal silently disappears.
+//
+// And the cost was not confined to the row. A floor gates the whole
+// publication, so an opening message - the FIRST row of a chat - would have
+// walled every older app out of that chat for as long as the marker was there,
+// which was the entire time a chat was being set up. The strictly better answer
+// is what ships: the row is projected honestly to every client version, and the
+// versions that cannot draw its delivery state are simply not told about it.
+
 /**
  * The floor a publication of `events` must stamp as `minReaderVersion`, or
  * `null` when every supported reader can render it.

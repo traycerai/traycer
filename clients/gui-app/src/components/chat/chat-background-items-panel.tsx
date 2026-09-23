@@ -42,6 +42,8 @@ import {
   useHeldManagedCommandsForChat,
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
+import { usePortForwardsForChat } from "@/stores/port-forwards/port-forwards-for-chat";
+import { PortForwardRow } from "@/components/chat/port-forward-row";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
@@ -704,10 +706,19 @@ export function BackgroundItemsPanel(props: {
     () => managedCommands.filter((command) => !heldCommandIds.has(command.id)),
     [managedCommands, heldCommandIds],
   );
+  // Same store, same host scoping as the shells above. Forwards are NOT part
+  // of "Stop all": that button ends work the agent is doing, and a forward is
+  // plumbing a person may still be looking through - it has its own Stop.
+  const portForwards = usePortForwardsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId,
+  });
   const headerSummary = backgroundHeaderSummary({
     runningCount: runningGroupCount + runningOnlyManagedCommands.length,
     heldCount: heldManagedCommands.length,
     waitingWakeCount,
+    portForwardCount: portForwards.length,
   });
   const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
@@ -916,6 +927,15 @@ export function BackgroundItemsPanel(props: {
                 viewTabId={props.viewTabId}
                 stoppable={managedStoppable}
                 onOpen={openManagedCommand}
+              />
+            ))}
+            {portForwards.map((forward) => (
+              // An RPC to the forward's host, like a shell's stop: a
+              // reconnecting chat stream has no bearing on it.
+              <PortForwardRow
+                key={forward.forwardId}
+                forward={forward}
+                stoppable={managedStoppable}
               />
             ))}
             <BackgroundTreeRows
