@@ -99,6 +99,8 @@ export function autoJudgeSeed(
     permission: DEFAULT_PERMISSION,
     reasoning: "",
     serviceTier: "",
+    // The judge runs no chat, so it carries no identity.
+    identityId: null,
   } as const;
   if (resolved === null) {
     return {

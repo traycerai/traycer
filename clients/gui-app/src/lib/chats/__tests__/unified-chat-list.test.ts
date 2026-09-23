@@ -415,6 +415,7 @@ describe("localChatLastActiveAtById / chatListLastActiveAtByKey", () => {
       updatedAt: overrides.updatedAt,
       userId: overrides.userId,
       hostId: overrides.hostId,
+      chatKind: "conversation",
       isTitleEditedByUser: false,
       settings: null,
       archivedAt: null,

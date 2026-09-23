@@ -100,6 +100,8 @@ function seedValuesOf(selection: ReviewSelection): ComposerToolbarValues {
     selection: picked,
     reasoning: selection.reasoningEffort ?? "",
     serviceTier: "",
+    // A review model is not a chat; the identity it reviews is implicit.
+    identityId: null,
   };
 }
 

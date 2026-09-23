@@ -22,7 +22,7 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
  * copy.
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -147,7 +147,7 @@ export interface EpicRuntimeCorePortSource {
    */
   readWriteCommandIntent(intent: unknown): EpicWriteCommandIntent | null;
   applyChatRecords(
-    records: readonly ChatRecordSummaryV11[],
+    records: readonly ChatRecordSummaryV12[],
     issuedAtSeq: number | null,
   ): void;
   applyChatRecordTouches(patches: readonly RecordListRecencyPatch[]): void;

@@ -496,6 +496,7 @@ export function useChatComposerSubmit(
           permission: toolbar.permission,
           reasoning: toolbar.reasoning,
           serviceTier: toolbar.serviceTier,
+          identityId: toolbar.identityId,
         });
         const submittedContent = appendImageAttachmentAtoms(
           buildSubmittedChatJSONContent(

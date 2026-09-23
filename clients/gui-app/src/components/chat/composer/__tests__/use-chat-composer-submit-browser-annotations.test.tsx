@@ -167,6 +167,7 @@ function mountSubmit(args: {
       },
       reasoning: "medium",
       serviceTier: "auto",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

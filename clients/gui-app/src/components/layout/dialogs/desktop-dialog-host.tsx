@@ -30,6 +30,9 @@ export function DesktopDialogHost(): ReactNode {
     (state) => state.draftsEntryPoint,
   );
   const activeDialog = useDesktopDialogStore((state) => state.activeDialog);
+  const identitiesRequest = useDesktopDialogStore(
+    (state) => state.identitiesRequest,
+  );
   const updateUnsyncedEpics = useDesktopDialogStore(
     (state) => state.updateUnsyncedEpics,
   );
@@ -68,7 +71,13 @@ export function DesktopDialogHost(): ReactNode {
         />
       ) : null}
       {activeDialog === "identities" ? (
-        <IdentitiesDialog hostId={hostId} onClose={close} />
+        <IdentitiesDialog
+          // A composer names its run target; the header and palette mean the
+          // app-wide host.
+          hostId={identitiesRequest.hostId ?? hostId}
+          mode={identitiesRequest.mode}
+          onClose={close}
+        />
       ) : null}
       <AboutDetailsDialog
         open={activeDialog === "about-details"}
