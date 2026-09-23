@@ -23,6 +23,7 @@ import {
   type ActivityGroupModel,
   type ActivityGroupDetailSegment,
 } from "@/components/chat/chat-activity-groups";
+import { distinctRenderKeys } from "@/components/chat/segment-render-keys";
 import { LiveActivityPromoteContext } from "./live-activity-promote-context";
 import { Shimmer } from "@/components/ui/shimmer";
 import { cn } from "@/lib/utils";
@@ -178,10 +179,11 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // nowhere else to put it, not because anyone opened it. Only `expanded`
   // records intent, and only `expanded` survives. See the `headerless` prop on
   // `ReasoningSegment` before changing either.
+  const childKeys = distinctRenderKeys(group.segments);
   const renderChildren = (bodyBoundedByParent: boolean): ReactNode =>
-    group.segments.map((segment) => (
+    group.segments.map((segment, index) => (
       <ActivityChildSegment
-        key={segment.id}
+        key={childKeys[index]}
         groupId={group.id}
         segment={segment}
         bodyBoundedByParent={bodyBoundedByParent}

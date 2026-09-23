@@ -7,6 +7,7 @@ import {
   useRestartHighlightPulse,
 } from "@/components/chat/chat-navigation-highlight";
 import { deriveToolInputSummary } from "@/lib/segment-summary";
+import { approvalCardText } from "@/components/chat/segments/approval-text";
 import { humanActionableApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import {
   APPROVAL_PAUSED_LINE,
@@ -186,12 +187,11 @@ function ApprovalRow(props: ApprovalRowProps) {
     props.highlightGeneration,
     rowRef,
   );
-  const inputSummary = deriveToolInputSummary(
+  const { inputSummary, headline } = approvalCardText(
     approval.toolName,
-    approval.input,
+    deriveToolInputSummary(approval.toolName, approval.input),
+    approval.description,
   );
-  const headline =
-    approval.description.length > 0 ? approval.description : approval.toolName;
   const reviewing = approval.reviewing;
   return (
     <div
@@ -227,7 +227,9 @@ function ApprovalRow(props: ApprovalRowProps) {
           </>
         ) : null}
       </div>
-      <p className="m-0 text-foreground/85">{headline}</p>
+      {headline === null ? null : (
+        <p className="m-0 text-foreground/85">{headline}</p>
+      )}
       {approval.reason !== null ? (
         <JudgeReason rule={approval.reason.rule} text={approval.reason.text} />
       ) : null}
