@@ -358,6 +358,7 @@ describe("open-epic-store doc projection", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "profile-uuid",
+      identityId: null,
     });
   });
 
