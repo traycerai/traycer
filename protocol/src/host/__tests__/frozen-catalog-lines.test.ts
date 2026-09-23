@@ -23,6 +23,7 @@ import {
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
+  listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -87,9 +88,12 @@ const LIVE_FROZEN_EXPORTS = {
   // schema now and its dump is unchanged, so neither row was regenerated.
   "agent.gui.listHarnesses@8.0": listGuiHarnessesResponseSchemaV80,
   "agent.gui.listHarnesses@9.0": listGuiHarnessesResponseSchemaV90,
-  // The head line, holding 9.0's old job: it names the LIVE schema, so the next
+  // 9.1 froze at the pre-`judgeDefaultModel` row when 9.2 opened, exactly as
+  // 9.0 froze when 9.1 opened - its dump did not change from its freeze.
+  "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchemaV91,
+  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
   // attempt to grow the row fails here first.
-  "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchema,
+  "agent.gui.listHarnesses@9.2": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
