@@ -184,9 +184,13 @@ function MermaidRenderSession(props: {
         className="tc-node-mermaid__preview m-0"
         role={render.status === "pending" ? "img" : undefined}
         aria-label={render.status === "pending" ? ariaLabel : undefined}
-        // Only a drawn diagram has words the painter may colour; the error
-        // body quotes the failing source and would otherwise take the hits.
-        {...(render.status === "ready" ? { [FIND_VISIBLE_ATTR]: "" } : {})}
+        // Only a diagram drawn from the mirrored source has words the painter
+        // may colour: the error body quotes the failing source, and while a
+        // streaming fence waits out the render debounce the drawing still
+        // shows the previous source. The block mark stands in meanwhile.
+        {...(render.status === "ready" && renderCode === sourceCode
+          ? { [FIND_VISIBLE_ATTR]: "" }
+          : {})}
       >
         {render.status === "pending" ? (
           <div className="tc-node-block__skeleton" aria-hidden="true">
