@@ -9,26 +9,36 @@ import {
   type UpdateMutationCapabilityAdoption,
 } from "@traycer-clients/shared/host-update";
 import type { Environment } from "../runner/environment";
+import {
+  HOST_START_ADOPTION_ACK_WAIT_MS,
+  HOST_START_ADOPTION_MAX_AGE_MS,
+} from "../service/spawn-edge-bounds";
 import { hostHomeDir } from "../store/paths";
 import type { WithCliUpdateContenderOptions } from "./update-contender";
 
 const HOST_START_ADOPTION_FILENAME = ".host-start-adoption.json";
-const HOST_START_ADOPTION_MAX_AGE_MS = 60_000;
 
-// The ONE grant-expiry predicate, shared by every reader of `issuedAtMs`.
+// The ONE grant-expiry predicate, shared by every reader of `issuedAtMs`. The
+// window and the ack wait are derived in `service/spawn-edge-bounds.ts`, a
+// leaf, so no import cycle can leave them unset at load.
 //
 // Symmetric on purpose: `now - issuedAtMs > MAX_AGE` alone never fires for a
 // FUTURE-dated timestamp (the difference is negative), so a proof written
 // after a backwards clock step - or with a corrupted `issuedAtMs` - would
 // read as an outstanding grant until the wall clock caught up, refusing
 // every launch for that whole window. A publisher and consumer live on the
-// same machine within the same minute, so any timestamp more than the grant
-// window AWAY from now, in either direction, is not a grant anyone can
-// still use.
+// same machine within one grant window of each other, so any timestamp more
+// than that window AWAY from now, in either direction, is not a grant anyone
+// can still use.
+//
+// And fail-closed: written as "not provably inside the window", so a `NaN`
+// on either side - a window that was somehow never derived, or a timestamp
+// that is not a number - reads as EXPIRED. `Math.abs(...) > NaN` is never
+// true, and in that form the same `NaN` would make every grant immortal.
 function adoptionGrantExpired(issuedAtMs: number): boolean {
-  return Math.abs(Date.now() - issuedAtMs) > HOST_START_ADOPTION_MAX_AGE_MS;
+  return !(Math.abs(Date.now() - issuedAtMs) <= HOST_START_ADOPTION_MAX_AGE_MS);
 }
-const HOST_START_ADOPTION_ACK_WAIT_MS = 30_000;
+
 const HOST_START_ADOPTION_POLL_MS = 25;
 
 // Test-only synchronization point for the exact read-then-claim race.  The
@@ -208,7 +218,9 @@ export async function consumeHostStartAdoption(
   // capability and cannot steal the pending grant for a service child. If a
   // proof is outstanding, do not fall through to a fresh admission either:
   // that would recreate the parent-lock/child-lock cycle the proof exists to
-  // avoid. Only a genuinely absent proof permits standalone admission.
+  // avoid. Only a proof that is absent, expired, or orphaned (its parent no
+  // longer holds the capability - `readOrphanedProof`) permits standalone
+  // admission; none of those has a live parent to form that cycle with.
   if (serviceLabel === null || serviceLabel.length === 0) {
     const pending = await readPendingAdoption(path);
     if (pending.kind === "absent") return { kind: "absent" };
@@ -236,6 +248,10 @@ export async function consumeHostStartAdoption(
       adoptionGrantExpired(pending.file.issuedAtMs)
     ) {
       return { kind: "absent" };
+    }
+    if (pending.kind === "valid") {
+      const orphan = await readOrphanedProof(pending.file, home);
+      if (orphan !== null) return orphan;
     }
     return {
       kind: "refused",
@@ -284,6 +300,17 @@ export async function consumeHostStartAdoption(
     adoptionGrantExpired(pending.file.issuedAtMs)
   ) {
     return { kind: "absent" };
+  }
+  // The labelled launch WITHOUT a nonce is the other nonce-less path, and the
+  // one a dead publisher steers launches onto: `readHostStartAdoptionNonce`
+  // hands out no nonce for a proof whose parent is gone, so the launcher
+  // re-execs `host start --service-label` bare and lands here. See
+  // `readOrphanedProof`. Ahead of the label check for the reason expiry is:
+  // whose grant a dead parent's proof was is not a routing question. A LIVE
+  // parent still refuses below, nonce or no nonce.
+  if (pending.kind === "valid" && expectedNonce === null) {
+    const orphan = await readOrphanedProof(pending.file, home);
+    if (orphan !== null) return orphan;
   }
   if (pending.kind === "valid" && pending.file.serviceLabel !== serviceLabel) {
     return {
@@ -467,6 +494,53 @@ async function readPendingAdoption(path: string): Promise<PendingAdoptionRead> {
   if (read.kind === "unreadable") return { kind: "unreadable" };
   const file = parseAdoption(read.text);
   return file === null ? { kind: "malformed" } : { kind: "valid", file };
+}
+
+/**
+ * For a NONCE-LESS launch only: `absent` when the pending proof's publisher no
+ * longer holds the capability it was issued under, `error` when that could not
+ * be checked, `null` when the parent is live and the caller's refusal stands.
+ *
+ * A proof whose parent capability is not live cannot be a live publisher's
+ * intent. Reading it as ABSENT sends the launch down the ordinary admission
+ * path, which is exactly what a launch with no proof at all gets, so this
+ * removes a refusal without granting anything a proof-less launch does not
+ * already have. Without it, a publisher that died between publishing and its
+ * child's consume refused every nonce-less launch until the proof expired -
+ * and the grant window more than doubled, to 130s.
+ *
+ * Deliberately the predicate `readHostStartAdoptionNonce` applies before it
+ * hands a launcher a nonce, so a launch that got no nonce BECAUSE the parent
+ * was gone is not then refused for lacking one. "Not live" includes a lock
+ * that cannot be read or parsed; that is safe for the same reason as the rest:
+ * ordinary admission contends that very lock, so a live holder misread here
+ * still stops the launch there.
+ *
+ * A nonce-BEARING launch never comes here. It was handed that nonce by a live
+ * parent, and a mismatch against a live parent's proof still refuses.
+ *
+ * The proof is left in place. Removal belongs to its publisher's `cancel`,
+ * and a dead publisher's proof expires by age (and the next publish replaces
+ * it) - a consumer without the nonce that removed it could erase a NEWER
+ * publisher's proof (see `removeAdoptionIfNonce`).
+ */
+async function readOrphanedProof(
+  file: HostStartAdoptionFile,
+  home: string,
+): Promise<HostStartAdoptionConsumeResult | null> {
+  let parentLive: boolean;
+  try {
+    parentLive = await validateUpdateMutationCapabilityAdoption(
+      file.adoption,
+      home,
+    );
+  } catch {
+    return {
+      kind: "error",
+      reason: "host-start adoption parent could not be checked",
+    };
+  }
+  return parentLive ? null : { kind: "absent" };
 }
 
 async function readAcknowledgement(

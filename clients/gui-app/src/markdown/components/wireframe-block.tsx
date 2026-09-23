@@ -5,8 +5,10 @@ import { WireframeFullscreenDialog } from "@/editor-core/nodes/wireframe/wirefra
 import { WireframeIframe } from "@/editor-core/nodes/wireframe/wireframe-iframe";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { FIND_BLOCK_ATTR } from "@/lib/find-engine/find-blocks";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { FindMirror } from "./find-mirror";
 
 // A streamed fence grows a few characters per delta; loading each partial
 // document into the iframe would flash a half-built page over and over. Wait
@@ -47,7 +49,7 @@ export function WireframeBlock(props: WireframeBlockProps) {
 
   if (code.trim().length === 0) {
     return (
-      <div className="tc-node-wireframe">
+      <div className="tc-node-wireframe" data-find-skip="">
         <div className="tc-node-block__empty">Empty wireframe block</div>
       </div>
     );
@@ -56,7 +58,14 @@ export function WireframeBlock(props: WireframeBlockProps) {
   return (
     // Excluded from quote selection like the mermaid block: the toolbar and
     // the iframe are non-prose UI inside quotable markdown.
-    <div className="tc-node-wireframe" data-quote-exclude="">
+    <div
+      className="tc-node-wireframe"
+      data-quote-exclude=""
+      {...{ [FIND_BLOCK_ATTR]: "wireframe" }}
+    >
+      {/* Outside the boundary: the mirror must outlive a crashed frame, since
+          the counter keeps counting the fence either way. */}
+      <FindMirror text={code} />
       <BlockErrorBoundary title="Wireframe block crashed" onCopy={handleCopy}>
         <WireframeBlockToolbar
           onOpenFullscreen={() => setFullscreenOpen(true)}

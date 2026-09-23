@@ -10,8 +10,8 @@ import {
   rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
-import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 
 /**
  * While mounted, refreshes `host.getRateLimitUsage` for the current host scope
@@ -19,12 +19,13 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
  * analog of `useRefreshRateLimitUsageOnTraycerTurn`. Branches on the provider's
  * fetch lane:
  *
- * - `ephemeralProcess` (codex, claude-code): enqueues onto the shared serial
- *   queue (`enqueueRateLimitFetch(..., { force: false })`) rather than
- *   invalidating directly, so a turn completion can't race a scheduled interval
- *   tick into two overlapping subprocess spawns. This enqueue is deliberately
- *   NOT gated by window visibility - only the interval timer pauses when hidden;
- *   a background turn finishing while the user is away must still update data.
+ * - `ephemeralProcess` (codex, claude-code, grok): an automatic
+ *   `fetchProviderRateLimits(..., { force: false })` rather than an
+ *   invalidation. Invalidating would run the observer's `queryFn`, which sends
+ *   no `force`, and an absent `force` reads on the wire as forced - a real CLI
+ *   probe for every qualifying turn. This fetch is deliberately NOT gated by
+ *   window visibility - only the interval timer pauses when hidden; a
+ *   background turn finishing while the user is away must still update data.
  * - `httpFetch` (openrouter, kilocode, huggingface, opencode): invalidates the
  *   query directly (no subprocess to bound), exactly as before.
  *
@@ -42,8 +43,8 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
  * Both paths are throttled by an outer cooldown ref to at most once per
  * `PROVIDER_RATE_LIMITS_STALE_TIME_MS` (a persistent, always-mounted surface
  * would otherwise refresh on every single matching turn completion); for the
- * queue path the queue's own five-minute freshness floor is a second, independent layer
- * under this ref.
+ * ephemeral path the fetch function's own five-minute freshness check is a
+ * second, independent layer under this ref.
  *
  * No-ops while `providerId` is `null` (surface isn't gated to a rate-limit
  * -capable provider).
@@ -54,7 +55,7 @@ export function useRefreshProviderRateLimitsOnTurn(
   fetchEligible: boolean,
 ): void {
   const queryClient = useQueryClient();
-  const queueScope = useRateLimitQueueScope();
+  const fetchScope = useProviderRateLimitFetchScope();
   const lastInvalidatedAtRef = useRef(0);
 
   useEffect(() => {
@@ -76,37 +77,29 @@ export function useRefreshProviderRateLimitsOnTurn(
         return;
       }
       lastInvalidatedAtRef.current = now;
-      // ephemeralProcess providers (codex, claude-code) route through the shared
-      // serial queue so this turn-completion refresh can't spawn a subprocess
-      // that overlaps a scheduled interval tick. The queue's own five-minute floor is a
-      // second, independent layer under this hook's outer cooldown ref. Crucially
-      // this fires regardless of window visibility - only the interval timer
-      // pauses when hidden, so a background turn finishing while the user is away
-      // still updates that provider's data.
+      // Crucially this fires regardless of window visibility - only the
+      // interval timer pauses when hidden, so a background turn finishing while
+      // the user is away still updates that provider's data.
       if (rateLimitFetchLane(providerId) === "ephemeralProcess") {
-        void enqueueRateLimitFetchForScope(
-          queueScope,
-          providerId,
-          DEFAULT_ACCOUNT_CONTEXT,
-          {
-            force: false,
-            profileId,
-          },
+        void fetchProviderRateLimits(
+          fetchScope,
+          { providerId, accountContext: DEFAULT_ACCOUNT_CONTEXT, profileId },
+          { force: false },
         );
         return;
       }
-      // httpFetch providers never touch the queue - a plain credential GET has
-      // no subprocess to bound, so invalidate directly.
+      // httpFetch providers read with a plain credential GET, so invalidate
+      // directly.
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
           "host.getRateLimitUsage"
-        >(queueScope?.hostId ?? null, "host.getRateLimitUsage", {
+        >(fetchScope?.hostId ?? null, "host.getRateLimitUsage", {
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
           providerId,
           profileId,
         }),
       });
     });
-  }, [fetchEligible, queryClient, profileId, providerId, queueScope]);
+  }, [fetchEligible, fetchScope, queryClient, profileId, providerId]);
 }

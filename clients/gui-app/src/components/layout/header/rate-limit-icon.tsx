@@ -41,7 +41,7 @@ const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
  * re-provided as this subtree's `HostRuntimeContext`. That one swap is what
  * re-targets the whole surface: every hook below reaches its host through
  * `useHostClient()` / `useAddressableHostId()`, and both read the binding
- * from context, so the query keys, the serial fetch queue's scope and the
+ * from context, so the query keys, the usage fetch scope and the
  * invalidations all move together and cannot end up describing different
  * machines. Nothing outside this subtree moves — picking a host to WATCH is
  * not picking where new work lands (`stores/rate-limits/rate-limit-popover-store`).

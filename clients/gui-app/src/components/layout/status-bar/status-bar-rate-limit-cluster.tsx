@@ -13,8 +13,7 @@ import { STATUS_BAR_MENU_EXEMPT_ATTRIBUTE } from "@/components/layout/status-bar
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
-import { useAnyRateLimitQueueTargetFetching } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 import {
   useStatusBarRateLimitSegments,
   type StatusBarRateLimitCluster as StatusBarRateLimitClusterModel,
@@ -27,7 +26,7 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverRevealTarget,
 } from "@/stores/rate-limits/rate-limit-popover-store";
-import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import type { PercentMode } from "@/stores/settings/layout-store";
 
@@ -64,7 +63,7 @@ export function StatusBarRateLimitCluster(props: {
     providers: props.providers,
     profileSelection: props.profileSelection,
     // The strip is the surface that OWNS the fetching for these keys: the http
-    // lane polls here, the queue lane takes its cold start here, and the `↻`
+    // lane polls here, the ephemeral lane takes its cold start here, and the `↻`
     // below fans out from here. Every other reader observes what this one wrote.
     mode: "live",
   });
@@ -231,36 +230,34 @@ function triggerAccessibleName(
 /**
  * The cluster's `↻`, fanning out over every provider it is showing.
  *
- * The queue lane goes out as ONE batch item rather than one per provider: a
- * batch fans its targets out together before the next queue item begins, which
- * is what makes "refresh everything on this strip" a single wait instead of a
- * serial walk. The http lane refetches its own observers, which are the only
- * enabled ones in the cluster.
+ * The ephemeral lane goes out as one forced fetch per target, all at once: how
+ * many of those probes run together is the host's call, not this control's.
+ * The http lane refetches its own observers, which are the only enabled ones
+ * in the cluster.
  */
 function StatusBarRateLimitRefresh(props: {
   readonly refresh: StatusBarRateLimitRefreshModel;
   readonly disabled: boolean;
 }): ReactNode {
-  const queueScope = useRateLimitQueueScope();
-  const queueFetching = useAnyRateLimitQueueTargetFetching(
-    props.refresh.queueTargets,
-  );
+  const fetchScope = useProviderRateLimitFetchScope();
   const hasTarget =
-    props.refresh.queueTargets.length > 0 ||
+    props.refresh.ephemeralTargets.length > 0 ||
     props.refresh.httpRefetches.length > 0;
   // Fire-and-forget, exactly as the popover's Refresh all is: the spinner is
-  // driven by the queue phase and the observers' own fetching state, not by
-  // awaiting work whose whole point is that it is serialized elsewhere.
+  // driven by the observers' own fetching state, not by awaiting a round whose
+  // slowest target would hold every other one's spinner.
   const refreshAll = (): Promise<void> => {
-    void enqueueRateLimitFetchBatchForScope(
-      queueScope,
-      props.refresh.queueTargets.map((target) => ({
-        providerId: target.providerId,
-        accountContext: DEFAULT_ACCOUNT_CONTEXT,
-        profileId: target.profileId,
-      })),
-      { force: true },
-    );
+    props.refresh.ephemeralTargets.forEach((target) => {
+      void fetchProviderRateLimits(
+        fetchScope,
+        {
+          providerId: target.providerId,
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          profileId: target.profileId,
+        },
+        { force: true },
+      );
+    });
     props.refresh.httpRefetches.forEach((refetch) => {
       void refetch();
     });
@@ -270,7 +267,7 @@ function StatusBarRateLimitRefresh(props: {
     <RefreshIconButton
       onRefresh={refreshAll}
       label="Refresh usage"
-      refreshing={queueFetching || props.refresh.httpFetching}
+      refreshing={props.refresh.ephemeralFetching || props.refresh.httpFetching}
       disabledReason={
         props.disabled || !hasTarget ? "nothing to refresh" : undefined
       }
@@ -280,14 +277,15 @@ function StatusBarRateLimitRefresh(props: {
 }
 
 /**
- * One provider's cold-start pull, routed through the serial queue.
+ * One target's cold-start pull, through `fetchProviderRateLimits`.
  *
  * Its own component so the hook count stays fixed while the provider list
- * changes. This is the only fetch the cluster initiates for the queue lane, and
- * it is deliberate: those observers are disabled by lane, so without it a strip
- * watching a host the app-shell queue is not bound to would sit cold forever.
- * `refetch: null` keeps it on the queue path — a direct refetch is the exact
- * subprocess race the lane's disabled observer exists to prevent.
+ * changes. This is the only automatic fetch the cluster initiates for the
+ * ephemeral lane, and it is deliberate: those observers are disabled by lane,
+ * so without it a strip watching a host the app-shell poll does not cover
+ * would sit cold forever. `refetch: null` keeps it on the fetch function - a
+ * direct refetch would send no `force`, which the wire reads as forced, and
+ * spawn a probe the host could have answered from its gauge.
  */
 function StatusBarProviderMountRefresh(props: {
   readonly target: StatusBarRateLimitMountTarget;

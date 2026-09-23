@@ -17,9 +17,51 @@ import {
   type ProcessRunner,
 } from "../linux";
 import { serviceManifestPath, type ServiceLabel } from "../../label";
-import { ProcessRunError, type RunResult } from "../../process-runner";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  type RunOptions,
+  type RunResult,
+} from "../../process-runner";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+  STDERR_FLUSH_TIMEOUT_MS,
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+} from "../../spawn-edge-bounds";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
+import {
+  isServiceMutationAuthorityError,
+  withServiceMutationAuthority,
+} from "../../mutation-authority";
+
+// The rollback-failure pins need `rm(unitFile())` itself to reject, which a
+// real filesystem removal never does for a file this suite just wrote. Gate
+// it behind a per-test flag rather than mocking the whole module unavailable:
+// every other row in this file (including its own `afterEach` cleanup)
+// removes real files and must keep doing so.
+const RM_FAILURE = vi.hoisted(() => ({ message: null as string | null }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rm: (async (
+      path: Parameters<typeof actual.rm>[0],
+      options: Parameters<typeof actual.rm>[1],
+    ) => {
+      if (RM_FAILURE.message !== null && String(path).endsWith(".service")) {
+        throw new Error(RM_FAILURE.message);
+      }
+      return actual.rm(path, options);
+    }) as typeof actual.rm,
+  };
+});
 
 // `stop --force`'s confirmed-settle branches finish with the SAME
 // child-kill engine the macOS force paths use (`forceStopHostProcess`) -
@@ -202,6 +244,9 @@ describe("linux service install flow", () => {
   });
 
   it("rolls the unit file back when daemon-reload fails", async () => {
+    // Linger runs before the edge too (see linux.ts `installService`), so it
+    // still fires here even though the write that follows the edge fails.
+    vi.stubEnv("USER", "golden-user");
     const { calls, runner } = recordingRunner(
       (call) => call.args[1] === "daemon-reload",
     );
@@ -216,13 +261,17 @@ describe("linux service install flow", () => {
     // is what failed.
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
+      "loginctl:enable-linger",
       "daemon-reload",
       "disable",
       "daemon-reload",
     ]);
+
+    vi.unstubAllEnvs();
   });
 
   it("rolls the unit file back - and re-reloads - when enable --now fails", async () => {
+    vi.stubEnv("USER", "golden-user");
     const { calls, runner } = recordingRunner(
       (call) => call.args[1] === "enable",
     );
@@ -238,29 +287,40 @@ describe("linux service install flow", () => {
     // unit rather than holding a loaded orphan.
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
+      "loginctl:enable-linger",
       "daemon-reload",
       "enable",
       "disable",
       "daemon-reload",
     ]);
+
+    vi.unstubAllEnvs();
   });
 
-  it("on success runs preflight → reload → enable --now → linger and leaves the unit installed", async () => {
+  it("on success runs preflight → linger → reload → enable --now and leaves the unit installed", async () => {
+    // Linger runs BEFORE the install edge now (right after the preflight),
+    // not after `enable --now` - see linux.ts `installService`'s doc
+    // comment. `USER` must be set for `tryEnableLinger` to issue the call at
+    // all.
+    vi.stubEnv("USER", "golden-user");
     const { calls, runner } = recordingRunner(() => false);
 
     await installWith(runner);
 
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
+      "loginctl:enable-linger",
       "daemon-reload",
       "enable",
-      "loginctl:enable-linger",
     ]);
     const unit = await readFile(unitFile(), "utf8");
     expect(unit).toContain(`SyslogIdentifier=${label.id}`);
+
+    vi.unstubAllEnvs();
   });
 
   it("replaces an existing unit with the OOM containment policy before reloading systemd", async () => {
+    vi.stubEnv("USER", "golden-user");
     await writeFile(
       unitFile(),
       "[Unit]\nDescription=stale-unit-fixture\n",
@@ -280,9 +340,9 @@ describe("linux service install flow", () => {
 
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
+      "loginctl:enable-linger",
       "daemon-reload",
       "enable",
-      "loginctl:enable-linger",
     ]);
     expect(unitsSeenAtReload).toHaveLength(1);
     expect(unitsSeenAtReload[0]).not.toContain("stale-unit-fixture");
@@ -290,6 +350,8 @@ describe("linux service install flow", () => {
     const unit = await readFile(unitFile(), "utf8");
     expect(unit).not.toContain("stale-unit-fixture");
     expect(unit).toContain("\nOOMPolicy=continue\n");
+
+    vi.unstubAllEnvs();
   });
 
   it("uninstall clears a failed unit entry after removing the file", async () => {
@@ -305,9 +367,109 @@ describe("linux service install flow", () => {
   });
 });
 
+// The recycle timeout fix, on the `enable --now` leg of install: it queues
+// the same kind of start job `start`/`restart` do, so it needs the same
+// widened runner timeout - not the old flat 15s.
+describe("linux service install — enable --now recycle timeout", () => {
+  interface RecordedCallWithOptions extends RecordedCall {
+    readonly options: RunOptions;
+  }
+
+  function stageEnableNowRunner(
+    behavior: (
+      args: readonly string[],
+      options: RunOptions,
+    ) => Promise<RunResult>,
+  ): { calls: RecordedCallWithOptions[]; runner: ProcessRunner } {
+    const calls: RecordedCallWithOptions[] = [];
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === "systemctl" && args[1] === "enable") {
+        return behavior(args, options);
+      }
+      return ok();
+    };
+    return { calls, runner };
+  }
+
+  const independentFloorMs =
+    SHUTDOWN_FORCE_EXIT_MS +
+    STDERR_END_WAIT_TIMEOUT_MS +
+    STDERR_FLUSH_TIMEOUT_MS +
+    CRASH_REPORT_SCAN_TIMEOUT_MS +
+    STOP_EXIT_GRACE_MARGIN_MS +
+    15_000;
+  const pinnedTimeoutMs = SYSTEMD_TIMEOUT_STOP_SECONDS * 1_000 + 15_000;
+
+  it("gives enable --now a timeout past the stop-job bound", async () => {
+    const { calls, runner } = stageEnableNowRunner(async () => ok());
+
+    await installWith(runner);
+
+    const enableCall = calls.find(
+      (c) => c.command === "systemctl" && c.args[1] === "enable",
+    );
+    expect(enableCall?.args).toEqual([
+      "--user",
+      "enable",
+      "--now",
+      `${label.id}.service`,
+    ]);
+    const timeoutMs = enableCall?.options.timeoutMs;
+    // Independent floor, built only from symbols that exist on the
+    // unmodified code (protocol lifecycle constants + crash-diagnostics
+    // waits + the 15s the start half always had).
+    expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+    expect(timeoutMs).toBe(pinnedTimeoutMs);
+  });
+
+  it("an enable --now slower than the old 15s bound but inside the new one still resolves", async () => {
+    const { runner } = stageEnableNowRunner(async (args, options) => {
+      const simulatedDurationMs = 20_000;
+      if (simulatedDurationMs > options.timeoutMs) {
+        throw new ProcessRunError(
+          `systemctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+          "systemctl",
+          args,
+          -1,
+          "",
+          "",
+        );
+      }
+      return ok();
+    });
+
+    await expect(installWith(runner)).resolves.toBeUndefined();
+  });
+
+  it("a runner timeout past the new bound still fails the install (rollback, not 'unconfirmed')", async () => {
+    // `enable --now`'s catch is install's own rollback path
+    // (SERVICE_INSTALL_FAILED), not `systemctlJobFailure` - a partially
+    // registered unit must not be left behind just because the failure was
+    // a timeout rather than systemd's own answer.
+    const { runner } = stageEnableNowRunner(async (args) => {
+      throw new ProcessTimeoutError(
+        `systemctl ${args.join(" ")} timed out after 52000ms (killed via SIGTERM): `,
+        "systemctl",
+        args,
+        -1,
+        "",
+        "",
+        52_000,
+      );
+    });
+
+    await expect(installWith(runner)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(await fileExists(unitFile())).toBe(false);
+  });
+});
+
 // `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN
-// when it returns (the runner caps the subprocess at 15s; the unit inherits
-// systemd's 90s default TimeoutStopSec), so force confirms through the
+// when it returns (the runner caps the subprocess at 15s; the unit's stop job
+// may run for its whole TimeoutStopSec - 37s, or systemd's 90s default on a
+// unit not yet re-registered), so force confirms through the
 // unit's OWN state - `systemctl is-active`, never a pid - and escalates to
 // `systemctl kill --signal=SIGKILL` when the plain stop does not settle it
 // in time. Graces mirror the macOS/desktop-agent force-stop margins
@@ -969,5 +1131,183 @@ describe("linux service stop --force", () => {
         expect(PID.goneCalls > 0).toBe(consultsIdentity);
       },
     );
+  });
+});
+
+describe("install — spawn-edge placement", () => {
+  it("show-environment then linger precede publish, and daemon-reload is the entry right after it - the install edge sits in front of the unit write", async () => {
+    // `publish` pushes into the SAME log `recordingRunner` fills, in the
+    // order things actually happen - not a separately-kept count. The
+    // install edge (`atServiceInstallEdge`) sits in front of the unit's
+    // FIRST write, before `daemon-reload` even runs - not after it - so a
+    // refused publication touches nothing. Linger now runs BEFORE the edge
+    // too (see linux.ts `installService`'s doc comment): it is off the
+    // grant's clock entirely, which is the whole point of moving it.
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(() => false);
+    const publish = vi.fn(async (): Promise<null> => {
+      calls.push({ command: "publish", args: [] });
+      return null;
+    });
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () => installWith(runner));
+
+    const verbs = calls.map((call) =>
+      call.command === "publish" ? "publish" : verbOf(call),
+    );
+    expect(verbs.filter((verb) => verb === "publish")).toHaveLength(1);
+    const publishIndex = verbs.indexOf("publish");
+    expect(verbs.slice(0, publishIndex)).toEqual([
+      "show-environment",
+      "loginctl:enable-linger",
+    ]);
+    // `atServiceSpawnEdge()` runs again right before `enable --now` and
+    // returns the SAME already-published lease (no second "publish" entry
+    // above), so only one call separates the edge from `enable`.
+    expect(verbs[publishIndex + 1]).toBe("daemon-reload");
+    expect(verbs[publishIndex + 2]).toBe("enable");
+
+    vi.unstubAllEnvs();
+  });
+
+  it("a refused publication at the install edge propagates raw, by identity - nothing was written, so nothing is rolled back", async () => {
+    // The install edge sits in front of the unit's FIRST write
+    // (`atServiceInstallEdge`, awaited before `serviceManifestPath` is even
+    // touched), so a refusal there leaves the previous registration - here,
+    // none - exactly as it was: no unit file, no `disable`, no
+    // `daemon-reload` rollback, and `enable` never issued. Nothing was
+    // written, so there is nothing to roll back, and the refusal propagates
+    // as itself rather than being wrapped into a SERVICE_INSTALL_FAILED.
+    // Linger runs BEFORE the edge, so it still fires here even though the
+    // edge itself then refuses - it is off the grant's clock entirely and
+    // does not depend on the edge succeeding.
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(() => false);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => installWith(runner),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+    // The preflight and linger ran before the edge rejected; no rollback
+    // verbs and no `enable` - the edge rejected before the unit was ever
+    // written.
+    expect(calls.map(verbOf)).toEqual([
+      "show-environment",
+      "loginctl:enable-linger",
+    ]);
+    expect(await fileExists(unitFile())).toBe(false);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("an authority refusal at the pre-publish check leaves the rollback UNRUN, and the unit was never written - and rejects with the authority error", async () => {
+    // Derive the exact pre-edge verify-call count by dry run, the same
+    // technique `macos.test.ts` uses: `installService`'s own
+    // `verifyServiceMutationAuthority()` calls around the manifest write
+    // consult the SAME verifier the edge's pre-publish check does.
+    const dryRunOrder: string[] = [];
+    const dryRunPublish = vi.fn(async (): Promise<null> => {
+      dryRunOrder.push("publish");
+      return null;
+    });
+    const { runner: dryRunRunner } = recordingRunner(() => false);
+    await withServiceMutationAuthority(
+      async () => {
+        dryRunOrder.push("verify");
+      },
+      () =>
+        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
+          installWith(dryRunRunner),
+        ),
+    );
+    await rm(unitFile(), { force: true });
+    const preEdgeVerifyCalls = dryRunOrder
+      .slice(0, dryRunOrder.indexOf("publish"))
+      .filter((entry) => entry === "verify").length;
+
+    const { calls, runner } = recordingRunner(() => false);
+    const authorityError = new Error("mutation authority was lost");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
+    };
+    const publish = vi.fn(async (): Promise<null> => null);
+
+    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
+      runWithLeaseAtServiceSpawnEdge(publish, () => installWith(runner)),
+    ).catch((cause: unknown) => cause);
+
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("daemon-reload");
+    expect(calls.map(verbOf)).not.toContain("enable");
+    // The authority check that gates the edge fires BEFORE the unit's first
+    // write, same as an ordinary refusal there - so the file was never
+    // written, not "still present" from an earlier write.
+    expect(await fileExists(unitFile())).toBe(false);
+  });
+
+  it("P2-1: re-registering over a LIVE unit - a refusal at the install edge propagates raw and leaves the old unit file byte-identical", async () => {
+    // The install-edge round's timeline pin: even when a unit file already
+    // exists (an existing registration being re-installed), the edge sits
+    // in front of the write, so a refused publication never touches it -
+    // the old bytes on disk are exactly what they were, and systemd is
+    // never told anything (no daemon-reload/enable/disable/stop).
+    vi.stubEnv("USER", "golden-user");
+    const oldUnitContent = "[Unit]\nDescription=live-registration-fixture\n";
+    await writeFile(unitFile(), oldUnitContent, "utf8");
+    const { calls, runner } = recordingRunner(() => false);
+    const refusal = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw refusal;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => installWith(runner),
+    ).catch((cause: unknown) => cause);
+
+    // Identity-preserved raw propagation - the edge refused before any
+    // write, so there is nothing for a wrapper to describe. Linger already
+    // ran (it precedes the edge and does not depend on it), so it appears
+    // ahead of the refusal.
+    expect(rejection).toBe(refusal);
+    expect(calls.map(verbOf)).toEqual([
+      "show-environment",
+      "loginctl:enable-linger",
+    ]);
+    expect(calls.map(verbOf)).not.toContain("daemon-reload");
+    expect(calls.map(verbOf)).not.toContain("enable");
+    expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("stop");
+    // The pre-existing unit is UNCHANGED - byte-identical to what was there
+    // before the re-register attempt.
+    expect(await readFile(unitFile(), "utf8")).toBe(oldUnitContent);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("enable --now failure plus a failing unit-file removal: the 'failed too' wording, not a claimed removal", async () => {
+    const { runner } = recordingRunner((call) => call.args[1] === "enable");
+    RM_FAILURE.message = "permission denied";
+
+    try {
+      await expect(installWith(runner)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "removing the partially-written unit file failed too: permission denied",
+        ),
+      });
+    } finally {
+      RM_FAILURE.message = null;
+    }
   });
 });

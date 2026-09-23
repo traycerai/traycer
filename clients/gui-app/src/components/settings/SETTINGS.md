@@ -1776,10 +1776,11 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     `rateLimits.shownProfiles[hostId][providerId] = [profileId | null, …]`
     (`stores/settings/layout-store.ts`; `null` is the ambient login), keyed by
     host because a profile id names a credential on ONE machine - the panel
-    writes the entry for `displayedHostId`, the strip and the header glyph
-    read the entry for the watch scope's host, and the background refresh
-    queue reads the app-wide host's (`useRateLimitProfileSelection(hostId)`
-    takes the host as an argument for exactly this reason). A checked id
+    writes the entry for `displayedHostId`, and the strip and the header glyph
+    read the entry for the watch scope's host
+    (`useRateLimitProfileSelection(hostId)` takes the host as an argument for
+    exactly this reason). The background poll does not read it: it refreshes
+    every eligible account, checked or not. A checked id
     whose profile has since gone is skipped at read time, never pruned; the
     guard drops anything that is not a string-or-null list under a known
     provider id. It lives on this page's slice but is NOT a display

@@ -15,20 +15,12 @@ import type { QueryKey } from "@tanstack/react-query";
  * accessor answers "which single row does this key stand for", which a batch
  * cannot: see its doc for the invalidation bug that conflating the two caused.
  *
- * **Freshness note - recorded, not a defect.** The batches this now admits do
- * not all share the Settings panel's caching. Settings pins its listing to
- * `staleTime: Infinity` (manual Refresh only), whereas the sidebar's row-2
- * batch takes the app-wide 60s default from `query-client.ts`, so a row folded
- * from that batch can refresh on a cadence the Settings panel never would.
- * Likewise, a multi-path key has no single target, so scope-aware invalidation
- * falls through to the "row membership may have changed" branch and refetches
- * once per accumulated burst rather than per path.
- *
- * Neither is introduced here: this predicate's body is unchanged, and other
- * consumers already emitted multi-path keys before the sidebar batch existed.
- * The sidebar simply widened an exposure that was always reachable. Written
- * down so the next reader does not re-derive it and mistake it for a
- * regression.
+ * No surface builds a multi-path key any more: every activity-enriched read
+ * caches per path (`useWorktreeEnrichmentForClient`, the Settings overlay) and
+ * batches only on the wire. The broad predicate stays broad so a batch that
+ * reappears is still folded and still invalidated - see
+ * {@link enrichmentQueryPaths} for how the `worktree.changed` choke point
+ * treats one.
  */
 export function isPerPathEnrichmentQueryKey(key: QueryKey): boolean {
   const params = key[3];
@@ -42,15 +34,12 @@ export function isPerPathEnrichmentQueryKey(key: QueryKey): boolean {
  * key under the method scope.
  *
  * A key qualifies only when `activityPaths` holds EXACTLY ONE path - which is
- * what "per-path" means, and what the Settings panel's keys always are. A
+ * what "per-path" means, and what every enrichment key the app builds is. A
  * MULTI-path key is a batch covering all of its paths, so it has no single
  * target: returning its first path made scope-aware invalidation
  * (`invalidate-worktree-changed-caches.ts`) treat the whole batch as an overlay
  * on `activityPaths[0]`, and a change to any other path in it never invalidated
- * the batch at all. Three batches were affected - the sidebar row-2 batch,
- * `useTaskWorktreeMetadata`, and `useWorktreeOwnerMetadata` - all of which now
- * fall through to the "row membership may have changed" branch and refetch once
- * per accumulated burst, which is what the scheduler already bounds them to.
+ * the batch at all.
  */
 export function perPathEnrichmentQueryPath(key: QueryKey): string | null {
   const params = key[3];
@@ -59,4 +48,25 @@ export function perPathEnrichmentQueryPath(key: QueryKey): string | null {
   const { activityPaths } = params;
   if (!Array.isArray(activityPaths) || activityPaths.length !== 1) return null;
   return typeof activityPaths[0] === "string" ? activityPaths[0] : null;
+}
+
+/**
+ * Every worktree path an enrichment key covers, or null for a key that is not
+ * one (the base list's `activityPaths: null`).
+ *
+ * Exists for the one question {@link perPathEnrichmentQueryPath} cannot answer
+ * about a multi-path batch: does it cover a path a `worktree.changed` frame
+ * named? The choke point only MARKS such a batch - refetching it would re-derive
+ * every row it covers for one row's change, which is the amplification the
+ * per-path cache shape exists to remove.
+ */
+export function enrichmentQueryPaths(key: QueryKey): readonly string[] | null {
+  const params = key[3];
+  if (typeof params !== "object" || params === null) return null;
+  if (!("activityPaths" in params)) return null;
+  const { activityPaths } = params;
+  if (!Array.isArray(activityPaths)) return null;
+  return activityPaths.filter(
+    (path: unknown): path is string => typeof path === "string",
+  );
 }

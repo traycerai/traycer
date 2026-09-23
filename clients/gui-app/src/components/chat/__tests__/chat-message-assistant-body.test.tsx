@@ -17,7 +17,9 @@ import type {
   AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  ApprovalSegment,
   MessageSegment,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 
 function render(ui: ReactNode) {
@@ -761,5 +763,63 @@ describe("AssistantMessageBody Timing tooltip section", () => {
     // No agent metadata, so no Agent section - Timing is the only content.
     expect(screen.queryByText("Agent")).toBeNull();
     expect(screen.queryByText("Provider")).toBeNull();
+  });
+});
+
+const SHARED_ID = "shared-id";
+
+const SHARED_TOOL: ToolSegment = {
+  id: SHARED_ID,
+  kind: "tool",
+  toolName: "run_command",
+  inputSummary: "echo tool-row-text",
+  inputDetail: null,
+  taskTodoItems: null,
+  error: null,
+  agentMessageSend: null,
+  managedCommand: null,
+  agentMessageReceipt: null,
+  isStreaming: false,
+  endState: null,
+  stopped: false,
+  progress: null,
+  backgroundOutput: null,
+  backgroundTask: null,
+  startedAt: 0,
+  durationMs: null,
+  parentId: null,
+  imageResults: [],
+};
+
+const SHARED_APPROVAL: ApprovalSegment = {
+  id: SHARED_ID,
+  kind: "approval",
+  toolName: "run_command",
+  description: "approval-row-description",
+  inputSummary: null,
+  inputDetail: null,
+  decision: { approved: true, reason: "approval-row-reason" },
+};
+
+describe("AssistantMessageBody shared block ids", () => {
+  it("renders a tool and an approval sharing one id, with no duplicate-key warning", () => {
+    const errors = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({ segments: [SHARED_TOOL, SHARED_APPROVAL] })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+
+    expect(screen.getByText("echo tool-row-text")).toBeTruthy();
+    expect(screen.getByText("Approved")).toBeTruthy();
+    const sameKey = errors.mock.calls.filter((call) =>
+      call.some((arg) => typeof arg === "string" && arg.includes("same key")),
+    );
+    expect(sameKey).toEqual([]);
+    errors.mockRestore();
   });
 });

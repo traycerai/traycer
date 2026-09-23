@@ -45,17 +45,16 @@ export interface ProviderRateLimitQueryOptions {
  *   subscriptions do not poll while the window is hidden. `refetchOnMount` is
  *   disabled; the shared mount-refresh hook fetches only while no successful
  *   value exists, then the fixed cadence and manual refresh own freshness.
- * - `ephemeralProcess` (codex, claude-code): opts out of observer polling. Its
- *   background refresh is driven entirely by the serial queue's interval timer
- *   writing fresh data into this exact query key. For the exact same reason,
- *   `refetchOnMount` is forced to `false`: TanStack's
- *   default would otherwise fire a refetch straight through this query's own
- *   `queryFn` on every popover/Settings-card open (a fresh mount) whenever the
- *   cached data is stale - a direct host call that bypasses the queue and can
- *   overlap a fetch it's already draining. `useRefreshProviderRateLimitsOnMount`
- *   and `RateLimitQueueProvider` are the queue-routed replacements. The query
- *   observer is disabled for this lane so it observes the shared cache state
- *   without ever initiating its own subprocess-spawning request.
+ * - `ephemeralProcess` (codex, claude-code, grok): the observer is disabled,
+ *   never polls, and never refetches on mount. Every read of this key goes
+ *   through `fetchProviderRateLimits` instead - the app-shell poll
+ *   (`RateLimitPollProvider`), a surface's mount fetch
+ *   (`useRefreshProviderRateLimitsOnMount`), a turn completion, a click -
+ *   because only that function says whether the read is forced. An observer's
+ *   own `queryFn` sends these params with no `force` at all, and an absent
+ *   `force` reads on the wire as forced: every popover or Settings-card open
+ *   would become a real CLI probe the host could otherwise have answered from
+ *   its gauge.
  */
 export function providerRateLimitQueryOptions(
   providerId: RateLimitProviderId,

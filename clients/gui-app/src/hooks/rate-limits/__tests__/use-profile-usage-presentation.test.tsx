@@ -16,8 +16,9 @@ import {
 } from "@traycer/protocol/host/index";
 import type { ReactNode } from "react";
 import { queryKeys } from "@/lib/query-keys";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { RunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
-import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { __resetProviderRateLimitFetchesForTests } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
 import { rateLimitProviderState } from "./profile-usage-fixtures";
 
@@ -94,6 +95,7 @@ function buildHostScope(
   const entry = { ...mockLocalHostEntry, hostId };
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: { invalidateHostScope: () => {} },
     findHostById: (id) => (id === entry.hostId ? entry : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -112,10 +114,11 @@ function buildHostScope(
     hostId,
     client,
     isReady,
-    queueScope: {
+    fetchScope: {
       hostId,
       queryClient,
-      request: (_hostId, method, params) => client.request(method, params),
+      request: (method, params, responseTimeoutMs) =>
+        client.requestWithResponseTimeout(method, params, responseTimeoutMs),
     },
   };
   return { scope };
@@ -149,7 +152,7 @@ function goodResponse(): RateLimitUsageResponse {
 
 describe("useProfileUsagePresentation", () => {
   beforeEach(() => {
-    __resetRateLimitQueueForTests();
+    __resetProviderRateLimitFetchesForTests();
     scopesRef.byHostId.clear();
     providerStateRef.providers = [
       rateLimitProviderState("claude-code", "authenticated"),
@@ -157,7 +160,7 @@ describe("useProfileUsagePresentation", () => {
   });
   afterEach(() => {
     cleanup();
-    __resetRateLimitQueueForTests();
+    __resetProviderRateLimitFetchesForTests();
     scopesRef.byHostId.clear();
     providerStateRef.providers = [];
   });
@@ -195,7 +198,7 @@ describe("useProfileUsagePresentation", () => {
       hostId: "tab-host",
       client: null,
       isReady: false,
-      queueScope: null,
+      fetchScope: null,
     };
     scopesRef.byHostId.set("tab-host", notReadyScope);
 
@@ -285,6 +288,11 @@ describe("useProfileUsagePresentation", () => {
   });
 
   it("scopes a refresh initiated on one profile to exactly that profile's entry, never a sibling's", async () => {
+    // This is the presentation layer's OWN pending-tracking
+    // (`pendingRefreshKeys` / `scopeProfileUsageRefreshStatus`), which is
+    // independent of the underlying fetch mechanism: it must key a pending
+    // refresh to the exact profile whose `refresh()` was invoked, and never
+    // bleed onto a sibling entry that merely shares a provider.
     const queryClient = new QueryClient();
     const order: string[] = [];
     const releaseFirstRef: { current: (() => void) | null } = { current: null };
@@ -329,10 +337,9 @@ describe("useProfileUsagePresentation", () => {
     const refreshA = result.current.entries.get("p-a")?.refresh();
     await waitFor(() => expect(order).toEqual(["start:p-a"]));
 
-    // The shared ephemeralProcess queue is now draining, so the raw
-    // comparison would mark p-b "queued" too - but p-b's own refresh was
-    // never invoked through this presentation hook, so its entry must stay
-    // "idle" while only p-a reads as pending.
+    // p-a's own refresh is in flight; p-b's `refresh()` was never invoked, so
+    // it must read "idle" throughout - not "refreshing" merely because a
+    // sibling profile on the same provider is mid-fetch.
     expect(result.current.entries.get("p-a")?.refreshStatus).toBe("refreshing");
     expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle");
 
@@ -346,7 +353,7 @@ describe("useProfileUsagePresentation", () => {
     expect(order).toEqual(["start:p-a", "end:p-a"]);
   });
 
-  it("addresses a refresh to exactly the invoked profile via the ephemeralProcess queue", async () => {
+  it("addresses a refresh to exactly the invoked profile via fetchProviderRateLimits", async () => {
     const queryClient = new QueryClient();
     const calls: Array<unknown> = [];
     const { scope } = buildHostScope(

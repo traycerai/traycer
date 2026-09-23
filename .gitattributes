@@ -12,6 +12,11 @@
 *.woff  binary
 *.woff2 binary
 
+# Service emitter goldens are byte-for-byte emitter OUTPUT, pinned by the CLI's
+# tests and read by the host's registration readers. Stored and checked out
+# verbatim: the Windows VBS launcher is CRLF because the emitter writes CRLF.
+clients/traycer-cli/src/service/platforms/__tests__/emitter-goldens/** -text
+
 # Generated files — collapse in PR diffs and exclude from language stats.
 *.gen.ts  linguist-generated=true
 bun.lock  linguist-generated=true

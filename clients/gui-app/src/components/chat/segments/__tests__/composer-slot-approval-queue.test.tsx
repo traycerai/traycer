@@ -278,3 +278,68 @@ describe("ComposerSlotApprovalQueue navigation highlight", () => {
     ).toBe("2");
   });
 });
+
+describe("<ComposerSlotApprovalQueue /> approval text", () => {
+  function renderOne(overrides: Partial<ChatApprovalState>) {
+    render(
+      <ComposerSlotApprovalQueue
+        approvals={[approval(overrides)]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId={null}
+      />,
+    );
+    return screen.getByTestId("approval-row");
+  }
+
+  it("shows a command once when the description is the command", () => {
+    const row = renderOne({
+      toolName: "run_command",
+      input: { command: "echo parity-check" },
+      description: "echo parity-check",
+    });
+    expect(within(row).getAllByText("echo parity-check")).toHaveLength(1);
+  });
+
+  it("shows no headline when the description is the tool name", () => {
+    const row = renderOne({
+      toolName: "run_command",
+      input: { command: "echo hi" },
+      description: "run_command",
+    });
+    expect(within(row).getAllByText("run_command")).toHaveLength(1);
+    expect(within(row).getAllByText("echo hi")).toHaveLength(1);
+  });
+
+  it("shows a distinct description as well as the summary", () => {
+    const row = renderOne({
+      toolName: "Bash",
+      input: { command: "git status" },
+      description: "Show working tree status",
+    });
+    expect(within(row).getByText("git status")).toBeTruthy();
+    expect(within(row).getByText("Show working tree status")).toBeTruthy();
+  });
+
+  it("shows a command over 80 characters once and in full, with no truncated copy", () => {
+    const command = `echo ${"a".repeat(100)}; rm -rf /tmp/victim`;
+    const row = renderOne({
+      toolName: "run_command",
+      input: { command },
+      description: command,
+    });
+    expect(within(row).getAllByText(command)).toHaveLength(1);
+    expect(row.textContent).not.toContain("…");
+  });
+
+  it("keeps the cut summary when the description only shares the command's prefix", () => {
+    const shared = `echo ${"a".repeat(90)}`;
+    const row = renderOne({
+      toolName: "run_command",
+      input: { command: `${shared}; rm -rf ~` },
+      description: `${shared} # tidy`,
+    });
+    expect(within(row).getAllByText(`${shared} # tidy`)).toHaveLength(1);
+    expect(row.textContent).toContain("…");
+  });
+});
