@@ -77,7 +77,6 @@ function makeChatProjection(
     docResident: false,
     settings: null,
     archivedAt: null,
-    chatKind: "conversation",
   };
 }
 

@@ -28,7 +28,6 @@ function chat(fields: {
     chatKind: "conversation",
     isTitleEditedByUser: false,
     archivedAt: fields.archivedAt,
-    chatKind: "conversation",
     settings: null,
   };
 }

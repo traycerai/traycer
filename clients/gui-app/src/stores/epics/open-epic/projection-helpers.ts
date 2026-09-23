@@ -56,7 +56,6 @@ import type {
   AgentRolesSlice,
   ArtifactsSlice,
   ChatProjection,
-  ChatProjectionKind,
   ChatsSlice,
   HeldChatRecordRow,
   DeletedArtifactProjection,
@@ -317,18 +316,7 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
         : "conversation",
     settings: coerceChatRunSettings(entry.get("settings")),
     archivedAt: readMaybeNullableNumber(entry, "archivedAt"),
-    chatKind: chatProjectionKindOf(entry.get("kind")),
   };
-}
-
-/**
- * The one reader for `Chat.kind` on every plane. Anything but the literal
- * `evolution` - an absent key, a pre-field record, a value a newer host
- * invented - is an ordinary conversation, which is the closed default the
- * schema itself states.
- */
-export function chatProjectionKindOf(raw: unknown): ChatProjectionKind {
-  return raw === "evolution" ? "evolution" : "conversation";
 }
 
 /**
@@ -472,7 +460,6 @@ export function chatProjectionsEq(
     a.hostId === b.hostId &&
     a.isTitleEditedByUser === b.isTitleEditedByUser &&
     a.archivedAt === b.archivedAt &&
-    a.chatKind === b.chatKind &&
     // In the gate because it CHANGES: a delta seeds `null` and the next poll
     // states the home, and a projection that compared equal across that
     // transition would leave every write affordance judging the row on the
@@ -737,9 +724,6 @@ export function chatProjectionFromRecord(
     archivedAt: record.archived
       ? (record.archivedAt ?? record.updatedAt)
       : null,
-    // Read defensively: the record row gains `kind` on a later minor, and a
-    // row from a plane that does not carry it is a conversation.
-    chatKind: chatProjectionKindOf("kind" in record ? record.kind : undefined),
   };
 }
 

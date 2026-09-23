@@ -30,7 +30,6 @@ function chat(fields: {
     // residency.
     docResident: false,
     archivedAt: fields.archivedAt,
-    chatKind: "conversation",
     settings: null,
   };
 }

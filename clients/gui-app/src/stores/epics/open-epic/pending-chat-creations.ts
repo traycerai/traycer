@@ -114,8 +114,6 @@ export function chatProjectionFromPendingCreation(
     chatKind: "conversation",
     settings: null,
     archivedAt: null,
-    // `epic.createChat` makes conversations; only the host spawns evolution.
-    chatKind: "conversation",
   };
 }
 

@@ -88,7 +88,6 @@ const SIDEBAR_CHAT: ChatProjection = {
   docResident: false,
   settings: null,
   archivedAt: null,
-  chatKind: "conversation",
 };
 
 describe("sourceToTileRef - sidebar-node branch", () => {

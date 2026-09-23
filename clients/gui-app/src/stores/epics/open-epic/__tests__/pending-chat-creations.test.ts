@@ -57,7 +57,6 @@ function chatProjection(overrides: Partial<ChatProjection>): ChatProjection {
     docResident: false,
     settings: null,
     archivedAt: null,
-    chatKind: "conversation",
     ...overrides,
   };
 }

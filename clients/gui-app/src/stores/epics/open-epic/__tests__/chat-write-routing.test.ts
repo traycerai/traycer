@@ -34,7 +34,6 @@ function chat(docResident: boolean | null): ChatProjection {
     docResident,
     settings: null,
     archivedAt: null,
-    chatKind: "conversation",
   };
 }
 

@@ -980,6 +980,9 @@ vi.mock("@/lib/epic-selectors", () => ({
         testState.activityTierById.get(id) ?? "turn",
       ]),
     ),
+  // The reveal exception skips identity evolution chats; this suite's fixtures
+  // hold none.
+  useEpicEvolutionChatIds: () => [],
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];

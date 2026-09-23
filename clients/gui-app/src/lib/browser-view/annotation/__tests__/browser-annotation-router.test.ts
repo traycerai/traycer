@@ -28,7 +28,6 @@ function chat(title: string, hostId: string | null): ChatProjection {
     docResident: false,
     settings: null,
     archivedAt: null,
-    chatKind: "conversation",
   };
 }
 

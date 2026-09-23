@@ -198,15 +198,13 @@ describe("chatProjectionFromRecord - identity evolution chats", () => {
     visibility: "private",
     origin: "own",
     docResident: null,
+    kind: "conversation",
   };
 
   it("maps a row carrying kind: 'evolution' to the evolution chatKind", () => {
-    // Assigned to a const first (not an inline literal) so the extra `kind`
-    // field - not yet declared on `HeldChatRecordRow` - passes without a
-    // cast: TS only excess-property-checks a literal assigned/passed
-    // directly against an explicit type, not a variable read back out.
-    const evolutionRow = { ...BASE_ROW, kind: "evolution" as const };
+    const evolutionRow: HeldChatRecordRow = { ...BASE_ROW, kind: "evolution" };
 
     expect(chatProjectionFromRecord(evolutionRow).chatKind).toBe("evolution");
+    expect(chatProjectionFromRecord(BASE_ROW).chatKind).toBe("conversation");
   });
 });

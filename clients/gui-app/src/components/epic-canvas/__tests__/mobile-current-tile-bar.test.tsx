@@ -215,7 +215,6 @@ function chatRow(
     docResident,
     settings: null,
     archivedAt: null,
-    chatKind: "conversation",
   };
 }
 
