@@ -8,12 +8,12 @@
  * the registry requires of every non-floor method. See
  * `agent-identity/schemas.ts` for what an old peer does instead.
  *
- * The Hermes importer (`import.hermes.*`) and the skill installer
- * (`skills.*`) have schemas in `unary-schemas.ts` but NO contract here yet:
- * T12 and T13 add the contract, the registry entry and the gui-app policy row
- * together with their host resolvers. The host's resolver-coverage gate fails
- * any advertised method without a resolver, so a contract registered ahead of
- * its resolver would be a red host build rather than an early start.
+ * The Hermes importer (`import.hermes.*`) has schemas in `unary-schemas.ts`
+ * but NO contract here yet: T12 adds the contract, the registry entry and the
+ * gui-app policy row together with its host resolvers. The host's
+ * resolver-coverage gate fails any advertised method without a resolver, so a
+ * contract registered ahead of its resolver would be a red host build rather
+ * than an early start.
  *
  * The two STREAM contracts live beside their frame schemas
  * (`state-subscribe.ts`, `file-subscribe.ts`) rather than here, following
@@ -43,6 +43,10 @@ import {
   agentIdentityHistoryRestoreResponseSchema,
   agentIdentityListRequestSchema,
   agentIdentityListResponseSchema,
+  agentIdentitySkillsImportRequestSchema,
+  agentIdentitySkillsImportResponseSchema,
+  agentIdentitySkillsInspectRequestSchema,
+  agentIdentitySkillsInspectResponseSchema,
   agentIdentityUpdateRequestSchema,
   agentIdentityUpdateResponseSchema,
 } from "@traycer/protocol/host/agent-identity/unary-schemas";
@@ -122,4 +126,18 @@ export const agentIdentityHistoryRestoreV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentIdentityHistoryRestoreRequestSchema,
   responseSchema: agentIdentityHistoryRestoreResponseSchema,
+});
+
+export const agentIdentitySkillsInspectV10 = defineRpcContract({
+  method: "agentIdentity.skills.inspect",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentIdentitySkillsInspectRequestSchema,
+  responseSchema: agentIdentitySkillsInspectResponseSchema,
+});
+
+export const agentIdentitySkillsImportV10 = defineRpcContract({
+  method: "agentIdentity.skills.import",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentIdentitySkillsImportRequestSchema,
+  responseSchema: agentIdentitySkillsImportResponseSchema,
 });

@@ -396,6 +396,9 @@ export const HOST_METHOD_POLL_TABLE = {
   // all — the Identities surface is hidden rather than degraded.
   "agentIdentity.list": { ...LATEST_SCHEDULING, poll: null },
   "agentIdentity.history.list": { ...LATEST_SCHEDULING, poll: null },
+  // Clones and scans a candidate skill source and writes nothing to the
+  // identity, so it coalesces like any other read.
+  "agentIdentity.skills.inspect": { ...LATEST_SCHEDULING, poll: null },
   "agentIdentity.create": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -443,6 +446,12 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "agentIdentity.history.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A mutation that answers only once the projection has ingested the files.
+  "agentIdentity.skills.import": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
