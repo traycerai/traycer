@@ -1427,7 +1427,9 @@ class CheckpointOverlapLoads {
     if (missing.length === 0) return;
     const result = yield { kind: "checkpoint-turns", turnKeys: missing };
     if (result.kind !== "checkpoint-turns") {
-      throw new Error(`row fold: checkpoint-turns answered with ${result.kind}`);
+      throw new Error(
+        `row fold: checkpoint-turns answered with ${result.kind}`,
+      );
     }
     for (const turnKey of missing) this.stored.set(turnKey, null);
     for (const turn of result.turns) this.stored.set(turn.turnKey, turn);
