@@ -827,6 +827,7 @@ function RateLimitPopoverScopedBody({
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   }, [displayedHostId, onClose, openSettings]);
   // "Manage provider", beside each provider's name. Same deep link the model
@@ -848,6 +849,7 @@ function RateLimitPopoverScopedBody({
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     },
     [displayedHostId, onClose, openSettings],
@@ -1013,6 +1015,7 @@ function RateLimitHostPickerRow({
               resetToGeneral: false,
               tab: null,
               draft: null,
+              hostId: null,
             });
           },
         }}
@@ -1160,6 +1163,7 @@ function RateLimitRail({
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   };
   return (
@@ -3046,6 +3050,7 @@ function RateLimitZeroState({
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   };
   return (

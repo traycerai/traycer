@@ -4,7 +4,7 @@ import { chatApprovalStateSchema } from "@traycer/protocol/host/agent/gui/subscr
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
-import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 
 /**
  * Finding: when the approval has no input summary, the "Allow from now on…"
@@ -50,7 +50,7 @@ const SOFT_FORCE_PUSH_REASON: NonNullable<ChatApprovalState["reason"]> = {
 
 describe("<ComposerSlotApprovalQueue /> rule draft action (inputSummary ?? toolName)", () => {
   it("drafts from the tool name when there is no input summary", () => {
-    const onOpenSettings = vi.fn<(opts: OpenSettingsModalOpts) => void>();
+    const onOpenSettings = vi.fn<(opts: TabHostSettingsOpts) => void>();
     render(
       <ComposerSlotApprovalQueue
         approvals={[
@@ -83,7 +83,7 @@ describe("<ComposerSlotApprovalQueue /> rule draft action (inputSummary ?? toolN
   });
 
   it("includes the workspace clauses when the tool name stands in for the summary", () => {
-    const onOpenSettings = vi.fn<(opts: OpenSettingsModalOpts) => void>();
+    const onOpenSettings = vi.fn<(opts: TabHostSettingsOpts) => void>();
     render(
       <ComposerSlotApprovalQueue
         approvals={[
@@ -167,7 +167,7 @@ describe("<ComposerSlotApprovalQueue /> rule draft action (inputSummary ?? toolN
   });
 
   it("still prefers the input summary over the tool name when both are present", () => {
-    const onOpenSettings = vi.fn<(opts: OpenSettingsModalOpts) => void>();
+    const onOpenSettings = vi.fn<(opts: TabHostSettingsOpts) => void>();
     render(
       <ComposerSlotApprovalQueue
         approvals={[

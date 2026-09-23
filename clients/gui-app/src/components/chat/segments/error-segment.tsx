@@ -50,6 +50,7 @@ function EnvCredentialSettingsAction({
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   }, [harnessId, openSettings]);
   return (

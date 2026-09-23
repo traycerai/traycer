@@ -525,6 +525,7 @@ export function NotificationsPopover(
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   }, [onNavigate, openSettings]);
 

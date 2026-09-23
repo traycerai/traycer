@@ -71,6 +71,7 @@ export function routerAdapterFor(
         resetToGeneral: true,
         tab: null,
         draft: null,
+        hostId: null,
       });
     },
     navigateToEpic: (epicId) => {

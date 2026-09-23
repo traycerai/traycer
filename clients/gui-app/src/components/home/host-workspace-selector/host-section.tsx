@@ -86,6 +86,7 @@ export function WorkspaceHostSwitcher(
             resetToGeneral: false,
             tab: null,
             draft: null,
+            hostId: null,
           });
         },
       }}

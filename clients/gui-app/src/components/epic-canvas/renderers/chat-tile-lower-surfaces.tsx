@@ -56,7 +56,7 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
-import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
 import {
@@ -227,7 +227,7 @@ export interface ChatLowerApprovalsState {
   /** Where this chat runs, for the rules an approval card drafts. */
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
   /** Opens Settings from an approval card's links. */
-  readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 export interface ChatLowerQueueState {
@@ -1244,7 +1244,7 @@ function PendingApprovalQueues(props: {
   readonly highlightedApprovalId: string | null;
   readonly highlightedGeneration?: number;
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
-  readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }) {
   return (
     <div className="flex flex-col gap-2">

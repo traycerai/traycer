@@ -45,6 +45,7 @@ export function useChatTileHostUpdate(): ChatTileHostUpdate {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   }, [openSettings, tabHostId]);
   return useMemo(

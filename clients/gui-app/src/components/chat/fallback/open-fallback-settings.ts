@@ -36,6 +36,7 @@ export function useOpenFallbackSettings(hostId: string | null): () => void {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
   }, [hostId, openSettings]);
 }

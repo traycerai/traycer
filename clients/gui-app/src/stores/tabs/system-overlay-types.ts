@@ -40,4 +40,19 @@ export interface OpenSettingsModalOpts {
   readonly tab: string | null;
   /** A prepared rule for the Permissions page, or `null`. */
   readonly draft: SettingsRuleDraft | null;
+  /**
+   * The machine the caller has in mind, for a page whose controls act on one
+   * machine: the Permissions page scopes Settings to it before showing `tab`.
+   * A composer's "Permission settings…" and an approval card's links name
+   * their tab's bound host, so a judge or rule change lands on the machine the
+   * conversation runs on. `null` keeps Settings on whatever machine it shows.
+   */
+  readonly hostId: string | null;
 }
+
+/**
+ * {@link OpenSettingsModalOpts} without the host, for a surface inside a tab:
+ * the tab binds its host for life, so the tab supplies `hostId` where it hands
+ * the opener down and the surface cannot name another machine.
+ */
+export type TabHostSettingsOpts = Omit<OpenSettingsModalOpts, "hostId">;

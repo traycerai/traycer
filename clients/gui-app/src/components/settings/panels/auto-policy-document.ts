@@ -1,11 +1,11 @@
 /**
- * The account auto-mode policy as a DOCUMENT: the shape a fresh one starts
- * from, the size the server will accept, and the one question the editor asks
- * about staleness.
+ * The account auto-mode policy as a DOCUMENT: how it splits into the Rules
+ * tab's sections and joins back, the size the server will accept, and the one
+ * question the tab asks about staleness.
  *
- * Split out of `auto-policy-editor-dialog.tsx` because a module that exports a
- * component may export nothing else - fast refresh replaces the whole module,
- * so a helper living beside a component is re-created on every edit and
+ * Kept apart from the tab because a module that exports a component may export
+ * nothing else - fast refresh replaces the whole module, so a helper living
+ * beside a component is re-created on every edit and
  * `react(only-export-components)` fails the build over it. These are also the
  * pieces worth testing without rendering anything.
  */
@@ -13,6 +13,17 @@ import type {
   AutoPolicyGetResponse,
   AutoPolicyReadState,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
+
+/**
+ * A prepared rule the Permissions page received through the open intent and
+ * has not yet handed to the Rules tab's editor. `id` is the intent's own, so
+ * the editor applies each exactly once and in the order they arrived.
+ */
+export interface PendingRuleDraft {
+  readonly id: number;
+  readonly draft: SettingsRuleDraft;
+}
 
 /**
  * How far the host's answer can be trusted, with the one fallback an older
@@ -45,24 +56,205 @@ export function autoPolicyReadStateFor(
  */
 export type AutoPolicyOpeningRead = "pending" | "settled" | "failed";
 
+/** The four sections the judge's prompt builder reads a policy under. */
+export const AUTO_POLICY_SECTION_KEYS = [
+  "environment",
+  "allow",
+  "softDeny",
+  "hardDeny",
+] as const;
+
+export type AutoPolicySectionKey = (typeof AUTO_POLICY_SECTION_KEYS)[number];
+
 /**
- * The four headings the judge's prompt builder reads a policy under. Prefilled
- * for an empty policy and nothing more: the guidance about what belongs under
- * each one is the dialog's copy, not the document's, because every byte of the
- * document is prose the judge will read.
- *
- * Heading DEPTH does not matter to the parser (any `#`..`######` is accepted,
- * as are `Soft-deny` / `SOFT DENY` spellings), and text under no heading is
- * kept too, so a user who rewrites this from scratch loses nothing.
+ * A policy as the Rules tab edits it: one text per section, plus `notes` for
+ * everything the host files under no section (text before the first heading,
+ * or under a heading it does not recognise).
  */
-export const AUTO_POLICY_TEMPLATE = `## Environment
+export type AutoPolicySections = Readonly<
+  Record<AutoPolicySectionKey | "notes", string>
+>;
 
-## Allow
+export const EMPTY_AUTO_POLICY_SECTIONS: AutoPolicySections = {
+  environment: "",
+  allow: "",
+  softDeny: "",
+  hardDeny: "",
+  notes: "",
+};
 
-## Soft deny
+/**
+ * The storage heading of each section. These are the words the host's parser
+ * recognises, not the tab's labels ("Always allow", "Ask first", "Never
+ * allow"): the stored document is prose the judge reads, and renaming a heading
+ * there is a host change.
+ */
+const AUTO_POLICY_SECTION_HEADINGS: Readonly<
+  Record<AutoPolicySectionKey, string>
+> = {
+  environment: "Environment",
+  allow: "Allow",
+  softDeny: "Soft deny",
+  hardDeny: "Hard deny",
+};
 
-## Hard deny
-`;
+const HEADING_PATTERN = /^(#{1,6})\s+(.*)$/;
+
+/**
+ * The host's heading synonyms, normalised the way the host normalises them.
+ *
+ * RESTATED, not shared: the host's parser
+ * (`traycer-host/src/domain/chat/auto-judge/auto-policy-document.ts`) lives in
+ * the closed-source repository, and the two copies are held together by a
+ * fixture pair checked into both repositories, each asserting its own parser
+ * reads the same sections out of the same documents.
+ */
+const CANONICAL_TITLES: ReadonlyMap<string, AutoPolicySectionKey> = new Map([
+  ["environment", "environment"],
+  ["allow", "allow"],
+  ["allowed", "allow"],
+  ["soft deny", "softDeny"],
+  ["softdeny", "softDeny"],
+  ["soft block", "softDeny"],
+  ["hard deny", "hardDeny"],
+  ["harddeny", "hardDeny"],
+  ["hard block", "hardDeny"],
+]);
+
+function normalizeHeadingTitle(title: string): string {
+  return title
+    .replace(/[^A-Za-z0-9\s-]/g, "")
+    .replace(/-/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/**
+ * Splits a stored policy into the Rules tab's sections, exactly as the host's
+ * `parseAutoPolicyDocument` does.
+ *
+ * Any mismatch with the host is a user-visible lie - a rule shown under Always
+ * allow that the judge reads as a note - so this is a line-for-line mirror,
+ * including what the host does NOT do: it tracks no code fences, so neither
+ * does this. Membership follows heading depth: a heading deeper than the one
+ * that opened the current section stays inside it, heading line and all; a
+ * heading at the same or a shallower depth that names no section closes it
+ * into `notes`, and that heading line is kept in `notes` too.
+ */
+export function splitAutoPolicySections(body: string): AutoPolicySections {
+  const buffers: Record<AutoPolicySectionKey | "notes", string[]> = {
+    environment: [],
+    allow: [],
+    softDeny: [],
+    hardDeny: [],
+    notes: [],
+  };
+  let current: AutoPolicySectionKey | "notes" = "notes";
+  let currentDepth = 0;
+  for (const line of body.split(/\r?\n/)) {
+    const heading = HEADING_PATTERN.exec(line);
+    if (heading === null) {
+      buffers[current].push(line);
+      continue;
+    }
+    const depth = heading[1].length;
+    const canonical = CANONICAL_TITLES.get(normalizeHeadingTitle(heading[2]));
+    if (canonical !== undefined) {
+      current = canonical;
+      currentDepth = depth;
+      continue;
+    }
+    if (current !== "notes" && depth > currentDepth) {
+      buffers[current].push(line);
+      continue;
+    }
+    current = "notes";
+    currentDepth = depth;
+    buffers.notes.push(line);
+  }
+  return {
+    environment: buffers.environment.join("\n").trim(),
+    allow: buffers.allow.join("\n").trim(),
+    softDeny: buffers.softDeny.join("\n").trim(),
+    hardDeny: buffers.hardDeny.join("\n").trim(),
+    notes: buffers.notes.join("\n").trim(),
+  };
+}
+
+/**
+ * The canonical stored form of a policy: Notes first, then the four sections
+ * in the judge's order, one blank line between parts, each body trimmed.
+ *
+ * **Notes go FIRST, although the tab shows them last.** The host files text
+ * under no heading - and text before the first heading - into `notes`, but it
+ * files text AFTER `## Hard deny` into Hard deny, so Notes written last would
+ * come back as Hard deny rules on the next read. Before the first heading is
+ * the one place free text is guaranteed to stay notes. The judge sees no
+ * difference: the host renders notes last, under their own heading.
+ *
+ * **All four headings are always written** once anything is, so the document
+ * a person opens on another device shows every section, and an empty one
+ * reads as empty rather than missing.
+ *
+ * **Headings escalate from `##` to `#`** when any section's body carries a
+ * heading of depth two or less. The host keeps a heading inside a section only
+ * while it is DEEPER than the section's own, so a `## Deploy` subheading under
+ * a `## Allow` would close Allow and move every rule below it into notes. `#`
+ * is the shallowest heading there is, so under it every body heading of depth
+ * two or more stays put. A body line that is itself a `#` heading cannot be
+ * kept inside any section by the host's rule - it was already notes when the
+ * host read it, so a split never produces one inside a section.
+ *
+ * An all-empty document joins to `""`, which `autoPolicy.set` reads as "clear
+ * the policy".
+ */
+export function joinAutoPolicySections(sections: AutoPolicySections): string {
+  const bodies = AUTO_POLICY_SECTION_KEYS.map((key) => sections[key].trim());
+  const notes = sections.notes.trim();
+  if (notes.length === 0 && bodies.every((body) => body.length === 0)) {
+    return "";
+  }
+  const marker = bodies.some(carriesShallowHeading) ? "#" : "##";
+  const parts: string[] = [];
+  if (notes.length > 0) parts.push(notes);
+  AUTO_POLICY_SECTION_KEYS.forEach((key, index) => {
+    const heading = `${marker} ${AUTO_POLICY_SECTION_HEADINGS[key]}`;
+    const body = bodies[index];
+    parts.push(body.length === 0 ? heading : `${heading}\n\n${body}`);
+  });
+  return `${parts.join("\n\n")}\n`;
+}
+
+function carriesShallowHeading(body: string): boolean {
+  return body.split(/\r?\n/).some((line) => {
+    const heading = HEADING_PATTERN.exec(line);
+    return heading !== null && heading[1].length <= 2;
+  });
+}
+
+/**
+ * Whether a stored policy will be rewritten on its next save only because the
+ * tab writes the canonical form - the one case the tab says so, once, before
+ * any edit ("Saved in Traycer's section order.").
+ *
+ * Not for an empty record, and not for one whose canonical form is empty: a
+ * document of blank lines is cleared by a save, which is not a reordering.
+ */
+export function autoPolicyNeedsReorder(stored: string): boolean {
+  if (stored.length === 0) return false;
+  const canonical = joinAutoPolicySections(splitAutoPolicySections(stored));
+  return canonical.length > 0 && canonical !== stored;
+}
+
+/**
+ * `text` added as a new line at the end of a section's body, as a drafted rule
+ * is: below whatever is there, including an earlier draft still unsaved.
+ */
+export function appendAutoPolicyLine(body: string, text: string): string {
+  const trimmedBody = body.replace(/\s+$/u, "");
+  return trimmedBody.length === 0 ? text : `${trimmedBody}\n${text}`;
+}
 
 /**
  * The server's cap on a policy body, in UTF-8 BYTES.

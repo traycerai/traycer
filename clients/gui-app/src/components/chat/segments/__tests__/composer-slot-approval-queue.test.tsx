@@ -13,7 +13,7 @@ import {
   AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
   type AutoModeRuleDraftWorkspace,
 } from "@/lib/auto-mode/auto-mode-rule-copy";
-import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 
 afterEach(() => {
   cleanup();
@@ -471,7 +471,7 @@ describe("<ComposerSlotApprovalQueue /> tier line", () => {
   });
 
   it("opens a drafted 'allow' rule with the full narrowing template on click", () => {
-    const onOpenSettings = vi.fn<(opts: OpenSettingsModalOpts) => void>();
+    const onOpenSettings = vi.fn<(opts: TabHostSettingsOpts) => void>();
     render(
       <ComposerSlotApprovalQueue
         approvals={[
@@ -511,7 +511,7 @@ describe("<ComposerSlotApprovalQueue /> tier line", () => {
   });
 
   it("drafts the minimal template when neither remote nor branch is known", () => {
-    const onOpenSettings = vi.fn<(opts: OpenSettingsModalOpts) => void>();
+    const onOpenSettings = vi.fn<(opts: TabHostSettingsOpts) => void>();
     render(
       <ComposerSlotApprovalQueue
         approvals={[

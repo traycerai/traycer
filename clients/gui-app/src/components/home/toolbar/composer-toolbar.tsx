@@ -134,7 +134,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     runHarnessId,
     runModelSlug,
   );
-  const openPermissionSettings = useOpenPermissionSettings();
+  const openPermissionSettings = useOpenPermissionSettings(runTargetHostId);
 
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.

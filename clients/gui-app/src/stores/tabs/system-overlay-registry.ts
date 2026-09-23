@@ -137,6 +137,7 @@ export function routeIntentViaModalBridge(
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
     return true;
   }

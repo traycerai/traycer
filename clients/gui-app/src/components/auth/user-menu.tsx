@@ -126,6 +126,7 @@ export function UserMenu(props: UserMenuProps) {
                   resetToGeneral: true,
                   tab: null,
                   draft: null,
+                  hostId: null,
                 });
               }}
             >

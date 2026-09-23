@@ -17,6 +17,7 @@ function opts(
     resetToGeneral: false,
     tab: null,
     draft: null,
+    hostId: null,
     ...overrides,
   };
 }
@@ -73,6 +74,35 @@ describe("armSettingsOpenIntent", () => {
     expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
   });
 
+  it("carries the hostId on the intent", () => {
+    armSettingsOpenIntent(opts({ tab: "judge", hostId: "host-b" }));
+
+    expect(useSettingsOpenIntentStore.getState().intent).toMatchObject({
+      tab: "judge",
+      hostId: "host-b",
+    });
+  });
+
+  it("still stores an intent for an arm with only a hostId", () => {
+    armSettingsOpenIntent(opts({ tab: null, draft: null, hostId: "host-b" }));
+
+    expect(useSettingsOpenIntentStore.getState().intent).toMatchObject({
+      section: "permissions",
+      tab: null,
+      draft: null,
+      hostId: "host-b",
+    });
+  });
+
+  it("clears the pending intent when tab, draft and hostId are all null", () => {
+    armSettingsOpenIntent(opts({ hostId: "host-b" }));
+    expect(useSettingsOpenIntentStore.getState().intent).not.toBeNull();
+
+    armSettingsOpenIntent(opts({ tab: null, draft: null, hostId: null }));
+
+    expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
+  });
+
   it("replaces an unconsumed intent left by an earlier call", () => {
     armSettingsOpenIntent(opts({ tab: "judge" }));
     armSettingsOpenIntent(opts({ tab: "rules" }));
@@ -87,9 +117,9 @@ describe("acknowledgeSettingsOpenIntent", () => {
   it("clears the intent it names", () => {
     armSettingsOpenIntent(opts({ tab: "judge" }));
     const id = useSettingsOpenIntentStore.getState().intent?.id;
-    expect(id).not.toBeUndefined();
+    if (id === undefined) throw new Error("expected a pending intent");
 
-    acknowledgeSettingsOpenIntent(id as number);
+    acknowledgeSettingsOpenIntent(id);
 
     expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
   });
@@ -97,11 +127,11 @@ describe("acknowledgeSettingsOpenIntent", () => {
   it("does not clear a newer intent when acknowledging a stale id", () => {
     armSettingsOpenIntent(opts({ tab: "judge" }));
     const staleId = useSettingsOpenIntentStore.getState().intent?.id;
-    expect(staleId).not.toBeUndefined();
+    if (staleId === undefined) throw new Error("expected a pending intent");
 
     armSettingsOpenIntent(opts({ tab: "rules" }));
 
-    acknowledgeSettingsOpenIntent(staleId as number);
+    acknowledgeSettingsOpenIntent(staleId);
 
     expect(useSettingsOpenIntentStore.getState().intent).toMatchObject({
       tab: "rules",

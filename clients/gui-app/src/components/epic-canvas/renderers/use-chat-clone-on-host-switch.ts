@@ -193,6 +193,7 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
                 resetToGeneral: false,
                 tab: null,
                 draft: null,
+                hostId: null,
               });
             },
           });

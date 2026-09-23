@@ -193,6 +193,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     });
 
@@ -898,6 +899,7 @@ describe("openSettings carries tab and draft into the settings-open-intent store
         tab: "rules",
         draft: DRAFT,
         resetToGeneral: false,
+        hostId: null,
       });
     });
 
@@ -929,6 +931,7 @@ describe("openSettings carries tab and draft into the settings-open-intent store
         tab: "judge",
         draft: null,
         resetToGeneral: false,
+        hostId: null,
       });
     });
 
@@ -956,6 +959,7 @@ describe("openSettings carries tab and draft into the settings-open-intent store
         tab: "rules",
         draft: DRAFT,
         resetToGeneral: false,
+        hostId: null,
       });
     });
     await waitFor(() => expect(intentProbe.current).not.toBeNull());
@@ -966,6 +970,7 @@ describe("openSettings carries tab and draft into the settings-open-intent store
         tab: null,
         draft: null,
         resetToGeneral: false,
+        hostId: null,
       });
     });
 
@@ -984,6 +989,7 @@ describe("openSettings carries tab and draft into the settings-open-intent store
         tab: "judge",
         draft: null,
         resetToGeneral: false,
+        hostId: null,
       });
     });
     await waitFor(() => expect(intentProbe.current?.tab).toBe("judge"));
@@ -996,6 +1002,7 @@ describe("openSettings carries tab and draft into the settings-open-intent store
         tab: "rules",
         draft: DRAFT,
         resetToGeneral: false,
+        hostId: null,
       });
     });
     await waitFor(() => expect(intentProbe.current?.tab).toBe("rules"));

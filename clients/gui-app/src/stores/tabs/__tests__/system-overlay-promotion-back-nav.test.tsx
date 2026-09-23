@@ -167,6 +167,7 @@ describe("back stays functional after promoting a system overlay to a tab", () =
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     });
     await waitFor(() =>

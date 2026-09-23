@@ -184,6 +184,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
                     resetToGeneral: false,
                     tab: null,
                     draft: null,
+                    hostId: null,
                   });
                 }}
               >

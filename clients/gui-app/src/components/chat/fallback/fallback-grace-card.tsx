@@ -249,6 +249,7 @@ export function FallbackGraceCard({
         resetToGeneral: false,
         tab: null,
         draft: null,
+        hostId: null,
       });
     };
     cancel.mutate({

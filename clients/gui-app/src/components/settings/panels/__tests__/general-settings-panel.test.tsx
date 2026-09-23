@@ -664,50 +664,11 @@ describe("GeneralSettingsPanel", () => {
     expect(documentPosition(danger, snapshots)).toBe("before");
   });
 
-  it("renders the Default permission mode row and writes 'auto' when Auto is chosen", () => {
-    useSettingsStore.setState({ defaultPermission: "full_access" });
+  it("no longer renders the default-permission row - it moved to Permissions ▸ Modes", () => {
     renderPanel();
 
-    // Radix opens the dropdown on pointerdown, not click - firing only
-    // `click` leaves the menu shut and the following query finds nothing.
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Full access" }), {
-      button: 0,
-      ctrlKey: false,
-      pointerType: "mouse",
-    });
-    // Querying by the "Auto" option's own description text rather than its
-    // label: the label "Auto" is a substring of the sibling "Auto-accept
-    // edits" option, and this menu's DropdownMenuRadioItem concatenates the
-    // label AND description into one accessible name, so a name matcher of
-    // "Auto" or /Auto/ ambiguously matches both radio items.
-    // Spelled out rather than imported from `PERMISSION_OPTIONS`: this is the
-    // sentence a user reads before turning the mode on. An assertion derived
-    // from the option registry would follow a copy change silently instead of
-    // making someone re-read it.
-    fireEvent.click(
-      screen.getByRole("menuitemradio", {
-        name: /A judge approves routine commands and asks you about risky ones\./,
-      }),
-    );
-
-    expect(useSettingsStore.getState().defaultPermission).toBe("auto");
-  });
-
-  // A Settings surface must not open Settings: the default-mode row's picker
-  // passes `onOpenPermissionSettings={null}`, so it renders no trailing item.
-  it("renders no trailing 'Permission settings…' item on the default-mode row", () => {
-    useSettingsStore.setState({ defaultPermission: "full_access" });
-    renderPanel();
-
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Full access" }), {
-      button: 0,
-      ctrlKey: false,
-      pointerType: "mouse",
-    });
-
-    expect(
-      screen.queryByRole("menuitem", { name: "Permission settings…" }),
-    ).toBeNull();
+    expect(screen.queryByText("New conversations start in")).toBeNull();
+    expect(screen.queryByText("Default permission mode")).toBeNull();
   });
 
   it("renders the Worktree branch prefix editor (moved from Worktrees)", () => {

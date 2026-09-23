@@ -6,6 +6,7 @@ import {
   KeyRound,
   Puzzle,
   Server,
+  ShieldCheck,
   Sparkles,
   SquareTerminal,
   type LucideIcon,
@@ -30,9 +31,10 @@ const PROVIDER_SECTION_ICONS: Record<ProviderTabKey, LucideIcon> = {
   account: KeyRound,
   usage: Gauge,
   general: SquareTerminal,
-  // The same glyph as the host-scoped Permissions page in the sidebar: the
-  // tab is that page's per-provider half.
-  permissions: KeyRound,
+  // Not the sidebar's `KeyRound`: this strip's Account tab already draws a
+  // key, and two tabs in one strip must not share a glyph. The tab is only
+  // about the built-in reviewer, which is what a shield says.
+  permissions: ShieldCheck,
   env: Braces,
   modelProviders: Boxes,
   mcp: Server,

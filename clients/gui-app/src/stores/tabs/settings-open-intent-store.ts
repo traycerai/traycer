@@ -32,6 +32,8 @@ export interface SettingsOpenIntent {
   readonly section: SettingsSectionId;
   readonly tab: string | null;
   readonly draft: SettingsRuleDraft | null;
+  /** The machine to scope Settings to first ({@link OpenSettingsModalOpts}). */
+  readonly hostId: string | null;
 }
 
 interface SettingsOpenIntentState {
@@ -47,20 +49,20 @@ export const useSettingsOpenIntentStore = create<SettingsOpenIntentState>(
  * Records what an `openSettings` call asked for, replacing whatever an earlier
  * call left unconsumed.
  *
- * A call with no tab and no draft CLEARS the pending intent rather than
- * leaving it: the user has since asked for Settings without one, and a draft
- * from an earlier card must not surface under a later, unrelated open. So does
- * a call with no section, which names no page to deliver to.
+ * A call with no tab, no draft and no host CLEARS the pending intent rather
+ * than leaving it: the user has since asked for Settings without one, and a
+ * draft from an earlier card must not surface under a later, unrelated open.
+ * So does a call with no section, which names no page to deliver to.
  */
 export function armSettingsOpenIntent(opts: OpenSettingsModalOpts): void {
-  const { section, tab, draft } = opts;
-  if (section === null || (tab === null && draft === null)) {
+  const { section, tab, draft, hostId } = opts;
+  if (section === null || (tab === null && draft === null && hostId === null)) {
     useSettingsOpenIntentStore.setState({ intent: null });
     return;
   }
   const id = useSettingsOpenIntentStore.getState().lastId + 1;
   useSettingsOpenIntentStore.setState({
-    intent: { id, section, tab, draft },
+    intent: { id, section, tab, draft, hostId },
     lastId: id,
   });
 }

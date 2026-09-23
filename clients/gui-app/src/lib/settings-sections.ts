@@ -299,13 +299,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Bell,
     group: "host",
   },
-  // What an agent may do on this machine without asking: the judge that
-  // reviews actions under the `auto` permission mode, the policy it follows
-  // and the rules that always apply. Its own page rather than rows on Agent
+  // What an agent may do on its own: the mode a conversation starts in, the
+  // judge that reviews actions under the `auto` permission mode, the rules it
+  // follows, and what it decided. Its own page rather than rows on Agent
   // selection - that page is about which agent gets CHOSEN for a task, and
-  // permissions are a different question. The app-wide DEFAULT permission
-  // mode stays on General: it is one preference for this app, not per machine
-  // (SETTINGS.md, "Scope: the organising idea").
+  // permissions are a different question. In the Host group because three of
+  // its four tabs are per machine; the Modes tab is the one application-scoped
+  // region on a host page (SETTINGS.md, "Scope: the organising idea").
   {
     id: "permissions",
     label: "Permissions",

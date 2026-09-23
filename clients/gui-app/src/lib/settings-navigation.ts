@@ -33,5 +33,6 @@ export function navigateToSettingsSection(sectionId: SettingsSectionId): void {
     resetToGeneral: false,
     tab: null,
     draft: null,
+    hostId: null,
   });
 }

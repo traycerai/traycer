@@ -128,7 +128,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
     runHarnessId,
     runModelSlug,
   );
-  const openPermissionSettings = useOpenPermissionSettings();
+  const openPermissionSettings = useOpenPermissionSettings(runTargetHostId);
   // Same gate as `ComposerToolbarRight`: an empty slug is the transient
   // "catalog still loading" marker and must never reach the wire as `model: ""`.
   const modelResolved = useStore(

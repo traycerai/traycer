@@ -423,6 +423,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
               resetToGeneral: false,
               tab: null,
               draft: null,
+              hostId: null,
             });
           }}
           onOperationDismiss={dismissLandingAttempt}

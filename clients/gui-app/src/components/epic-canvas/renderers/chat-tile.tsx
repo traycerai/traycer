@@ -264,6 +264,7 @@ import {
   useAnySystemOverlayActive,
   useSystemTabModalActions,
 } from "@/stores/tabs/use-system-tab-modal";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 import { autoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -3423,6 +3424,14 @@ function useChatTileSessionViewModel(
     [state.worktreeBinding],
   );
   const { openSettings } = useSystemTabModalActions();
+  // The card's settings links open on THIS tab's machine: the judge and the
+  // rules it names are the ones this conversation's host applies.
+  const openSettingsOnTabHost = useCallback(
+    (opts: TabHostSettingsOpts) => {
+      openSettings({ ...opts, hostId: viewModelHostId });
+    },
+    [openSettings, viewModelHostId],
+  );
   const lowerApprovals = useMemo(
     () => ({
       pendingFileEditApprovals: state.pendingFileEditApprovals,
@@ -3432,7 +3441,7 @@ function useChatTileSessionViewModel(
       highlightedApprovalId: composerHighlightBlockId,
       highlightedGeneration: composerHighlightGeneration,
       ruleDraftWorkspace,
-      onOpenSettings: openSettings,
+      onOpenSettings: openSettingsOnTabHost,
     }),
     [
       composerHighlightBlockId,
@@ -3442,7 +3451,7 @@ function useChatTileSessionViewModel(
       dispatchFileEditApprovalDecision,
       dispatchApprovalDecision,
       ruleDraftWorkspace,
-      openSettings,
+      openSettingsOnTabHost,
     ],
   );
 

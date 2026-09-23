@@ -162,6 +162,7 @@ describe("SystemTabModalHost theme editor integration", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
 
     const settings = await screen.findByRole("dialog", { name: "Settings" });

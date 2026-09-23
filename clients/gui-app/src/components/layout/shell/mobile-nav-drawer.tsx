@@ -108,6 +108,7 @@ export function MobileNavDrawer(): ReactNode {
       resetToGeneral: true,
       tab: null,
       draft: null,
+      hostId: null,
     });
   };
   const handleManageSubscription = () => {

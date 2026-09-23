@@ -33,7 +33,7 @@ import type {
   ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
-import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 
 interface ComposerSlotApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatApprovalState>;
@@ -47,7 +47,7 @@ interface ComposerSlotApprovalQueueProps {
    */
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
   /** Opens Settings; the card's two links land on Permissions tabs. */
-  readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 /**
@@ -209,7 +209,7 @@ interface ApprovalRowProps {
   /** The card's header already shows this row's judge stage. */
   readonly stageInHeader: boolean;
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
-  readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 function ApprovalRow(props: ApprovalRowProps) {
@@ -467,7 +467,7 @@ function JudgeReason(props: {
    */
   readonly ruleDraftAction: string | null;
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
-  readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }) {
   const { reason, onOpenSettings, ruleDraftAction } = props;
   const unavailable = isJudgeUnavailableReason(reason.text);
@@ -538,7 +538,7 @@ function JudgeReason(props: {
  */
 function JudgeUnavailableLine(props: {
   readonly text: string;
-  readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }) {
   const line = judgeUnavailableHumanLine(props.text);
   return (
