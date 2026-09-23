@@ -8,6 +8,7 @@ import {
   type ChatFindRow,
 } from "@/components/chat/chat-find";
 import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { ChatFindIndexDemandSource } from "@/components/chat/chat-find-index";
 import {
   FIND_BLOCK_ATTR,
   FIND_HIT_ATTR,
@@ -1070,6 +1071,8 @@ function testRowWithChain(
 ): ChatFindRow {
   return {
     messageId,
+    recordId: messageId,
+    createdAt: 0,
     units: [
       {
         unitId,
@@ -1141,6 +1144,10 @@ function createChatFindTestAdapter(
     clearReveal: callbacks.clearReveal,
     getMountedMessageRoot: callbacks.getMountedMessageRoot,
     getMountedUnitRoot: callbacks.getMountedUnitRoot,
+    // Every row here is loaded: the index never has anything to add.
+    isRecordHeld: () => true,
+    indexDemand: new ChatFindIndexDemandSource(),
+    jumpToIndexHit: () => undefined,
   });
   return {
     adapter,

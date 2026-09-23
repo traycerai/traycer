@@ -146,6 +146,7 @@ import type {
 } from "@/stores/chats/transcript-window";
 import {
   chatTranscriptEventRowId,
+  chatTranscriptJumpForTile,
   chatTranscriptJumpKey,
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
@@ -1064,8 +1065,11 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // Parked in a store rather than called directly because the jump is issued
   // from another tile, possibly before this one exists - `openTile`
   // mounts it and the request is waiting here when it renders.
-  const transcriptJump = useChatTranscriptJumpStore(
-    (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
+  const transcriptJump = useChatTranscriptJumpStore((s) =>
+    chatTranscriptJumpForTile(
+      s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
+      props.node.instanceId,
+    ),
   );
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,

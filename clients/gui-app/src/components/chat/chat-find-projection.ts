@@ -52,6 +52,14 @@ import type {
 
 export interface ChatFindRow {
   readonly messageId: string;
+  /**
+   * The persisted record this row renders - the row id for a user row, the
+   * turn's `persistentMessageId` for an assistant slice. What an index hit
+   * names, so it is how a hydrated hit finds its rows.
+   */
+  readonly recordId: string;
+  /** The row's sort key, which places an older index hit among the rows. */
+  readonly createdAt: number;
   readonly units: ReadonlyArray<ChatFindUnit>;
 }
 
@@ -106,6 +114,8 @@ export function buildChatFindRows(
     );
     return {
       messageId: message.id,
+      recordId: message.persistentMessageId ?? message.id,
+      createdAt: message.createdAt,
       units,
     };
   });

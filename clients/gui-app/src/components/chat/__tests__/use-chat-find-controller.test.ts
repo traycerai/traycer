@@ -141,6 +141,8 @@ describe("useChatFindController - chain-open on reveal", () => {
           // This suite drives the legacy line, where the transcript is fully
           // materialized and find has nothing to disclose.
           getFindCoverageMessage: () => null,
+          isRecordHeld: () => true,
+          requestIndexJump: () => undefined,
           rowIndexByKeyRef,
           getScroller: () => scroller,
           scrollToLocation,

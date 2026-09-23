@@ -4326,6 +4326,51 @@ describe("<ChatTile />", () => {
     });
   });
 
+  /**
+   * Find in one tile navigates THAT tile to an older hit through this same
+   * jump. The chat can be open in a second tile (`duplicateTab`), which must
+   * neither move nor swallow a jump addressed to the other.
+   */
+  it("leaves a jump addressed to another tile of the same chat to that tile", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    // Parked by find in the chat's other tile.
+    act(() => {
+      useChatTranscriptJumpStore.setState({
+        requestsByChatId: {
+          [key]: {
+            target: { kind: "end" },
+            requestId: 1_000,
+            tileInstanceId: "inst-chat-2",
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).not.toBeUndefined();
+
+    // The same wait is enough for this tile to act on its own jump.
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestTileJump(HOST_ID, CHAT_ARTIFACT.id, CHAT_ARTIFACT.instanceId, {
+          kind: "end",
+        });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
   it("resolves a durable assistant message id to its projected transcript row", async () => {
     renderChatTile();
     await waitForChatTileLoaded();

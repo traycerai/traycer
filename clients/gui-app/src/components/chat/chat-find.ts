@@ -24,6 +24,7 @@ export {
   chatFindCoverageMessage,
   createChatFindAdapter,
   type ChatFindAdapter,
+  type ChatFindLandingOutcome,
   type ChatFindReconcileTarget,
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find-adapter";
