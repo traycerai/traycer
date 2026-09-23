@@ -55,4 +55,29 @@ describe("wireframeVisibleText", () => {
   it("returns an empty string for empty input", () => {
     expect(wireframeVisibleText("")).toBe("");
   });
+
+  it("includes an input's placeholder/value and a textarea's placeholder at their position in document order", () => {
+    const html = [
+      "<h2>Sign in</h2>",
+      '<input placeholder="Email">',
+      "<button>Go</button>",
+      '<textarea placeholder="Notes"></textarea>',
+      '<input type="submit" value="Save">',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Sign in Email Go Notes Save");
+  });
+
+  it("excludes hidden and password input values", () => {
+    const html = [
+      '<input type="hidden" value="token123">',
+      '<input type="password" value="secret">',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("");
+  });
+
+  it("contributes nothing for an input with neither a placeholder nor a value", () => {
+    expect(wireframeVisibleText("<input>")).toBe("");
+  });
 });

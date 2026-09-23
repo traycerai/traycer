@@ -836,8 +836,12 @@ function tokenToText(token: Token): string {
 // a keyword would take a diagram parser. A keyword hit is shown by the block's
 // find mark instead of a painted word (see `lib/find-engine/find-blocks.ts`).
 function fenceSearchText(token: Tokens.Code): string {
-  const lang = (token.lang ?? "").trim().toLowerCase();
-  if (lang.startsWith("wireframe")) return wireframeVisibleText(token.text);
+  // The renderer promotes a fence whose language is exactly `wireframe`, the
+  // first word of the info string (remark's `language-wireframe` class), so
+  // the count follows the same rule: a `wireframes` fence is drawn as code
+  // and is counted as code.
+  const language = (token.lang ?? "").trim().split(/\s+/)[0] ?? "";
+  if (language === "wireframe") return wireframeVisibleText(token.text);
   return token.text;
 }
 

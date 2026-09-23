@@ -271,6 +271,41 @@ describe("chat find projection", () => {
     expect(text).not.toContain("track");
   });
 
+  it("indexes a wireframe fence whose info string carries metadata on its visible words only", () => {
+    const text = markdownToChatSearchText(
+      [
+        '```wireframe title="Checkout"',
+        '<button class="primary">Save</button><script>track("Save")</script>',
+        "```",
+      ].join("\n"),
+    );
+
+    expect(text).toContain("Save");
+    expect(text.match(/Save/g)).toHaveLength(1);
+    expect(text).not.toContain("primary");
+    expect(text).not.toContain("track");
+  });
+
+  it("keeps a wireframes or wireframe-json fence's raw body, not promoted to a wireframe", () => {
+    const pluralText = markdownToChatSearchText(
+      ["```wireframes", '<div class="card">Save</div>', "```"].join("\n"),
+    );
+    const jsonText = markdownToChatSearchText(
+      ["```wireframe-json", '<div class="card">Save</div>', "```"].join("\n"),
+    );
+
+    expect(pluralText).toContain('<div class="card">');
+    expect(jsonText).toContain('<div class="card">');
+  });
+
+  it("keeps a capitalised Wireframe fence's raw body, since the match is case-sensitive", () => {
+    const text = markdownToChatSearchText(
+      ["```Wireframe", '<div class="card">Save</div>', "```"].join("\n"),
+    );
+
+    expect(text).toContain('<div class="card">');
+  });
+
   it("keeps a mermaid fence's full source, including labels", () => {
     const text = markdownToChatSearchText(
       ["```mermaid", "graph TD", "  A[Save] --> B[Done]", "```"].join("\n"),

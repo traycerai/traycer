@@ -11,7 +11,10 @@ const NEVER_RENDERED_SELECTOR =
  * renders the same text as its find mirror so every counted hit has a home in
  * the block. Text nodes are joined with a space so words in neighbouring
  * elements do not run together; a word split across an inline element (rare
- * in a mockup) is the accepted cost of not laying the document out.
+ * in a mockup) is the accepted cost of not laying the document out. A form
+ * control shows its words through attributes rather than text nodes (a
+ * placeholder, a submit button's value), so those count too, at the control's
+ * place in the document.
  */
 export function wireframeVisibleText(html: string): string {
   if (typeof DOMParser === "undefined") return "";
@@ -20,13 +23,24 @@ export function wireframeVisibleText(html: string): string {
     element.remove();
   }
   const words: string[] = [];
+  const push = (text: string | null): void => {
+    const collapsed = (text ?? "").replace(/\s+/g, " ").trim();
+    if (collapsed.length > 0) words.push(collapsed);
+  };
   const walker = body.ownerDocument.createTreeWalker(
     body,
-    NodeFilter.SHOW_TEXT,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
   );
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-    const text = (node as Text).data.replace(/\s+/g, " ").trim();
-    if (text.length > 0) words.push(text);
+    if (node instanceof Text) {
+      push(node.data);
+    } else if (node instanceof HTMLInputElement) {
+      if (node.type === "hidden" || node.type === "password") continue;
+      push(node.getAttribute("placeholder"));
+      push(node.getAttribute("value"));
+    } else if (node instanceof HTMLTextAreaElement) {
+      push(node.getAttribute("placeholder"));
+    }
   }
   return words.join(" ");
 }
