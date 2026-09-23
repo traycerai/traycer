@@ -75,8 +75,18 @@ function identityFixture(title: string): IdentityFixture {
   };
 }
 
+/**
+ * The incarnation the plain fixtures mint for a path: one life per path, which
+ * is all a test that is not ABOUT incarnations needs. The incarnation tests
+ * below name theirs explicitly.
+ */
+function incarnationOf(path: string): string {
+  return `inc:${path}`;
+}
+
 interface DocumentRowFixture {
   readonly path: string;
+  readonly incarnation: string;
   readonly shardRoomId: string;
   readonly fragmentName: string;
   readonly updatedAt: number;
@@ -88,8 +98,17 @@ function documentRowFixture(
   path: string,
   revision: number,
 ): DocumentRowFixture {
+  return documentRowAt(path, incarnationOf(path), revision);
+}
+
+function documentRowAt(
+  path: string,
+  incarnation: string,
+  revision: number,
+): DocumentRowFixture {
   return {
     path,
+    incarnation,
     shardRoomId: "shard-a",
     fragmentName: "doc",
     updatedAt: 1000,
@@ -100,6 +119,7 @@ function documentRowFixture(
 
 interface FileRowFixture {
   readonly path: string;
+  readonly incarnation: string;
   readonly entry: {
     readonly v: number;
     readonly kind: string;
@@ -117,8 +137,17 @@ interface FileRowFixture {
 }
 
 function fileRowFixture(path: string, revision: number): FileRowFixture {
+  return fileRowAt(path, incarnationOf(path), revision);
+}
+
+function fileRowAt(
+  path: string,
+  incarnation: string,
+  revision: number,
+): FileRowFixture {
   return {
     path,
+    incarnation,
     entry: {
       v: 1,
       kind: "blob",
@@ -201,6 +230,7 @@ interface DeltaOverrides {
   readonly removals?: readonly {
     population: "document" | "file";
     path: string;
+    incarnation: string;
     revision: number;
   }[];
   readonly identity?: {
@@ -518,18 +548,18 @@ describe("createIdentityStateLaneAdapter - snapshot", () => {
         row: { kind: "identity", identity: frame.identity.identity },
       },
       {
-        rowId: identityDocumentRowId("SOUL.md"),
+        rowId: identityDocumentRowId("SOUL.md", incarnationOf("SOUL.md")),
         revision: 5,
         row: { kind: "document", row: frame.documents[0] },
       },
       {
-        rowId: identityFileRowId("SOUL.md"),
+        rowId: identityFileRowId("SOUL.md", incarnationOf("SOUL.md")),
         revision: 6,
         row: { kind: "file", row: frame.files[0] },
       },
     ]);
-    expect(identityDocumentRowId("SOUL.md")).not.toBe(
-      identityFileRowId("SOUL.md"),
+    expect(identityDocumentRowId("SOUL.md", incarnationOf("SOUL.md"))).not.toBe(
+      identityFileRowId("SOUL.md", incarnationOf("SOUL.md")),
     );
   });
 
@@ -662,10 +692,20 @@ describe("createIdentityStateLaneAdapter - delta", () => {
       documentUpserts: [documentRowFixture("skills/a/SKILL.md", 11)],
       fileUpserts: [fileRowFixture("skills/a/logo.png", 12)],
       removals: [
-        { population: "document", path: "old.md", revision: 13 },
+        {
+          population: "document",
+          path: "old.md",
+          incarnation: incarnationOf("old.md"),
+          revision: 13,
+        },
         // Same path, other population: a client re-deriving which map a path
         // belongs to would remove the wrong row here.
-        { population: "file", path: "old.md", revision: 14 },
+        {
+          population: "file",
+          path: "old.md",
+          incarnation: incarnationOf("old.md"),
+          revision: 14,
+        },
       ],
     });
     latest().callbacks.onDelta(frame);
@@ -689,7 +729,10 @@ describe("createIdentityStateLaneAdapter - delta", () => {
       {
         kind: "upsert",
         row: {
-          rowId: identityDocumentRowId("skills/a/SKILL.md"),
+          rowId: identityDocumentRowId(
+            "skills/a/SKILL.md",
+            incarnationOf("skills/a/SKILL.md"),
+          ),
           revision: 11,
           row: { kind: "document", row: frame.documentUpserts[0] },
         },
@@ -697,20 +740,23 @@ describe("createIdentityStateLaneAdapter - delta", () => {
       {
         kind: "upsert",
         row: {
-          rowId: identityFileRowId("skills/a/logo.png"),
+          rowId: identityFileRowId(
+            "skills/a/logo.png",
+            incarnationOf("skills/a/logo.png"),
+          ),
           revision: 12,
           row: { kind: "file", row: frame.fileUpserts[0] },
         },
       },
       {
         kind: "remove",
-        rowId: identityDocumentRowId("old.md"),
+        rowId: identityDocumentRowId("old.md", incarnationOf("old.md")),
         revision: 13,
         reason: IDENTITY_ROW_REMOVE_REASON,
       },
       {
         kind: "remove",
-        rowId: identityFileRowId("old.md"),
+        rowId: identityFileRowId("old.md", incarnationOf("old.md")),
         revision: 14,
         reason: IDENTITY_ROW_REMOVE_REASON,
       },
@@ -844,5 +890,127 @@ describe("createIdentityStateLaneAdapter - generation guard", () => {
       { connection: "open", closeReason: null },
       { connection: "closed", closeReason: { kind: "caller" } },
     ]);
+  });
+});
+
+// ─── Incarnations: one key per LIFE of a path ─────────────────────────────
+
+describe("createIdentityStateLaneAdapter - incarnation keys", () => {
+  /** Every change the adapter emitted, in order, across all transactions. */
+  function emittedChanges(
+    log: readonly LogEntry[],
+  ): readonly { kind: string; rowId: string }[] {
+    return emittedEvents(log).flatMap((event) =>
+      event.kind === "record-transaction"
+        ? event.changes.map((change) => ({
+            kind: change.kind,
+            rowId: change.kind === "upsert" ? change.row.rowId : change.rowId,
+          }))
+        : [],
+    );
+  }
+
+  it("keys a rename back to a path apart from the life that rename removed", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createIdentityStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    // A, renamed to B, renamed back to A - each rename one envelope carrying the
+    // destination's fresh life and the source's removal.
+    latest().callbacks.onDelta(
+      deltaFrame({ seq: 1, documentUpserts: [documentRowAt("a.md", "a1", 1)] }),
+    );
+    latest().callbacks.onDelta(
+      deltaFrame({
+        seq: 2,
+        documentUpserts: [documentRowAt("b.md", "b1", 1)],
+        removals: [
+          {
+            population: "document",
+            path: "a.md",
+            incarnation: "a1",
+            revision: 2,
+          },
+        ],
+      }),
+    );
+    latest().callbacks.onDelta(
+      deltaFrame({
+        seq: 3,
+        documentUpserts: [documentRowAt("a.md", "a2", 1)],
+        removals: [
+          {
+            population: "document",
+            path: "b.md",
+            incarnation: "b1",
+            revision: 2,
+          },
+        ],
+      }),
+    );
+
+    const firstA = identityDocumentRowId("a.md", "a1");
+    const secondA = identityDocumentRowId("a.md", "a2");
+    expect(emittedChanges(log)).toEqual([
+      { kind: "upsert", rowId: firstA },
+      { kind: "upsert", rowId: identityDocumentRowId("b.md", "b1") },
+      { kind: "remove", rowId: firstA },
+      { kind: "upsert", rowId: secondA },
+      { kind: "remove", rowId: identityDocumentRowId("b.md", "b1") },
+    ]);
+    // The tombstone the first rename left names the first life only.
+    expect(secondA).not.toBe(firstA);
+  });
+
+  it("keys a blob recreated from the same bytes apart from the one deleted", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createIdentityStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    // Same path, same sha256: nothing but the incarnation tells the lives apart.
+    latest().callbacks.onDelta(
+      deltaFrame({ seq: 1, fileUpserts: [fileRowAt("logo.png", "f1", 1)] }),
+    );
+    latest().callbacks.onDelta(
+      deltaFrame({
+        seq: 2,
+        removals: [
+          {
+            population: "file",
+            path: "logo.png",
+            incarnation: "f1",
+            revision: 2,
+          },
+        ],
+      }),
+    );
+    latest().callbacks.onDelta(
+      deltaFrame({ seq: 3, fileUpserts: [fileRowAt("logo.png", "f2", 1)] }),
+    );
+
+    expect(emittedChanges(log)).toEqual([
+      { kind: "upsert", rowId: identityFileRowId("logo.png", "f1") },
+      { kind: "remove", rowId: identityFileRowId("logo.png", "f1") },
+      { kind: "upsert", rowId: identityFileRowId("logo.png", "f2") },
+    ]);
+  });
+
+  it("never aliases two (path, incarnation) pairs, whatever either half contains", () => {
+    // Both halves are free-form; a plain join would make these two pairs one key.
+    expect(identityDocumentRowId("a#b", "c")).not.toBe(
+      identityDocumentRowId("a", "b#c"),
+    );
+    expect(identityDocumentRowId('a","b', "c")).not.toBe(
+      identityDocumentRowId("a", 'b","c'),
+    );
+    expect(identityDocumentRowId("x", "1")).not.toBe(
+      identityFileRowId("x", "1"),
+    );
   });
 });

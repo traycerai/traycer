@@ -37,8 +37,11 @@
  *   hand, and making it optional would only create a path where the check is
  *   silently skipped.
  * - `docGuid`, inside the seed offer - the BODY's identity. A file deleted and
- *   recreated at the same path keeps neither, and a delta computed against the
- *   wrong one would union two logically different documents.
+ *   recreated at the same path, or renamed away and back, keeps the epoch (that
+ *   names the identity's replica, not the file) but NEVER its guid: each new
+ *   life of a path - each fresh `incarnation` on the index lane - gets a body
+ *   with a fresh guid, and a delta computed against the wrong one would union
+ *   two logically different documents.
  *
  * The remedies differ, which is why the codes do: a stale epoch means the
  * client's whole view of the identity is void, while a stale doc guid means only

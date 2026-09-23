@@ -120,19 +120,74 @@ export type AgentIdentityRecordPatch = z.infer<
 >;
 
 /**
+ * WHICH LIFE of a path a row describes. Host-minted, opaque, and half of every
+ * row's key: a row is `(path, incarnation)`, never the path alone.
+ *
+ * ## Why a path is not enough
+ *
+ * A removal is terminal and ABSORBING (`epicLaneRowRevisionSchema`, rule 2): no
+ * later upsert resurrects the row it removed, whatever its revision. That is
+ * right for ONE file, and wrong for a PATH, because a path is reused. Rename A
+ * to B and back to A, or delete A and create A again, inside one authority
+ * epoch: keyed by path, the second A lands on A's tombstone and is suppressed
+ * for the life of the replica. Nothing the file carries tells its two lives
+ * apart either - a markdown fragment is named after its path, and a blob
+ * recreated from the same bytes has the same hash - so the discriminator has
+ * to be minted by the host, which is the only party that sees a row come into
+ * existence.
+ *
+ * ## The minting contract - the HOST must honour all of it
+ *
+ * FRESH - a value this identity's replica has never used for this path in this
+ * `authorityEpoch` - every time a row comes into existence at a path:
+ *
+ * - a create (`files.add`, a committed upload to a new path, an import, the
+ *   projection ingesting a file the agent wrote);
+ * - a rename, for the row at the DESTINATION path, including a rename back to
+ *   a path that has held a row before;
+ * - a recreate at a path whose previous row was removed.
+ *
+ * UNCHANGED for every later change to that same row: a body edit, a blob
+ * overwrite (the displaced object moves into `versions[]`), a provenance or
+ * metadata change - anything that is an upsert of a row the client already
+ * holds. Minting a new one there would read as a removal the host never sent
+ * plus a create, and leave the old row live forever.
+ *
+ * A removal names the incarnation it removes, so it can only ever absorb that
+ * one life of the path.
+ *
+ * The value is OPAQUE: a client compares it for equality and nothing else, and
+ * never orders, parses or derives one. How the host mints it is the host's
+ * business - a uuid, or the position of the commit that created the row, both
+ * satisfy the contract - but it must be persisted with the replica, for the
+ * same reason `revision` is: a restart that re-minted it would present every
+ * held row as a new life of its path.
+ *
+ * `revision` is per incarnation: a new life may start its count over.
+ */
+export const agentIdentityRowIncarnationSchema = lazySchema(() =>
+  z.string().min(1),
+);
+export type AgentIdentityRowIncarnation = z.infer<
+  typeof agentIdentityRowIncarnationSchema
+>;
+
+/**
  * One markdown file, as a ROW.
  *
- * `path` is the row key - it is the map key in the index, so a row that carried
- * its own id beside it would be two names for one thing. `revision` is the
- * per-row staleness test every row on a lane carries: apply an upsert only when
- * it STRICTLY EXCEEDS the one held, and treat a removal as terminal and
- * ABSORBING - it applies at any revision and no later upsert resurrects the row.
- * `epicLaneRowRevisionSchema` states both rules in full, including why the
- * second is not simply "higher revision wins".
+ * Keyed by `(path, incarnation)` - see {@link agentIdentityRowIncarnationSchema}
+ * for why the path alone is not a key. `path` is also the row's DATA: it is
+ * where the file lives, and a caller looking for "the file at P" matches on it.
+ * `revision` is the per-row staleness test every row on a lane carries: apply an
+ * upsert only when it STRICTLY EXCEEDS the one held, and treat a removal as
+ * terminal and ABSORBING - it applies at any revision and no later upsert
+ * resurrects the row. `epicLaneRowRevisionSchema` states both rules in full,
+ * including why the second is not simply "higher revision wins".
  */
 export const agentIdentityDocumentRowSchema = lazySchema(() =>
   z.object({
     path: agentIdentityPathSchema,
+    incarnation: agentIdentityRowIncarnationSchema,
     shardRoomId: z.string().min(1),
     fragmentName: z.string().min(1),
     /** Display metadata. No ordering decision may read it; that is `revision`. */
@@ -145,10 +200,14 @@ export type AgentIdentityDocumentRow = z.infer<
   typeof agentIdentityDocumentRowSchema
 >;
 
-/** One blob, as a ROW: the plane's manifest entry keyed by its path. */
+/**
+ * One blob, as a ROW: the plane's manifest entry, keyed by `(path,
+ * incarnation)` exactly as a document row is.
+ */
 export const agentIdentityFileRowSchema = lazySchema(() =>
   z.object({
     path: agentIdentityPathSchema,
+    incarnation: agentIdentityRowIncarnationSchema,
     entry: identityFileEntrySchema,
     ...epicLaneRowRevisionFields,
   }),
@@ -156,7 +215,8 @@ export const agentIdentityFileRowSchema = lazySchema(() =>
 export type AgentIdentityFileRow = z.infer<typeof agentIdentityFileRowSchema>;
 
 /**
- * A row's removal, addressed by its key.
+ * A row's removal, addressed by its key - the path AND the incarnation, so a
+ * removal absorbs exactly the life of the path it names and never a later one.
  *
  * One shape for both populations, because a removal carries nothing but the key
  * and the revision and two identical schemas would be two names for one fact.
@@ -169,6 +229,7 @@ export const agentIdentityRowRemovalSchema = lazySchema(() =>
   z.object({
     population: z.enum(["document", "file"]),
     path: agentIdentityPathSchema,
+    incarnation: agentIdentityRowIncarnationSchema,
     ...epicLaneRowRevisionFields,
   }),
 );
@@ -331,8 +392,9 @@ const agentIdentityStateSubscribeHostStateFrameSchemaV10 = lazySchema(() =>
  * the schema boundary instead of in prose.
  *
  * The atomicity obligation is on the PRODUCER and cannot be typed: a RENAME
- * ships the new document row AND the old path's removal in one envelope, so no
- * client ever observes both paths live or neither. A blob overwrite ships one
+ * ships the new document row (under a FRESH incarnation) AND the old row's
+ * removal in one envelope, so no client ever observes both paths live or
+ * neither. A blob overwrite ships one
  * file row whose entry already carries the displaced object in `versions[]`.
  */
 const agentIdentityStateSubscribeDeltaFrameSchemaV10 = lazySchema(() =>

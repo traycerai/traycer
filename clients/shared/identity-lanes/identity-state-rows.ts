@@ -13,15 +13,26 @@
  *
  * A record replica holds ONE map from `rowId` to row, so the populations the
  * lane carries are told apart by their keys rather than by which array they
- * arrived in. The two prefixes below are that encoding, and they are enough on
- * their own: a path may contain anything, but `document:` and `file:` are
- * distinct namespaces and `<prefix><path>` is injective WITHIN a namespace, so
- * no pair of distinct (population, path) keys can alias. That is why this file
- * needs none of the JSON encoding `commentThreadRowId` carries - that key is a
- * PAIR of free-form strings joined together, and a join is what aliases.
+ * arrived in. The two prefixes below are that encoding: `document:` and `file:`
+ * are distinct namespaces, so no document key can alias a file key.
  *
- * Keys are opaque to the replica and never parsed back apart: a caller that
- * wants a path asks the row, which carries it.
+ * ## A key names one LIFE of a path, not the path
+ *
+ * Within a namespace the key is the pair `(path, incarnation)`, never the path
+ * alone. The replica treats a removal as absorbing, so a path-only key would let
+ * a file's first life tombstone every later one: rename A to B and back, or
+ * delete and recreate A, and the second A would be suppressed for the rest of
+ * the epoch. The host mints a fresh `incarnation` for each life of a path
+ * (`agentIdentityRowIncarnationSchema` states the contract), and the key carries
+ * it.
+ *
+ * The pair is JSON-encoded, as `commentThreadRowId` encodes its pair, because
+ * both halves are free-form strings and a plain join is what aliases.
+ *
+ * Keys are opaque to the replica and never parsed back apart - and they are an
+ * IDENTITY, not an address: a caller that wants "the file at P" matches on the
+ * row's own `path`, since it cannot know which incarnation is live there without
+ * reading the rows anyway.
  *
  * ## Why a removal is a removal here, and not a tombstone row
  *
@@ -79,7 +90,7 @@ export type IdentityStateRow =
    * The body itself rides `agentIdentity.file.subscribe`, per open file.
    */
   | { readonly kind: "document"; readonly row: AgentIdentityDocumentRow }
-  /** One blob: the file plane's manifest entry, keyed by its path. */
+  /** One blob: the file plane's manifest entry, at one life of its path. */
   | { readonly kind: "file"; readonly row: AgentIdentityFileRow };
 
 const DOCUMENT_ROW_PREFIX = "document:";
@@ -93,18 +104,26 @@ const FILE_ROW_PREFIX = "file:";
  */
 export const IDENTITY_RECORD_ROW_ID = "identity";
 
-/** The index row for the markdown file at `path`. */
-export function identityDocumentRowId(path: string): string {
-  return `${DOCUMENT_ROW_PREFIX}${path}`;
+function pathIncarnationKey(path: string, incarnation: string): string {
+  return JSON.stringify([path, incarnation]);
 }
 
-/** The index row for the blob at `path`. */
-export function identityFileRowId(path: string): string {
-  return `${FILE_ROW_PREFIX}${path}`;
+/** The index row for one life of the markdown file at `path`. */
+export function identityDocumentRowId(
+  path: string,
+  incarnation: string,
+): string {
+  return `${DOCUMENT_ROW_PREFIX}${pathIncarnationKey(path, incarnation)}`;
+}
+
+/** The index row for one life of the blob at `path`. */
+export function identityFileRowId(path: string, incarnation: string): string {
+  return `${FILE_ROW_PREFIX}${pathIncarnationKey(path, incarnation)}`;
 }
 
 /**
- * The key for a removal the lane addressed by `(population, path)`.
+ * The key for a removal the lane addressed by `(population, path,
+ * incarnation)`.
  *
  * `population` is read off the wire rather than re-derived from the path, and
  * that is the contract's own instruction: which map a path belongs to is a HOST
@@ -115,19 +134,21 @@ export function identityFileRowId(path: string): string {
 export function identityRowIdFor(
   population: "document" | "file",
   path: string,
+  incarnation: string,
 ): string {
   return population === "document"
-    ? identityDocumentRowId(path)
-    : identityFileRowId(path);
+    ? identityDocumentRowId(path, incarnation)
+    : identityFileRowId(path, incarnation);
 }
 
 /**
  * The removal reason stamped on a row the index lane removed.
  *
  * A CLOSED adapter-side constant, and deliberately not a wire field. The
- * `removals` entry carries a population, a path and a revision and nothing else
- * - the host does not record who deleted a file or why - so a `reason` on the
- * wire would be a field with nothing truthful to put in it, and a fabricated one
+ * `removals` entry carries a population, a path, an incarnation and a revision
+ * and nothing else - the host does not record who deleted a file or why - so a
+ * `reason` on the wire would be a field with nothing truthful to put in it, and
+ * a fabricated one
  * is worse than an honest constant because nothing downstream could tell it from
  * a real answer. Attribution IS available, one unary over: `agentIdentity
  * .history.list` serves the version log with its provenance.

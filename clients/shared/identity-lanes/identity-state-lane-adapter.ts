@@ -241,14 +241,14 @@ export function createIdentityStateLaneAdapter(
     });
     for (const row of frame.documents) {
       rows.push({
-        rowId: identityDocumentRowId(row.path),
+        rowId: identityDocumentRowId(row.path, row.incarnation),
         revision: row.revision,
         row: { kind: "document", row },
       });
     }
     for (const row of frame.files) {
       rows.push({
-        rowId: identityFileRowId(row.path),
+        rowId: identityFileRowId(row.path, row.incarnation),
         revision: row.revision,
         row: { kind: "file", row },
       });
@@ -278,7 +278,7 @@ export function createIdentityStateLaneAdapter(
       changes.push({
         kind: "upsert",
         row: {
-          rowId: identityDocumentRowId(row.path),
+          rowId: identityDocumentRowId(row.path, row.incarnation),
           revision: row.revision,
           row: { kind: "document", row },
         },
@@ -288,7 +288,7 @@ export function createIdentityStateLaneAdapter(
       changes.push({
         kind: "upsert",
         row: {
-          rowId: identityFileRowId(row.path),
+          rowId: identityFileRowId(row.path, row.incarnation),
           revision: row.revision,
           row: { kind: "file", row },
         },
@@ -301,7 +301,11 @@ export function createIdentityStateLaneAdapter(
       // wrong would strand the old path forever.
       changes.push({
         kind: "remove",
-        rowId: identityRowIdFor(removal.population, removal.path),
+        rowId: identityRowIdFor(
+          removal.population,
+          removal.path,
+          removal.incarnation,
+        ),
         revision: removal.revision,
         reason: IDENTITY_ROW_REMOVE_REASON,
       });
