@@ -1354,9 +1354,9 @@ describe("P5: fold state version guard", () => {
       appendedEvents: [],
     });
     const step = steps.next();
-    expect(step.done, "declines immediately, before yielding any load").toBe(
-      true,
-    );
+    if (step.done !== true) {
+      throw new Error("expected the fold to decline before yielding any load");
+    }
     const result = step.value;
     if (result.continued) {
       throw new Error("expected the fold to decline on a version mismatch");
