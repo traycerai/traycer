@@ -1738,6 +1738,7 @@ function useChatTileSessionViewModel(
         permission: defaultPermission,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        identityId: null,
       }),
     [defaultPermission, defaultReasoning, defaultServiceTier, defaultSelection],
   );

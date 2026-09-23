@@ -1,4 +1,5 @@
 import { displayTitle } from "@/lib/display-title";
+import { chatListedAsArchived } from "@/lib/chats/chat-list-visibility";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
 
 export interface QuoteChatTarget {
@@ -47,8 +48,9 @@ export interface QuoteChatTargetsInput {
  * agent turn the most recently updated chat is just whichever agent streamed
  * last.
  *
- * Archived chats are excluded: they are hidden from the sidebar, so offering
- * one here would send a message somewhere the user cannot see it.
+ * Archived chats (and evolution chats, which lists treat as archived - see
+ * `chatListedAsArchived`) are excluded: they are hidden from the sidebar, so
+ * offering one here would send a message somewhere the user cannot see it.
  *
  * A chat on ANOTHER host than the source is kept, marked rather than removed.
  * Dropping the row would leave the user hunting for a chat they can see in the
@@ -62,7 +64,7 @@ export function resolveQuoteChatTargets(
   const rows = input.orderedChatIds.flatMap((chatId) => {
     if (!Object.hasOwn(input.chats.byId, chatId)) return [];
     const chat = input.chats.byId[chatId];
-    if (chat.archivedAt !== null) return [];
+    if (chatListedAsArchived(chat)) return [];
     return [
       {
         chatId: chat.id,

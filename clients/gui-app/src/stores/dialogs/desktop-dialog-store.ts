@@ -8,6 +8,23 @@ import {
 
 export type DraftsDialogEntryPoint = "menu" | "palette";
 
+/**
+ * How the Identities dialog opens. `list` is the plain list; `create` is the
+ * same list with its create field focused, for a "New identity" entry point.
+ */
+export type IdentitiesDialogMode = "list" | "create";
+
+/**
+ * A caller that knows WHICH host it means - a composer bound to its run
+ * target - names it, so the list it opens is that host's and a tab opened from
+ * it binds there. `null` is the app-wide effective host, which is what the
+ * header button and the palette mean.
+ */
+export interface IdentitiesDialogRequest {
+  readonly hostId: string | null;
+  readonly mode: IdentitiesDialogMode;
+}
+
 export type DesktopDialogKind =
   | "drafts"
   | "identities"
@@ -67,8 +84,11 @@ export interface DesktopDialogState {
     readonly reportId: string;
   } | null;
   readonly draftsEntryPoint: DraftsDialogEntryPoint;
+  /** What the open Identities dialog was asked for; see the request type. */
+  readonly identitiesRequest: IdentitiesDialogRequest;
   readonly openDrafts: (entryPoint: DraftsDialogEntryPoint) => void;
   readonly openIdentities: () => void;
+  readonly openIdentitiesFor: (request: IdentitiesDialogRequest) => void;
   readonly openAboutDetails: () => void;
   readonly openLogs: () => void;
   readonly openEpicInNewWindow: () => void;
@@ -88,6 +108,11 @@ export interface DesktopDialogState {
   readonly close: () => void;
 }
 
+const DEFAULT_IDENTITIES_REQUEST: IdentitiesDialogRequest = {
+  hostId: null,
+  mode: "list",
+};
+
 export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   activeDialog: null,
   reportIssueAvailable: false,
@@ -98,11 +123,18 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   updateUnsyncedOtherWindowsUnknown: false,
   lastConfirmedReport: null,
   draftsEntryPoint: "menu",
+  identitiesRequest: DEFAULT_IDENTITIES_REQUEST,
   openDrafts: (entryPoint) => {
     set({ activeDialog: "drafts", draftsEntryPoint: entryPoint });
   },
   openIdentities: () => {
-    set({ activeDialog: "identities" });
+    set({
+      activeDialog: "identities",
+      identitiesRequest: DEFAULT_IDENTITIES_REQUEST,
+    });
+  },
+  openIdentitiesFor: (request) => {
+    set({ activeDialog: "identities", identitiesRequest: request });
   },
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });

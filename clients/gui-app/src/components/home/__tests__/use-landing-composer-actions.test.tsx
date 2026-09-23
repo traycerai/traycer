@@ -3930,6 +3930,7 @@ function defaultToolbar() {
     },
     reasoning: "high" as const,
     serviceTier: "" as const,
+    identityId: null,
     permission: "supervised" as const,
   };
 }

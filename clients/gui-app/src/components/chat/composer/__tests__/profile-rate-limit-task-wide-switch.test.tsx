@@ -405,6 +405,7 @@ describe("rate-limit banner task-wide switch", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,

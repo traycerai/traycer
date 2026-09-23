@@ -50,6 +50,7 @@ function renderSheet(overrides: {
       turnActive={overrides.turnActive}
       judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
+      identitySection={null}
     />,
   );
 }

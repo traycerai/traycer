@@ -29,6 +29,7 @@ function chat(docResident: boolean | null): ChatProjection {
     updatedAt: 2,
     userId: "user-a",
     hostId: "host-1",
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     docResident,
     settings: null,

@@ -5,6 +5,7 @@ import {
   chatEventSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/chat-events";
 import {
+  chatKindSchema,
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreAuto,
   chatRunSettingsSchemaPreReasonix,
@@ -180,7 +181,7 @@ export const chatSchema = lazySchema(() =>
      * (a background compaction pass, say) is a third member, not a second flag
      * that has to be reconciled with this one.
      */
-    kind: z.enum(["conversation", "evolution"]).default("conversation"),
+    kind: chatKindSchema.default("conversation"),
     /**
      * Clean completed turns since this chat's identity last ran an evolution
      * pass, or `null` when the chat has no identity.

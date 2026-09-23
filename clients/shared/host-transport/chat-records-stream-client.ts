@@ -5,6 +5,8 @@ import {
   hostChatRecordsSubscribeServerFrameSchemaV14,
   type ChatRecordRemovalReason,
   type ChatRecordSummaryStreamV13,
+  type HostChatRecordsSubscribeServerFrameV11,
+  type HostChatRecordsSubscribeServerFrameV12,
   type HostChatRecordsSubscribeServerFrameV13,
   type HostChatRecordsSubscribeServerFrameV14,
 } from "@traycer/protocol/host/epic/chat-records";
@@ -282,12 +284,31 @@ function sessionFacetOf(
   return { sessionState: record.sessionState, lastExit: record.lastExit };
 }
 
+/**
+ * A `@1.1`/`@1.2` chat `upsert`, stated in the `@1.3` shape.
+ *
+ * Those minors' chat row has no `kind`, and every chat they carry is a
+ * `conversation`: evolution chats exist only on hosts that speak the minors
+ * carrying the field. So this states the one true value rather than leaving the
+ * consumer to guess, exactly as the list's `@1.1 -> @1.2` upgrade does.
+ */
+function withConversationKind(
+  frame:
+    | Exclude<HostChatRecordsSubscribeServerFrameV11, { kind: "tuiUpsert" }>
+    | HostChatRecordsSubscribeServerFrameV12,
+): ChatRecordsStreamFrame {
+  if (frame.kind !== "upsert") return frame;
+  return { ...frame, record: { ...frame.record, kind: "conversation" } };
+}
+
 function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
   const parsed =
     hostChatRecordsSubscribeServerFrameSchemaV11.safeParse(envelope);
   if (!parsed.success) return { success: false };
   const frame = parsed.data;
-  if (frame.kind !== "tuiUpsert") return { success: true, data: frame };
+  if (frame.kind !== "tuiUpsert") {
+    return { success: true, data: withConversationKind(frame) };
+  }
   return {
     success: true,
     data: {
@@ -340,7 +361,10 @@ function parseNegotiatedFrame(
     return hostChatRecordsSubscribeServerFrameSchemaV13.safeParse(envelope);
   }
   if (negotiated.minor === 2) {
-    return hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope);
+    const parsed =
+      hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope);
+    if (!parsed.success) return { success: false };
+    return { success: true, data: withConversationKind(parsed.data) };
   }
   return parseV11Frame(envelope);
 }

@@ -1309,6 +1309,11 @@ export const epicListChatRecordsV12 = defineRpcContract({
  * Absent says the only true thing: that host was never asked. Consumers read
  * `head ?? null` and see no difference, which is why the distinction costs
  * them nothing.
+ *
+ * `kind` is the opposite case, and is stated: every row a `@1.1` host serves
+ * is a `conversation`, because evolution chats exist only on hosts that speak
+ * the minors carrying the field. That is a fact about the older host, not a
+ * guess put in its mouth.
  */
 export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
   typeof epicListChatRecordsV11,
@@ -1317,7 +1322,12 @@ export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
   from: epicListChatRecordsV11.schemaVersion,
   to: epicListChatRecordsV12.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    chats: response.chats.map((chat) => ({
+      ...chat,
+      kind: "conversation" as const,
+    })),
+  }),
 });
 
 // `@1.3` gates the whole answer on a list revision the caller sends back: the

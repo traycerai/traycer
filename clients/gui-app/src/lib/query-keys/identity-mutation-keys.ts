@@ -11,4 +11,6 @@ export const identityMutationKeys = {
   restoreHistory: () => ["agentIdentity.history.restore"] as const,
   inspectSkills: () => ["agentIdentity.skills.inspect"] as const,
   importSkills: () => ["agentIdentity.skills.import"] as const,
+  scanHermesProfile: () => ["agentIdentity.import.hermes.scan"] as const,
+  runHermesImport: () => ["agentIdentity.import.hermes.run"] as const,
 };

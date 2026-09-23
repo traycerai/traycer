@@ -113,6 +113,7 @@ import type {
   TreeSlice,
 } from "@/stores/epics/open-epic/types";
 import { EMPTY_ARRAY, EMPTY_TREE_SLICE } from "@/stores/epics/open-epic/types";
+import { chatListedAsArchived } from "@/lib/chats/chat-list-visibility";
 
 // ─── Type re-exports ──────────────────────────────────────────────────────
 
@@ -1212,7 +1213,8 @@ export function useEpicChatRecords(): ReadonlyArray<ChatProjection> {
 
 /**
  * Ids of the chats + terminal-agents whose record carries `archivedAt !== null`
- * - the archive roots the sidebar hides subtrees from. Chats and TUI agents are
+ * (for chats, `chatListedAsArchived`, which also counts an identity's
+ * evolution chat) - the archive roots the sidebar hides subtrees from. Chats and TUI agents are
  * merged into one list because a single `epic.setChatArchived` RPC keyed by id
  * covers both record kinds, so the tree treats them identically.
  *
@@ -1227,13 +1229,36 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
     handle.store,
     useShallow((s): ReadonlyArray<string> => {
       const archived = [
-        ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+        ...s.chats.allIds.filter((id) =>
+          chatListedAsArchived(s.chats.byId[id]),
+        ),
         ...s.tuiAgents.allIds.filter(
           (id) => s.tuiAgents.byId[id].archivedAt !== null,
         ),
       ];
       if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
       return archived.sort();
+    }),
+  );
+}
+
+/**
+ * Ids of the identity evolution chats in this epic, sorted for the same
+ * `useShallow` bail-out as {@link useEpicArchivedNodeIds}. The sidebar's
+ * reveal exception reads it: a background review pass is always "working" or
+ * "unread" at some point, and neither may pull it into the default view - only
+ * the user opening it may.
+ */
+export function useEpicEvolutionChatIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      const ids = s.chats.allIds.filter(
+        (id) => s.chats.byId[id].chatKind === "evolution",
+      );
+      if (ids.length === 0) return EMPTY_TREE_ID_ARRAY;
+      return ids.sort();
     }),
   );
 }
@@ -1258,7 +1283,7 @@ function archivedNodeIdsSnapshot(
   if (handle === null) return EMPTY_TREE_ID_ARRAY;
   const s = handle.store.getState();
   const archived = [
-    ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+    ...s.chats.allIds.filter((id) => chatListedAsArchived(s.chats.byId[id])),
     ...s.tuiAgents.allIds.filter(
       (id) => s.tuiAgents.byId[id].archivedAt !== null,
     ),

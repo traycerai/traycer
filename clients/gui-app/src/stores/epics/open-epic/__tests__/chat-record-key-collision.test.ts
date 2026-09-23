@@ -30,7 +30,7 @@
  * binary).
  */
 import { describe, expect, it } from "vitest";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import {
   createChatRecordTable,
@@ -42,8 +42,8 @@ const EPIC_ID = "epic-collision";
 
 /** Mirrors `chat-records-union.test.ts`'s `record()` fixture. */
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -60,6 +60,7 @@ function record(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }

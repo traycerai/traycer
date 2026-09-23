@@ -106,6 +106,14 @@ const filePlaneAgentProducerSchema = lazySchema(() =>
   z.object({
     type: z.literal("agent"),
     chatId: z.string(),
+    /**
+     * Set when the chat is an identity's hidden EVOLUTION pass, so a blob it
+     * writes (a skill script, an image) keeps the same provenance its
+     * markdown edits carry through the version log. Additive: absent on
+     * every other agent write, and a reader that predates it sees a plain
+     * agent producer, which is the honest degradation.
+     */
+    evolution: z.literal(true).optional(),
   }),
 );
 const filePlaneGenericProducerSchema = lazySchema(() =>
