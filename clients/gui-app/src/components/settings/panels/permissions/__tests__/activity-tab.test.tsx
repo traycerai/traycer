@@ -10,12 +10,7 @@ import type { AutoJudgeRecentEntry } from "@traycer/protocol/host/auto-mode/cont
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
 import type { VisibleChat } from "@/hooks/chats/use-visible-chats";
-import {
-  AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
-  autoModeRuleDisplayName,
-  autoModeRuleDraftAction,
-  autoModeRuleDraftText,
-} from "@/lib/auto-mode/auto-mode-rule-copy";
+import { AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL } from "@/lib/auto-mode/auto-mode-rule-copy";
 import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
 
 // ---- host boundary --------------------------------------------------------
@@ -226,6 +221,21 @@ describe("ActivityTab", () => {
       expect(rows[0].getAttribute("data-testid")).toBe(rowTestId);
     });
 
+    it("says so, with no table, when the filter matches none of the entries", () => {
+      recent.entries = [ALLOWED];
+      defaultTab();
+
+      fireEvent.click(screen.getByTestId("auto-judge-activity-filter-refused"));
+
+      expect(
+        screen.getByTestId("auto-judge-activity-filter-empty").textContent,
+      ).toBe("No decisions match this filter.");
+      expect(screen.queryByRole("table")).toBeNull();
+      expect(screen.queryAllByTestId(/^auto-judge-activity-row-/)).toHaveLength(
+        0,
+      );
+    });
+
     it("returns to every row on All", () => {
       defaultTab();
       fireEvent.click(screen.getByTestId("auto-judge-activity-filter-refused"));
@@ -250,19 +260,10 @@ describe("ActivityTab", () => {
       expect(link.textContent).toBe(AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL);
       fireEvent.click(link);
 
-      const action = autoModeRuleDraftAction({
-        inputSummary: ASKED.inputSummary,
-        toolName: ASKED.toolName,
-      });
-      if (action === null) throw new Error("expected a draft action");
       expect(onAllowFromNowOn).toHaveBeenCalledTimes(1);
       expect(onAllowFromNowOn).toHaveBeenCalledWith({
         section: "allow",
-        text: autoModeRuleDraftText({
-          workspace: { remote: null, branch: null },
-          ruleName: autoModeRuleDisplayName("Force Push"),
-          action,
-        }),
+        text: "Force push for `git push --force origin main`",
       });
     });
 
@@ -273,7 +274,6 @@ describe("ActivityTab", () => {
           "chat-1",
           {
             title: "Live title",
-            hostId: "host-a",
             workspace: { remote: "acme/web", branch: "feature-x" },
           },
         ],
@@ -289,6 +289,29 @@ describe("ActivityTab", () => {
       const text = onAllowFromNowOn.mock.calls[0][0].text;
       expect(text).toContain("In acme/web:");
       expect(text).toContain("on branch feature-x");
+    });
+
+    it("is offered for a refused soft-tier block too", () => {
+      const onAllowFromNowOn = vi.fn<(draft: SettingsRuleDraft) => void>();
+      renderTab({ onAllowFromNowOn, onFixInJudge: noop });
+
+      fireEvent.click(
+        within(
+          screen.getByTestId("auto-judge-activity-row-refused"),
+        ).getByTestId("auto-judge-activity-allow-from-now-on"),
+      );
+
+      expect(onAllowFromNowOn).toHaveBeenCalledTimes(1);
+      expect(onAllowFromNowOn.mock.calls[0][0].section).toBe("allow");
+    });
+
+    it("is not offered for a generic tool name with no input summary", () => {
+      recent.entries = [askedWith({ inputSummary: "", toolName: "Bash" })];
+      defaultTab();
+
+      expect(
+        screen.queryByTestId("auto-judge-activity-allow-from-now-on"),
+      ).toBeNull();
     });
 
     it("is not offered for an allow, a hard-tier block, or a block with no rule", () => {
@@ -371,7 +394,6 @@ describe("ActivityTab", () => {
           "chat-1",
           {
             title: "Live title",
-            hostId: null,
             workspace: { remote: null, branch: null },
           },
         ],

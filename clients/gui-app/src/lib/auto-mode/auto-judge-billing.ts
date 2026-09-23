@@ -402,9 +402,10 @@ function judgeHarnessLabel(harnessId: string): string {
  * The measured order of magnitude of Copilot premium requests an hour of Auto
  * mode spends - Traycer's own call rate over real sessions, not a derivation
  * from one call per command (a reviewed command can take two calls, or none on
- * a cache hit).
+ * a cache hit). Quoted by the composer's meta line below and by Settings ▸
+ * Permissions ▸ Judge, so the two cannot drift.
  */
-const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
+export const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
 
 /**
  * The one-line disclosure on the composer's Auto row, so a user who never
@@ -429,40 +430,4 @@ export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
     case "blocked":
       return "No judge available on this machine · asks you instead";
   }
-}
-
-/**
- * The self-billing warning shown at selection time in Settings, or `null` when
- * the judge is Traycer's own and nothing of the user's is being spent.
- *
- * "On top of your chat replies" is the clause that must not be dropped: the
- * sharpest case is a user picking the SAME harness for chat and judge, which is
- * the natural thing to reach for and doubles the spend on one account.
- */
-export function autoJudgeSelfBillingWarning(
-  billing: AutoJudgeSelectionBilling | AutoJudgeBilling,
-): string | null {
-  if (billing.kind === "traycer") return null;
-  // Nothing extra is spent, so there is nothing to warn about. Unreachable
-  // from Settings, whose picker builds its billing from the stored selection
-  // alone - the branch exists so the union stays exhaustive if that changes.
-  if (billing.kind === "provider-native") return null;
-  // Nothing is spent when nothing runs.
-  if (billing.kind === "blocked") return null;
-  // NO PER-COMMAND CALL COUNT. Both sentences used to promise "one per command
-  // reviewed", and the host's judge is not one call: `AutoJudgeService.runStages`
-  // invokes the adapter for stage 1 and invokes it AGAIN for stage 2 whenever
-  // stage 1 answers `yes` or `unsure`, while a cache hit can skip the call
-  // altogether. A number a user can multiply is worse than no number when the
-  // pipeline can spend two or zero.
-  //
-  // The claim that survives is the one the warning exists for: this spends the
-  // user's own provider allowance rather than Traycer's, and it is spent on top
-  // of the chat itself. The Copilot line keeps its ORDER-OF-MAGNITUDE range,
-  // which was measured over real sessions rather than derived from one call per
-  // command, and now says so.
-  if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
-    return `Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use ${COPILOT_PREMIUM_REQUESTS_PER_HOUR} of it.`;
-  }
-  return `Judge calls use your own ${billing.harnessLabel} account, on top of your chat replies — a reviewed command can take more than one call.`;
 }

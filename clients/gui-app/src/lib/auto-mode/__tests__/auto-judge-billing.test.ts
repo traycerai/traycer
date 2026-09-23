@@ -14,7 +14,6 @@ import {
   autoJudgeBillingFor,
   autoJudgeBillingForRun,
   autoJudgeMetaLine,
-  autoJudgeSelfBillingWarning,
   autoJudgeTarget,
   harnessHasNativeAutoJudge,
   providerRunsItsOwnJudge,
@@ -650,66 +649,6 @@ describe("autoJudgeMetaLine", () => {
   it("says no judge is available for the blocked kind", () => {
     expect(autoJudgeMetaLine({ kind: "blocked" })).toBe(
       "No judge available on this machine · asks you instead",
-    );
-  });
-});
-
-describe("autoJudgeSelfBillingWarning", () => {
-  it("returns null when the judge is Traycer's own - nothing of the user's is spent", () => {
-    expect(
-      autoJudgeSelfBillingWarning({ kind: "traycer", modelLabel: "Sonnet 5" }),
-    ).toBeNull();
-  });
-
-  it("returns null for the provider-native kind - nothing extra is spent, the provider reviews for free", () => {
-    expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider-native",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toBeNull();
-  });
-
-  it("returns null for the blocked kind - nothing is spent when nothing runs", () => {
-    expect(autoJudgeSelfBillingWarning({ kind: "blocked" })).toBeNull();
-  });
-
-  it("quotes Traycer's own Copilot premium-request call rate for the copilot harness", () => {
-    expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-        modelLabel: "GPT-5",
-      }),
-    ).toBe(
-      "Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use 60–350 of it.",
-    );
-  });
-
-  it("states the generic 'on top of your chat replies' sentence for any other provider harness", () => {
-    expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-        modelLabel: "Sonnet",
-      }),
-    ).toBe(
-      "Judge calls use your own Claude Code account, on top of your chat replies — a reviewed command can take more than one call.",
-    );
-  });
-
-  it("also works from the selection-level billing shape (Settings), which carries no model label", () => {
-    expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toBe(
-      "Judge calls use your own Claude Code account, on top of your chat replies — a reviewed command can take more than one call.",
     );
   });
 });

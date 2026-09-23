@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -72,7 +72,16 @@ vi.mock("@/components/settings/panels/permissions/rules-tab", () => ({
     readonly drafts: ReadonlyArray<PendingRuleDraft>;
   }): ReactNode => {
     rulesProps.current = props.drafts;
-    return <div data-testid="rules-body" />;
+    // Local state, as the real editor's unsaved text is: a remount loses it.
+    const [text, setText] = useState("pristine");
+    return (
+      <div data-testid="rules-body">
+        <span data-testid="rules-text">{text}</span>
+        <button type="button" onClick={() => setText("UNSAVED EDIT")}>
+          stub edit
+        </button>
+      </div>
+    );
   },
 }));
 vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
@@ -249,6 +258,26 @@ describe("PermissionsSettingsPanel", () => {
       expect(rulesProps.current).toEqual([
         { id: 1, draft: { section: "allow", text: "Run the linter" } },
       ]);
+    });
+
+    it("does not remount Rules when the intent names the host Settings already follows", async () => {
+      const user = userEvent.setup();
+      // Following the active host: the raw pin is null, the scope's host is host-a.
+      scopeOverrides.current = { hostId: "host-a" };
+      render(<PermissionsSettingsPanel />);
+      await user.click(screen.getByTestId("permissions-tab-rules"));
+      await user.click(screen.getByRole("button", { name: "stub edit" }));
+      expect(screen.getByTestId("rules-text").textContent).toBe("UNSAVED EDIT");
+
+      act(() => {
+        armIntent({
+          tab: "rules",
+          draft: { section: "allow", text: "second draft" },
+          hostId: "host-a",
+        });
+      });
+
+      expect(screen.getByTestId("rules-text").textContent).toBe("UNSAVED EDIT");
     });
 
     it("carries a named host into the Settings scope and acknowledges the intent", () => {

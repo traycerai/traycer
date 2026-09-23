@@ -15,7 +15,10 @@ import {
   joinAutoPolicySections,
   type PendingRuleDraft,
 } from "@/components/settings/panels/auto-policy-document";
-import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
+import {
+  RulesTab,
+  type RulesEditorState,
+} from "@/components/settings/panels/permissions/rules-tab";
 
 // ---- host boundary --------------------------------------------------------
 
@@ -146,6 +149,8 @@ interface TabProps {
   readonly active: boolean;
   readonly drafts: ReadonlyArray<PendingRuleDraft>;
   readonly onDraftsConsumed: (throughId: number) => void;
+  readonly snapshot: RulesEditorState | null;
+  readonly onSnapshot: (editor: RulesEditorState) => void;
 }
 
 function tab(overrides: Partial<TabProps>): ReactElement {
@@ -153,6 +158,8 @@ function tab(overrides: Partial<TabProps>): ReactElement {
     active: true,
     drafts: [],
     onDraftsConsumed: noop,
+    snapshot: null,
+    onSnapshot: noop,
     ...overrides,
   };
   return <RulesTab {...props} />;
@@ -412,8 +419,8 @@ describe("RulesTab", () => {
       });
       render(tab({}));
 
-      expect(screen.getByTestId("auto-policy-banner").textContent).toContain(
-        "can't read your saved rules",
+      expect(screen.getByTestId("auto-policy-banner").textContent).toBe(
+        "Traycer can't read your saved rules right now, so saving is off. Reopen Settings to try again.",
       );
       expect(input("allow").disabled).toBe(true);
       expect((await settledSave()).disabled).toBe(true);

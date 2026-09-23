@@ -22,10 +22,11 @@ type SetAutoJudgeContext = {
  * Writes this host's judge selection.
  *
  * The read is updated in place from the response, and THEN revalidated. The
- * in-place write is for the `selection`: the picker commits on every model /
- * provider / profile click, and without it the trigger would snap back to the
- * previous selection for the frame before a refetch lands. The response
- * settles that question - it echoes what the host persisted.
+ * in-place write is for the `selection`: Settings ▸ Permissions ▸ Judge
+ * commits on every provider / account / model choice, and without it the
+ * controls would snap back to the previous selection for the frame before a
+ * refetch lands. The response settles that question - it echoes what the host
+ * persisted.
  *
  * It does not settle `effective` and `blocked`. Those are the host's verdict
  * on availability - provider enablement, the Traycer row, the Traycer model
@@ -45,7 +46,7 @@ type SetAutoJudgeContext = {
  * because the verdict has more than one input and each has its own
  * invalidator; a fence would need every one of them to bump the same
  * counter, and a revalidation needs none. Not awaited: the save is done, and
- * the picker should not stay disabled on a read.
+ * the pick it settles should not wait on a read.
  *
  * `hostId` is captured in `onMutate` so a surface whose host moved mid-flight
  * files the answer against the host that was asked.
@@ -82,9 +83,14 @@ export function useAutoJudgeSetMutation(): UseMutationResult<
         // same cache entry afterwards. Measured on the real QueryClient:
         // `afterSave={SAVED}; afterRead={OLD}`.
         //
-        // `await`ed, which is what keeps the mutation PENDING across it. The
-        // picker is disabled while pending, so the window in which a user could
-        // pick again against a cache about to be overwritten closes too.
+        // `await`ed, which keeps the mutation pending across it - and that is
+        // what makes the Judge tab's hand-off seamless. Nothing is disabled
+        // while a write is in flight: the tab presents its latest pick, not
+        // the record, until THAT pick's per-call callback settles, and
+        // TanStack runs per-call callbacks only after this `onSuccess` has
+        // resolved, so the cache already holds the saved selection when the
+        // pick gives way to it. A second pick made meanwhile queues behind this
+        // write on `autoJudgeWriteScope`.
         onSuccess: async (data, _variables, ctx) => {
           if (ctx.hostId === null) return;
           const queryKey = hostQueryKeys.methodScope(

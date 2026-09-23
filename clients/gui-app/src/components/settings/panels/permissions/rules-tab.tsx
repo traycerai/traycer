@@ -146,6 +146,15 @@ export function RulesTab(props: {
   readonly drafts: ReadonlyArray<PendingRuleDraft>;
   /** Called once the editor has taken every draft up to `throughId`. */
   readonly onDraftsConsumed: (throughId: number) => void;
+  /**
+   * The edit as the page last saw it, or `null` before there is one. A
+   * remounted editor - a switch of machine re-keys everything under
+   * `HostScopeGate` - starts from it, so the edit follows the account, not the
+   * machine that happened to be showing it.
+   */
+  readonly snapshot: RulesEditorState | null;
+  /** Hands every committed editor state up to the page. */
+  readonly onSnapshot: (editor: RulesEditorState) => void;
 }): ReactNode {
   return (
     <AutoModeHostGate
@@ -160,6 +169,8 @@ export function RulesTab(props: {
           active={props.active}
           drafts={props.drafts}
           onDraftsConsumed={props.onDraftsConsumed}
+          snapshot={props.snapshot}
+          onSnapshot={props.onSnapshot}
         />
       )}
     </AutoModeHostGate>
@@ -169,9 +180,10 @@ export function RulesTab(props: {
 /**
  * What the editor holds between renders. `baseline` is the record the edit
  * started from and `sections` the edit itself; everything else is bookkeeping
- * for the gates and the drafts.
+ * for the gates and the drafts. The page keeps a copy (see `RulesTab`'s
+ * `snapshot`), so it is exported.
  */
-interface RulesEditorState {
+export interface RulesEditorState {
   /** Which record `baseline` came from; a newer one re-seeds a clean editor. */
   readonly recordKey: string;
   readonly readState: AutoPolicyReadState;
@@ -232,6 +244,26 @@ function editorIsDirty(editor: RulesEditorState): boolean {
 }
 
 /**
+ * Whether a newer record already says exactly what the edit says, so there is
+ * nothing left to save. The save's own answer re-seeds a mounted editor; this
+ * is the same re-seed for an editor that did not see that answer - one resumed
+ * on another machine while its save was in flight, whose opening read there
+ * returns the saved record. A dirty edit is otherwise never re-seeded, and the
+ * user's own save would read as a change made elsewhere.
+ */
+function editorHoldsRecord(
+  editor: RulesEditorState,
+  body: string | null,
+  readState: AutoPolicyReadState,
+): boolean {
+  if (readState === "unreadable") return false;
+  return (
+    joinAutoPolicySections(editor.sections) ===
+    joinAutoPolicySections(splitAutoPolicySections(body ?? ""))
+  );
+}
+
+/**
  * Every draft newer than the last one applied, appended to its section in
  * arrival order - whether or not the edit is already dirty, and below an
  * earlier draft still unsaved. The same object when there is nothing new, so
@@ -265,8 +297,9 @@ function editorWithDrafts(
 
 /**
  * The editor state for this render: the record seeds it the first time and
- * re-seeds it whenever a newer record arrives while the edit is clean, and
- * pending drafts are appended once the record is known.
+ * re-seeds it whenever a newer record arrives while the edit is clean - or
+ * already says exactly what that record says - and pending drafts are
+ * appended once the record is known.
  *
  * Drafts wait while a save is in flight, so the save's own re-seed cannot
  * swallow one, and while the record is unreadable, where there is no text to
@@ -283,7 +316,12 @@ function nextEditorState(input: {
   if (data === undefined) return editor;
   const readState = autoPolicyReadStateFor(data);
   const key = recordKeyFor(data.body, data.updatedAt, readState);
-  if (editor === null || (editor.recordKey !== key && !editorIsDirty(editor))) {
+  if (
+    editor === null ||
+    (editor.recordKey !== key &&
+      (!editorIsDirty(editor) ||
+        editorHoldsRecord(editor, data.body, readState)))
+  ) {
     editor = editorFromRecord({
       body: data.body,
       updatedAt: data.updatedAt,
@@ -295,11 +333,18 @@ function nextEditorState(input: {
   return editorWithDrafts(editor, input.drafts);
 }
 
+/** The last draft nonce an editor state has already scrolled to, or `0`. */
+function scrolledThrough(editor: RulesEditorState | null): number {
+  return editor?.scrollRequest?.nonce ?? 0;
+}
+
 function RulesEditor(props: {
   readonly hostId: string | null;
   readonly active: boolean;
   readonly drafts: ReadonlyArray<PendingRuleDraft>;
   readonly onDraftsConsumed: (throughId: number) => void;
+  readonly snapshot: RulesEditorState | null;
+  readonly onSnapshot: (editor: RulesEditorState) => void;
 }): ReactNode {
   const query = useAutoPolicyQuery();
   const setPolicy = useAutoPolicySetMutation();
@@ -312,7 +357,13 @@ function RulesEditor(props: {
     () => parseShippedAutoPolicy(data?.shippedDefaults ?? ""),
     [data?.shippedDefaults],
   );
-  const [editorState, setEditorState] = useState<RulesEditorState | null>(null);
+  // Local and authoritative while mounted; seeded from the page's copy, so a
+  // remount (another machine, the same account) resumes the same edit. The
+  // opening read below is this mount's own, so it is re-taken on the machine
+  // now showing, and the banner governs Save exactly as for a fresh edit.
+  const [editorState, setEditorState] = useState<RulesEditorState | null>(
+    props.snapshot,
+  );
   const editor = nextEditorState({
     editor: editorState,
     data,
@@ -323,15 +374,23 @@ function RulesEditor(props: {
   const openingRead = useOpeningRead(props.active, query.refetch);
 
   const appliedDraftId = editor?.appliedDraftId ?? 0;
-  const { onDraftsConsumed } = props;
+  const { onDraftsConsumed, onSnapshot } = props;
   useEffect(() => {
     if (appliedDraftId > 0) onDraftsConsumed(appliedDraftId);
   }, [appliedDraftId, onDraftsConsumed]);
+  useEffect(() => {
+    if (editorState !== null) onSnapshot(editorState);
+  }, [editorState, onSnapshot]);
 
   const sectionRefs = useRef(new Map<AutoPolicySectionKey, HTMLElement>());
+  // A draft scrolls its section into view once. A remount resumes a snapshot
+  // whose last draft has already been shown, so it starts past that one.
+  const scrolledNonce = useRef(scrolledThrough(props.snapshot));
   const scrollRequest = editor?.scrollRequest ?? null;
   useEffect(() => {
     if (scrollRequest === null) return;
+    if (scrollRequest.nonce <= scrolledNonce.current) return;
+    scrolledNonce.current = scrollRequest.nonce;
     const element = sectionRefs.current.get(scrollRequest.section);
     element?.scrollIntoView({ block: "center" });
   }, [scrollRequest]);
@@ -535,7 +594,7 @@ function RulesBanner(props: {
 }): ReactNode {
   const sentences = [
     props.readState === "unreadable"
-      ? "Traycer can't read your saved rules right now, so saving is off: a save would replace rules nobody can see. Reopen Settings to try again."
+      ? "Traycer can't read your saved rules right now, so saving is off. Reopen Settings to try again."
       : null,
     props.readState === "stale"
       ? "Traycer is showing a copy of your rules it couldn't refresh, so saving is off. Reopen Settings to try again."

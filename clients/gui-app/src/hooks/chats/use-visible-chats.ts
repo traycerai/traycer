@@ -1,8 +1,5 @@
 import { useSyncExternalStore } from "react";
-import {
-  getChatSessionHandleHostId,
-  getChatSessionRegistry,
-} from "@/lib/registries/chat-session-registry";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
 import {
@@ -21,8 +18,6 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 export interface VisibleChat {
   /** The live title, or `null` when only the chat's session is open. */
   readonly title: string | null;
-  /** The host the chat lives on, when either registry knows it. */
-  readonly hostId: string | null;
   /** The remote and branch its binding records; see the rule-draft copy. */
   readonly workspace: AutoModeRuleDraftWorkspace;
 }
@@ -44,18 +39,12 @@ function collectVisibleChats(): Map<string, VisibleChat> {
   const chats = new Map<string, VisibleChat>();
   for (const handle of EPIC_REGISTRY.liveHandles()) {
     for (const chat of Object.values(handle.store.getState().chats.byId)) {
-      chats.set(chat.id, {
-        title: chat.title,
-        hostId: chat.hostId,
-        workspace: UNKNOWN_WORKSPACE,
-      });
+      chats.set(chat.id, { title: chat.title, workspace: UNKNOWN_WORKSPACE });
     }
   }
   for (const handle of CHAT_REGISTRY.listHandles()) {
-    const known = chats.get(handle.chatId);
     chats.set(handle.chatId, {
-      title: known?.title ?? null,
-      hostId: known?.hostId ?? getChatSessionHandleHostId(handle),
+      title: chats.get(handle.chatId)?.title ?? null,
       workspace: autoModeRuleDraftWorkspace(
         handle.store.getState().worktreeBinding,
       ),

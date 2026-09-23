@@ -423,24 +423,6 @@ describe("JudgeTab", () => {
       );
     });
 
-    it("keeps presenting the pick after a successful write until the record answers", () => {
-      render(<JudgeTab />);
-
-      chooseProvider("Codex");
-      act(() => {
-        setJudgeMutate.mock.calls[0][1].onSuccess();
-      });
-      judgeRecord.current = {
-        selection: { harnessId: "codex", model: "gpt-mini", profileId: null },
-      };
-      cleanup();
-      render(<JudgeTab />);
-
-      expect(screen.getByTestId("judge-provider-select").textContent).toContain(
-        "Codex",
-      );
-    });
-
     it("commits a chosen model on the current provider", () => {
       catalog.models = {
         ...catalog.models,
@@ -460,6 +442,62 @@ describe("JudgeTab", () => {
     });
   });
 
+  describe("the model list", () => {
+    beforeEach(() => {
+      judgeRecord.current = { selection: CLAUDE_STORED };
+    });
+
+    it("shows each model by its display label", () => {
+      catalog.models = {
+        ...catalog.models,
+        claude: [
+          guiAgentModelOptionSchema.parse({
+            harnessId: "claude",
+            slug: "sonnet",
+            label: "Anthropic: Claude",
+            description: null,
+            contextWindow: null,
+            maxOutputTokens: null,
+            defaultReasoningEffort: null,
+            supportedReasoningEfforts: [],
+            metadata: { openCodeProviderLabel: "Anthropic" },
+          }),
+        ],
+      };
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-model-combobox"));
+
+      expect(screen.getByRole("option", { name: "Claude" })).not.toBeNull();
+      expect(screen.queryByText("Anthropic: Claude")).toBeNull();
+    });
+
+    it("says no model matches a search that matches none of a non-empty catalog", () => {
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-model-combobox"));
+      fireEvent.change(screen.getByPlaceholderText("Search models…"), {
+        target: { value: "zzz-no-such-model" },
+      });
+
+      expect(screen.getByText("No matching models.")).not.toBeNull();
+    });
+
+    it("says the provider offers no models for an empty catalog, not that nothing matches", () => {
+      catalog.models = { ...catalog.models, claude: [] };
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-model-combobox"));
+
+      expect(
+        screen.getByText(
+          "Claude Code offers no models on this machine. Pick another provider.",
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByText("No matching models.")).toBeNull();
+    });
+  });
+
   describe("a provider that cannot run a judge", () => {
     beforeEach(() => {
       catalog.harnesses = [
@@ -469,16 +507,53 @@ describe("JudgeTab", () => {
       judgeRecord.current = { selection: CLAUDE_STORED };
     });
 
-    it("shows its reason and an Open Providers button, and opens Providers focused on it", () => {
+    it("lists it as a disabled option with its reason and no control inside the list", () => {
       render(<JudgeTab />);
 
       fireEvent.click(screen.getByTestId("judge-provider-select"));
       const blocked = screen.getByTestId("judge-provider-blocked-codex");
+
       expect(within(blocked).getByText("Turned off")).not.toBeNull();
+      expect(blocked.getAttribute("aria-disabled")).toBe("true");
+      expect(within(blocked).queryByRole("button")).toBeNull();
+      expect(
+        within(screen.getByRole("listbox")).queryByRole("button"),
+      ).toBeNull();
+    });
+
+    it("links Providers from the warning line for a stored blocked provider, with no second link", () => {
+      judgeRecord.current = {
+        selection: { harnessId: "codex", model: "gpt-mini", profileId: null },
+      };
+      render(<JudgeTab />);
+
+      const warning = screen.getByTestId("auto-judge-warning");
+      expect(warning.textContent).toContain("Codex is turned off");
+      expect(screen.queryByTestId("judge-open-providers")).toBeNull();
 
       fireEvent.click(
-        within(blocked).getByRole("button", { name: "Open Providers" }),
+        within(warning).getByRole("button", { name: "Providers" }),
       );
+
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBe("codex");
+      expect(openSettingsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers Open Providers under the field when the warning line has no link, and opens Providers focused on it", () => {
+      catalog.harnesses = [
+        harness({ id: "claude", label: "Claude Code" }),
+        harness({ id: "codex", label: "Codex", authStatus: "unauthenticated" }),
+      ];
+      judgeRecord.current = {
+        selection: { harnessId: "codex", model: "gpt-mini", profileId: null },
+        blocked: { reason: "unsupported-harness" },
+      };
+      render(<JudgeTab />);
+
+      expect(screen.getByTestId("auto-judge-warning").textContent).toContain(
+        "can't run a judge on Codex",
+      );
+      fireEvent.click(screen.getByTestId("judge-open-providers"));
 
       expect(useProvidersFocusStore.getState().focusHarnessId).toBe("codex");
       expect(openSettingsMock).toHaveBeenCalledTimes(1);
@@ -489,6 +564,12 @@ describe("JudgeTab", () => {
         draft: null,
         hostId: null,
       });
+    });
+
+    it("offers no Open Providers for a displayed provider that can run", () => {
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("judge-open-providers")).toBeNull();
     });
 
     it("renders no such row for a provider that can run", () => {

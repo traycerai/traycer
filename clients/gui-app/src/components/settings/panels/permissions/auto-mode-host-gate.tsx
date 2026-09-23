@@ -2,8 +2,10 @@
  * Docs: see ../../SETTINGS.md (Permissions).
  * Update that file whenever this settings surface changes.
  */
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
@@ -28,9 +30,16 @@ type AutoModeTabMethod =
  * and the key that discards a tab's state when the viewer or the host changes.
  *
  * `HostScopeGate` owns the copy for a scope that is connecting, unreachable or
- * vanished; this still checks `isHostScopeUsable` itself so a body is not
- * MOUNTED under a dead scope - the gate hides its children in an `<Activity>`,
- * and a hidden-but-mounted query is still the wrong host's query.
+ * vanished. **A body is never unmounted because the scope stopped being
+ * usable.** The Rules tab is an always-open editor, and a host restart, a sleep
+ * or a relay blip would otherwise throw away unsaved text and drafts already
+ * taken from a card. While the scope cannot serve, the body keeps rendering
+ * against the LAST usable binding: `HostScopeGate` holds it in a hidden
+ * `<Activity>`, which tears its effects and subscriptions down, so nothing
+ * issues a read against a host that is not there, and its host-keyed
+ * `<Activity>` still discards the body on a real switch of machine. What stays
+ * true is the other half: a body is never FIRST mounted under a scope that is
+ * not usable, so no read ever starts against the wrong host.
  *
  * **Tri-state, deliberately.** `null` ("no handshake with this host yet") is
  * not `false` ("this host handshook and lacks the method"), and the
@@ -42,12 +51,16 @@ type AutoModeTabMethod =
  * exactly while the tab is parked. `scope.client`, never the ambient one, so it
  * asks the host this page is showing.
  *
- * **Keyed by VIEWER and host**, and both halves are load-bearing. A draft or
- * an in-flight pick must never carry across a host switch; and the policy
- * query is partitioned by viewer, but partitioning the cache does nothing
- * about an editor already mounted - switching from account A to B on a host
- * that stays usable, with B's policy cached, would leave A's draft on screen
- * with B's mutation behind Save. A remount discards the outgoing state whole.
+ * **Keyed by VIEWER and host**, and both halves are load-bearing. An in-flight
+ * judge pick must never carry across a host switch - the judge is the
+ * machine's - and a body's reads and mutations are the host's. The Rules EDIT
+ * does carry across one, deliberately: the policy is the account's, so the
+ * page holds the edit and the remounted editor resumes it (`useRulesEdit`).
+ * The viewer half: the policy query is partitioned by viewer, but partitioning
+ * the cache does nothing about an editor already mounted - switching from
+ * account A to B on a host that stays usable, with B's policy cached, would
+ * leave A's draft on screen with B's mutation behind Save. A remount discards
+ * the outgoing state whole, and the page drops A's edit with it.
  * `JSON.stringify` rather than a joined string: host ids carry `:`, and a
  * two-element array leaves nothing to reason about.
  */
@@ -71,19 +84,76 @@ export function AutoModeHostGate(props: {
     ],
   });
 
-  if (!isHostScopeUsable(scope.status)) return null;
+  const usable = isHostScopeUsable(scope.status);
   const binding = scopedBinding ?? realBinding;
-  // "Not known yet" is not "unsupported": the same fail-toward-silence the
-  // composer's disclosure takes, and the reason the tri-state exists.
-  if (support === null && binding !== null) return null;
-  if (support !== true || binding === null) return props.unsupported;
+  const held = useHeldBinding(usable && support === true ? binding : null);
+  const shown = gatedBinding({
+    hostId: scope.hostId,
+    usable,
+    support,
+    binding,
+    held,
+  });
+  if (shown === "unsupported") return props.unsupported;
+  if (shown === null) return null;
   return (
-    <HostRuntimeContext.Provider value={binding}>
+    <HostRuntimeContext.Provider value={shown}>
       <Fragment key={JSON.stringify([viewerUserId, scope.hostId])}>
         {props.children(scope.hostId)}
       </Fragment>
     </HostRuntimeContext.Provider>
   );
+}
+
+type GateBinding = HostRuntimeBinding<HostRpcRegistry>;
+
+/**
+ * The binding the body was last rendered against, held so a scope that stops
+ * serving does not unmount it. State adjusted during render rather than a ref,
+ * because the body is rendered from it; compared member by member, so a
+ * binding rebuilt from the same parts settles instead of re-rendering.
+ */
+function useHeldBinding(live: GateBinding | null): GateBinding | null {
+  const [held, setHeld] = useState(live);
+  if (live !== null && (held === null || !sameBinding(live, held))) {
+    setHeld(live);
+  }
+  return live ?? held;
+}
+
+function sameBinding(a: GateBinding, b: GateBinding): boolean {
+  return (
+    a.hostId === b.hostId &&
+    a.hostClient === b.hostClient &&
+    a.runtime === b.runtime &&
+    a.directory === b.directory &&
+    a.auth === b.auth
+  );
+}
+
+/**
+ * What the gate renders: the live binding, the held one, the unsupported line,
+ * or nothing.
+ */
+function gatedBinding(input: {
+  readonly hostId: string | null;
+  readonly usable: boolean;
+  readonly support: boolean | null;
+  readonly binding: GateBinding | null;
+  readonly held: GateBinding | null;
+}): GateBinding | "unsupported" | null {
+  // Held only for the machine it served, so no body ever renders on another
+  // machine's binding, whatever keys the gates around this one.
+  const held = input.held?.hostId === input.hostId ? input.held : null;
+  // A scope that cannot serve keeps whatever was already mounted; with nothing
+  // mounted yet, nothing mounts.
+  if (!input.usable) return held;
+  // "Not known yet" is not "unsupported": the same fail-toward-silence the
+  // composer's disclosure takes, and the reason the tri-state exists. A body
+  // already on screen stays there while a re-handshake answers again.
+  if (input.support === null && input.binding !== null) return held;
+  if (input.support !== true || input.binding === null) return "unsupported";
+  return input.binding;
 }
 
 /** The line a gated tab shows on a host whose Auto mode is too old. */

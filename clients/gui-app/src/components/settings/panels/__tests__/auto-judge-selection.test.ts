@@ -11,14 +11,16 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
-  autoJudgeRecordHealth,
   defaultJudgeModelFor,
   firstOfferedJudgeProfileId,
   judgeModelUnavailable,
+  judgeModelsFailedLine,
+  judgeNoModelsLine,
   judgeProfileBlocker,
   judgeProfileUnavailable,
   judgeProviderBlocker,
   judgeSelectionForProvider,
+  judgeWarningCause,
   offeredJudgeProfileIds,
   providerForHarness,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -331,104 +333,134 @@ describe("offeredJudgeProfileIds", () => {
   });
 });
 
-describe("autoJudgeRecordHealth", () => {
+describe("judgeWarningCause", () => {
   const healthy = {
-    hasStoredSelection: true,
-    unrecognizedHarnessId: null,
-    isBlocked: false,
-    saving: false,
-    storedHarness: harness({}),
-    storedModelSlug: "opus",
+    stored: { harnessId: "claude", model: "opus", profileId: "work" },
+    blocked: null,
+    harnesses: [harness({})],
     offeredModels: [model("opus")],
-    storedProfileId: "work",
     offeredProfileIds: [null, "work"],
   };
+  const allGone = {
+    ...healthy,
+    stored: { harnessId: "claude", model: "gone", profileId: "gone" },
+  };
 
-  it("reports nothing wrong for a healthy record", () => {
-    expect(autoJudgeRecordHealth(healthy)).toEqual({
-      storedHarnessUnavailable: false,
-      storedModelUnavailable: false,
-      storedProfileUnavailable: false,
-      noJudgeWillRun: false,
-    });
+  it("is null for a healthy record", () => {
+    expect(judgeWarningCause(healthy)).toBeNull();
   });
 
-  it("flags a stored provider that cannot run, and suppresses the model and account findings under it", () => {
-    const health = autoJudgeRecordHealth({
-      ...healthy,
-      storedHarness: harness({ enabled: false }),
-      storedModelSlug: "gone",
-      storedProfileId: "gone",
-    });
-    expect(health).toEqual({
-      storedHarnessUnavailable: true,
-      storedModelUnavailable: false,
-      storedProfileUnavailable: false,
-      noJudgeWillRun: true,
-    });
+  it("puts the host's blocked verdict first, whatever else is wrong", () => {
+    for (const reason of [
+      "provider-disabled",
+      "unsupported-harness",
+    ] as const) {
+      expect(
+        judgeWarningCause({
+          ...allGone,
+          blocked: { reason },
+          harnesses: [harness({ enabled: false })],
+        }),
+      ).toEqual({ kind: reason });
+    }
   });
 
-  it("flags a stored model that left the catalog", () => {
-    const health = autoJudgeRecordHealth({
-      ...healthy,
-      storedModelSlug: "gone",
-    });
-    expect(health.storedModelUnavailable).toBe(true);
-    expect(health.noJudgeWillRun).toBe(true);
+  it("says nothing past the host's verdict while the harness catalog has not answered", () => {
+    expect(judgeWarningCause({ ...allGone, harnesses: undefined })).toBeNull();
   });
 
-  it("flags a stored account that left the provider", () => {
-    const health = autoJudgeRecordHealth({
-      ...healthy,
-      storedProfileId: "gone",
-    });
-    expect(health.storedProfileUnavailable).toBe(true);
-    expect(health.noJudgeWillRun).toBe(true);
-  });
-
-  it("diagnoses nothing while a write is in flight", () => {
-    const health = autoJudgeRecordHealth({
-      ...healthy,
-      saving: true,
-      storedModelSlug: "gone",
-      storedProfileId: "gone",
-    });
-    expect(health.storedModelUnavailable).toBe(false);
-    expect(health.storedProfileUnavailable).toBe(false);
-  });
-
-  it("diagnoses nothing for a record this build cannot read, or with no stored selection", () => {
+  it("reports a stored harness with no catalog row as unrecognized", () => {
     expect(
-      autoJudgeRecordHealth({
+      judgeWarningCause({ ...healthy, harnesses: [harness({ id: "codex" })] }),
+    ).toEqual({ kind: "unrecognized" });
+  });
+
+  it("reports each provider blocker ahead of a gone model or account", () => {
+    const rows: ReadonlyArray<[Partial<GuiHarnessOption>, string]> = [
+      [{ enabled: false }, "Turned off"],
+      [{ authStatus: "unauthenticated" }, "Signed out"],
+      [
+        { available: false, unavailableReason: "missing-binary" },
+        "Not installed",
+      ],
+      [{ available: false, unavailableReason: "other" }, "Not available"],
+    ];
+    for (const [overrides, blocker] of rows) {
+      expect(
+        judgeWarningCause({ ...allGone, harnesses: [harness(overrides)] }),
+      ).toEqual({ kind: "provider", blocker });
+    }
+  });
+
+  it("reports a gone model ahead of a gone account", () => {
+    expect(judgeWarningCause(allGone)).toEqual({ kind: "model" });
+  });
+
+  it("reports a gone account when the model is fine", () => {
+    expect(
+      judgeWarningCause({
         ...healthy,
-        unrecognizedHarnessId: "future",
-        storedModelSlug: "gone",
-      }).storedModelUnavailable,
-    ).toBe(false);
-    expect(
-      autoJudgeRecordHealth({
-        ...healthy,
-        hasStoredSelection: false,
-        storedModelSlug: "gone",
-      }).storedModelUnavailable,
-    ).toBe(false);
+        stored: { harnessId: "claude", model: "opus", profileId: "gone" },
+      }),
+    ).toEqual({ kind: "profile" });
   });
 
-  it("treats a catalog or providers read that has not answered as unknown, not gone", () => {
-    const health = autoJudgeRecordHealth({
-      ...healthy,
-      storedHarness: undefined,
-      offeredModels: undefined,
-      offeredProfileIds: undefined,
-      storedModelSlug: "gone",
-      storedProfileId: "gone",
+  it("counts a resolvedModel alias as offered", () => {
+    const aliased = guiAgentModelOptionSchema.parse({
+      harnessId: "claude",
+      slug: "opus[1m]",
+      label: "Opus",
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      metadata: { resolvedModel: "claude-opus-5" },
     });
-    expect(health.noJudgeWillRun).toBe(false);
+    expect(
+      judgeWarningCause({
+        ...healthy,
+        stored: {
+          harnessId: "claude",
+          model: "claude-opus-5",
+          profileId: null,
+        },
+        offeredModels: [aliased],
+      }),
+    ).toBeNull();
   });
 
-  it("noJudgeWillRun follows isBlocked on its own", () => {
+  it("treats a model catalog or providers read that has not answered as no finding", () => {
     expect(
-      autoJudgeRecordHealth({ ...healthy, isBlocked: true }).noJudgeWillRun,
-    ).toBe(true);
+      judgeWarningCause({
+        ...allGone,
+        offeredModels: undefined,
+        offeredProfileIds: undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it("never reports the ambient account as gone", () => {
+    expect(
+      judgeWarningCause({
+        ...healthy,
+        stored: { harnessId: "claude", model: "opus", profileId: null },
+        offeredProfileIds: [],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("the pick lines", () => {
+  it("names the provider in the no-models line", () => {
+    expect(judgeNoModelsLine("Codex")).toBe(
+      "Codex offers no models on this machine. Pick another provider.",
+    );
+  });
+
+  it("names the provider in the models-failed line", () => {
+    expect(judgeModelsFailedLine("Codex")).toBe(
+      "Couldn't load Codex's models. Reopen Settings to try again, or pick another provider.",
+    );
   });
 });

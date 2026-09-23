@@ -26,14 +26,17 @@ import {
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import {
-  autoJudgeRecordHealth,
   defaultJudgeModelFor,
   firstOfferedJudgeProfileId,
+  judgeModelsFailedLine,
+  judgeNoModelsLine,
   judgeProviderBlocker,
   judgeSelectionForProvider,
+  judgeWarningCause,
   offeredJudgeProfileIds,
   providerForHarness,
   type JudgeProviderBlocker,
+  type JudgeWarningCause,
 } from "@/components/settings/panels/auto-judge-selection";
 import {
   AutoModeHostGate,
@@ -41,18 +44,13 @@ import {
 } from "@/components/settings/panels/permissions/auto-mode-host-gate";
 import { JudgeModelField } from "@/components/settings/panels/permissions/judge-model-field";
 import { ProviderJudgeSwitch } from "@/components/settings/panels/permissions/provider-judge-switch";
+import { COPILOT_PREMIUM_REQUESTS_PER_HOUR } from "@/lib/auto-mode/auto-judge-billing";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 const PREDATES_AUTO_MODE =
   "This machine's host predates Auto mode. Update it to choose a judge and write a policy.";
-
-/**
- * The measured range for a metered pocket, restated from the composer's meta
- * line (`auto-judge-billing.ts`), where it is not exported.
- */
-const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
 
 /** A typed harness id for the models query while no provider is chosen. */
 const IDLE_MODELS_HARNESS_ID = providerIdToGuiHarnessId("traycer");
@@ -93,17 +91,15 @@ export function JudgeTab(): ReactNode {
  * A pick the controls present before the host has stored it. `id` orders
  * picks, so only the LATEST one's settlement clears it - an older write
  * landing must not snap the controls back to a superseded choice.
+ *
+ * A pick whose `model` is `""` is UNCOMMITTED: a provider chosen before its
+ * default model is known. It is on screen and never sent - the contract
+ * refuses an empty model - until its catalog names one, and choosing an
+ * account for it keeps it uncommitted.
  */
 interface JudgeDraft {
   readonly id: number;
   readonly selection: AutoJudgeSelection | null;
-  /**
-   * A provider was chosen whose default model is only known from its catalog,
-   * which has not answered; the pick commits once it does.
-   */
-  readonly awaitingModels: boolean;
-  /** Ready to be sent; the effect below sends each draft exactly once. */
-  readonly dispatch: boolean;
 }
 
 /** What the controls present, and the one way to change it. */
@@ -115,63 +111,53 @@ interface JudgePick {
   readonly displayedRow: GuiHarnessOption | undefined;
   /** The displayed provider's catalog, `undefined` while it has not answered. */
   readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
-  readonly request: (
-    selection: AutoJudgeSelection | null,
-    awaitingModels: boolean,
-  ) => void;
+  /** The displayed provider's catalog read failed, so `models` is not coming. */
+  readonly modelsFailed: boolean;
+  /** The latest pick is waiting on a model and has not been sent. */
+  readonly uncommitted: boolean;
+  readonly request: (selection: AutoJudgeSelection | null) => void;
+}
+
+function isUncommitted(draft: JudgeDraft | null): boolean {
+  return draft?.selection?.model === "";
 }
 
 /**
- * A provider chosen before its catalog answered commits the moment it does.
- * The same draft when nothing changes, so the render-phase adjustment settles.
+ * An uncommitted pick commits the moment its catalog names a model. The same
+ * draft when nothing changes, so the render-phase adjustment settles; a
+ * catalog that answers with nothing leaves it uncommitted, and the tab says so.
  */
 function resolveAwaitedDraft(input: {
   readonly draft: JudgeDraft | null;
-  readonly displayed: AutoJudgeSelection | null;
   readonly row: GuiHarnessOption | undefined;
   readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
 }): JudgeDraft | null {
-  const { draft, displayed, row, models } = input;
-  if (draft === null || !draft.awaitingModels || row === undefined) {
-    return draft;
-  }
-  const model = defaultJudgeModelFor(row, models);
-  if (model !== null && displayed !== null) {
-    return {
-      ...draft,
-      selection: { ...displayed, model },
-      awaitingModels: false,
-      dispatch: true,
-    };
-  }
-  // The catalog answered with nothing to judge on: the pick stays on screen,
-  // uncommitted, and the Model field says so.
-  if (models !== undefined) return { ...draft, awaitingModels: false };
-  return draft;
+  const { draft, row } = input;
+  const selection = draft?.selection ?? null;
+  if (draft === null || selection === null || row === undefined) return draft;
+  if (selection.model !== "") return draft;
+  const model = defaultJudgeModelFor(row, input.models);
+  return model === null
+    ? draft
+    : { ...draft, selection: { ...selection, model } };
 }
 
 /**
  * The pick a provider choice makes: its default model when one is known now,
- * else the provider alone, waiting for its catalog.
+ * else the provider alone, uncommitted until its catalog answers.
  */
 function providerPick(input: {
   readonly row: GuiHarnessOption;
   readonly provider: ProviderCliState | undefined;
   readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
-}): {
-  readonly selection: AutoJudgeSelection;
-  readonly awaitingModels: boolean;
-} {
-  const selection = judgeSelectionForProvider(input);
-  if (selection !== null) return { selection, awaitingModels: false };
-  return {
-    selection: {
+}): AutoJudgeSelection {
+  return (
+    judgeSelectionForProvider(input) ?? {
       harnessId: input.row.id,
       model: "",
       profileId: firstOfferedJudgeProfileId(input.provider),
-    },
-    awaitingModels: true,
-  };
+    }
+  );
 }
 
 /**
@@ -183,6 +169,7 @@ function providerPick(input: {
  * pending, and they do not - they present the latest pick (`draft`) until its
  * write settles, whatever earlier writes do. A refused write clears the draft,
  * which is the rollback: the controls fall back to the record the host holds.
+ * An uncommitted pick is never dispatched, so nothing here can send `""`.
  */
 function useJudgePick(
   stored: AutoJudgeSelection | null,
@@ -206,21 +193,18 @@ function useJudgePick(
   );
   const models =
     displayedRow === undefined ? undefined : modelsQuery.data?.models;
+  const modelsFailed =
+    displayedRow !== undefined && models === undefined && modelsQuery.isError;
 
   // Adjusted during render rather than in an effect, so the draft never shows
   // an empty model for a frame after the catalog is known.
-  const resolved = resolveAwaitedDraft({
-    draft,
-    displayed,
-    row: displayedRow,
-    models,
-  });
+  const resolved = resolveAwaitedDraft({ draft, row: displayedRow, models });
   if (resolved !== draft) setDraft(resolved);
 
   const mutateJudge = setJudge.mutate;
   const dispatched = useRef(new Set<number>());
   useEffect(() => {
-    if (draft === null || !draft.dispatch) return;
+    if (draft === null || isUncommitted(draft)) return;
     if (dispatched.current.has(draft.id)) return;
     dispatched.current.add(draft.id);
     const id = draft.id;
@@ -235,19 +219,19 @@ function useJudgePick(
     );
   }, [draft, mutateJudge]);
 
-  const request = (
-    selection: AutoJudgeSelection | null,
-    awaitingModels: boolean,
-  ): void => {
+  const request = (selection: AutoJudgeSelection | null): void => {
     lastDraftId.current += 1;
-    setDraft({
-      id: lastDraftId.current,
-      selection,
-      awaitingModels,
-      dispatch: !awaitingModels,
-    });
+    setDraft({ id: lastDraftId.current, selection });
   };
-  return { draft, displayed, displayedRow, models, request };
+  return {
+    draft,
+    displayed,
+    displayedRow,
+    models,
+    modelsFailed,
+    uncommitted: isUncommitted(draft),
+    request,
+  };
 }
 
 /**
@@ -294,7 +278,7 @@ function AutoJudgeControls(props: {
         onValueChange={(next) => {
           if (next === "automatic") {
             setSpecificChosen(false);
-            if (pick.displayed !== null) pick.request(null, false);
+            if (pick.displayed !== null) pick.request(null);
           } else if (next === "specific") {
             setSpecificChosen(true);
           }
@@ -331,7 +315,7 @@ function AutomaticOption(props: {
   readonly copilotEnabled: boolean;
 }): ReactNode {
   const { record, pick } = props;
-  const writing = pick.draft !== null && !pick.draft.awaitingModels;
+  const writing = pick.draft !== null && !pick.uncommitted;
   return (
     <JudgeOption
       value="automatic"
@@ -369,7 +353,13 @@ function SpecificOption(props: {
   const { pick, providers } = props;
   const { displayed } = pick;
   const openProvider = useOpenJudgeProvider();
-  const writing = pick.draft !== null && !pick.draft.awaitingModels;
+  const writing = pick.draft !== null && !pick.uncommitted;
+  const cause = storedJudgeCause({
+    record: props.record,
+    pick,
+    harnesses: props.harnesses,
+    providers,
+  });
   return (
     <JudgeOption
       value="specific"
@@ -391,36 +381,33 @@ function SpecificOption(props: {
             }
             selection={displayed}
             models={pick.models}
+            modelsFailed={pick.modelsFailed}
+            openProvidersFor={openProvidersTarget(pick, cause)}
             disabled={props.disabled}
             onProvider={(row) => {
-              const next = providerPick({
-                row,
-                provider: providerForHarness(providers, row.id),
-                models:
-                  row.id === pick.displayedRow?.id ? pick.models : undefined,
-              });
-              pick.request(next.selection, next.awaitingModels);
-            }}
-            onAccount={(profileId) => {
-              if (displayed === null) return;
               pick.request(
-                { ...displayed, profileId },
-                pick.draft?.awaitingModels ?? false,
+                providerPick({
+                  row,
+                  provider: providerForHarness(providers, row.id),
+                  models:
+                    row.id === pick.displayedRow?.id ? pick.models : undefined,
+                }),
               );
             }}
+            onAccount={(profileId) => {
+              if (displayed !== null) pick.request({ ...displayed, profileId });
+            }}
             onModel={(model) => {
-              if (displayed === null) return;
-              pick.request({ ...displayed, model }, false);
+              if (displayed !== null) pick.request({ ...displayed, model });
             }}
             onOpenProvider={openProvider}
           />
           <div className="flex min-w-0 items-center gap-2">
+            <UncommittedPickLine pick={pick} />
             <JudgeWarning
-              record={props.record}
-              saving={pick.draft !== null}
+              cause={cause}
+              stored={props.record?.selection ?? null}
               harnesses={props.harnesses}
-              models={pick.models}
-              providers={providers}
               onOpenProvider={openProvider}
             />
             {writing && displayed !== null ? <MutedAgentSpinner /> : null}
@@ -428,6 +415,70 @@ function SpecificOption(props: {
         </>
       ) : null}
     </JudgeOption>
+  );
+}
+
+/**
+ * What is wrong with the stored judge, or `null` - also while a pick is on
+ * screen, since the record is about to change or is not what the controls
+ * show. `judgeWarningCause` decides.
+ */
+function storedJudgeCause(input: {
+  readonly record: AutoJudgeGetResponse | undefined;
+  readonly pick: JudgePick;
+  readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
+  readonly providers: ReadonlyArray<ProviderCliState> | undefined;
+}): JudgeWarningCause | null {
+  const stored = input.record?.selection ?? null;
+  if (input.record === undefined || stored === null) return null;
+  if (input.pick.draft !== null) return null;
+  return judgeWarningCause({
+    stored,
+    blocked: input.record.blocked ?? null,
+    harnesses: input.harnesses,
+    // With no pick on screen the displayed provider IS the stored one.
+    offeredModels: input.pick.models,
+    offeredProfileIds: offeredJudgeProfileIds(
+      input.providers,
+      stored.harnessId,
+    ),
+  });
+}
+
+/**
+ * The provider the Provider field's "Open Providers" link opens: the displayed
+ * one while it cannot run here, unless the warning line already links there.
+ */
+function openProvidersTarget(
+  pick: JudgePick,
+  cause: JudgeWarningCause | null,
+): GuiHarnessOption | null {
+  const row = pick.displayedRow;
+  if (row === undefined || judgeProviderBlocker(row) === null) return null;
+  const warningLinks =
+    cause?.kind === "provider" || cause?.kind === "provider-disabled";
+  return warningLinks ? null : row;
+}
+
+/**
+ * The line under an uncommitted pick once its catalog has spoken: a read that
+ * failed, or a provider with no model to judge on. Silent while it loads - the
+ * Model field says "Loading models…" then, and only then.
+ */
+function UncommittedPickLine(props: { readonly pick: JudgePick }): ReactNode {
+  const { pick } = props;
+  const row = pick.displayedRow;
+  if (!pick.uncommitted || row === undefined) return null;
+  if (!pick.modelsFailed && pick.models === undefined) return null;
+  return (
+    <p
+      className="min-w-0 text-pretty text-ui-sm text-warning-foreground"
+      data-testid="auto-judge-pick-warning"
+    >
+      {pick.modelsFailed
+        ? judgeModelsFailedLine(row.label)
+        : judgeNoModelsLine(row.label)}
+    </p>
   );
 }
 
@@ -545,85 +596,20 @@ function EffectiveModelLabel(props: {
   return autoJudgeModelLabel(models, props.slug) ?? props.slug;
 }
 
-/** The first thing wrong with a stored judge, in the order it is reported. */
-type JudgeWarningCause =
-  | { readonly kind: "provider-disabled" }
-  | { readonly kind: "unsupported-harness" }
-  | { readonly kind: "unrecognized" }
-  | { readonly kind: "provider"; readonly blocker: JudgeProviderBlocker }
-  | { readonly kind: "model" }
-  | { readonly kind: "profile" };
-
-/**
- * The host's own `blocked` verdict first, then a harness this build does not
- * know, then what `autoJudgeRecordHealth` finds against the catalog. `null`
- * when the stored judge can run.
- */
-function judgeWarningCause(input: {
-  readonly record: AutoJudgeGetResponse;
-  readonly stored: AutoJudgeSelection;
-  readonly storedRow: GuiHarnessOption | undefined;
-  readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
-  readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
-  readonly providers: ReadonlyArray<ProviderCliState> | undefined;
-}): JudgeWarningCause | null {
-  const { stored, storedRow } = input;
-  const blocked = input.record.blocked ?? null;
-  if (blocked !== null) return { kind: blocked.reason };
-  if (input.harnesses !== undefined && storedRow === undefined) {
-    return { kind: "unrecognized" };
-  }
-  const health = autoJudgeRecordHealth({
-    hasStoredSelection: true,
-    unrecognizedHarnessId: null,
-    isBlocked: false,
-    saving: false,
-    storedHarness: storedRow,
-    storedModelSlug: stored.model,
-    offeredModels: input.models,
-    storedProfileId: stored.profileId,
-    offeredProfileIds: offeredJudgeProfileIds(
-      input.providers,
-      stored.harnessId,
-    ),
-  });
-  if (health.storedHarnessUnavailable && storedRow !== undefined) {
-    const blocker = judgeProviderBlocker(storedRow);
-    return blocker === null ? null : { kind: "provider", blocker };
-  }
-  if (health.storedModelUnavailable) return { kind: "model" };
-  if (health.storedProfileUnavailable) return { kind: "profile" };
-  return null;
-}
-
 /**
  * At most one amber line under the fields: the first thing wrong with the
  * stored record, in one sentence with one fix. `judgeWarningCause` decides;
- * this only chooses the sentence. Silent while a pick is in flight - the
- * record is about to change - and under Automatic, whose status line speaks
- * for it.
+ * this only chooses the sentence.
  */
 function JudgeWarning(props: {
-  readonly record: AutoJudgeGetResponse | undefined;
-  readonly saving: boolean;
+  readonly cause: JudgeWarningCause | null;
+  readonly stored: AutoJudgeSelection | null;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
-  readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
-  readonly providers: ReadonlyArray<ProviderCliState> | undefined;
   readonly onOpenProvider: (row: GuiHarnessOption) => void;
 }): ReactNode {
-  const { record } = props;
-  const stored = record?.selection ?? null;
-  if (record === undefined || stored === null || props.saving) return null;
+  const { cause, stored } = props;
+  if (cause === null || stored === null) return null;
   const storedRow = props.harnesses?.find((row) => row.id === stored.harnessId);
-  const cause = judgeWarningCause({
-    record,
-    stored,
-    storedRow,
-    harnesses: props.harnesses,
-    models: props.models,
-    providers: props.providers,
-  });
-  if (cause === null) return null;
   const fixLink =
     storedRow === undefined ? (
       "Providers"

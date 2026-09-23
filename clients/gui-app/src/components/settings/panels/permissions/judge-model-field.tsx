@@ -37,7 +37,10 @@ import {
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
+import { modelDisplayLabel } from "@/components/home/data/landing-options";
 import {
+  judgeModelsFailedLine,
+  judgeNoModelsLine,
   judgeProfileBlocker,
   judgeProviderBlocker,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -61,14 +64,22 @@ export function JudgeModelField(props: {
   readonly selection: AutoJudgeSelection | null;
   /** The chosen provider's catalog, `undefined` while it has not answered. */
   readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
+  /** The chosen provider's catalog read failed, so `models` is not coming. */
+  readonly modelsFailed: boolean;
+  /**
+   * The chosen provider when it cannot run here and nothing else on the tab
+   * already links to its fix; `null` otherwise.
+   */
+  readonly openProvidersFor: GuiHarnessOption | null;
   readonly disabled: boolean;
   readonly onProvider: (row: GuiHarnessOption) => void;
   readonly onAccount: (profileId: string | null) => void;
   readonly onModel: (slug: string) => void;
   readonly onOpenProvider: (row: GuiHarnessOption) => void;
 }): ReactNode {
+  const { selection } = props;
   const profiles = props.provider?.profiles ?? [];
-  const showAccount = props.selection !== null && profiles.length > 1;
+  const showAccount = selection !== null && profiles.length > 1;
   return (
     <div
       className={cn(
@@ -79,27 +90,42 @@ export function JudgeModelField(props: {
     >
       <ProviderField
         harnesses={props.harnesses}
-        value={props.selection?.harnessId ?? null}
+        value={selection?.harnessId ?? null}
         disabled={props.disabled}
+        openProvidersFor={props.openProvidersFor}
         onProvider={props.onProvider}
         onOpenProvider={props.onOpenProvider}
       />
       {showAccount ? (
         <AccountField
           profiles={profiles}
-          value={props.selection.profileId}
+          value={selection.profileId}
           disabled={props.disabled}
           onAccount={props.onAccount}
         />
       ) : null}
       <ModelField
         models={props.models}
-        value={props.selection?.model ?? null}
-        disabled={props.disabled || props.selection === null}
+        modelsFailed={props.modelsFailed}
+        providerLabel={
+          selection === null
+            ? ""
+            : judgeProviderLabel(props.harnesses, selection.harnessId)
+        }
+        value={selection?.model ?? null}
+        disabled={props.disabled || selection === null}
         onModel={props.onModel}
       />
     </div>
   );
+}
+
+/** A provider as the fields name it: its catalog label, else its id. */
+function judgeProviderLabel(
+  harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+  harnessId: string,
+): string {
+  return harnesses?.find((row) => row.id === harnessId)?.label ?? harnessId;
 }
 
 function FieldLabel(props: {
@@ -115,25 +141,26 @@ function FieldLabel(props: {
 
 /**
  * Every catalog row, because every adapter can judge. A row that cannot run
- * today is a disabled option naming why, with a link beside it to the
- * provider's own settings, where the fix is.
+ * today is a disabled option naming why. The fix lives in the provider's own
+ * settings, and one "Open Providers" link under the field reaches it while the
+ * CHOSEN provider is the blocked one - never a control inside the list, whose
+ * options are the only thing a listbox may hold.
  */
 function ProviderField(props: {
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly value: string | null;
   readonly disabled: boolean;
+  readonly openProvidersFor: GuiHarnessOption | null;
   readonly onProvider: (row: GuiHarnessOption) => void;
   readonly onOpenProvider: (row: GuiHarnessOption) => void;
 }): ReactNode {
   const labelId = useId();
   const harnesses = props.harnesses ?? [];
-  const [open, setOpen] = useState(false);
+  const { openProvidersFor } = props;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <FieldLabel id={labelId}>Provider</FieldLabel>
       <Select
-        open={open}
-        onOpenChange={setOpen}
         value={props.value ?? ""}
         disabled={props.disabled || props.harnesses === undefined}
         onValueChange={(next) => {
@@ -149,46 +176,44 @@ function ProviderField(props: {
           <SelectValue placeholder="Choose a provider" />
         </SelectTrigger>
         <SelectContent>
-          {harnesses.map((row) => {
-            const blocker = judgeProviderBlocker(row);
-            if (blocker === null) {
-              return (
-                <SelectItem key={row.id} value={row.id}>
-                  {row.label}
-                </SelectItem>
-              );
-            }
-            return (
-              <div
-                key={row.id}
-                className="flex min-w-0 items-center gap-2 pr-2"
-                data-testid={`judge-provider-blocked-${row.id}`}
-              >
-                <SelectItem value={row.id} disabled className="flex-1">
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{row.label}</span>
-                    <span className="text-ui-xs text-muted-foreground">
-                      {blocker}
-                    </span>
-                  </span>
-                </SelectItem>
-                <Button
-                  type="button"
-                  variant="link"
-                  size="inline-xs"
-                  onClick={() => {
-                    setOpen(false);
-                    props.onOpenProvider(row);
-                  }}
-                >
-                  Open Providers
-                </Button>
-              </div>
-            );
-          })}
+          {harnesses.map((row) => (
+            <ProviderOption key={row.id} row={row} />
+          ))}
         </SelectContent>
       </Select>
+      {openProvidersFor === null ? null : (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          className="self-start"
+          data-testid="judge-open-providers"
+          onClick={() => props.onOpenProvider(openProvidersFor)}
+        >
+          Open Providers
+        </Button>
+      )}
     </div>
+  );
+}
+
+function ProviderOption(props: { readonly row: GuiHarnessOption }): ReactNode {
+  const { row } = props;
+  const blocker = judgeProviderBlocker(row);
+  if (blocker === null) {
+    return <SelectItem value={row.id}>{row.label}</SelectItem>;
+  }
+  return (
+    <SelectItem
+      value={row.id}
+      disabled
+      data-testid={`judge-provider-blocked-${row.id}`}
+    >
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate">{row.label}</span>
+        <span className="text-ui-xs text-muted-foreground">{blocker}</span>
+      </span>
+    </SelectItem>
   );
 }
 
@@ -255,6 +280,8 @@ function AccountField(props: {
  */
 function ModelField(props: {
   readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
+  readonly modelsFailed: boolean;
+  readonly providerLabel: string;
   readonly value: string | null;
   readonly disabled: boolean;
   readonly onModel: (slug: string) => void;
@@ -282,6 +309,12 @@ function ModelField(props: {
     props.value === null || props.value.length === 0
       ? null
       : (autoJudgeModelLabel(props.models, props.value) ?? props.value);
+  const emptyLine = modelListEmptyLine({
+    models: props.models,
+    modelsFailed: props.modelsFailed,
+    providerLabel: props.providerLabel,
+    matching: filtered.length,
+  });
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <FieldLabel id={labelId}>Model</FieldLabel>
@@ -345,12 +378,9 @@ function ModelField(props: {
               spellCheck={false}
             />
             <CommandList className="max-h-[min(50vh,18rem)] p-1">
-              {props.models === undefined ? (
-                <CommandEmpty>Loading models…</CommandEmpty>
-              ) : null}
-              {props.models !== undefined && filtered.length === 0 ? (
-                <CommandEmpty>No matching models.</CommandEmpty>
-              ) : null}
+              {emptyLine === null ? null : (
+                <CommandEmpty>{emptyLine}</CommandEmpty>
+              )}
               {filtered.length > 0 ? (
                 <CommandGroup>
                   {filtered.map((model) => (
@@ -367,8 +397,7 @@ function ModelField(props: {
                       }}
                     >
                       <span className="min-w-0 flex-1 break-words">
-                        {autoJudgeModelLabel(props.models, model.slug) ??
-                          model.label}
+                        {modelDisplayLabel(model)}
                       </span>
                     </CommandItem>
                   ))}
@@ -380,4 +409,24 @@ function ModelField(props: {
       </Popover>
     </div>
   );
+}
+
+/**
+ * What the model list says when it lists nothing: still loading, a failed
+ * read, a provider with no models at all, or a search that matched none.
+ * Loading is only ever claimed while a read is still pending.
+ */
+function modelListEmptyLine(input: {
+  readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
+  readonly modelsFailed: boolean;
+  readonly providerLabel: string;
+  readonly matching: number;
+}): string | null {
+  if (input.models === undefined) {
+    return input.modelsFailed
+      ? judgeModelsFailedLine(input.providerLabel)
+      : "Loading models…";
+  }
+  if (input.models.length === 0) return judgeNoModelsLine(input.providerLabel);
+  return input.matching === 0 ? "No matching models." : null;
 }

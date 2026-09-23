@@ -220,36 +220,45 @@ function ActivityList(props: {
               </Button>
             ))}
           </div>
-          <div
-            role="table"
-            aria-label="Recent Auto mode decisions"
-            className="overflow-clip rounded-lg border border-border/60 bg-card/40"
-          >
-            <div
-              role="row"
-              className={cn(
-                "hidden border-b border-border/60 px-4 py-2 text-ui-xs text-muted-foreground",
-                ROW_GRID,
-              )}
+          {shown.length === 0 ? (
+            <p
+              className="px-1 text-ui-sm text-muted-foreground"
+              data-testid="auto-judge-activity-filter-empty"
             >
-              <span role="columnheader">When</span>
-              <span role="columnheader">Action</span>
-              <span role="columnheader">Outcome</span>
-              <span role="columnheader">Why</span>
-              <span role="columnheader">
-                <span className="sr-only">Actions</span>
-              </span>
+              No decisions match this filter.
+            </p>
+          ) : (
+            <div
+              role="table"
+              aria-label="Recent Auto mode decisions"
+              className="overflow-clip rounded-lg border border-border/60 bg-card/40"
+            >
+              <div
+                role="row"
+                className={cn(
+                  "hidden border-b border-border/60 px-4 py-2 text-ui-xs text-muted-foreground",
+                  ROW_GRID,
+                )}
+              >
+                <span role="columnheader">When</span>
+                <span role="columnheader">Action</span>
+                <span role="columnheader">Outcome</span>
+                <span role="columnheader">Why</span>
+                <span role="columnheader">
+                  <span className="sr-only">Actions</span>
+                </span>
+              </div>
+              {shown.map((entry) => (
+                <ActivityRow
+                  key={entry.id}
+                  entry={entry}
+                  visible={visibleChats.get(entry.chatId) ?? null}
+                  onAllowFromNowOn={props.onAllowFromNowOn}
+                  onFixInJudge={props.onFixInJudge}
+                />
+              ))}
             </div>
-            {shown.map((entry) => (
-              <ActivityRow
-                key={entry.id}
-                entry={entry}
-                visible={visibleChats.get(entry.chatId) ?? null}
-                onAllowFromNowOn={props.onAllowFromNowOn}
-                onFixInJudge={props.onFixInJudge}
-              />
-            ))}
-          </div>
+          )}
         </>
       )}
       <p className="px-1 text-ui-xs text-muted-foreground">
@@ -282,8 +291,8 @@ function ActivityRow(props: {
   const title = visible?.title ?? entry.chatTitle;
   const ruleName =
     entry.rule === null ? null : autoModeRuleDisplayName(entry.rule);
-  // The card's rule: a draft names an action, so an entry with neither an
-  // input nor a tool name to narrow by offers no draft at all.
+  // The card's rule: a draft names an action, so an entry with no input and
+  // no tool name, or only a generic one (`Bash`), offers no draft at all.
   const action = autoModeRuleDraftAction({
     inputSummary: entry.inputSummary,
     toolName: entry.toolName,

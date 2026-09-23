@@ -19,7 +19,10 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type { AutoJudgeSelection } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  AutoJudgeBlocked,
+  AutoJudgeSelection,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
@@ -128,85 +131,78 @@ export function judgeSelectionForProvider(input: {
 }
 
 /**
- * What is WRONG with the stored judge record, as settled facts - the single
- * decision the Judge tab's one warning line is chosen from.
- *
- * Every field answers "only when we actually know": a catalog or a providers
- * read that has not answered is `undefined`, and `undefined` is never evidence
- * that something is gone. A write in flight is not a record to diagnose
- * either - the controls present the user's pick while the stored record waits
- * for the response, and the two differing is the one difference that means
- * nothing is wrong.
+ * The first thing wrong with a stored judge, in the order it is reported: the
+ * single decision the Judge tab's one warning line is chosen from.
  */
-export interface AutoJudgeRecordHealth {
-  /** The stored provider cannot run on this machine; the host will escalate. */
-  readonly storedHarnessUnavailable: boolean;
-  /** The provider is fine but the stored MODEL has left its catalog. */
-  readonly storedModelUnavailable: boolean;
-  /**
-   * The provider is fine but the stored ACCOUNT is gone from it. The quietest
-   * of the three, because nothing on screen would otherwise change: the host
-   * still holds the removed id and fails the judge call on it.
-   */
-  readonly storedProfileUnavailable: boolean;
-  /**
-   * Nothing will call a judge, so no billing line may be shown beside it: "no
-   * judge will run" and "this is billed to your provider account" contradict
-   * each other, and the contradiction is worse than either line alone.
-   */
-  readonly noJudgeWillRun: boolean;
-}
+export type JudgeWarningCause =
+  | { readonly kind: "provider-disabled" }
+  | { readonly kind: "unsupported-harness" }
+  | { readonly kind: "unrecognized" }
+  | { readonly kind: "provider"; readonly blocker: JudgeProviderBlocker }
+  | { readonly kind: "model" }
+  | { readonly kind: "profile" };
 
-export function autoJudgeRecordHealth(input: {
-  readonly hasStoredSelection: boolean;
-  readonly unrecognizedHarnessId: string | null;
-  readonly isBlocked: boolean;
-  /** Whether a write is in flight for this record. */
-  readonly saving: boolean;
-  /** The stored provider's catalog row, or `undefined` while unknown. */
-  readonly storedHarness: GuiHarnessOption | undefined;
-  readonly storedModelSlug: string;
+/**
+ * What is wrong with the stored judge record, or `null` when it can run.
+ *
+ * The host's own `blocked` verdict first, since it is the one the host acts
+ * on; then a harness this build does not know; then the stored provider, whose
+ * models and accounts going with it are consequences, not second findings;
+ * then the model, then the account.
+ *
+ * Every catalog answers "only when we actually know": a harness catalog, a
+ * model catalog or a providers read that has not answered is `undefined`, and
+ * `undefined` is never evidence that something is gone - so nothing is
+ * reported past the host's verdict until the harness catalog has answered.
+ * The caller does not ask while a pick is in flight: the controls present the
+ * pick, the record waits for the write, and the two differing is the one
+ * difference that means nothing is wrong.
+ */
+export function judgeWarningCause(input: {
+  readonly stored: AutoJudgeSelection;
+  readonly blocked: AutoJudgeBlocked | null;
+  readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   /** The stored provider's catalog, or `undefined` while it has not answered. */
   readonly offeredModels: ReadonlyArray<GuiAgentModelOption> | undefined;
-  /** `null` is the ambient account, which no provider can delete. */
-  readonly storedProfileId: string | null;
   /**
    * Commit ids the stored provider currently offers, or `undefined` while
    * `providers.list` has not answered. Commit ids, not wire rows: the stored
    * record speaks the composer's vocabulary, where ambient is `null`.
    */
   readonly offeredProfileIds: ReadonlyArray<string | null> | undefined;
-}): AutoJudgeRecordHealth {
-  // A record this build cannot read at all is `unrecognizedHarnessId`'s line
-  // to report; every finding below would be a consequence of it.
-  const readable =
-    input.hasStoredSelection &&
-    input.unrecognizedHarnessId === null &&
-    !input.saving;
-  const storedHarnessUnavailable =
-    readable &&
-    input.storedHarness !== undefined &&
-    judgeProviderBlocker(input.storedHarness) !== null;
-  // Gated behind the provider: a provider that cannot run is the finding, and
-  // its models and accounts going with it are consequences, not second ones.
-  const storedModelUnavailable =
-    readable &&
-    !storedHarnessUnavailable &&
-    judgeModelUnavailable(input.storedModelSlug, input.offeredModels);
-  const storedProfileUnavailable =
-    readable &&
-    !storedHarnessUnavailable &&
-    judgeProfileUnavailable(input.storedProfileId, input.offeredProfileIds);
-  return {
-    storedHarnessUnavailable,
-    storedModelUnavailable,
-    storedProfileUnavailable,
-    noJudgeWillRun:
-      input.isBlocked ||
-      storedHarnessUnavailable ||
-      storedModelUnavailable ||
-      storedProfileUnavailable,
-  };
+}): JudgeWarningCause | null {
+  const { stored } = input;
+  if (input.blocked !== null) return { kind: input.blocked.reason };
+  if (input.harnesses === undefined) return null;
+  const row = input.harnesses.find(
+    (candidate) => candidate.id === stored.harnessId,
+  );
+  if (row === undefined) return { kind: "unrecognized" };
+  const blocker = judgeProviderBlocker(row);
+  if (blocker !== null) return { kind: "provider", blocker };
+  if (judgeModelUnavailable(stored.model, input.offeredModels)) {
+    return { kind: "model" };
+  }
+  if (judgeProfileUnavailable(stored.profileId, input.offeredProfileIds)) {
+    return { kind: "profile" };
+  }
+  return null;
+}
+
+/**
+ * The line under a provider chosen whose catalog answered with nothing to
+ * judge on: the pick stays on screen, uncommitted, and this says why.
+ */
+export function judgeNoModelsLine(providerLabel: string): string {
+  return `${providerLabel} offers no models on this machine. Pick another provider.`;
+}
+
+/**
+ * The line under a provider whose catalog read failed. Reopening Settings
+ * remounts the tab, and a query in error refetches on mount.
+ */
+export function judgeModelsFailedLine(providerLabel: string): string {
+  return `Couldn't load ${providerLabel}'s models. Reopen Settings to try again, or pick another provider.`;
 }
 
 /**
@@ -268,8 +264,8 @@ export function judgeProfileUnavailable(
  *
  * `undefined` for every "cannot say" - the providers read has not answered, or
  * the harness maps to no provider - which is the value
- * {@link autoJudgeRecordHealth} treats as unknown rather than as "every stored
- * profile is gone".
+ * {@link judgeProfileUnavailable} treats as unknown rather than as "every
+ * stored profile is gone".
  */
 export function offeredJudgeProfileIds(
   providers: ReadonlyArray<ProviderCliState> | undefined,

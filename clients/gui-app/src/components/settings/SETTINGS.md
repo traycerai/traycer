@@ -3806,13 +3806,25 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       unsupported verdict parks the very RPCs whose handshake would overturn
       it. `useHostCapabilityProbe` keeps a `false` refutable, re-asking when
       the host's version or dialability changes.
-    - The gate also checks `isHostScopeUsable` itself, so a body is not
-      MOUNTED under a dead scope. `HostScopeGate` hides its children in an
-      `<Activity>`, and a hidden-but-mounted query is still the wrong host's
-      query.
+    - **A body is never unmounted because its scope stopped serving.** The
+      gate first mounts a body only under a usable scope
+      (`isHostScopeUsable`). Once mounted, it keeps rendering the body while
+      the scope is `connecting` or `unreachable`, against the LAST usable
+      binding (`useHeldBinding`).
+      - The old rule unmounted it instead. Every blip cost the unsaved Rules
+        text and any draft it had already taken, and a return to the same
+        machine could not bring them back.
+      - That rule guarded against a hidden body querying the wrong host.
+        `HostScopeGate` removes that risk by holding the body in a hidden
+        `<Activity>`, which tears down its effects and subscriptions, so the
+        held binding serves no reads.
+      - When the same host comes back, the body resumes as it was.
+      - A `vanished` scope, or no host at all, still unmounts it.
+        That is `HostScopeGate`'s own rule.
     - It re-provides the scoped binding, and keys the body by viewer AND host,
-      so a draft or an in-flight pick never carries across an account switch
-      or a host switch.
+      so an in-flight judge pick never carries across an account switch or a
+      host switch. The Rules edit is the exception by design: the page holds it
+      (see Rules), because the policy belongs to the account, not the machine.
     - A tab whose host lacks the method says so in one line: "This machine's
       host predates Auto mode. Update it to choose a judge and write a policy."
       for Judge and Rules, and "This machine's host doesn't record Auto mode
@@ -3828,8 +3840,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     `hostId`. The page writes the host into the Settings scope
     (`carryViewedHostIntoSettingsScope`) in a LAYOUT effect before
     acknowledging the intent, and the gated bodies are held until the scope
-    agrees. So "Permission settings…" from a chat on host B always lands on
-    host B's judge, and never paints a frame of the machine it is leaving.
+    agrees. "Agrees" means the scope RESOLVES to that host (`scope.hostId`),
+    not that the raw pin names it. An intent naming the machine Settings
+    already follows therefore holds nothing and remounts nothing, so an
+    unsaved edit there stays put. So "Permission settings…" from a chat on
+    host B always lands on host B's judge, and never paints a frame of the
+    machine it is leaving.
     Every other `openSettings` caller passes `hostId: null`: it opens on
     whatever Settings is already scoped to.
   - **Modes** (`modes-tab.tsx`) holds the row **New conversations start in**,
@@ -3869,17 +3885,40 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         A host too old to report `effective` gets no status line. When Copilot
         is enabled, a hint quotes Traycer's own measured rate (60–350 premium
         requests per hour of Auto mode), which cannot go stale when GitHub
-        reprices.
+        reprices. The figure is `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
+        (`lib/auto-mode/auto-judge-billing.ts`). The composer's meta line
+        quotes the same constant, so the two cannot drift.
     - **A specific model** is three fields: Provider, Account (drawn only for
       more than one profile) and Model. Model is a searchable combobox, not a
       menu, because a catalog can be long.
-      - A provider that cannot judge is listed, disabled, with its reason
-        ("Turned off", "Signed out", "Not installed", "Not available") and an
-        "Open Providers" link that focuses that provider's page.
+      - A provider that cannot judge is listed as a disabled option with its
+        reason ("Turned off", "Signed out", "Not installed", "Not available").
+        A listbox holds options and nothing else, so no control sits inside
+        it.
+      - While the DISPLAYED provider is a blocked one, a single "Open
+        Providers" link under the Provider field focuses that provider's
+        page. It is left out when the warning line below already carries a
+        Providers link (a stored blocked provider), so the fix is never
+        offered twice.
+      - A blocked provider that is not chosen offers no fix link of its own.
+        Providers is one click away in the sidebar.
       - An account is disabled with "Turned off" or "No API key".
       - Choosing a provider commits its `judgeDefaultModel`, else its first
-        catalog model. If only the catalog knows, the pick waits on screen,
-        uncommitted, until the catalog answers.
+        catalog model.
+      - If only the catalog knows, the pick waits on screen UNCOMMITTED (model
+        `""`) until the catalog answers.
+        - It is never sent: the contract refuses an empty model.
+        - Choosing an account for it keeps it uncommitted.
+        - One line under the fields says why it is stuck. An empty catalog
+          gives "{Provider} offers no models on this machine. Pick another
+          provider." A failed read gives "Couldn't load {Provider}'s models.
+          Reopen Settings to try again, or pick another provider." Reopening
+          works because an errored query refetches on its next mount.
+      - The Model list says the same two things. It shows "Loading models…"
+        only while the read is pending, and "No matching models." only for a
+        search that matches nothing in a non-empty catalog.
+      - Its rows are labelled with `modelDisplayLabel`, the composer picker's
+        own label.
       - The description states the billing: "Billed to that provider's
         account, on top of the conversation itself." Copilot also gets the
         rate.
@@ -3900,9 +3939,14 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - an unusable provider (one sentence per blocker, with a Providers link)
       - a model no longer offered
       - a removed account
-        `autoJudgeRecordHealth` (`auto-judge-selection.ts`) decides; the tab only
-        picks the sentence. The line is silent while a pick is in flight, and
-        under Automatic, whose status line speaks for it.
+        `judgeWarningCause` (`auto-judge-selection.ts`) decides and returns
+        the cause; the tab only picks the sentence. Nothing past the host's
+        own `blocked` verdict is reported until the harness catalog answers:
+        an unanswered read is never evidence that something is gone. The line
+        is silent while a pick is on screen, since the record is about to
+        change or is not what the controls show. An uncommitted pick's own
+        line (above) is the one shown then. The line is also silent under
+        Automatic, whose status line speaks for it.
     - **Providers with a built-in reviewer** has one row per catalog row that
       reports `nativeAutoJudge`: "Reviews with {provider}'s classifier, inside
       the conversation." beside the same `ProviderJudgeSwitch` the provider's
@@ -3951,12 +3995,40 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         than an empty policy it could save over.
       - A host that predates the field resolves to `fresh`
         (`autoPolicyReadStateFor`).
-    - **Every showing re-reads the record.** The tab is force-mounted (so an
-      unsaved edit survives a look at another tab), and becoming active fires
-      a refetch. The stale-edit warning compares the `updatedAt` the edit
-      started from against that answer. This includes null to a real stamp: a
-      policy CREATED elsewhere while the editor was open. A generation guard
-      stops an older read's late answer from unlocking Save.
+    - **Every showing re-reads the record.** Becoming active fires a refetch.
+      The stale-edit warning compares the `updatedAt` the edit started from
+      against that answer. This includes null to a real stamp: a policy
+      CREATED elsewhere while the editor was open. A generation guard stops an
+      older read's late answer from unlocking Save.
+    - **The tab mounts on its first visit** (`rulesVisited`). Opening
+      Permissions on another tab starts no Rules read. A draft handed to
+      Rules counts as a visit. From then on the tab stays force-mounted,
+      hidden while another tab shows, so a save in flight, whose answer
+      re-seeds the editor, survives a look elsewhere.
+    - **The edit belongs to the account, not the machine.** The page
+      (`useRulesEdit` in `permissions-settings-panel.tsx`) holds the editor's
+      last committed state (text, drafted markers, the last draft taken) and
+      the drafts not yet taken. It keys them by the signed-in viewer only.
+      - A switch of machine re-keys the editor under the gate. The new mount
+        resumes from the page's copy and re-takes its opening read on the
+        machine now showing. The unreadable and stale banners then govern
+        Save exactly as for a fresh edit.
+      - There is no warning dialog: the switch changes the reader, not the
+        document.
+      - A switch of ACCOUNT drops the edit. A viewer id resolving from
+        unknown keeps it, and so does signing out and back in as the same
+        account.
+      - A resumed editor does not scroll again to a draft it already showed.
+      - A save in flight when the machine switches loses the editor that
+        would have taken its answer. When the new machine's read returns a
+        newer record whose text equals the edit, it re-seeds the editor
+        anyway, so the user's own save never reads as a change made
+        elsewhere. The re-seed covers any newer record equal to the edit,
+        since nothing is left to save.
+      - The editor stays authoritative while mounted and reports each
+        committed state upward. If the page owned the state and the editor
+        wrote it back from an effect, a queued write could overwrite fresh
+        keystrokes or append a draft twice.
     - **Drafts.** A prepared rule, from an approval card's "Allow from now on…"
       or from Activity, reaches the page as a queued draft with a page-local
       id. The editor appends it to its section in render, whether or not the
@@ -3985,6 +4057,8 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         you".
       - Refused uses the warning recipe, and its Why adds the card's unattended
         sentence.
+      - A filter that matches no row replaces the table with one line: "No
+        decisions match this filter."
     - **Why** is the rule's display name plus the judge's reason. A Couldn't
       decide row gets the card's own human line for an `auto: ` reason, else
       its `failureKind` family. The kinds a Judge setting fixes
@@ -3993,8 +4067,10 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     - **"Allow from now on…"** appears on an Asked you or Refused row with tier
       `soft` and a rule, the card's own rule. It drafts the same narrow text as
       the card (`autoModeRuleDraftText`, narrowed by the chat's workspace when
-      this window holds the chat open) and hands it to Rules. An entry with
-      neither an input nor a tool name offers no draft.
+      this window holds the chat open) and hands it to Rules. A draft must
+      name the action (`autoModeRuleDraftAction`), so an entry offers no draft
+      when it has no input and no tool name, or only a generic tool name such
+      as `Bash`, which would allow every command of that tool.
     - A conversation is named by its LIVE title when this window has it open
       (`hooks/chats/use-visible-chats.ts`), else by the title the host
       recorded, else "Untitled conversation".
@@ -4006,23 +4082,27 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     sentence BESIDE it, never in its place. There are three sentences, because
     the constants describe three situations and one sentence is false for two
     of them:
-    - **did not run** (`auto: no judge configured`, `auto: judge
-unavailable (…)`, `auto: judge failed`): "Traycer couldn't run the
-      judge, so it's asking you instead."
+    - **did not run** (`auto: no judge configured`, `auto: judge unavailable
+(…)`, `auto: judge failed`): `judgeCouldNotRunSentence` says "The judge
+      couldn't run." or, when the machine string carries a cause in its
+      parentheses, "The judge couldn't run: {cause}.", followed by the "Fix in
+      Permissions ▸ Judge" link.
     - **ran without deciding** (`auto: judge returned no verdict`,
       `auto: unparseable verdict`): "The judge reviewed this but didn't reach a
       verdict, so it's asking you instead."
     - **ran out of time** (`auto: judge timed out`, `auto: judge exceeded <n>
 min`): "The judge didn't finish in time, so it's asking you instead."
-      The second family is the one the single sentence got wrong: the judge's own
-      reasoning about the action sits directly above that line. The wire carries
-      `{ rule, text }` and no outcome, so the family is read off the STRING. An
-      `auto: ` constant this build does not know falls back to the "couldn't run"
-      line. That includes the four the host emits outside the three families
-      (`turn stopped`, `judge preflight timed out`, `judge tools unavailable`,
-      `account policy could not be read`), all of which the first sentence
-      describes truthfully. Activity reuses these same sentences for its
-      Couldn't decide rows.
+
+    The second family is the one a single sentence got wrong: the judge's own
+    reasoning about the action sits directly above that line. The wire carries
+    `{ rule, text }` and no outcome, so the family is read off the STRING. An
+    `auto: ` constant this build does not know falls back to the "couldn't run"
+    sentence. That includes the four the host emits outside the three families
+    (`turn stopped`, `judge preflight timed out`, `judge tools unavailable`,
+    `account policy could not be read`), all of which that sentence describes
+    truthfully. Activity's Couldn't decide rows use the same three sentences:
+    the card's own line for a recorded `auto: ` reason, otherwise the family its
+    `failureKind` names; "Fix in Judge" there keys on the kind.
 
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide

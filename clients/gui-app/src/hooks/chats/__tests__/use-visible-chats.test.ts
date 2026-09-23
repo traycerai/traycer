@@ -59,10 +59,7 @@ const fakes = vi.hoisted(() => {
 
 interface EpicState {
   chats: {
-    byId: Record<
-      string,
-      { id: string; title: string | null; hostId: string | null }
-    >;
+    byId: Record<string, { id: string; title: string | null }>;
   };
 }
 interface ChatState {
@@ -79,7 +76,6 @@ interface EpicHandle {
 }
 interface ChatHandle {
   chatId: string;
-  hostId: string | null;
   store: FakeStore<ChatState>;
 }
 
@@ -88,7 +84,6 @@ const epicRegistry = vi.hoisted(() => fakes.makeRegistry<EpicHandle>());
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => chatRegistry,
-  getChatSessionHandleHostId: (handle: ChatHandle) => handle.hostId,
 }));
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   getOpenEpicRegistry: () => epicRegistry,
@@ -102,12 +97,10 @@ function epicHandle(
 
 function chatHandle(
   chatId: string,
-  hostId: string | null,
   worktreeBinding: ChatState["worktreeBinding"],
 ): ChatHandle {
   return {
     chatId,
-    hostId,
     store: fakes.makeStore<ChatState>({ worktreeBinding }),
   };
 }
@@ -126,10 +119,10 @@ describe("useVisibleChats", () => {
     expect(result.current.size).toBe(0);
   });
 
-  it("takes a chat's title and host from an open epic", () => {
+  it("takes a chat's title from an open epic", () => {
     epicRegistry.handles.push(
       epicHandle({
-        "chat-1": { id: "chat-1", title: "Fix the build", hostId: "host-a" },
+        "chat-1": { id: "chat-1", title: "Fix the build" },
       }),
     );
 
@@ -137,14 +130,13 @@ describe("useVisibleChats", () => {
 
     expect(result.current.get("chat-1")).toEqual({
       title: "Fix the build",
-      hostId: "host-a",
       workspace: { remote: null, branch: null },
     });
   });
 
   it("takes a chat's workspace from its session's worktree binding", () => {
     chatRegistry.handles.push(
-      chatHandle("chat-2", "host-b", {
+      chatHandle("chat-2", {
         entries: [
           {
             isPrimary: true,
@@ -159,7 +151,6 @@ describe("useVisibleChats", () => {
 
     expect(result.current.get("chat-2")).toEqual({
       title: null,
-      hostId: "host-b",
       workspace: { remote: "acme/web", branch: "feature-x" },
     });
   });
@@ -167,11 +158,11 @@ describe("useVisibleChats", () => {
   it("joins an epic's title with the same chat's session workspace", () => {
     epicRegistry.handles.push(
       epicHandle({
-        "chat-3": { id: "chat-3", title: "Both", hostId: "host-c" },
+        "chat-3": { id: "chat-3", title: "Both" },
       }),
     );
     chatRegistry.handles.push(
-      chatHandle("chat-3", "host-other", {
+      chatHandle("chat-3", {
         entries: [
           {
             isPrimary: true,
@@ -186,14 +177,13 @@ describe("useVisibleChats", () => {
 
     expect(result.current.get("chat-3")).toEqual({
       title: "Both",
-      hostId: "host-c",
       workspace: { remote: "acme/api", branch: null },
     });
   });
 
   it("returns the same map instance across an update that changes nothing it reads", () => {
     const epic = epicHandle({
-      "chat-1": { id: "chat-1", title: "Stable", hostId: "host-a" },
+      "chat-1": { id: "chat-1", title: "Stable" },
     });
     epicRegistry.handles.push(epic);
     const { result } = renderHook(() => useVisibleChats());
@@ -205,7 +195,7 @@ describe("useVisibleChats", () => {
       epic.store.setState({
         chats: {
           byId: {
-            "chat-1": { id: "chat-1", title: "Stable", hostId: "host-a" },
+            "chat-1": { id: "chat-1", title: "Stable" },
           },
         },
       });
@@ -216,7 +206,7 @@ describe("useVisibleChats", () => {
 
   it("returns a new map when a title it reads changes", () => {
     const epic = epicHandle({
-      "chat-1": { id: "chat-1", title: "Before", hostId: "host-a" },
+      "chat-1": { id: "chat-1", title: "Before" },
     });
     epicRegistry.handles.push(epic);
     const { result } = renderHook(() => useVisibleChats());
@@ -226,7 +216,7 @@ describe("useVisibleChats", () => {
       epic.store.setState({
         chats: {
           byId: {
-            "chat-1": { id: "chat-1", title: "After", hostId: "host-a" },
+            "chat-1": { id: "chat-1", title: "After" },
           },
         },
       });
@@ -241,9 +231,12 @@ describe("useVisibleChats", () => {
     expect(result.current.size).toBe(0);
 
     act(() => {
-      chatRegistry.add(chatHandle("chat-9", "host-z", null));
+      chatRegistry.add(chatHandle("chat-9", null));
     });
 
-    expect(result.current.get("chat-9")?.hostId).toBe("host-z");
+    expect(result.current.get("chat-9")).toEqual({
+      title: null,
+      workspace: { remote: null, branch: null },
+    });
   });
 });

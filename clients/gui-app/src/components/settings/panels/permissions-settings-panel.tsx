@@ -32,15 +32,31 @@ import {
 import type { PendingRuleDraft } from "@/components/settings/panels/auto-policy-document";
 import { ModesTab } from "@/components/settings/panels/permissions/modes-tab";
 import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
-import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
+import {
+  RulesTab,
+  type RulesEditorState,
+} from "@/components/settings/panels/permissions/rules-tab";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   acknowledgeSettingsOpenIntent,
   useSettingsOpenIntent,
 } from "@/stores/tabs/settings-open-intent-store";
 import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
+
+/**
+ * The Rules edit as the page holds it across remounts of the editor: the
+ * editor's last committed state, and the drafts handed to Rules that it has
+ * not taken yet. `viewerId` is the account it belongs to; `""` until one is
+ * known.
+ */
+interface RulesEdit {
+  readonly viewerId: string;
+  readonly snapshot: RulesEditorState | null;
+  readonly nextDraftId: number;
+  readonly drafts: ReadonlyArray<PendingRuleDraft>;
+}
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened -
@@ -58,37 +74,25 @@ import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
  * machine the caller had in mind; that machine becomes the Settings scope
  * BEFORE the tab's body mounts, so a composer's "Permission settings…" always
  * lands on its own machine's judge.
+ *
+ * The Rules edit lives HERE, keyed by the signed-in account alone. The policy
+ * is the account's - traycer-server stores it and every machine reads the same
+ * one - so a switch of machine re-keys the editor under `HostScopeGate` but
+ * must not lose an unsaved edit: the remounted editor resumes from the page's
+ * copy and re-takes its opening read on the machine now showing. Only a
+ * switch of account drops it.
  */
 export function PermissionsSettingsPanel(): ReactNode {
   const scope = useHostScope();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
   const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);
-  const scopedHostId = useSettingsHostScopeStore((state) => state.scopedHostId);
   const [tab, setTab] = useState<PermissionsTab>("modes");
+  const [rulesVisited, setRulesVisited] = useState(false);
   const [appliedIntentId, setAppliedIntentId] = useState<number | null>(null);
   const [appliedRevealAt, setAppliedRevealAt] = useState<number | null>(null);
-  const [draftQueue, setDraftQueue] = useState<{
-    readonly nextId: number;
-    readonly drafts: ReadonlyArray<PendingRuleDraft>;
-  }>({ nextId: 1, drafts: [] });
-
-  const enqueueDraft = useCallback((draft: SettingsRuleDraft): void => {
-    setDraftQueue((queue) => ({
-      nextId: queue.nextId + 1,
-      drafts: [...queue.drafts, { id: queue.nextId, draft }],
-    }));
-  }, []);
-  const onDraftsConsumed = useCallback((throughId: number): void => {
-    setDraftQueue((queue) =>
-      queue.drafts.every((entry) => entry.id > throughId)
-        ? queue
-        : {
-            ...queue,
-            drafts: queue.drafts.filter((entry) => entry.id > throughId),
-          },
-    );
-  }, []);
+  const rules = useRulesEdit();
+  const { enqueueDraft } = rules;
 
   // The intent, applied once per arm during render so the requested tab is the
   // first one drawn. A draft always means Rules, whatever else was asked.
@@ -113,6 +117,9 @@ export function PermissionsSettingsPanel(): ReactNode {
     const revealTab = permissionsTabForAnchor(pendingReveal.anchor);
     if (revealTab !== null) setTab(revealTab);
   }
+  // Rules starts its read when it mounts, so it mounts on its first visit -
+  // a draft handed to it is one - and stays mounted from then on.
+  if (tab === "rules" && !rulesVisited) setRulesVisited(true);
   // The intent's machine becomes the Settings scope before paint, and the
   // intent is spent. A store write, so it belongs in an effect; LAYOUT, so the
   // host-scoped bodies below never paint a frame of the previous machine.
@@ -122,9 +129,12 @@ export function PermissionsSettingsPanel(): ReactNode {
     acknowledgeSettingsOpenIntent(intent.id);
   }, [intent]);
   // Until then the gated bodies hold, so none of them mounts - and starts a
-  // read - against the machine the page is about to leave.
+  // read - against the machine the page is about to leave. Compared with the
+  // machine the scope RESOLVES to, not the pin: an intent naming the machine
+  // Settings already follows moves nothing, and holding would unmount every
+  // body for a frame.
   const scopePending =
-    intent !== null && intent.hostId !== null && intent.hostId !== scopedHostId;
+    intent !== null && intent.hostId !== null && intent.hostId !== scope.hostId;
 
   const gated = (body: ReactNode): ReactNode =>
     scopePending ? null : (
@@ -179,20 +189,24 @@ export function PermissionsSettingsPanel(): ReactNode {
         <TabsContent value="judge" className="pt-5" {...contentLabel("judge")}>
           {gated(<JudgeTab />)}
         </TabsContent>
-        {/* Mounted while hidden, so an unsaved edit - a draft the card or the
-            Activity tab handed over included - survives a look at another
-            tab. Radix leaves a force-mounted pane visible, hence the class. */}
+        {/* Mounted while hidden once visited, so a save in flight - whose
+            answer re-seeds the editor - survives a look at another tab; the
+            edit itself lives on this page. Never before the first visit, so
+            opening on another tab starts no Rules read. Radix leaves a
+            force-mounted pane visible, hence the class. */}
         <TabsContent
           value="rules"
-          forceMount
+          forceMount={rulesVisited ? true : undefined}
           className="pt-5 data-[state=inactive]:hidden"
           {...contentLabel("rules")}
         >
           {gated(
             <RulesTab
               active={tab === "rules"}
-              drafts={draftQueue.drafts}
-              onDraftsConsumed={onDraftsConsumed}
+              drafts={rules.edit.drafts}
+              onDraftsConsumed={rules.onDraftsConsumed}
+              snapshot={rules.edit.snapshot}
+              onSnapshot={rules.onSnapshot}
             />,
           )}
         </TabsContent>
@@ -214,6 +228,65 @@ export function PermissionsSettingsPanel(): ReactNode {
       </Tabs>
     </SettingsPanelShell>
   );
+}
+
+/**
+ * The page's copy of the Rules edit, and the three ways it changes: a draft
+ * handed to Rules, the editor taking drafts, and the editor committing a
+ * state.
+ */
+function useRulesEdit(): {
+  readonly edit: RulesEdit;
+  readonly enqueueDraft: (draft: SettingsRuleDraft) => void;
+  readonly onDraftsConsumed: (throughId: number) => void;
+  readonly onSnapshot: (editor: RulesEditorState) => void;
+} {
+  const viewerId = useCloudChatViewerId();
+  const [edit, setEdit] = useState<RulesEdit>({
+    viewerId,
+    snapshot: null,
+    nextDraftId: 1,
+    drafts: [],
+  });
+  // Another account's edit is not this one's to keep. An id arriving where
+  // none was known is the same viewer resolving, and keeps the edit; an id
+  // going away (signing out) records nothing, so the next account is compared
+  // against the last one known.
+  if (viewerId !== "" && edit.viewerId !== viewerId) {
+    setEdit(
+      edit.viewerId === ""
+        ? { ...edit, viewerId }
+        : {
+            viewerId,
+            snapshot: null,
+            nextDraftId: edit.nextDraftId,
+            drafts: [],
+          },
+    );
+  }
+  const enqueueDraft = useCallback((draft: SettingsRuleDraft): void => {
+    setEdit((current) => ({
+      ...current,
+      nextDraftId: current.nextDraftId + 1,
+      drafts: [...current.drafts, { id: current.nextDraftId, draft }],
+    }));
+  }, []);
+  const onDraftsConsumed = useCallback((throughId: number): void => {
+    setEdit((current) =>
+      current.drafts.every((entry) => entry.id > throughId)
+        ? current
+        : {
+            ...current,
+            drafts: current.drafts.filter((entry) => entry.id > throughId),
+          },
+    );
+  }, []);
+  const onSnapshot = useCallback((editor: RulesEditorState): void => {
+    setEdit((current) =>
+      current.snapshot === editor ? current : { ...current, snapshot: editor },
+    );
+  }, []);
+  return { edit, enqueueDraft, onDraftsConsumed, onSnapshot };
 }
 
 function PermissionsHostGate(props: {
