@@ -92,6 +92,24 @@ function documentRowFixture(
   };
 }
 
+/** Like {@link documentRowFixture}, with the incarnation named explicitly. */
+function documentRowAt(
+  path: string,
+  incarnation: string,
+  fragmentName: string,
+  revision: number,
+): DocumentRowFixture {
+  return {
+    path,
+    incarnation,
+    shardRoomId: "shard-a",
+    fragmentName,
+    updatedAt: 1000,
+    provenance: "agent",
+    revision,
+  };
+}
+
 interface SnapshotOverrides {
   readonly documents?: readonly DocumentRowFixture[];
 }
@@ -129,6 +147,54 @@ function docFrame(
     hasBinaryPayload: true,
   });
   if (parsed.kind !== "doc") throw new Error("fixture drift: doc");
+  return parsed;
+}
+
+interface DeltaOverrides {
+  readonly seq: number;
+  readonly documentUpserts?: readonly DocumentRowFixture[];
+  readonly removals?: readonly {
+    readonly population: "document" | "file";
+    readonly path: string;
+    readonly incarnation: string;
+    readonly revision: number;
+  }[];
+}
+
+function deltaFrame(
+  overrides: DeltaOverrides,
+): Extract<AgentIdentityStateSubscribeServerFrameV10, { kind: "delta" }> {
+  const parsed = agentIdentityStateSubscribeServerFrameSchemaV10.parse({
+    kind: "delta",
+    authorityEpoch: EPOCH,
+    seq: overrides.seq,
+    documentUpserts: overrides.documentUpserts ?? [],
+    fileUpserts: [],
+    removals: overrides.removals ?? [],
+    identity: null,
+    hasBinaryPayload: false,
+  });
+  if (parsed.kind !== "delta") throw new Error("fixture drift: delta");
+  return parsed;
+}
+
+function unavailableFrame(
+  path: string,
+  code: string,
+  terminal: boolean,
+): Extract<AgentIdentityFileSubscribeServerFrameV10, { kind: "unavailable" }> {
+  const parsed = agentIdentityFileSubscribeServerFrameSchemaV10.parse({
+    kind: "unavailable",
+    authorityEpoch: EPOCH,
+    path,
+    code,
+    reason: "host-side summary",
+    terminal,
+    hasBinaryPayload: false,
+  });
+  if (parsed.kind !== "unavailable") {
+    throw new Error("fixture drift: unavailable");
+  }
   return parsed;
 }
 
@@ -178,6 +244,7 @@ interface FileHandle {
   readonly path: string;
   readonly request: IdentityFileStreamClientRequest;
   closeCalls: number;
+  readonly applyUpdateCalls: { docGuid: string; bytes: Uint8Array }[];
 }
 
 interface FakeFileFactory {
@@ -190,12 +257,19 @@ interface FakeFileFactory {
 function createFakeFileFactory(): FakeFileFactory {
   const handlesByPath = new Map<string, FileHandle[]>();
   const factory: IdentityFileStreamClientFactory = (request) => {
-    const handle: FileHandle = { path: request.path, request, closeCalls: 0 };
+    const handle: FileHandle = {
+      path: request.path,
+      request,
+      closeCalls: 0,
+      applyUpdateCalls: [],
+    };
     const existing = handlesByPath.get(request.path) ?? [];
     existing.push(handle);
     handlesByPath.set(request.path, existing);
     return {
-      applyUpdate: () => undefined,
+      applyUpdate: (docGuid, bytes) => {
+        handle.applyUpdateCalls.push({ docGuid, bytes });
+      },
       awareness: () => undefined,
       close: () => {
         handle.closeCalls += 1;
@@ -359,6 +433,117 @@ describe("createOpenIdentityStore", () => {
     const fragment = rig.handle.getFileFragment("SOUL.md");
     expect(fragment).not.toBeNull();
     expect(fragment?.toJSON()).toContain("hello");
+
+    release();
+  });
+
+  it("an edit made while disconnected flushes on reconnect after the file's last view was released", () => {
+    const rig = rigUnderTest();
+    rig.state.latest().callbacks.onSnapshot(
+      snapshotFrame({
+        documents: [
+          documentRowFixture("SOUL.md", "doc", 1),
+          documentRowFixture("MEMORY.md", "doc", 1),
+        ],
+      }),
+    );
+    rig.state.latest().callbacks.onConnectionStatus("open", null);
+    expect(rig.handle.store.getState().connection).toBe("open");
+
+    const release = rig.handle.acquireFileBodyLease("SOUL.md");
+    const fileHandle = rig.file.forPath("SOUL.md");
+    fileHandle.request.callbacks.onDoc(
+      docFrame("SOUL.md", "guid-a", encodeDocStateVectorBase64(new Y.Doc())),
+      Y.encodeStateAsUpdate(new Y.Doc()),
+    );
+
+    // The connection drops - writes must retain locally rather than send.
+    rig.state.latest().callbacks.onConnectionStatus("closed", null);
+    expect(rig.handle.store.getState().connection).not.toBe("open");
+
+    const doc = rig.handle.getFileDoc("SOUL.md");
+    if (doc === null) throw new Error("expected a seeded doc");
+    doc.transact(() => {
+      doc.getXmlFragment("doc").insert(0, [new Y.XmlText("offline")]);
+    });
+    expect(rig.handle.store.getState().dirtyPaths).toContain("SOUL.md");
+
+    // The editor's last view goes away, but the lane is kept open: the
+    // tier still retains bytes no lane has carried yet.
+    release();
+    expect(rig.handle.attachedBodyPaths()).toContain("SOUL.md");
+    expect(fileHandle.applyUpdateCalls).toHaveLength(0);
+
+    // Reconnect: the store flushes the retained edit over the SAME lane
+    // (never closed while pending bytes existed), then releases it once
+    // the flush leaves nothing behind to protect.
+    rig.state.latest().callbacks.onConnectionStatus("open", null);
+
+    expect(fileHandle.applyUpdateCalls.length).toBeGreaterThan(0);
+    const merged = new Y.Doc();
+    for (const call of fileHandle.applyUpdateCalls) {
+      Y.applyUpdate(merged, call.bytes);
+    }
+    expect(merged.getXmlFragment("doc").toJSON()).toContain("offline");
+
+    expect(rig.handle.attachedBodyPaths()).not.toContain("SOUL.md");
+    expect(rig.handle.store.getState().dirtyPaths).not.toContain("SOUL.md");
+  });
+
+  it("a new incarnation at a refused path reopens its body lane", () => {
+    const rig = rigUnderTest();
+    rig.state.latest().callbacks.onSnapshot(
+      snapshotFrame({
+        documents: [documentRowAt("SOUL.md", "inc-1", "doc", 1)],
+      }),
+    );
+
+    const release = rig.handle.acquireFileBodyLease("SOUL.md");
+    expect(rig.file.openCountFor("SOUL.md")).toBe(1);
+
+    rig.file
+      .forPath("SOUL.md")
+      .request.callbacks.onUnavailable(
+        unavailableFrame("SOUL.md", "fileNotFound", true),
+      );
+
+    expect(rig.handle.getFileBodyAvailability("SOUL.md")).toEqual({
+      kind: "unavailable",
+      code: "file-not-found",
+      reason: "host-side summary",
+    });
+    expect(rig.file.openCountFor("SOUL.md")).toBe(1);
+
+    rig.state.latest().callbacks.onDelta(
+      deltaFrame({
+        seq: 1,
+        documentUpserts: [documentRowAt("SOUL.md", "inc-2", "doc", 2)],
+        removals: [
+          {
+            population: "document",
+            path: "SOUL.md",
+            incarnation: "inc-1",
+            revision: 2,
+          },
+        ],
+      }),
+    );
+
+    expect(rig.file.openCountFor("SOUL.md")).toBe(2);
+
+    const donor = new Y.Doc();
+    donor.getXmlFragment("doc").insert(0, [new Y.XmlText("fresh")]);
+    rig.file
+      .forPath("SOUL.md")
+      .request.callbacks.onDoc(
+        docFrame("SOUL.md", "guid-2", encodeDocStateVectorBase64(new Y.Doc())),
+        Y.encodeStateAsUpdate(donor),
+      );
+
+    expect(rig.handle.getFileBodyAvailability("SOUL.md")).toEqual({
+      kind: "ready",
+    });
+    expect(rig.handle.getFileFragment("SOUL.md")).not.toBeNull();
 
     release();
   });

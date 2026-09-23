@@ -5,7 +5,14 @@
  * `useIdentityBlobQueryForClient`, and a pending blob renders the pending
  * notice.
  */
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
@@ -136,6 +143,71 @@ function docFrame(
   return parsed;
 }
 
+interface FileRowFixture {
+  readonly path: string;
+  readonly incarnation: string;
+  readonly shardRoomId: string;
+  readonly entry: {
+    readonly v: number;
+    readonly kind: string;
+    readonly current: {
+      readonly sha256: string;
+      readonly byteLength: number;
+      readonly mediaType: string;
+      readonly createdAt: number;
+      readonly createdBy: string;
+      readonly producer: { readonly type: "agent"; readonly chatId: string };
+    };
+    readonly status: string;
+  };
+  readonly revision: number;
+}
+
+function fileRowFixture(
+  path: string,
+  mediaType: string,
+  byteLength: number,
+): FileRowFixture {
+  return {
+    path,
+    incarnation: `inc:${path}`,
+    shardRoomId: "shard-a",
+    entry: {
+      v: 1,
+      kind: "blob",
+      current: {
+        sha256: "a".repeat(64),
+        byteLength,
+        mediaType,
+        createdAt: 1000,
+        createdBy: "user-1",
+        producer: { type: "agent", chatId: "chat-1" },
+      },
+      status: "available",
+    },
+    revision: 1,
+  };
+}
+
+function snapshotFrameWithFile(
+  file: FileRowFixture,
+): Extract<AgentIdentityStateSubscribeServerFrameV10, { kind: "snapshot" }> {
+  const parsed = agentIdentityStateSubscribeServerFrameSchemaV10.parse({
+    kind: "snapshot",
+    authorityEpoch: EPOCH,
+    position: 0,
+    basis: "cold",
+    reconciledWithCloud: false,
+    identity: { revision: 1, identity: identityFixture("An Identity") },
+    documents: [],
+    files: [file],
+    shards: [],
+    hasBinaryPayload: false,
+  });
+  if (parsed.kind !== "snapshot") throw new Error("fixture drift: snapshot");
+  return parsed;
+}
+
 interface StateHandle {
   readonly callbacks: IdentityStateStreamCallbacks;
   readonly resumeProvider: () => EpicLaneCursor | null;
@@ -235,6 +307,18 @@ const PNG_FILE: IdentityTreeFile = {
   kind: "blob",
   mediaType: "image/png",
   byteLength: 3,
+  status: "available",
+  pending: false,
+  executable: false,
+};
+
+const ZIP_FILE: IdentityTreeFile = {
+  path: "bundle.zip",
+  name: "bundle.zip",
+  group: "soul",
+  kind: "blob",
+  mediaType: "application/zip",
+  byteLength: 9,
   status: "available",
   pending: false,
   executable: false,
@@ -370,5 +454,108 @@ describe("IdentityFileBody - blob", () => {
     );
 
     expect(screen.getByTestId("identity-blob-pending")).not.toBeNull();
+  });
+
+  it("Download on a non-previewable blob fetches then saves without a second click", () => {
+    blobMocks.data = null;
+    URL.createObjectURL = vi.fn(() => "blob:mock/1");
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+
+    const rig = createRig();
+    opened.push(rig.handle);
+    rig.state
+      .latest()
+      .callbacks.onSnapshot(
+        snapshotFrameWithFile(
+          fileRowFixture("bundle.zip", "application/zip", 9),
+        ),
+      );
+
+    const { rerender } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <OpenIdentityContext.Provider
+          value={{ kind: "ready", handle: rig.handle }}
+        >
+          <IdentityFileBody
+            identityId={IDENTITY_ID}
+            hostId={HOST_ID}
+            file={ZIP_FILE}
+            hydrated
+          />
+        </OpenIdentityContext.Provider>
+      </TabHostProvider>,
+    );
+
+    // Nothing is fetched yet - the click only RECORDS the intent.
+    fireEvent.click(screen.getByTestId("identity-blob-download"));
+    expect(clickSpy).not.toHaveBeenCalled();
+
+    // The fetch completes: an effect watching the now-arrived bytes performs
+    // the save the earlier click asked for, with no second click.
+    blobMocks.data = {
+      kind: "bytes",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+      mediaType: "application/zip",
+    };
+    rerender(
+      <TabHostProvider hostId={HOST_ID}>
+        <OpenIdentityContext.Provider
+          value={{ kind: "ready", handle: rig.handle }}
+        >
+          <IdentityFileBody
+            identityId={IDENTITY_ID}
+            hostId={HOST_ID}
+            file={ZIP_FILE}
+            hydrated
+          />
+        </OpenIdentityContext.Provider>
+      </TabHostProvider>,
+    );
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    clickSpy.mockRestore();
+  });
+
+  it("image object URL is created by an effect and revoked on unmount", () => {
+    blobMocks.data = {
+      kind: "bytes",
+      bytes: new Uint8Array([1, 2, 3]),
+      mediaType: "image/png",
+    };
+    const createSpy = vi.fn(() => "blob:mock/1");
+    const revokeSpy = vi.fn();
+    URL.createObjectURL = createSpy;
+    URL.revokeObjectURL = revokeSpy;
+
+    const rig = createRig();
+    opened.push(rig.handle);
+    rig.state.latest().callbacks.onSnapshot(snapshotFrame([]));
+
+    const { unmount } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <OpenIdentityContext.Provider
+          value={{ kind: "ready", handle: rig.handle }}
+        >
+          <IdentityFileBody
+            identityId={IDENTITY_ID}
+            hostId={HOST_ID}
+            file={PNG_FILE}
+            hydrated
+          />
+        </OpenIdentityContext.Provider>
+      </TabHostProvider>,
+    );
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("identity-blob-image").getAttribute("src")).toBe(
+      "blob:mock/1",
+    );
+
+    unmount();
+
+    expect(revokeSpy).toHaveBeenCalledWith("blob:mock/1");
   });
 });
