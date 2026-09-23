@@ -43,7 +43,7 @@ import {
  * passing silently.
  */
 
-const IDENTITY_ID = "identity-1";
+const IDENTITY_ID = "identity_1";
 const LANE_ID = identityStateLaneId(IDENTITY_ID);
 const SHA = "a".repeat(64);
 

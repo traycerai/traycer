@@ -87,7 +87,7 @@ function attachAdapterTo(
 ): IdentityStateStreamCallbacks {
   const opened: IdentityStateStreamCallbacks[] = [];
   const adapter = createIdentityStateLaneAdapter({
-    identityId: "identity-1",
+    identityId: "identity_1",
     streamClientFactory: (_identityId, streamCallbacks) => {
       opened.push(streamCallbacks);
       return { close: () => {} };

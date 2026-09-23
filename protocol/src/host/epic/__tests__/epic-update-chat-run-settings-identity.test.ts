@@ -56,7 +56,7 @@ describe("updateChatRunSettingsRequestSchemaV11 (frozen)", () => {
   it("does not carry identityId, and strips one a newer client sends", () => {
     const parsed = updateChatRunSettingsRequestSchemaV11.parse({
       ...REQUEST_V11,
-      settings: { ...SETTINGS_V11, identityId: "identity-1" },
+      settings: { ...SETTINGS_V11, identityId: "identity_1" },
     });
     expect(parsed.settings).not.toHaveProperty("identityId");
     expect(parsed).toEqual(REQUEST_V11);
@@ -65,7 +65,7 @@ describe("updateChatRunSettingsRequestSchemaV11 (frozen)", () => {
 
 describe("updateChatRunSettingsRequestSchemaV12", () => {
   it("round-trips a named identity and the stock one", () => {
-    for (const identityId of ["identity-1", null]) {
+    for (const identityId of ["identity_1", null]) {
       const request = {
         ...REQUEST_V11,
         settings: { ...SETTINGS_V11, identityId },
@@ -110,7 +110,7 @@ describe("hostAgentRemoteSenderFactsSchema (GUI arm)", () => {
     const facts = {
       surface: "gui" as const,
       hostId: "host-1",
-      settings: { ...SETTINGS_V11, identityId: "identity-1" },
+      settings: { ...SETTINGS_V11, identityId: "identity_1" },
     };
     expect(hostAgentRemoteSenderFactsSchema.parse(facts)).toEqual(facts);
   });
