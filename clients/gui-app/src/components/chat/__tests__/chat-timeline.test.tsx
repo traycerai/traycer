@@ -125,6 +125,7 @@ function rowIds(container: HTMLElement): ReadonlyArray<string> {
 function makeUserActions(): ChatMessageUserActions {
   return {
     type: "user",
+    deliveryPhase: null,
     enabled: true,
     confirmingDelete: false,
     editing: null,

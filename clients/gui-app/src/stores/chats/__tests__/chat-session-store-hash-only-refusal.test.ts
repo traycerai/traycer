@@ -14,6 +14,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
+import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -521,43 +522,6 @@ afterEach(() => {
 });
 
 describe("chat session store - hash-only refusal (T5)", () => {
-  it("a refused accepted-message edit retracts the hashes it sent bare", async () => {
-    const hash = await seedConfirmedImage();
-    harness = createHarness();
-    emitOwnerSnapshot(harness.callbacks(), []);
-
-    const action = harness.handle.store.getState().messageDeliveryEdit({
-      messageId: "accepted-message-1",
-      expectedRevision: 1,
-      content: hashOnlyContent(hash),
-      browserAnnotations: [],
-    });
-    expect(action).not.toBeNull();
-    if (action === null) throw new Error("delivery edit was refused locally");
-    expect(
-      harness.handle.store.getState().pendingActions[action.clientActionId]
-        ?.sentContentHashes,
-    ).toEqual([hash]);
-
-    harness.callbacks().onActionAck({
-      kind: "actionAck",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      clientActionId: action.clientActionId,
-      action: "messageDeliveryEdit",
-      status: "rejected",
-      reason: "Host cannot decode this hash-only attachment.",
-      code: "MISSING_ATTACHMENT_BYTES",
-      cause: "unsupported-format",
-      backgroundStopTaskIds: [],
-      token: null,
-    });
-
-    expect(isDraftBlobConfirmed(HOST_ID, hash, OWNER_ID)).toBe(false);
-    expect(isDraftBlobUnbridgeable(HOST_ID, hash)).toBe(true);
-  });
-
   it("a rejected hash-only send invalidates the memo and retries inline exactly once, silently", async () => {
     // Pre-T5: `onActionAck` had no hash-only fork at all, so a
     // `MISSING_ATTACHMENT_BYTES` rejection fell straight to the ordinary
@@ -593,6 +557,89 @@ describe("chat session store - hash-only refusal (T5)", () => {
     const retriedNode = retryFrame.content.content?.at(0);
     expect(retriedNode?.attrs?.hash).toBeFalsy();
     expect(typeof retriedNode?.attrs?.b64content).toBe("string");
+  });
+
+  it("a rejected hash-only send neither retries nor surfaces while the delivery view names it - the identical rejection WOULD retry silently without the gate (see the case above)", async () => {
+    const controlHash = await seedConfirmedImage();
+    const gatedHash = await seedSecondConfirmedImage();
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks(), []);
+
+    // Positive control, inline: an identical `not-on-host` rejection with no
+    // delivery view retries inline exactly once, silently - the same
+    // mechanism the case above already proves, repeated here so this test is
+    // self-contained.
+    const control = sendHashOnlyMessage(harness, controlHash);
+    rejectMissingAttachmentBytes(
+      harness,
+      control.clientActionId,
+      "not-on-host",
+    );
+    // Synchronous, before the async re-inline completes and the record is
+    // retired: an identical rejection with no delivery view creates a
+    // recovery record at once - the baseline the gated case's absence is
+    // measured against.
+    expect(
+      Object.hasOwn(
+        harness.handle.store.getState().hashOnlyRecoveries,
+        control.clientActionId,
+      ),
+    ).toBe(true);
+    await vi.waitFor(() => {
+      expect(harness?.sent).toHaveLength(2);
+    });
+    const controlRetry = harness.sent[1];
+    if (controlRetry.kind !== "send") {
+      throw new Error("expected the control's retry send frame");
+    }
+    expect(controlRetry.messageId).toBe(control.messageId);
+
+    // The gated send: the delivery view already names this exact message
+    // before its rejection arrives.
+    const gated = sendHashOnlyMessage(harness, gatedHash);
+    const delivery: ChatMessageDelivery = {
+      messageId: gated.messageId,
+      revision: 1,
+      state: { phase: "pending" },
+    };
+    harness.callbacks().onMessageDeliveryChanged({
+      kind: "messageDeliveryChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      delivery,
+    });
+    const beforeGatedReject = harness.handle.store.getState();
+
+    rejectMissingAttachmentBytes(harness, gated.clientActionId, "not-on-host");
+
+    // `beginHashOnlyRecovery`'s own gate (`messageDeliveryNames`) declines
+    // BEFORE it ever creates a recovery record - synchronous, unconditional
+    // proof that no retry was even scheduled, not a timing-dependent absence.
+    expect(
+      Object.hasOwn(
+        harness.handle.store.getState().hashOnlyRecoveries,
+        gated.clientActionId,
+      ),
+    ).toBe(false);
+    // The ordinary rejected-arm housekeeping still runs (the host's refusal
+    // IS honoured) - only `rejectionSurfaces`' own notice/restoration are
+    // gated silent.
+    expect(
+      harness.handle.store.getState().pendingActions[gated.clientActionId],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().errorNotices).toEqual(
+      beforeGatedReject.errorNotices,
+    );
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+
+    // No third send frame ever follows the gated message's own initial one -
+    // asserted after flushing microtasks, on top of (never instead of) the
+    // synchronous mechanism proof above.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.sent).toHaveLength(3);
   });
 
   it("the optimistic user message never flickers across the rejection and retry", async () => {

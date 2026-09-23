@@ -2308,8 +2308,9 @@ describe("chat.subscribe registry membership", () => {
     // projected away below it rather than refused.
     //
     // `15` is the message-delivery line: the accepted-message execution state
-    // (edit/retry/cancel and the `messageDeliveryChanged` push) moves onto the
-    // host's explicit record, windowed for the same ceiling reason again.
+    // (the `messageDeliveryRestored` acknowledgement and the
+    // `messageDeliveryChanged` push) moves onto the host's explicit record,
+    // windowed for the same ceiling reason again.
     expect(entry[1].latestMinor).toBe(15);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);

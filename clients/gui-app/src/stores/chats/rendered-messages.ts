@@ -180,6 +180,13 @@ export interface RenderedMessagesInput {
    * transcript does not draw it. Absent means this caller has no queue.
    */
   readonly queuedPromptMessageIds?: ReadonlySet<string>;
+  /**
+   * The opening the host's delivery view says is withdrawn, or `null`
+   * (`withdrawnMessageDeliveryId`). Its user row, persisted or optimistic, is
+   * not drawn: the prompt is back in the composer, and the host's own removal
+   * can trail the view by a round trip.
+   */
+  readonly withdrawnMessageId: string | null;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingApprovals?: ReadonlyArray<ChatApprovalState>;
@@ -1152,6 +1159,7 @@ export function useRenderedMessages(
   const pendingInterviews = input.pendingInterviews ?? NO_PENDING_INTERVIEWS;
   const queuedPromptMessageIds =
     input.queuedPromptMessageIds ?? NO_QUEUED_PROMPT_IDS;
+  const withdrawnMessageId = input.withdrawnMessageId;
   const turnPauseAccounting = useMemo(
     () =>
       buildTurnPauseAccounting({
@@ -1281,14 +1289,18 @@ export function useRenderedMessages(
     () => userMessagesByIdFromMessages(input.messages),
     [input.messages],
   );
-  const retainedUserMessageIds = useMemo(
-    (): ReadonlySet<string> =>
-      new Set([
-        ...userMessagesById.keys(),
-        ...input.pendingUserMessages.map((message) => message.messageId),
-      ]),
-    [userMessagesById, input.pendingUserMessages],
-  );
+  // A withdrawn opening anchors nothing: its row is hidden below, and a
+  // record-less `turn.stopped` naming it (a legacy chat's stop during the old
+  // setup window, migrated on upgrade) would otherwise draw an orphan stopped
+  // boundary until the host's own removal of the row lands.
+  const retainedUserMessageIds = useMemo((): ReadonlySet<string> => {
+    const ids = new Set([
+      ...userMessagesById.keys(),
+      ...input.pendingUserMessages.map((message) => message.messageId),
+    ]);
+    if (withdrawnMessageId !== null) ids.delete(withdrawnMessageId);
+    return ids;
+  }, [userMessagesById, input.pendingUserMessages, withdrawnMessageId]);
 
   const activeTurnSteeredIdsKey = liveMergesIntoPersisted
     ? activeTurnSteeredIdsContentKey(partition.activeTurn, liveAssistant)
@@ -1457,6 +1469,20 @@ export function useRenderedMessages(
   );
 
   return useMemo(() => {
+    // A withdrawn opening has left the conversation - its prompt is back in the
+    // composer - so neither its row nor an optimistic copy of it is drawn, from
+    // the moment the host's delivery view says so. The host's own removal
+    // follows (on the windowed line, a reindex and a resnapshot later); this is
+    // the one place that gap is closed, and every row below reads these.
+    const shownPersisted = withoutWithdrawnUserRow(
+      persisted,
+      withdrawnMessageId,
+    );
+    const shownActiveTurn = withoutWithdrawnUserRow(
+      activeTurn,
+      withdrawnMessageId,
+    );
+    const shownPending = withoutWithdrawnUserRow(pending, withdrawnMessageId);
     // Pre-turn window: the host reports `running`/`stopping` (a send was
     // accepted) but no assistant row exists yet - provider-session/worktree
     // setup runs before the turn materializes. Synthesize a pending-assistant
@@ -1494,7 +1520,12 @@ export function useRenderedMessages(
           activeTurnStartedAt,
           activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
           turnPauseAccounting,
-          rendered: [...persisted, ...activeTurn, ...pending, ...live],
+          rendered: [
+            ...shownPersisted,
+            ...shownActiveTurn,
+            ...shownPending,
+            ...live,
+          ],
         });
 
     // A prompt is drawn in one place.
@@ -1506,9 +1537,9 @@ export function useRenderedMessages(
     // is not drawn. Once the host has persisted the message, that transcript
     // row is the copy; the optimistic row shares its id and drops.
     const persistedIds = new Set(
-      [...persisted, ...activeTurn].map((message) => message.id),
+      [...shownPersisted, ...shownActiveTurn].map((message) => message.id),
     );
-    const dedupedPending = pending.filter(
+    const dedupedPending = shownPending.filter(
       (message) =>
         !persistedIds.has(message.id) &&
         !queuedPromptMessageIds.has(message.id),
@@ -1519,8 +1550,8 @@ export function useRenderedMessages(
     // imported-chat markers are deliberately NOT here - they are pinned (see
     // `pinImportedChatMarkers`), so sorting them would only file them wrongly.
     const baseRows = [
-      ...persisted,
-      ...activeTurn,
+      ...shownPersisted,
+      ...shownActiveTurn,
       ...dedupedPending,
       ...live,
       ...stoppedWithoutAssistantRecords,
@@ -1612,6 +1643,7 @@ export function useRenderedMessages(
     setupCardRows,
     setupCardEntries,
     queuedPromptMessageIds,
+    withdrawnMessageId,
     activeRunState,
     activeTurnId,
     activeTurnStartedAt,
@@ -1619,6 +1651,21 @@ export function useRenderedMessages(
     turnPauseAccounting,
     displayContext,
   ]);
+}
+
+/**
+ * The rows without the user row of a withdrawn opening - the same array when
+ * there is none. Keyed by row id, which a user row and its optimistic echo
+ * share (both are the message id).
+ */
+function withoutWithdrawnUserRow(
+  rows: ReadonlyArray<ChatMessageModel>,
+  withdrawnMessageId: string | null,
+): ReadonlyArray<ChatMessageModel> {
+  if (withdrawnMessageId === null) return rows;
+  return rows.filter(
+    (row) => row.role !== "user" || row.id !== withdrawnMessageId,
+  );
 }
 
 function projectActiveTurn(
@@ -3521,7 +3568,6 @@ function renderUserMessage(
     completedAt: null,
     stopped: null,
     persistentMessageId: message.messageId,
-    providerHistory: message.providerHistory,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     assistantMeta: null,
     statusLabel: null,

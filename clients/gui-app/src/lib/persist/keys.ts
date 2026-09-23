@@ -157,6 +157,13 @@ export const interviewDraftKey = (chatId: string, blockId: string): string =>
     encodeURIComponent(blockId),
   );
 
+// A withdrawn opening prompt this device already put back in the chat's
+// composer, while the host has not yet confirmed the acknowledgement. One key
+// per chat, for the same cross-window isolation as the interview drafts above,
+// and on the same device-local tier as the composer draft the prompt went into.
+export const deliveryRestoreAckKey = (chatId: string): string =>
+  scopedPersistKey("delivery-restore-ack", encodeURIComponent(chatId));
+
 export const readingPositionKeyPrefix = (accountId: string): string =>
   `${scopedPersistKey(
     "reading-position",
@@ -266,6 +273,14 @@ export const PERSIST_STORES = [
   {
     camelName: "interviewDraft",
     leaf: "interview-drafts",
+    kind: "static",
+  },
+  // Enumerated under the `delivery-restore-ack` leaf, but persisted as one key
+  // per chat (`delivery-restore-ack:{encChatId}`, see `deliveryRestoreAckKey`).
+  // The `traycer-gui-app:` prefix sweep in `wipe.ts` clears every one of them.
+  {
+    camelName: "deliveryRestoreAck",
+    leaf: "delivery-restore-ack",
     kind: "static",
   },
   {
