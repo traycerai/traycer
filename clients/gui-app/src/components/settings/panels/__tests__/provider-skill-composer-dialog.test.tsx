@@ -896,9 +896,7 @@ describe("install targets", () => {
     // back to the import step, and submit is blocked regardless.
     expect(screen.queryByText("2 skills found")).toBeNull();
     const install = screen.getByRole("button", { name: "Add skill" });
-    expect(install instanceof HTMLButtonElement && install.disabled).toBe(
-      true,
-    );
+    expect(install instanceof HTMLButtonElement && install.disabled).toBe(true);
 
     fireEvent.click(install);
     await new Promise((resolve) => setTimeout(resolve, 0));
