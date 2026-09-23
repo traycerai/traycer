@@ -381,6 +381,99 @@ export type AgentIdentityFilesUploadBlobResponse = z.infer<
   typeof agentIdentityFilesUploadBlobResponseSchema
 >;
 
+/**
+ * `agentIdentity.files.readBlob@1.0` - a blob's bytes back out to the GUI, for
+ * preview and download. The read half of `files.uploadBlob`, chunked the same
+ * way and capped by the same number.
+ *
+ * ## Addressed by `(path, sha256)`, not by path alone
+ *
+ * A multi-chunk read is several calls, and the path can be overwritten between
+ * them. Naming the object makes every chunk of one read come from ONE object:
+ * a client that learned `sha256` from the index lane's manifest entry gets that
+ * object's bytes or a refusal, never the first half of the old file spliced to
+ * the second half of the new one. The sha may name the entry's `current` object
+ * or any object still in its `versions[]` - so a history view can read a prior
+ * version through the same method. A sha the path holds in neither place
+ * answers `pathNotFound`: from the caller's side, the thing it addressed is not
+ * there.
+ *
+ * ## Chunking
+ *
+ * `offset` and `length` are in RAW bytes. `length` is capped at
+ * {@link AGENT_IDENTITY_UPLOAD_MAX_CHUNK_BYTES} - one measured answer to "how
+ * much base64 fits in a unary envelope", so a read chunk and an upload chunk are
+ * the same size. The host returns at most `length` bytes; fewer means the object
+ * ended. A read at or past the end is not an error: it answers `ok` with no
+ * bytes and `final: true`, which is also what a zero-length blob's only chunk
+ * looks like.
+ *
+ * ## `pending`
+ *
+ * The plane mirrors bytes lazily - a blob over the eager-download threshold is
+ * fetched on first demand - so a host may know an object it cannot serve YET.
+ * `pending` says exactly that: the entry and the sha are right, the mirror has
+ * not landed the bytes, and the host has started fetching them. The client
+ * retries the SAME request later; nothing about it is wrong. It is an answer
+ * rather than a wait held open inside the unary, because a large download can
+ * outlive any unary timeout.
+ */
+export const agentIdentityFilesReadBlobRequestSchema = lazySchema(() =>
+  z.object({
+    identityId: agentIdentityIdSchema,
+    path: agentIdentityPathSchema,
+    /** The object to read: the entry's `current.sha256`, or one in `versions[]`. */
+    sha256: identityFileSha256Schema,
+    /** Raw-byte offset into the object. */
+    offset: z.number().int().nonnegative().max(AGENT_IDENTITY_FILE_MAX_BYTES),
+    /** Raw bytes wanted, at most one upload chunk. */
+    length: z
+      .number()
+      .int()
+      .positive()
+      .max(AGENT_IDENTITY_UPLOAD_MAX_CHUNK_BYTES),
+  }),
+);
+export type AgentIdentityFilesReadBlobRequest = z.infer<
+  typeof agentIdentityFilesReadBlobRequestSchema
+>;
+
+export const agentIdentityFilesReadBlobResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ok"),
+      /** This chunk: at most `length` raw bytes starting at `offset`. */
+      bytesBase64: z.base64().max(AGENT_IDENTITY_UPLOAD_MAX_CHUNK_BASE64_CHARS),
+      /**
+       * The WHOLE object's length, not this chunk's - the chunk's is its own
+       * decoded size. Carried on every chunk so the first answer tells the
+       * caller how many more to ask for.
+       */
+      byteLength: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(AGENT_IDENTITY_FILE_MAX_BYTES),
+      /** The manifest entry's host-authoritative media type for this object. */
+      mediaType: z.string().min(1),
+      /** Whether this chunk reaches the end of the object. */
+      final: z.boolean(),
+    }),
+    /** Known object, bytes not local yet; the host is fetching. Retry later. */
+    z.object({ kind: z.literal("pending") }),
+    /**
+     * `pathNotFound` (no blob at the path, or not this sha),
+     * `unsupportedBodyKind` (a markdown path - its body rides
+     * `agentIdentity.file.subscribe`), `identityNotFound`, or
+     * `projectionUnavailable`.
+     */
+    z.object({ ...agentIdentityRefusalFields }),
+  ]),
+);
+export type AgentIdentityFilesReadBlobResponse = z.infer<
+  typeof agentIdentityFilesReadBlobResponseSchema
+>;
+
 // ─── History ────────────────────────────────────────────────────────────────
 
 /**

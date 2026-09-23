@@ -439,6 +439,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A READ, and still `fifo`: one read is a sequence of chunk calls at
+  // different offsets, the shape `host.fileTransfer.readChunk` has, and it is
+  // scheduled the same way so no chunk request is superseded by the next.
+  "agentIdentity.files.readBlob": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "agentIdentity.history.restore": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

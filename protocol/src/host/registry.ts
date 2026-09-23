@@ -16,6 +16,7 @@ import {
   agentIdentityFilesAddV10,
   agentIdentityFilesDeleteV10,
   agentIdentityFilesRenameV10,
+  agentIdentityFilesReadBlobV10,
   agentIdentityFilesUploadBlobV10,
   agentIdentityHistoryListV10,
   agentIdentityHistoryRestoreV10,
@@ -5400,6 +5401,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentIdentityFilesUploadBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.files.readBlob": {
+    // Chunked read addressed by (path, sha256), so a multi-chunk read never splices two objects.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityFilesReadBlobV10,
           upgradeFromPreviousVersion: null,
         },
       },
