@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -59,13 +59,23 @@ export function EpicSessionControllerBridge(): ReactNode {
     };
   }, [authService, binding, openTransport, queryClient]);
 
+  // Counts installs so a deferred cleanup can tell "this environment was
+  // torn down" from "this environment was re-installed after my cleanup ran".
+  // React StrictMode (dev) mounts, cleans up and re-mounts the effect with the
+  // SAME environment object; a deferred uninstall keyed on identity alone then
+  // nulls the environment the re-mount just installed, and no epic session can
+  // start for the rest of the window.
+  const installSeq = useRef(0);
   useEffect(() => {
+    installSeq.current += 1;
+    const seq = installSeq.current;
     installEpicSessionControllerEnvironment(environment);
     return () => {
       // Deferred, and only if still current: a binding change runs this
       // cleanup a moment before the next environment installs, and a `null`
       // in between would cancel every in-flight re-point for nothing.
       queueMicrotask(() => {
+        if (installSeq.current !== seq) return;
         uninstallEpicSessionControllerEnvironment(environment);
       });
     };
