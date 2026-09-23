@@ -177,3 +177,33 @@ export function useIdentitySkillsImportForClient(
     silentCodes: ["RPC_ERROR"],
   });
 }
+
+/**
+ * The Hermes profile importer's two calls. `scan` is a read, but it is a
+ * mutation here because it runs on demand over a directory the user typed,
+ * not over a key a query could cache by. A run may create an identity, so it
+ * invalidates the list.
+ */
+export function useIdentityHermesScanForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): IdentityMutation<"agentIdentity.import.hermes.scan"> {
+  return useHostScopedMutationForClient(client, {
+    method: "agentIdentity.import.hermes.scan",
+    mutationKey: identityMutationKeys.scanHermesProfile(),
+    errorMessage: "Couldn't read that Hermes profile.",
+    invalidateMethods: NO_INVALIDATIONS,
+    silentCodes: ["RPC_ERROR"],
+  });
+}
+
+export function useIdentityHermesRunForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): IdentityMutation<"agentIdentity.import.hermes.run"> {
+  return useHostScopedMutationForClient(client, {
+    method: "agentIdentity.import.hermes.run",
+    mutationKey: identityMutationKeys.runHermesImport(),
+    errorMessage: "Couldn't import the Hermes profile.",
+    invalidateMethods: LIST_INVALIDATIONS,
+    silentCodes: ["RPC_ERROR"],
+  });
+}

@@ -8,12 +8,10 @@
  * the registry requires of every non-floor method. See
  * `agent-identity/schemas.ts` for what an old peer does instead.
  *
- * The Hermes importer (`import.hermes.*`) has schemas in `unary-schemas.ts`
- * but NO contract here yet: T12 adds the contract, the registry entry and the
- * gui-app policy row together with its host resolvers. The host's
- * resolver-coverage gate fails any advertised method without a resolver, so a
- * contract registered ahead of its resolver would be a red host build rather
- * than an early start.
+ * The Hermes importer (`import.hermes.*`) registered last, together with its
+ * host resolvers: the host's resolver-coverage gate fails any advertised
+ * method without a resolver, so its contract waited for the resolver rather
+ * than landing as an early start.
  *
  * The two STREAM contracts live beside their frame schemas
  * (`state-subscribe.ts`, `file-subscribe.ts`) rather than here, following
@@ -41,6 +39,10 @@ import {
   agentIdentityHistoryListResponseSchema,
   agentIdentityHistoryRestoreRequestSchema,
   agentIdentityHistoryRestoreResponseSchema,
+  agentIdentityHermesRunRequestSchema,
+  agentIdentityHermesRunResponseSchema,
+  agentIdentityHermesScanRequestSchema,
+  agentIdentityHermesScanResponseSchema,
   agentIdentityListRequestSchema,
   agentIdentityListResponseSchema,
   agentIdentitySkillsImportRequestSchema,
@@ -140,4 +142,18 @@ export const agentIdentitySkillsImportV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentIdentitySkillsImportRequestSchema,
   responseSchema: agentIdentitySkillsImportResponseSchema,
+});
+
+export const agentIdentityImportHermesScanV10 = defineRpcContract({
+  method: "agentIdentity.import.hermes.scan",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentIdentityHermesScanRequestSchema,
+  responseSchema: agentIdentityHermesScanResponseSchema,
+});
+
+export const agentIdentityImportHermesRunV10 = defineRpcContract({
+  method: "agentIdentity.import.hermes.run",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentIdentityHermesRunRequestSchema,
+  responseSchema: agentIdentityHermesRunResponseSchema,
 });

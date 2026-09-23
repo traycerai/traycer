@@ -602,17 +602,12 @@ export type AgentIdentityHistoryRestoreResponse = z.infer<
 
 // ─── Hermes import ──────────────────────────────────────────────────────────
 //
-// NOT REGISTERED YET. `agentIdentity.import.hermes.scan` and `.run` are
-// registered by T12 (Hermes profile import) together with their host
-// resolvers: the contract (`agent-identity/contracts.ts`), the `hostRpcRegistry`
-// entry at `{1,0}` with `degrade: { kind: "unsupported" }`, the gui-app
-// policy-table rows, and the family list in `agent-identity-registration.test.ts`.
-// They are held back because the host's resolver-coverage gate fails any
-// advertised method without a resolver. Two facts the registry entries carried
-// until then: `scan` reads a profile directory on THIS host (the profile lives
-// on that host's disk), and `run` is idempotent by path - re-running into the
-// same identity replaces files and keeps the old versions in history. `scan` is
-// a dry run, so its policy row coalesces; `run` is a mutation and is `fifo`.
+// `agentIdentity.import.hermes.scan` and `.run` are registered at `{1,0}` with
+// `degrade: { kind: "unsupported" }` beside their host resolvers (T12). `scan`
+// reads a profile directory on THIS host (the profile lives on that host's
+// disk) and is a dry run, so its policy row coalesces; `run` is idempotent by
+// path - re-running into the same identity replaces files and keeps the old
+// versions in history - and is a `fifo` mutation.
 
 /**
  * WHY one item of a Hermes profile cannot be imported.
