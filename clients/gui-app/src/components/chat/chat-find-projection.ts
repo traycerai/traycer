@@ -53,13 +53,12 @@ import type {
 export interface ChatFindRow {
   readonly messageId: string;
   /**
-   * The persisted record this row renders - the row id for a user row, the
-   * turn's `persistentMessageId` for an assistant slice. What an index hit
-   * names, so it is how a hydrated hit finds its rows.
+   * The persisted records this row renders - the row id for a user row; for
+   * an assistant slice every record its turn folds (`turnMessageIds`), or
+   * the one `persistentMessageId`. What an index hit names, so it is how a
+   * hydrated hit finds its rows.
    */
-  readonly recordId: string;
-  /** The row's sort key, which places an older index hit among the rows. */
-  readonly createdAt: number;
+  readonly recordIds: ReadonlyArray<string>;
   readonly units: ReadonlyArray<ChatFindUnit>;
 }
 
@@ -114,8 +113,9 @@ export function buildChatFindRows(
     );
     return {
       messageId: message.id,
-      recordId: message.persistentMessageId ?? message.id,
-      createdAt: message.createdAt,
+      recordIds: message.turnMessageIds ?? [
+        message.persistentMessageId ?? message.id,
+      ],
       units,
     };
   });

@@ -5,12 +5,14 @@ import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key"
 import {
   CHAT_FIND_INDEX_ABSENT,
   CHAT_FIND_INDEX_MAX_PAGES,
+  FULLY_LOADED_TRANSCRIPT,
   chatFindIndexCoverageMessage,
   olderChatFindIndexHits,
   type ChatFindIndexAnswer,
   type ChatFindIndexDemandSource,
   type ChatFindOlderHit,
   type ChatFindSearch,
+  type ChatFindTranscriptPlacement,
 } from "@/components/chat/chat-find-index";
 import type { ChatFindRow } from "@/components/chat/chat-find-projection";
 import type {
@@ -65,17 +67,19 @@ interface ChatFindAdapterOptions {
    */
   readonly getCoverageMessage: () => string | null;
   /**
-   * Whether the window holds this persisted record. Read with the rows: an
-   * index hit on a held record is the client scan's, and is dropped.
+   * Where records and rows sit in the transcript the tile holds, read with
+   * the rows: which index hits describe text the rows do not show, where each
+   * falls among them, and what navigating to one jumps to.
    */
-  readonly isRecordHeld: (messageId: string) => boolean;
+  readonly getPlacement: () => ChatFindTranscriptPlacement;
   /** Where the adapter asks for index pages; see `ChatFindIndexDemandSource`. */
   readonly indexDemand: ChatFindIndexDemandSource;
   /**
-   * Hydrate and land an older message by its persisted id - the tile's own
+   * Hydrate and land an older message - by a row id when the window can name
+   * the row, else by the persisted message id - through the tile's own
    * transcript jump, the path the History hit list takes.
    */
-  readonly jumpToIndexHit: (messageId: string) => void;
+  readonly jumpToIndexHit: (target: string) => void;
   readonly revealMatch: (target: ChatFindRevealTarget) => void;
   readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
   readonly clearReveal: () => void;
@@ -132,8 +136,24 @@ interface ChatFindMatch {
  * becomes exact matches once navigation hydrates it.
  */
 type ChatFindStop =
-  | { readonly kind: "client"; readonly match: ChatFindMatch }
-  | { readonly kind: "index"; readonly hit: ChatFindOlderHit };
+  | {
+      readonly kind: "client";
+      /** Its row's transcript position; see {@link mergeStops}. */
+      readonly key: number;
+      readonly match: ChatFindMatch;
+    }
+  | {
+      readonly kind: "index";
+      readonly key: number;
+      readonly hit: ChatFindOlderHit;
+    };
+
+interface PendingIndexJump {
+  /** The message the index named. */
+  readonly recordId: string;
+  /** Every jump target tried for it so far: a landing on one of these is ours. */
+  readonly attempted: ReadonlySet<string>;
+}
 
 const CHAT_FIND_CAPABILITIES: ReadonlySet<TileFindCapability> =
   new Set<TileFindCapability>(["find"]);
@@ -175,9 +195,9 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
   private readonly getRows: () => ReadonlyArray<ChatFindRow>;
   private readonly getCoverageMessage: () => string | null;
-  private readonly isRecordHeld: (messageId: string) => boolean;
+  private readonly getPlacement: () => ChatFindTranscriptPlacement;
   private readonly indexDemand: ChatFindIndexDemandSource;
-  private readonly jumpToIndexHit: (messageId: string) => void;
+  private readonly jumpToIndexHit: (target: string) => void;
   private readonly revealMatch: (target: ChatFindRevealTarget) => void;
   private readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
   private readonly clearReveal: () => void;
@@ -214,17 +234,20 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   // and virtual-row mount syncs must preserve that state until navigation or a
   // new search deliberately selects an active match again.
   private activeMatchDismissed = false;
-  // The record an index-stop navigation jumped to, until its landing settles.
-  private pendingIndexRecordId: string | null = null;
-  // The oldest loaded index hit the reader stepped back past, while the page
-  // that continues the walk is on its way.
-  private awaitingOlderThanRecordId: string | null = null;
+  // Refreshed with `rows`, for the same reason `coverage` is.
+  private placement: ChatFindTranscriptPlacement = FULLY_LOADED_TRANSCRIPT;
+  // The message an index-stop navigation jumped to, and the targets tried for
+  // it, until a landing hands it to the client scan.
+  private pendingIndexJump: PendingIndexJump | null = null;
+  // Where the reader stood when they stepped back from the oldest stop, while
+  // the page that continues the walk is on its way.
+  private awaitingOlderThanKey: number | null = null;
 
   constructor(options: ChatFindAdapterOptions) {
     this.tileInstanceId = options.tileInstanceId;
     this.getRows = options.getRows;
     this.getCoverageMessage = options.getCoverageMessage;
-    this.isRecordHeld = options.isRecordHeld;
+    this.getPlacement = options.getPlacement;
     this.indexDemand = options.indexDemand;
     this.jumpToIndexHit = options.jumpToIndexHit;
     this.revealMatch = options.revealMatch;
@@ -268,8 +291,8 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.cancelScheduledPaint();
     this.clearHighlight();
     this.activeMatchDismissed = false;
-    this.pendingIndexRecordId = null;
-    this.awaitingOlderThanRecordId = null;
+    this.pendingIndexJump = null;
+    this.awaitingOlderThanKey = null;
     if (input.query.length === 0) {
       // An empty query needs no projection: skip the supplier entirely and let
       // publishMatchState reset to the idle snapshot.
@@ -285,6 +308,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       // Opening or changing the query is the point at which rows must be built.
       this.rows = this.getRows();
       this.coverage = this.getCoverageMessage();
+      this.placement = this.getPlacement();
       this.stops = this.scanStops(search);
       // The first LOADED match, as before the index existed: a search never
       // jumps to an older hit by itself.
@@ -304,8 +328,8 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   next(): void {
     if (this.stops.length === 0 || this.snapshot.query.length === 0) return;
     this.activeMatchDismissed = false;
-    this.pendingIndexRecordId = null;
-    this.awaitingOlderThanRecordId = null;
+    this.pendingIndexJump = null;
+    this.awaitingOlderThanKey = null;
     this.activeStopIndex =
       this.activeStopIndex === null
         ? 0
@@ -321,18 +345,14 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   previous(): void {
     if (this.stops.length === 0 || this.snapshot.query.length === 0) return;
     this.activeMatchDismissed = false;
-    this.pendingIndexRecordId = null;
-    this.awaitingOlderThanRecordId = null;
-    const oldest = this.stops[0];
-    if (
-      this.activeStopIndex === 0 &&
-      oldest.kind === "index" &&
-      this.olderPagesRemain()
-    ) {
-      // Stepping back past the oldest older hit LOADED is the one thing that
-      // reads another index page. Stay put until it lands; the walk then
-      // continues into it instead of wrapping to the newest match.
-      this.awaitingOlderThanRecordId = oldest.hit.messageId;
+    this.pendingIndexJump = null;
+    this.awaitingOlderThanKey = null;
+    if (this.activeStopIndex === 0 && this.olderPagesRemain()) {
+      // Stepping back from the OLDEST stop - an older hit, or a loaded match
+      // when no older hit is loaded yet - is the one thing that reads another
+      // index page. Stay put until it lands; the walk then continues into it
+      // instead of wrapping to the newest match.
+      this.awaitingOlderThanKey = this.stops[0].key;
       this.requestNextIndexPage();
       return;
     }
@@ -362,8 +382,9 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     // in-flight page is dropped.
     this.indexDemand.setSearch(null);
     this.indexAnswer = CHAT_FIND_INDEX_ABSENT;
-    this.pendingIndexRecordId = null;
-    this.awaitingOlderThanRecordId = null;
+    this.placement = FULLY_LOADED_TRANSCRIPT;
+    this.pendingIndexJump = null;
+    this.awaitingOlderThanKey = null;
     this.stops = EMPTY_STOPS;
     this.coverage = null;
     this.activeStopIndex = null;
@@ -388,14 +409,15 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     if (this.snapshot.query.length === 0) return;
     this.rows = this.getRows();
     this.coverage = this.getCoverageMessage();
+    this.placement = this.getPlacement();
     this.rescanPassively();
   }
 
   setIndexAnswer(answer: ChatFindIndexAnswer): void {
     this.indexAnswer = answer;
     if (this.snapshot.query.length === 0) return;
-    // The rows and caveat the loaded scan published stay; only which records
-    // are held is re-read, since that decides which hits are older.
+    // Against the rows, caveat and placement the loaded scan read: they
+    // describe one transcript, and the next row change re-reads all three.
     const navigate = this.rescanStops();
     this.publishMatchState({
       requestId: this.snapshot.requestId,
@@ -409,22 +431,39 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     rowMessageId: string,
     outcome: ChatFindLandingOutcome,
   ): void {
-    const recordId = this.pendingIndexRecordId;
-    if (recordId === null || this.snapshot.query.length === 0) return;
+    const pending = this.pendingIndexJump;
+    if (pending === null || this.snapshot.query.length === 0) return;
+    const { attempted, recordId } = pending;
     const row = this.rows.find(
       (candidate) => candidate.messageId === rowMessageId,
     );
     // Some other navigation's landing.
-    if (row === undefined || !rowRendersRecord(row, recordId)) return;
-    this.pendingIndexRecordId = null;
+    if (
+      !attempted.has(rowMessageId) &&
+      (row === undefined || !rowRendersRecord(row, recordId))
+    ) {
+      return;
+    }
+    this.pendingIndexJump = null;
     // A reader gesture, or a newer navigation, took the viewport first: the
     // find does not take it back.
     if (outcome === "cancelled") return;
     const handed = firstClientStopForRecord(this.stops, this.rows, recordId);
-    // The index claimed text the loaded row does not show - a stale index, or
-    // a match the snippet check could not rule out. The row is landed and
-    // ringed; there is no exact position to reveal.
-    if (handed === -1) return;
+    if (handed === -1) {
+      // The landed row does not show the match. While more of the message is
+      // unhydrated the match is in one of those rows: walk on to the next.
+      // With none left the index claimed text the loaded rows do not show - a
+      // stale index, or a match the snippet check could not rule out - and the
+      // row stays landed and ringed, with no exact position to reveal.
+      const next = this.nextIndexTarget(recordId, attempted);
+      if (next === null) return;
+      this.pendingIndexJump = {
+        recordId,
+        attempted: new Set([...attempted, next]),
+      };
+      this.jumpToIndexHit(next);
+      return;
+    }
     this.activeStopIndex = handed;
     this.activeMatchDismissed = false;
     this.publishMatchState({
@@ -581,8 +620,12 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       });
       this.notify();
       if (args.navigate) {
-        this.pendingIndexRecordId = activeStop.hit.messageId;
-        this.jumpToIndexHit(activeStop.hit.messageId);
+        const [target] = activeStop.hit.targets;
+        this.pendingIndexJump = {
+          recordId: activeStop.hit.messageId,
+          attempted: new Set([target]),
+        };
+        this.jumpToIndexHit(target);
       }
       return;
     }
@@ -603,7 +646,11 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       this.requestReveal(activeMatch);
       return;
     }
-    this.requestReconcile(activeMatch);
+    // An index jump still landing owns the reveal. The hydration that just
+    // handed its message to the client scan must not reconcile the match
+    // first: that records the unit as already revealed, and the landing's
+    // reveal would then take it for an in-place hop and never scroll to it.
+    if (this.pendingIndexJump === null) this.requestReconcile(activeMatch);
     this.requestHighlightPaint();
   }
 
@@ -616,15 +663,27 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     });
     // A complete scan leaves nothing older for the index to answer, and a
     // stale answer must not outlive the rows it was about.
-    const older =
-      this.coverage === null
-        ? []
-        : olderChatFindIndexHits({
-            answer: this.indexAnswer,
-            search,
-            isRecordHeld: this.isRecordHeld,
-          });
-    return mergeStops(this.rows, matches, older);
+    if (this.coverage === null) {
+      return mergeStops(this.rows, matches, [], this.placement);
+    }
+    const older = olderChatFindIndexHits({
+      answer: this.indexAnswer,
+      search,
+      placement: this.placement,
+    });
+    // A held message whose loaded rows already matched is the client scan's:
+    // it is counted there, and the rest of it is a scroll away.
+    const matchedRecords = new Set<string>();
+    for (const match of matches) {
+      const row = this.rows.at(match.rowIndex);
+      if (row === undefined) continue;
+      matchedRecords.add(row.messageId);
+      for (const recordId of row.recordIds) matchedRecords.add(recordId);
+    }
+    const unseen = older.filter(
+      (hit) => !hit.held || !matchedRecords.has(hit.messageId),
+    );
+    return mergeStops(this.rows, matches, unseen, this.placement);
   }
 
   /**
@@ -666,21 +725,18 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
    * that is a navigation.
    */
   private continueOlderWalk(): boolean {
-    const anchorId = this.awaitingOlderThanRecordId;
-    if (anchorId === null) return false;
+    const beforeKey = this.awaitingOlderThanKey;
+    if (beforeKey === null) return false;
     const answer = this.indexAnswer;
     if (answer.kind === "ready" && answer.loadingMore) return false;
-    const anchor = this.stops.findIndex(
-      (stop) => stop.kind === "index" && stop.hit.messageId === anchorId,
-    );
-    if (anchor === -1) {
-      // Hydrated or superseded meanwhile; the walk has nowhere to continue.
-      this.awaitingOlderThanRecordId = null;
-      return false;
-    }
-    if (anchor > 0) {
-      this.awaitingOlderThanRecordId = null;
-      this.activeStopIndex = anchor - 1;
+    // The stop just older than where the reader stood.
+    let older = -1;
+    this.stops.forEach((stop, index) => {
+      if (stop.key < beforeKey) older = index;
+    });
+    if (older !== -1) {
+      this.awaitingOlderThanKey = null;
+      this.activeStopIndex = older;
       return true;
     }
     // The page held nothing older this scan can use (all held, or ruled out
@@ -690,9 +746,22 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       return false;
     }
     // The end of the walk: wrap to the newest match, like any find.
-    this.awaitingOlderThanRecordId = null;
+    this.awaitingOlderThanKey = null;
+    if (this.stops.length === 0) return false;
     this.activeStopIndex = this.stops.length - 1;
     return true;
+  }
+
+  /** The next target of an index stop's message not tried yet, if any. */
+  private nextIndexTarget(
+    recordId: string,
+    attempted: ReadonlySet<string>,
+  ): string | null {
+    for (const stop of this.stops) {
+      if (stop.kind !== "index" || stop.hit.messageId !== recordId) continue;
+      return stop.hit.targets.find((target) => !attempted.has(target)) ?? null;
+    }
+    return null;
   }
 
   private olderPagesRemain(): boolean {
@@ -962,30 +1031,32 @@ function findMatches(input: {
 }
 
 /**
- * Client matches and older index hits in one transcript-ordered list.
+ * Client matches and older index hits in one transcript-ordered list, by
+ * skeleton ordinal: each row's own, each hit's from its placement.
  *
- * An older hit goes before the first row whose sort key is later than its own
- * timestamp - which, on the usual window (a hydrated tail and unhydrated
- * history above it), is before every loaded match; a hit falling in a gap
- * between hydrated spans lands in that gap. Linear over rows and matches, both
- * already in transcript order.
+ * A row the skeleton has not placed yet (live, pending) keeps the position
+ * of the row before it, so everything it holds stays after what precedes it.
+ * Linear over rows and matches, both already in transcript order.
  */
 function mergeStops(
   rows: ReadonlyArray<ChatFindRow>,
   matches: ReadonlyArray<ChatFindMatch>,
   older: ReadonlyArray<ChatFindOlderHit>,
+  placement: ChatFindTranscriptPlacement,
 ): ReadonlyArray<ChatFindStop> {
   if (older.length === 0 && matches.length === 0) return EMPTY_STOPS;
   const stops: ChatFindStop[] = [];
   let olderIndex = 0;
   let matchIndex = 0;
+  let rowKey = Number.NEGATIVE_INFINITY;
   rows.forEach((row, rowIndex) => {
+    rowKey = Math.max(rowKey, placement.rowSortKey(row.messageId) ?? rowKey);
     for (
       let hit = older.at(olderIndex);
-      hit !== undefined && hit.createdAt < row.createdAt;
+      hit !== undefined && hit.sortKey < rowKey;
       hit = older.at(olderIndex)
     ) {
-      stops.push({ kind: "index", hit });
+      stops.push({ kind: "index", key: hit.sortKey, hit });
       olderIndex += 1;
     }
     for (
@@ -993,17 +1064,19 @@ function mergeStops(
       match !== undefined && match.rowIndex === rowIndex;
       match = matches.at(matchIndex)
     ) {
-      stops.push({ kind: "client", match });
+      stops.push({ kind: "client", key: rowKey, match });
       matchIndex += 1;
     }
   });
   // Later than every loaded row: only when the tail itself is unhydrated.
-  for (const hit of older.slice(olderIndex)) stops.push({ kind: "index", hit });
+  for (const hit of older.slice(olderIndex)) {
+    stops.push({ kind: "index", key: hit.sortKey, hit });
+  }
   return stops;
 }
 
 function rowRendersRecord(row: ChatFindRow, recordId: string): boolean {
-  return row.messageId === recordId || row.recordId === recordId;
+  return row.messageId === recordId || row.recordIds.includes(recordId);
 }
 
 /** The first exact match in a record's rows, once the record is loaded. */

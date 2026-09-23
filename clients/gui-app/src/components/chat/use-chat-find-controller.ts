@@ -12,6 +12,7 @@ import {
   CHAT_FIND_INDEX_ABSENT,
   ChatFindIndexDemandSource,
   type ChatFindIndexAnswer,
+  type ChatFindTranscriptPlacement,
 } from "@/components/chat/chat-find-index";
 import {
   serializeChatCollapsibleKey,
@@ -74,12 +75,12 @@ interface ChatFindControllerArgs {
    */
   readonly getFindCoverageMessage: () => string | null;
   /**
-   * Whether the window holds a persisted record, read lazily beside the rows.
-   * An older index hit on a held record is the client scan's.
+   * Where records and rows sit in the transcript (`ChatFindTranscriptPlacement`),
+   * read with the rows.
    */
-  readonly isRecordHeld: (messageId: string) => boolean;
-  /** Hydrate and land an older message by its persisted id (the tile's jump). */
-  readonly requestIndexJump: (messageId: string) => void;
+  readonly getFindPlacement: () => ChatFindTranscriptPlacement;
+  /** Hydrate and land an older message by a row or message id (the tile's jump). */
+  readonly requestIndexJump: (target: string) => void;
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
@@ -123,7 +124,7 @@ export function useChatFindController(
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
     getFindCoverageMessage,
-    isRecordHeld,
+    getFindPlacement,
     requestIndexJump,
     rowIndexByKeyRef,
     getScroller,
@@ -137,15 +138,15 @@ export function useChatFindController(
   const [indexDemand] = useState(() => new ChatFindIndexDemandSource());
   // Read through refs, so a caller's new callback identity never re-registers
   // the adapter - which would drop the search it is holding.
-  const isRecordHeldRef = useRef(isRecordHeld);
+  const getFindPlacementRef = useRef(getFindPlacement);
   const requestIndexJumpRef = useRef(requestIndexJump);
   // The last answer, so an adapter created later (a re-registration) starts
   // from it rather than waiting for the index to answer again.
   const indexAnswerRef = useRef<ChatFindIndexAnswer>(CHAT_FIND_INDEX_ABSENT);
   useLayoutEffect(() => {
-    isRecordHeldRef.current = isRecordHeld;
+    getFindPlacementRef.current = getFindPlacement;
     requestIndexJumpRef.current = requestIndexJump;
-  }, [isRecordHeld, requestIndexJump]);
+  }, [getFindPlacement, requestIndexJump]);
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const setFindActiveTarget = useSetChatFindActiveTarget();
@@ -473,9 +474,9 @@ export function useChatFindController(
           backgroundToolBlockIdsRef.current,
         ),
       getCoverageMessage: getFindCoverageMessage,
-      isRecordHeld: (messageId) => isRecordHeldRef.current(messageId),
+      getPlacement: () => getFindPlacementRef.current(),
       indexDemand,
-      jumpToIndexHit: (messageId) => requestIndexJumpRef.current(messageId),
+      jumpToIndexHit: (target) => requestIndexJumpRef.current(target),
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,

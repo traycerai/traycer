@@ -976,6 +976,40 @@ function nextStepsAssistantMessage(): Message {
   };
 }
 
+/** One of several records one assistant turn folds together. */
+function foldedTurnRecord(messageId: string, timestamp: number): Message {
+  return {
+    role: "assistant",
+    messageId,
+    startedAt: timestamp,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: `text-${messageId}`,
+        text: `Output of ${messageId}`,
+        status: "completed",
+        timestamp,
+        providerNotice: null,
+      },
+    ],
+    timestamp,
+    turnId: "turn-folded",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
 function planAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -4407,6 +4441,50 @@ describe("<ChatTile />", () => {
     });
     expect(
       document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  /**
+   * History's own case: a hit names the record it matched, and a turn folded
+   * from several records renders under the LAST one's id. A hit on an earlier
+   * record named no row, so the jump stayed parked until its TTL dropped it.
+   */
+  it("resolves an earlier record of a turn folded from several records", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          messageId: "folded-first",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [
+          hostUserMessage(),
+          foldedTurnRecord("folded-first", 2),
+          foldedTurnRecord("folded-last", 3),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-folded"]'),
     ).not.toBeNull();
   });
 

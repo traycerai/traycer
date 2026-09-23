@@ -5,9 +5,10 @@
  * client scan for the exact highlight.
  *
  * Driven over the real controller, adapter, projection and highlighter, the
- * real index hook and host query layer, and a scripted host. The fake index
- * holds documents the way the host's extraction does: one per (message, tier)
- * for user text, assistant prose, notices and card text - never tool output,
+ * real index hook and host query layer, a real transcript window (skeleton,
+ * range serves, record ledger) and a scripted host. The fake index holds
+ * documents the way the host's extraction does: one per (message, tier) for
+ * user text, assistant prose, notices and card text - never tool output,
  * subagent bodies or reasoning.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -33,6 +34,8 @@ import {
   HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import {
   chatSearchRequestSchema,
   type ChatSearchMessageHit,
@@ -45,6 +48,7 @@ import {
   chatFindCoverageMessage,
   type ChatFindAdapter,
 } from "@/components/chat/chat-find";
+import { chatFindTranscriptPlacement } from "@/components/chat/chat-find-index";
 import { useChatFindIndexFeed } from "@/hooks/chats/use-chat-find-index-feed";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -55,6 +59,15 @@ import {
   ChatFindForceTileInstanceIdContext,
   createChatFindForceStore,
 } from "@/stores/chats/chat-find-force-store-context";
+import {
+  appendLiveRecords,
+  applyRangeResponse,
+  applySkeletonChunk,
+  applyWindowedSnapshot,
+  emptyTranscriptWindow,
+  unhydratedRowCount,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { makeMessageAt } from "./chat-message-fixtures";
@@ -79,11 +92,51 @@ const EMPTY_PROMOTED: ReadonlySet<string> = new Set<string>();
 const EXCLUSION_TAIL =
   "older reasoning, subagent and tool output are not indexed.";
 
-interface FakeDoc {
-  readonly messageId: string;
-  readonly tier: ChatSearchTier;
-  readonly createdAt: number;
-  readonly text: string;
+// ---------------------------------------------------------------------------
+// Records, rendered rows and the window that holds them.
+
+const CONTENT: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+};
+
+function userRecord(messageId: string, timestamp: number): Message {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "owner-1" },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+    timestamp,
+    sessionAnchor: null,
+  };
+}
+
+function assistantRecord(
+  messageId: string,
+  turnId: string,
+  timestamp: number,
+): Message {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: timestamp,
+    timestamp,
+    turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
 }
 
 function userRow(id: string, content: string, createdAt: number) {
@@ -95,21 +148,154 @@ function userRow(id: string, content: string, createdAt: number) {
   } satisfies ChatMessageModel;
 }
 
-function streamingAssistantRow(
-  rowId: string,
-  recordId: string,
-  markdown: string,
-  createdAt: number,
-): ChatMessageModel {
+function assistantRow(input: {
+  readonly rowId: string;
+  readonly persistentMessageId: string;
+  readonly turnMessageIds: ReadonlyArray<string> | null;
+  readonly markdown: string;
+  readonly createdAt: number;
+  readonly streaming: boolean;
+}): ChatMessageModel {
   return {
-    ...makeMessageAt(0, "assistant", createdAt),
-    id: rowId,
-    persistentMessageId: recordId,
-    runState: "streaming",
+    ...makeMessageAt(0, "assistant", input.createdAt),
+    id: input.rowId,
+    persistentMessageId: input.persistentMessageId,
+    ...(input.turnMessageIds === null
+      ? {}
+      : { turnMessageIds: input.turnMessageIds }),
+    runState: input.streaming ? "streaming" : null,
     segments: [
-      { id: `${rowId}:text`, kind: "text", markdown, isStreaming: true },
+      {
+        id: `${input.rowId}:text`,
+        kind: "text",
+        markdown: input.markdown,
+        isStreaming: input.streaming,
+      },
     ],
   };
+}
+
+interface RowSpec {
+  readonly rowId: string;
+  /** The skeleton's placement key: a turn's anchor for its rows. */
+  readonly createdAt: number;
+  readonly role: "user" | "assistant";
+  /** What the row's serve carries into the ledger. */
+  readonly records: ReadonlyArray<Message>;
+  /** The rendered row once hydrated; `null` leaves the row unhydrated. */
+  readonly model: ChatMessageModel | null;
+}
+
+interface TranscriptState {
+  readonly window: TranscriptWindow;
+  /** What the list renders: hydrated rows, then live ones. */
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+}
+
+/**
+ * A window the way the session builds one: a snapshot, the whole skeleton,
+ * then one range serve per run of hydrated rows. `live` records arrive on the
+ * stream, ahead of any ordinal.
+ */
+function transcriptOf(
+  rows: ReadonlyArray<RowSpec>,
+  live: {
+    readonly records: ReadonlyArray<Message>;
+    readonly models: ReadonlyArray<ChatMessageModel>;
+  } | null,
+): TranscriptState {
+  let window = applyWindowedSnapshot(
+    emptyTranscriptWindow(),
+    {
+      epoch: 1,
+      rowCount: rows.length,
+      indexRevision: null,
+      tail: { fromOrdinal: rows.length, messages: [], events: [] },
+    },
+    null,
+    null,
+  );
+  window = applySkeletonChunk(window, {
+    epoch: 1,
+    fromOrdinal: 0,
+    entries: rows.map((row) => ({
+      rowId: row.rowId,
+      createdAt: row.createdAt,
+      role: row.role,
+      byteLength: 128,
+      bodyDigest: `d-${row.rowId}`,
+    })),
+    isFinal: true,
+  });
+  let ordinal = 0;
+  while (ordinal < rows.length) {
+    if (rows[ordinal].model === null) {
+      ordinal += 1;
+      continue;
+    }
+    const from = ordinal;
+    while (ordinal < rows.length && rows[ordinal].model !== null) ordinal += 1;
+    const run = rows.slice(from, ordinal);
+    const records = new Map<string, Message>();
+    for (const row of run) {
+      for (const record of row.records) records.set(record.messageId, record);
+    }
+    window = applyRangeResponse(
+      window,
+      {
+        requestId: `req-${from}`,
+        epoch: 1,
+        fromOrdinal: from,
+        rowIds: run.map((row) => row.rowId),
+        incompleteRowIds: [],
+        messages: [...records.values()],
+        events: [],
+        rowContext: {},
+        reachedStart: from === 0,
+        reachedEnd: ordinal === rows.length,
+      },
+      null,
+      null,
+    );
+  }
+  if (live !== null) {
+    window = appendLiveRecords(window, {
+      messages: [...live.records],
+      events: [],
+    });
+  }
+  return {
+    window,
+    messages: [
+      ...rows.flatMap((row) => (row.model === null ? [] : [row.model])),
+      ...(live?.models ?? []),
+    ],
+  };
+}
+
+function userSpec(
+  id: string,
+  createdAt: number,
+  content: string,
+  hydrated: boolean,
+): RowSpec {
+  return {
+    rowId: id,
+    createdAt,
+    role: "user",
+    records: [userRecord(id, createdAt)],
+    model: hydrated ? userRow(id, content, createdAt) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The host.
+
+interface FakeDoc {
+  readonly messageId: string;
+  readonly tier: ChatSearchTier;
+  readonly createdAt: number;
+  readonly text: string;
 }
 
 function asciiLower(text: string): string {
@@ -253,14 +439,8 @@ async function settle(): Promise<void> {
   });
 }
 
-interface TranscriptState {
-  readonly messages: ReadonlyArray<ChatMessageModel>;
-  /** Record ids the window holds, hydrated or live. */
-  readonly held: ReadonlySet<string>;
-  readonly unhydratedRows: number;
-  /** `dateRange.to` the renderer derives from the hydrated tail suffix. */
-  readonly olderThan: number | null;
-}
+// ---------------------------------------------------------------------------
+// The tile: `ChatMessages`' find wiring over the window.
 
 interface ControllerHandle {
   readonly onTranscriptLandingSettled: (
@@ -279,6 +459,8 @@ function renderFind(input: {
   readonly getAdapter: () => ChatFindAdapter;
   readonly getController: () => ControllerHandle;
   readonly setTranscript: (next: TranscriptState) => void;
+  /** The list scroll every find REVEAL issues - a navigation's mechanism. */
+  readonly scrollToLocation: Mock;
 } {
   let registered: ChatFindAdapter | null = null;
   let controller: ControllerHandle | null = null;
@@ -304,10 +486,8 @@ function renderFind(input: {
     const { transcript } = props;
     const messagesRef = useRef(transcript.messages);
     messagesRef.current = transcript.messages;
-    const heldRef = useRef(transcript.held);
-    heldRef.current = transcript.held;
-    const unhydratedRef = useRef(transcript.unhydratedRows);
-    unhydratedRef.current = transcript.unhydratedRows;
+    const windowRef = useRef(transcript.window);
+    windowRef.current = transcript.window;
     const rowIndexByKeyRef = useRef<ReadonlyMap<string, number>>(new Map());
     rowIndexByKeyRef.current = new Map(
       transcript.messages.map((message, index) => [message.id, index]),
@@ -316,11 +496,11 @@ function renderFind(input: {
     // Stable identities, as `ChatMessages` passes them: the controller
     // registers its adapter against these.
     const getFindCoverageMessage = useCallback(
-      () => chatFindCoverageMessage(unhydratedRef.current),
+      () => chatFindCoverageMessage(unhydratedRowCount(windowRef.current)),
       [],
     );
-    const isRecordHeld = useCallback(
-      (messageId: string) => heldRef.current.has(messageId),
+    const getFindPlacement = useCallback(
+      () => chatFindTranscriptPlacement(windowRef.current),
       [],
     );
     const find = useChatFindController({
@@ -330,7 +510,7 @@ function renderFind(input: {
       backgroundToolBlockIds: EMPTY_PROMOTED,
       backgroundToolBlockIdsRef,
       getFindCoverageMessage,
-      isRecordHeld,
+      getFindPlacement,
       requestIndexJump: input.requestIndexJump,
       rowIndexByKeyRef,
       getScroller,
@@ -345,8 +525,7 @@ function renderFind(input: {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       demandSource: find.indexDemand,
-      hasUnhydratedRows: transcript.unhydratedRows > 0,
-      olderThan: transcript.olderThan,
+      hasUnhydratedRows: unhydratedRowCount(transcript.window) > 0,
       onAnswer: find.setIndexAnswer,
     });
     controller = find;
@@ -382,8 +561,12 @@ function renderFind(input: {
     setTranscript: (next) => {
       rendered.rerender(<Harness transcript={next} />);
     },
+    scrollToLocation: callbacks.scrollToLocation,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Painting.
 
 /** Mounts `message` the way the list renders it: a row with its find units. */
 function mountRow(scroller: HTMLElement, message: ChatMessageModel): string {
@@ -452,6 +635,15 @@ function installMockHighlights(): {
   };
 }
 
+function activeHighlightText(
+  values: ReadonlyMap<string, TestHighlight>,
+): string | undefined {
+  const active = [...values.entries()].find(([name]) =>
+    name.includes("active"),
+  );
+  return active?.[1].ranges[0]?.toString();
+}
+
 let frames: FrameRequestCallback[] = [];
 
 function installFrameQueue(): () => void {
@@ -503,36 +695,30 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     vi.restoreAllMocks();
   });
 
-  const oldUser = userRow("u-old", "an old needle in the haystack", 10);
-  const newUser = userRow("u-new", "a recent needle", 100);
-  // Newer than every paged fixture's documents, so the bound admits them all.
-  const latestUser = userRow("u-new", "a recent needle", 1000);
+  const OLD_TEXT = "an old needle in the haystack";
+  const NEW_TEXT = "a recent needle";
+
+  /** An older user row, unhydrated, above a hydrated recent one. */
+  function oldAndNew(oldHydrated: boolean): TranscriptState {
+    return transcriptOf(
+      [
+        userSpec("u-old", 10, OLD_TEXT, oldHydrated),
+        userSpec("u-new", 100, NEW_TEXT, true),
+      ],
+      null,
+    );
+  }
 
   it("reports one older index match, and navigating to it hydrates the row and highlights the exact range", async () => {
     const highlights = installMockHighlights();
     const host = hostFixture(
       fakeIndex([
-        {
-          messageId: "u-old",
-          tier: "user",
-          createdAt: 10,
-          text: oldUser.content,
-        },
-        {
-          messageId: "u-new",
-          tier: "user",
-          createdAt: 100,
-          text: newUser.content,
-        },
+        { messageId: "u-old", tier: "user", createdAt: 10, text: OLD_TEXT },
+        { messageId: "u-new", tier: "user", createdAt: 100, text: NEW_TEXT },
       ]),
     );
     const find = renderFind({
-      initial: {
-        messages: [newUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 1,
-        olderThan: 100,
-      },
+      initial: oldAndNew(false),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -559,11 +745,8 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       total: 2,
       coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
     });
-    // Only rows older than the hydrated tail are asked about.
-    expect(searchCalls(host.messenger).at(-1)?.dateRange).toEqual({
-      from: null,
-      to: 100,
-    });
+    // No date bound: none a client can derive is safe.
+    expect(searchCalls(host.messenger).at(-1)?.dateRange).toBeNull();
 
     act(() => {
       void adapter.previous();
@@ -578,13 +761,9 @@ describe("chat find over a windowed transcript: older rows from the index", () =
 
     // The jump hydrates the row: it is now held and rendered, so the client
     // scan owns it and the index stop is gone.
+    const hydrated = oldAndNew(true);
     act(() => {
-      find.setTranscript({
-        messages: [oldUser, newUser],
-        held: new Set(["u-old", "u-new"]),
-        unhydratedRows: 0,
-        olderThan: null,
-      });
+      find.setTranscript(hydrated);
     });
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
@@ -592,11 +771,15 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       coverageMessage: null,
     });
 
-    const unitId = mountRow(scroller, oldUser);
+    const unitId = mountRow(scroller, hydrated.messages[0]);
+    flushFrames();
+    // The landing reveals the exact match: the scroll is its mechanism.
+    find.scrollToLocation.mockClear();
     act(() => {
       find.getController().onTranscriptLandingSettled("u-old", "landed");
     });
     flushFrames();
+    expect(find.scrollToLocation).toHaveBeenCalled();
 
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
@@ -604,22 +787,14 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       activeUnitId: unitId,
       exactHighlight: "painted",
     });
-    const active = [...highlights.values.entries()].find(([name]) =>
-      name.includes("active"),
-    );
-    expect(active?.[1].ranges[0]?.toString()).toBe("needle");
+    expect(activeHighlightText(highlights.values)).toBe("needle");
     highlights.restore();
   });
 
   it("does not double count a hit inside the hydrated window, or one message's several tiers", async () => {
     const host = hostFixture(
       fakeIndex([
-        {
-          messageId: "u-new",
-          tier: "user",
-          createdAt: 100,
-          text: newUser.content,
-        },
+        { messageId: "u-new", tier: "user", createdAt: 100, text: NEW_TEXT },
         {
           messageId: "a-old",
           tier: "assistant",
@@ -635,13 +810,21 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       ]),
     );
     const find = renderFind({
-      initial: {
-        messages: [newUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 3,
-        // No bound: the in-window document comes back and must be dropped.
-        olderThan: null,
-      },
+      initial: transcriptOf(
+        [
+          userSpec("u-0", 5, "no match", false),
+          {
+            rowId: "assistant:t-old",
+            createdAt: 20,
+            role: "assistant",
+            records: [assistantRecord("a-old", "t-old", 20)],
+            model: null,
+          },
+          userSpec("u-mid", 50, "no match", false),
+          userSpec("u-new", 100, NEW_TEXT, true),
+        ],
+        null,
+      ),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -672,12 +855,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       });
     });
     const find = renderFind({
-      initial: {
-        messages: [newUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 1,
-        olderThan: 100,
-      },
+      initial: oldAndNew(false),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -704,30 +882,31 @@ describe("chat find over a windowed transcript: older rows from the index", () =
   });
 
   it("finds a live streaming row with the client scan before the index has it", async () => {
-    const live = streamingAssistantRow(
-      "assistant:turn-live",
-      "a-live",
-      "still streaming the needle",
-      200,
-    );
+    const live = assistantRow({
+      rowId: "assistant:turn-live",
+      persistentMessageId: "a-live",
+      turnMessageIds: null,
+      markdown: "still streaming the needle",
+      createdAt: 200,
+      streaming: true,
+    });
     // The index lags a live chat: the streaming row is not in it yet.
     const host = hostFixture(
       fakeIndex([
-        {
-          messageId: "u-old",
-          tier: "user",
-          createdAt: 10,
-          text: oldUser.content,
-        },
+        { messageId: "u-old", tier: "user", createdAt: 10, text: OLD_TEXT },
       ]),
     );
     const find = renderFind({
-      initial: {
-        messages: [newUser, live],
-        held: new Set(["u-new", "a-live"]),
-        unhydratedRows: 1,
-        olderThan: 100,
-      },
+      initial: transcriptOf(
+        [
+          userSpec("u-old", 10, OLD_TEXT, false),
+          userSpec("u-new", 100, NEW_TEXT, true),
+        ],
+        {
+          records: [assistantRecord("a-live", "turn-live", 200)],
+          models: [live],
+        },
+      ),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -753,12 +932,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     // and the assistant's prose; tool output is never a document.
     const host = hostFixture(
       fakeIndex([
-        {
-          messageId: "u-old",
-          tier: "user",
-          createdAt: 10,
-          text: oldUser.content,
-        },
+        { messageId: "u-old", tier: "user", createdAt: 10, text: OLD_TEXT },
         {
           messageId: "a-tool",
           tier: "assistant",
@@ -774,12 +948,20 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       ]),
     );
     const find = renderFind({
-      initial: {
-        messages: [newUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 2,
-        olderThan: 100,
-      },
+      initial: transcriptOf(
+        [
+          userSpec("u-old", 10, OLD_TEXT, false),
+          {
+            rowId: "assistant:t-tool",
+            createdAt: 30,
+            role: "assistant",
+            records: [assistantRecord("a-tool", "t-tool", 30)],
+            model: null,
+          },
+          userSpec("u-new", 100, NEW_TEXT, true),
+        ],
+        null,
+      ),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -798,23 +980,34 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     );
   });
 
-  it("asks for page 1 per query and a further page only on navigating past the oldest loaded hit", async () => {
-    // Three pages of older hits, newest first: u-249..u-150, u-149..u-50,
-    // u-49..u-0.
-    const docs: FakeDoc[] = Array.from({ length: 250 }, (_unused, index) => ({
+  /** `count` older user rows, unhydrated, under one hydrated recent row. */
+  function pagedTranscript(count: number): TranscriptState {
+    return transcriptOf(
+      [
+        ...Array.from({ length: count }, (_unused, index) =>
+          userSpec(`u-${index}`, index + 1, `needle ${index}`, false),
+        ),
+        userSpec("u-new", 1000, NEW_TEXT, true),
+      ],
+      null,
+    );
+  }
+
+  function pagedDocs(count: number): FakeDoc[] {
+    return Array.from({ length: count }, (_unused, index) => ({
       messageId: `u-${index}`,
       tier: "user",
       createdAt: index + 1,
       text: `needle ${index}`,
     }));
-    const host = hostFixture(fakeIndex(docs));
+  }
+
+  it("asks for page 1 per query and a further page only on navigating past the oldest loaded hit", async () => {
+    // Three pages of older hits, newest first: u-249..u-150, u-149..u-50,
+    // u-49..u-0.
+    const host = hostFixture(fakeIndex(pagedDocs(250)));
     const find = renderFind({
-      initial: {
-        messages: [latestUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 250,
-        olderThan: 1000,
-      },
+      initial: pagedTranscript(250),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -879,20 +1072,9 @@ describe("chat find over a windowed transcript: older rows from the index", () =
   });
 
   it("drops 'At least' once the last page is seen", async () => {
-    const docs: FakeDoc[] = Array.from({ length: 150 }, (_unused, index) => ({
-      messageId: `u-${index}`,
-      tier: "user",
-      createdAt: index + 1,
-      text: `needle ${index}`,
-    }));
-    const host = hostFixture(fakeIndex(docs));
+    const host = hostFixture(fakeIndex(pagedDocs(150)));
     const find = renderFind({
-      initial: {
-        messages: [latestUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 150,
-        olderThan: 1000,
-      },
+      initial: pagedTranscript(150),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -948,12 +1130,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       return serve(params);
     });
     const find = renderFind({
-      initial: {
-        messages: [newUser],
-        held: new Set(["u-new"]),
-        unhydratedRows: 1,
-        olderThan: 100,
-      },
+      initial: oldAndNew(false),
       client: host.client,
       queryClient: host.queryClient,
       scroller,
@@ -1009,5 +1186,420 @@ describe("chat find over a windowed transcript: older rows from the index", () =
         "needle hay",
       ]);
     });
+  });
+
+  /**
+   * No client-side date bound is safe. A turn adopted from a notification
+   * keeps the notification's early transcript position while its records are
+   * stamped at run time - later than rows that sort after it. A bound taken
+   * from the hydrated rows excluded exactly those records.
+   */
+  it("finds an older record stamped later than the hydrated rows below it", async () => {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-adopted",
+          tier: "assistant",
+          createdAt: 50,
+          text: "the adopted turn found the needle",
+        },
+        { messageId: "u-new", tier: "user", createdAt: 30, text: NEW_TEXT },
+      ]),
+    );
+    const find = renderFind({
+      initial: transcriptOf(
+        [
+          {
+            rowId: "assistant:t-adopted",
+            // The notification's time, which is where the row stays.
+            createdAt: 20,
+            role: "assistant",
+            records: [assistantRecord("a-adopted", "t-adopted", 50)],
+            model: null,
+          },
+          userSpec("u-new", 30, NEW_TEXT, true),
+        ],
+        null,
+      ),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().total).toBe(2);
+    });
+    expect(adapter.getSnapshot().coverageMessage).toBe(
+      `1 older message matches; ${EXCLUSION_TAIL}`,
+    );
+  });
+
+  it("reads past a page of loaded matches when the reader steps back from the oldest one", async () => {
+    // The newest 100 documents are all rows the tile holds, so page 1 names
+    // no older message; the one older match is on page 2.
+    const tail = Array.from({ length: 100 }, (_unused, index) =>
+      userSpec(`u-t${index}`, 10 + index, `tail needle ${index}`, true),
+    );
+    const host = hostFixture(
+      fakeIndex([
+        { messageId: "u-old", tier: "user", createdAt: 1, text: OLD_TEXT },
+        ...tail.map((row, index) => ({
+          messageId: row.rowId,
+          tier: "user" as const,
+          createdAt: row.createdAt,
+          text: `tail needle ${index}`,
+        })),
+      ]),
+    );
+    const find = renderFind({
+      initial: transcriptOf(
+        [userSpec("u-old", 1, OLD_TEXT, false), ...tail],
+        null,
+      ),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await settle();
+    expect(searchCalls(host.messenger)).toHaveLength(1);
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 100,
+      coverageMessage: "Partial results: 1 older message is not loaded.",
+    });
+
+    // Back from the oldest loaded match: the next page, and onto what it
+    // names instead of wrapping to the newest match.
+    act(() => {
+      void adapter.previous();
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().total).toBe(101);
+    });
+    expect(searchCalls(host.messenger)).toHaveLength(2);
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
+    });
+    expect(requestIndexJump).toHaveBeenLastCalledWith("u-old");
+  });
+
+  /**
+   * A turn whose hydration edge falls inside it: one slice is hydrated, so
+   * the window holds all of the turn's records, but the text of the others is
+   * nowhere the client scan can see.
+   */
+  function straddledTurn(input: {
+    readonly hydratedParts: ReadonlySet<number>;
+    readonly partText: (part: number) => string;
+  }): TranscriptState {
+    const record = assistantRecord("a-T", "T", 21);
+    return transcriptOf(
+      [
+        ...[0, 1, 2].map((part): RowSpec => ({
+          rowId: `assistant:T:part:${part}`,
+          createdAt: 20,
+          role: "assistant",
+          records: [record],
+          model: input.hydratedParts.has(part)
+            ? assistantRow({
+                rowId: `assistant:T:part:${part}`,
+                persistentMessageId: "a-T",
+                turnMessageIds: null,
+                markdown: input.partText(part),
+                createdAt: 20,
+                streaming: false,
+              })
+            : null,
+        })),
+        userSpec("u-new", 100, "a recent note", true),
+      ],
+      null,
+    );
+  }
+
+  it("counts a held message whose match is in its unhydrated rows, and walks to it by row", async () => {
+    const highlights = installMockHighlights();
+    const partText = (part: number): string =>
+      part === 1 ? "the middle slice has the needle" : `slice ${part}`;
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: "the middle slice has the needle",
+        },
+      ]),
+    );
+    const find = renderFind({
+      initial: straddledTurn({ hydratedParts: new Set([2]), partText }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot()).toMatchObject({
+        total: 1,
+        coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
+      });
+    });
+
+    // The nearest unhydrated slice first, by its row id.
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:1");
+
+    const hydrated = straddledTurn({
+      hydratedParts: new Set([1, 2]),
+      partText,
+    });
+    act(() => {
+      find.setTranscript(hydrated);
+    });
+    const unitId = mountRow(scroller, hydrated.messages[0]);
+    act(() => {
+      find
+        .getController()
+        .onTranscriptLandingSettled("assistant:T:part:1", "landed");
+    });
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 1,
+      activeUnitId: unitId,
+      exactHighlight: "painted",
+    });
+    expect(activeHighlightText(highlights.values)).toBe("needle");
+    highlights.restore();
+  });
+
+  it("walks on to the next unhydrated row when the landed one does not hold the match", async () => {
+    const partText = (part: number): string =>
+      part === 0 ? "the first slice has the needle" : `slice ${part}`;
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: "the first slice has the needle",
+        },
+      ]),
+    );
+    const find = renderFind({
+      initial: straddledTurn({ hydratedParts: new Set([2]), partText }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().total).toBe(1);
+    });
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:1");
+
+    // Slice 1 lands without the text: on to slice 0.
+    act(() => {
+      find.setTranscript(
+        straddledTurn({ hydratedParts: new Set([1, 2]), partText }),
+      );
+    });
+    act(() => {
+      find
+        .getController()
+        .onTranscriptLandingSettled("assistant:T:part:1", "landed");
+    });
+    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:0");
+
+    const hydrated = straddledTurn({
+      hydratedParts: new Set([0, 1, 2]),
+      partText,
+    });
+    act(() => {
+      find.setTranscript(hydrated);
+    });
+    const unitId = mountRow(scroller, hydrated.messages[0]);
+    act(() => {
+      find
+        .getController()
+        .onTranscriptLandingSettled("assistant:T:part:0", "landed");
+    });
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 1,
+      activeUnitId: unitId,
+    });
+  });
+
+  it("hands an earlier record of a folded turn to the client scan once its row lands", async () => {
+    const highlights = installMockHighlights();
+    const records = [
+      assistantRecord("a-first", "T2", 20),
+      assistantRecord("a-last", "T2", 21),
+    ];
+    const foldedTurn = (hydrated: boolean): TranscriptState =>
+      transcriptOf(
+        [
+          {
+            rowId: "assistant:T2",
+            createdAt: 20,
+            role: "assistant",
+            records,
+            model: hydrated
+              ? assistantRow({
+                  rowId: "assistant:T2",
+                  // The row renders under its LAST record.
+                  persistentMessageId: "a-last",
+                  turnMessageIds: ["a-first", "a-last"],
+                  markdown: "the first record's needle",
+                  createdAt: 20,
+                  streaming: false,
+                })
+              : null,
+          },
+          userSpec("u-new", 100, "a recent note", true),
+        ],
+        null,
+      );
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-first",
+          tier: "assistant",
+          createdAt: 20,
+          text: "the first record's needle",
+        },
+      ]),
+    );
+    const find = renderFind({
+      initial: foldedTurn(false),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().total).toBe(1);
+    });
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexJump).toHaveBeenLastCalledWith("a-first");
+
+    const hydrated = foldedTurn(true);
+    act(() => {
+      find.setTranscript(hydrated);
+    });
+    const unitId = mountRow(scroller, hydrated.messages[0]);
+    flushFrames();
+    // The landing is what reveals the exact match: the row renders under the
+    // turn's last record, and the hit named the first.
+    find.scrollToLocation.mockClear();
+    act(() => {
+      find.getController().onTranscriptLandingSettled("assistant:T2", "landed");
+    });
+    flushFrames();
+    expect(find.scrollToLocation).toHaveBeenCalled();
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 1,
+      activeUnitId: unitId,
+      exactHighlight: "painted",
+    });
+    expect(activeHighlightText(highlights.values)).toBe("needle");
+    highlights.restore();
+  });
+
+  /**
+   * A steer bubble sits at its turn's start while its record carries the
+   * time it was sent. Its row id IS the record id, so the skeleton places it
+   * exactly; the timestamp would put it after rows it precedes.
+   */
+  it("places a steer hit where its row is, not where its timestamp falls", async () => {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "s-steer",
+          tier: "user",
+          createdAt: 35,
+          text: "steer toward the needle",
+        },
+      ]),
+    );
+    const find = renderFind({
+      initial: transcriptOf(
+        [
+          userSpec("u-1", 10, "needle one", true),
+          {
+            rowId: "assistant:T",
+            createdAt: 20,
+            role: "assistant",
+            records: [assistantRecord("a-T", "T", 20)],
+            model: null,
+          },
+          {
+            rowId: "s-steer",
+            createdAt: 20,
+            role: "user",
+            records: [userRecord("s-steer", 35)],
+            model: null,
+          },
+          userSpec("u-3", 30, "needle three", true),
+        ],
+        null,
+      ),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().total).toBe(3);
+    });
+    expect(adapter.getSnapshot().current).toBe(1);
+    // From "needle one" the next stop is the steer, before "needle three".
+    act(() => {
+      void adapter.next();
+    });
+    expect(adapter.getSnapshot().current).toBe(2);
+    expect(requestIndexJump).toHaveBeenLastCalledWith("s-steer");
   });
 });

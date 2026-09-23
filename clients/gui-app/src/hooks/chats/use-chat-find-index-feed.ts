@@ -19,8 +19,6 @@ export interface ChatFindIndexFeedArgs {
    * and the index is not asked.
    */
   readonly hasUnhydratedRows: boolean;
-  /** See `chatFindIndexOlderThan`. */
-  readonly olderThan: number | null;
   readonly onAnswer: (answer: ChatFindIndexAnswer) => void;
 }
 
@@ -41,7 +39,6 @@ export function useChatFindIndexFeed(args: ChatFindIndexFeedArgs): void {
     epicId: args.epicId,
     chatId: args.chatId,
     demand: args.hasUnhydratedRows ? demand : null,
-    olderThan: args.olderThan,
   });
   // Layout, so an answer and the transcript it is read against land in the
   // same commit's find pass.

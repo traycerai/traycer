@@ -14,18 +14,23 @@
  * earlier match - measured at p95 143-201 ms a pass on the largest chat. So
  * one request goes out per settled query, for page 1, and a further page only
  * when the demand grows ({@link ChatFindIndexDemand.pages}), which the adapter
- * does when the reader steps past the oldest older hit already loaded. A query
+ * does when the reader steps back from the oldest stop it has. A query
  * that changes, or a bar that closes, drops the request's observer, and the
  * query layer aborts it.
  *
- * ## Only rows older than the hydrated tail are asked about
+ * ## No date bound
  *
- * `olderThan` becomes `dateRange.to`, so the loaded tail's documents - the
- * newest ones, which would otherwise fill page 1 - are never read. Within one
- * search the bound only ever moves LATER: a hydration that grows the tail
- * leaves it (the extra rows come back and are dropped as held), while an
- * eviction that shrinks the tail widens it, since rows that just left the
- * window are exactly the ones the old bound excluded.
+ * The request carries no `dateRange`, although one would spare the host the
+ * hydrated tail's documents - the newest ones, which fill page 1 first and
+ * come back only to be dropped as held. No bound the client can derive is
+ * safe. The skeleton orders rows by a placement key, and a record's
+ * timestamp can be LATER than that of a row sorting after it: a
+ * notification-anchor row stamped mid-turn sorts after the whole turn, whose
+ * rows sit at its start, and a turn adopted from a notification keeps the
+ * notification's early position while its records carry the run's time. A
+ * bound taken from the hydrated rows silently excluded those records. So the
+ * held documents are read and dropped, and a page of nothing but held ones
+ * is paged past on the reader's press like any other.
  */
 import { useMemo, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -115,14 +120,6 @@ function combineChatFindIndexPages(
   };
 }
 
-interface HeldBound {
-  /** The search the bound belongs to; any other starts from its own. */
-  readonly key: string | null;
-  readonly to: number | null;
-}
-
-const NO_BOUND: HeldBound = { key: null, to: null };
-
 interface IndexWalk {
   /** The request the cursors were issued for; any other starts over. */
   readonly key: string | null;
@@ -131,12 +128,6 @@ interface IndexWalk {
 
 const NO_CURSORS: ReadonlyArray<string> = [];
 const NO_WALK: IndexWalk = { key: null, cursors: NO_CURSORS };
-
-/** The later of two `to` bounds, `null` (no bound) being the latest. */
-function laterBound(held: number | null, next: number | null): number | null {
-  if (held === null || next === null) return null;
-  return Math.max(held, next);
-}
 
 /**
  * The query to send, or `null` when the index cannot answer it: no search, no
@@ -157,24 +148,6 @@ function askableIndexQuery(
     query.length <= CHAT_SEARCH_MAX_QUERY_CHARS
     ? query
     : null;
-}
-
-/**
- * `dateRange.to` for the search `searchKey` names: `olderThan`, never moved
- * earlier within one search (see the module doc). React's "adjust state during
- * render" idiom - it settles in one extra pass.
- */
-function useIndexBound(
-  searchKey: string | null,
-  olderThan: number | null,
-): number | null {
-  const [bound, setBound] = useState<HeldBound>(NO_BOUND);
-  const to =
-    bound.key === searchKey ? laterBound(bound.to, olderThan) : olderThan;
-  if (searchKey !== null && (bound.key !== searchKey || bound.to !== to)) {
-    setBound({ key: searchKey, to });
-  }
-  return to;
 }
 
 /** Page 1, then one request per cursor the walk has taken. */
@@ -217,20 +190,14 @@ export function useChatFindIndexHits(args: {
   readonly chatId: string;
   /** `null` while there is nothing to ask: no query, or nothing unhydrated. */
   readonly demand: ChatFindIndexDemand | null;
-  /** `dateRange.to` as of this render; `null` leaves the range open. */
-  readonly olderThan: number | null;
 }): ChatFindIndexAnswer {
-  const { chatId, client, demand, epicId, hostId, olderThan } = args;
+  const { chatId, client, demand, epicId, hostId } = args;
   const { hostReachable, methodUnsupported } = useChatSearchHost(
     hostId,
     client,
   );
   const search = demand === null ? null : demand.search;
   const query = askableIndexQuery(search, hostReachable && !methodUnsupported);
-  const to = useIndexBound(
-    query === null ? null : JSON.stringify([hostId, epicId, chatId, query]),
-    olderThan,
-  );
   const base = useMemo<ChatSearchBaseRequest | null>(
     () =>
       query === null
@@ -240,11 +207,12 @@ export function useChatFindIndexHits(args: {
             scope: { kind: "chat", epicId, chatId },
             tiers: [...CHAT_FIND_INDEX_TIERS],
             roleFilter: "any",
-            dateRange: to === null ? null : { from: null, to },
+            // Deliberately unbounded; see "No date bound" above.
+            dateRange: null,
             harness: null,
             mode: "substring",
           },
-    [chatId, epicId, query, to],
+    [chatId, epicId, query],
   );
 
   // The host is part of the walk's identity: a cursor is the answering host's.
@@ -262,7 +230,8 @@ export function useChatFindIndexHits(args: {
     options: CHAT_SEARCH_QUERY_OPTIONS,
     combine: combineChatFindIndexPages,
   });
-  // Same render-phase idiom as the bound.
+  // React's "adjust state during render" idiom: the walk settles in one
+  // extra pass.
   const next = nextIndexCursor(
     pages,
     cursors,

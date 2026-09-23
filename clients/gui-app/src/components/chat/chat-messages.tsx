@@ -36,8 +36,9 @@ import {
 import { unhydratedRowCount } from "@/stores/chats/transcript-window";
 import { chatFindCoverageMessage } from "@/components/chat/chat-find";
 import {
-  chatFindIndexOlderThan,
-  transcriptWindowHoldsMessage,
+  FULLY_LOADED_TRANSCRIPT,
+  chatFindTranscriptPlacement,
+  type ChatFindTranscriptPlacement,
 } from "@/components/chat/chat-find-index";
 import { ChatFindIndexSource } from "@/components/chat/chat-find-index-source";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
@@ -2045,7 +2046,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
-  // Read only by find's coverage and held-record suppliers, and through a ref
+  // Read only by find's coverage and placement suppliers, and through a ref
   // for the same reason `messages` is: the window changes identity on every
   // hydration, and a value dependency would re-register the find adapter each
   // time.
@@ -3712,23 +3713,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (window === null) return null;
     return chatFindCoverageMessage(unhydratedRowCount(window));
   }, []);
-  // An index hit on a record the window holds is the client scan's to count.
+  // Which index hits describe text the rows do not show, and where they sit.
   // The legacy line holds every record.
-  const isFindRecordHeld = useCallback((messageId: string): boolean => {
+  const getFindPlacement = useCallback((): ChatFindTranscriptPlacement => {
     const window = transcriptWindowRef.current;
-    return window === null || transcriptWindowHoldsMessage(window, messageId);
+    return window === null
+      ? FULLY_LOADED_TRANSCRIPT
+      : chatFindTranscriptPlacement(window);
   }, []);
   // An older index hit is navigated the way a History hit is: the tile's jump
-  // resolves it through the skeleton and hydrates the row. Addressed to this
-  // tile, since the chat may be open in another.
+  // resolves it - a row id through the skeleton, a message id through the
+  // rows or the host - and hydrates the row. Addressed to this tile, since
+  // the chat may be open in another.
   const requestFindIndexJump = useCallback(
-    (messageId: string): void => {
+    (target: string): void => {
       if (hostId === null) return;
       useChatTranscriptJumpStore
         .getState()
         .requestTileJump(hostId, taskId, instanceId, {
           kind: "message",
-          messageId,
+          messageId: target,
         });
     },
     [hostId, instanceId, taskId],
@@ -3747,7 +3751,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
     getFindCoverageMessage,
-    isRecordHeld: isFindRecordHeld,
+    getFindPlacement,
     requestIndexJump: requestFindIndexJump,
     rowIndexByKeyRef,
     getScroller,
@@ -3758,16 +3762,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     findLandingSettledRef.current = onChatFindTranscriptLandingSettled;
   }, [onChatFindTranscriptLandingSettled]);
-  // What the index is asked about moves with hydration only, not with every
-  // streaming token that re-renders the transcript.
-  const chatFindIndexScope = useMemo(
-    () =>
-      transcriptWindow === null
-        ? { hasUnhydratedRows: false, olderThan: null }
-        : {
-            hasUnhydratedRows: unhydratedRowCount(transcriptWindow) > 0,
-            olderThan: chatFindIndexOlderThan(transcriptWindow),
-          },
+  // Whether the index has anything to answer moves with hydration only, not
+  // with every streaming token that re-renders the transcript.
+  const chatFindIndexHasUnhydratedRows = useMemo(
+    () => transcriptWindow !== null && unhydratedRowCount(transcriptWindow) > 0,
     [transcriptWindow],
   );
 
@@ -4028,8 +4026,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             epicId={epicId}
             chatId={taskId}
             demandSource={chatFindIndexDemand}
-            hasUnhydratedRows={chatFindIndexScope.hasUnhydratedRows}
-            olderThan={chatFindIndexScope.olderThan}
+            hasUnhydratedRows={chatFindIndexHasUnhydratedRows}
             onAnswer={setChatFindIndexAnswer}
           />
         ) : null}

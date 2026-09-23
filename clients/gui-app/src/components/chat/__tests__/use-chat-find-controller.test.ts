@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import type { StoreApi } from "zustand/vanilla";
 import { createElement, useRef } from "react";
 import type { ChatFindAdapter } from "@/components/chat/chat-find";
+import { FULLY_LOADED_TRANSCRIPT } from "@/components/chat/chat-find-index";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
@@ -141,7 +142,7 @@ describe("useChatFindController - chain-open on reveal", () => {
           // This suite drives the legacy line, where the transcript is fully
           // materialized and find has nothing to disclose.
           getFindCoverageMessage: () => null,
-          isRecordHeld: () => true,
+          getFindPlacement: () => FULLY_LOADED_TRANSCRIPT,
           requestIndexJump: () => undefined,
           rowIndexByKeyRef,
           getScroller: () => scroller,
