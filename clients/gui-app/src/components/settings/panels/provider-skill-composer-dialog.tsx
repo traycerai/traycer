@@ -141,6 +141,30 @@ function resolveTargets(
 }
 
 /**
+ * The selected target once it has left the list (an identity deleted while the
+ * dialog was open). It is never swapped for another target - an inspection or
+ * a selection made for it must not be submitted somewhere else - so it stays
+ * selected, unavailable, until the user picks another.
+ */
+function unavailableTarget(value: string): ResolvedSkillTarget {
+  return {
+    value,
+    kind: "identity",
+    label: "Unavailable",
+    authoring: IDENTITY_AUTHORING,
+    listScope: "global",
+    canProviderScope: false,
+    installedSelectable: false,
+    destinationFor: () => ({ display: "an unavailable target", exact: false }),
+    onMutate: () =>
+      Promise.reject(new Error("This install target is no longer available.")),
+  };
+}
+
+const UNAVAILABLE_TARGET_BLOCKER =
+  "The selected target is gone. Choose where to install.";
+
+/**
  * The one surface for getting a skill onto disk.
  *
  * Opens import-first when import is advertised: a smart source field, then
@@ -194,7 +218,7 @@ export function ProviderSkillComposerDialog(props: {
         </DialogHeader>
 
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
-          {draft.targets.length > 1 ? (
+          {draft.targets.length > 1 || draft.unavailable ? (
             <TargetField
               targets={draft.targets}
               value={target.value}
@@ -339,30 +363,27 @@ function useComposerDraft(props: {
   const [targetKey, setTargetKey] = useState(() =>
     targetValue(props.initialTarget),
   );
-  // A target that has left the list (an identity deleted while the dialog was
-  // open) falls back to the first one rather than rendering against nothing.
-  const found =
-    targets.find((candidate) => candidate.value === targetKey) ?? targets.at(0);
+  const found = targets.find((candidate) => candidate.value === targetKey);
+  const unavailable = found === undefined;
+  const target = found ?? unavailableTarget(targetKey);
   const [mode, setMode] = useState<"import" | "write">(() =>
-    initialModeFor(found?.authoring ?? IDENTITY_AUTHORING),
+    initialModeFor(target.authoring),
   );
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [body, setBody] = useState(skillBodyScaffold);
   const [source, setSource] = useState("");
   const [providerScoped, setProviderScoped] = useState(false);
-  const [inspectSession, setInspectSession] = useState<{
+  const [inspected, setInspected] = useState<{
+    /** The destination the inspection was made against. */
+    readonly destinationKey: string;
     readonly token: string;
     readonly candidates: readonly ProviderSkillInspectCandidate[];
   } | null>(null);
-  const [selectedNames, setSelectedNames] = useState<readonly string[]>([]);
+  const [pickedNames, setSelectedNames] = useState<readonly string[]>([]);
   const [pickerNote, setPickerNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const nameError = useMemo(() => skillNameError(name), [name]);
-  if (found === undefined) {
-    throw new Error("The skill composer needs at least one install target.");
-  }
-  const target = found;
 
   // A mode the current target cannot serve (write, on an identity) reads as
   // the one it can, so switching target never strands the form.
@@ -371,20 +392,42 @@ function useComposerDraft(props: {
     (mode === "import" && !target.authoring.canImport)
       ? initialModeFor(target.authoring)
       : mode;
+  const effectiveProviderScoped = target.canProviderScope && providerScoped;
+  // An inspection - and the names picked from it - belongs to the destination
+  // it was made against. Any change of destination (another target, the other
+  // scope, the target leaving the list) drops both, so a token minted for one
+  // destination is never submitted to another.
+  const destinationKey = `${target.value}\u0000${String(effectiveProviderScoped)}`;
+  const inspectSession =
+    !unavailable && inspected?.destinationKey === destinationKey
+      ? { token: inspected.token, candidates: inspected.candidates }
+      : null;
+  const selectedNames = inspectSession === null ? [] : pickedNames;
   const step: SkillComposerStep =
     inspectSession !== null ? "picker" : effectiveMode;
-  const effectiveProviderScoped = target.canProviderScope && providerScoped;
-  const blocker = skillSubmitBlocker({
-    step,
-    name,
-    description,
-    source,
-    selectedNames,
-  });
+  const blocker = unavailable
+    ? UNAVAILABLE_TARGET_BLOCKER
+    : skillSubmitBlocker({
+        step,
+        name,
+        description,
+        source,
+        selectedNames,
+      });
   const destination = target.destinationFor(effectiveProviderScoped);
   const showScope = step !== "picker" && target.canProviderScope;
 
+  function setInspectSession(
+    session: {
+      readonly token: string;
+      readonly candidates: readonly ProviderSkillInspectCandidate[];
+    } | null,
+  ): void {
+    setInspected(session === null ? null : { destinationKey, ...session });
+  }
+
   function onSubmit(): void {
+    if (unavailable) return;
     void submitComposer({
       step,
       pending: props.pending,
@@ -413,7 +456,7 @@ function useComposerDraft(props: {
   }
 
   function resetTransient(): void {
-    setInspectSession(null);
+    setInspected(null);
     setSelectedNames([]);
     setPickerNote(null);
     setError(null);
@@ -422,6 +465,7 @@ function useComposerDraft(props: {
   return {
     targets,
     target,
+    unavailable,
     selectTarget: (value: string) => {
       if (value === target.value) return;
       setTargetKey(value);
@@ -485,7 +529,7 @@ function TargetField({
           className="w-full"
           data-testid="skill-install-target"
         >
-          <SelectValue />
+          <SelectValue placeholder="Choose where to install" />
         </SelectTrigger>
         <SelectContent>
           {targets.map((candidate) => (
