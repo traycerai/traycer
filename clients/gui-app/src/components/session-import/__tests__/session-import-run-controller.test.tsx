@@ -454,6 +454,7 @@ describe("<SessionImportRunController />", () => {
           serviceTier: null,
           agentMode: "regular",
           profileId: null,
+          identityId: null,
         },
         Date.now(),
       );

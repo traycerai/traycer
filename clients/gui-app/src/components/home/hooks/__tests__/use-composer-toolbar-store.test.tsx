@@ -215,6 +215,7 @@ function runSettings(harnessId: ProviderId, model: string): ChatRunSettings {
     serviceTier: null,
     agentMode: "regular",
     profileId: null,
+    identityId: null,
   };
 }
 
@@ -1432,6 +1433,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       serviceTier: null,
       agentMode: "epic",
       profileId: null,
+      identityId: null,
     };
     rerender();
 
@@ -1470,6 +1472,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: "work-uuid",
+        identityId: null,
       },
     };
     const { result, rerender } = renderHook(() =>

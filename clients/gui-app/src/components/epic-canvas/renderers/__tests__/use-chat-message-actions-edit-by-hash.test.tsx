@@ -123,6 +123,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const TARGET_MESSAGE_ID = "persistent-message-1";

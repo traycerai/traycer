@@ -118,6 +118,27 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // consumer is a host keeping the row out of provider history. Nor can an older
 // host clone the row into a new chat's history: every fork slices at an
 // assistant record, and nothing follows an unresolved opening.
+//
+// 1.6 also carries `core.settings.identityId` - which agent identity the chat
+// runs as. It arrives here BY DERIVATION rather than by an edit:
+// `snapshotChatRunSettingsSchema` (`open-harness.ts`) is built from the live
+// `chatRunSettingsSchema`'s shape on purpose, so a field added to the persisted
+// tuple lands in the publication automatically. That is the intended behaviour
+// - a published chat should say which identity it ran as, and a clone target
+// should be able to carry it - and it is why COMPATIBILITY.md §7 lists "change
+// a shared epic leaf (… run settings)" as a row that moves both fixtures.
+//
+// It rides this still-unreleased minor on the same rule as `error.failure`
+// above: `host-v1.3.x` shipped chat-sync 1.3, so 1.6 is the next line a
+// released reader will meet, and opening 1.7 for it would cut a line no reader
+// has ever seen away from one no reader has ever seen. Defaulted `null`, so a
+// 1.3 record parses unchanged and §3's residual capture carries the field
+// through an older publisher losslessly; `CHAT_SYNC_1_1_READER_FLOOR` is NOT
+// raised and a 1.6 head still stamps `minReaderVersion: null`. An older reader
+// that does not know the field renders a chat with no identity attributed to
+// it, which is a gap in its display and never a misreading - §4's bar for a
+// reader floor is a change an old reader would act on WRONGLY, and this is not
+// one.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 6 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

@@ -14,6 +14,7 @@ const ALICE_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const BOB_SETTINGS: ChatRunSettings = {
@@ -24,6 +25,7 @@ const BOB_SETTINGS: ChatRunSettings = {
   serviceTier: "flex",
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 const ALICE_EMAIL = "alice@example.com";

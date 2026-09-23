@@ -33,6 +33,7 @@ function makeHandoff(
       serviceTier: null,
       agentMode: "epic",
       profileId: null,
+      identityId: null,
     },
     worktreeIntent: null,
     placement: null,

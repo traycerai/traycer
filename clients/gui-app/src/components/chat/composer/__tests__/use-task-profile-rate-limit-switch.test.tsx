@@ -81,6 +81,7 @@ function settings(
     agentMode: "regular",
     profileId: "limited",
     ...overrides,
+    identityId: null,
   };
 }
 

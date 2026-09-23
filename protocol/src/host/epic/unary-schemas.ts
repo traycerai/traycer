@@ -34,6 +34,9 @@ import {
 import {
   chatRunSettingsSchema,
   chatRunSettingsStrictSchema,
+  chatRunSettingsStrictSchemaPreIdentity,
+  guiHarnessIdSchema,
+  permissionModeSchema,
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
@@ -2091,11 +2094,51 @@ export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
 // Optional (non-floor) capability: old hosts fail only this call with
 // E_HOST_UNSUPPORTED and the renderer degrades to the legacy
 // persist-on-next-send behavior.
+/**
+ * Frozen `epic.updateChatRunSettings@1.0` settings tuple: the LIVE tuple as it
+ * stood before `identityId`, backstops and live enums intact.
+ *
+ * `@1.0` bound the live tuple by reference, which was fine while every later
+ * addition was one both released minors of this method would take. `identityId`
+ * is not: `@1.1` binds `chatRunSettingsStrictSchemaPreIdentity`, which is short
+ * of the field because adding a REQUIRED key to a released request line
+ * refuses every write a shipped client sends (see that schema's own note). A
+ * live `@1.0` beside a frozen `@1.1` is a minor that DROPS a field, which
+ * `validateVersionedRpcRegistry` rejects outright - and rightly, since the drop
+ * would be real: a client on `@1.0` could state an identity that a host
+ * canonical on `@1.1` would then be unable to accept.
+ *
+ * So the field is absent from both RELEASED lines of this method, and identity
+ * writes ride `@1.2`, the first line that may carry it. Hand-frozen
+ * field-for-field rather than derived, on the discipline every other frozen
+ * copy of this tuple follows - a later addition to the live tuple must not
+ * leak onto a released line.
+ *
+ * The enums stay LIVE, unlike the `chat.subscribe` freezes. This is a
+ * client->host request: the host must keep accepting whatever a newer client
+ * can spell, and pinning a roster here would make a harness or mode unsettable
+ * rather than version-gated.
+ */
+export const updateChatRunSettingsTupleSchemaV10 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
+export type UpdateChatRunSettingsTupleV10 = z.infer<
+  typeof updateChatRunSettingsTupleSchemaV10
+>;
+
 export const updateChatRunSettingsRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
     chatId: z.string(),
-    settings: chatRunSettingsSchema,
+    settings: updateChatRunSettingsTupleSchemaV10,
   }),
 );
 export type UpdateChatRunSettingsRequest = z.infer<
@@ -2116,15 +2159,54 @@ export type UpdateChatRunSettingsResponse = z.infer<
 // schema makes a subset-field "patch" a validation error instead of a silent
 // null-clobber of omitted fields. See `chatRunSettingsStrictSchema`.
 // Profile-only changes belong on `epic.updateChatProfile` below.
+//
+// FROZEN: `@1.1` shipped in `host-v1.3.x`, so it binds the pre-identity copy of
+// the strict tuple and never the live one.
 export const updateChatRunSettingsRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    settings: chatRunSettingsStrictSchemaPreIdentity,
+  }),
+);
+export type UpdateChatRunSettingsRequestV11 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV11
+>;
+
+/**
+ * The first minor of `epic.updateChatRunSettings` whose tuple carries the
+ * chat's agent identity.
+ *
+ * Named because the HOST must branch on it, and that is the one non-obvious
+ * part of this line. A caller below it cannot state an identity at all, so its
+ * request reaches the resolver upgraded with `identityId: null` - and that
+ * `null` means "the caller could not say", not "run as the stock identity".
+ * The resolver therefore keeps the chat's stored identity whenever
+ * `ctx.schemaVersion` (the version the CALLER sent) is below this minor, and
+ * writes the tuple's `identityId` only at or above it. Without that branch
+ * every write from a shipped `@1.1` client would silently clear the identity
+ * a newer client set.
+ *
+ * The received-version branch is the established pattern for exactly this
+ * question - "what could this caller represent" - and it keeps the `@1.2` wire
+ * honest: a caller at `@1.2` must state `identityId`, and there is no
+ * "unchanged" arm on the wire for a new client to reach for instead.
+ */
+export const EPIC_UPDATE_CHAT_RUN_SETTINGS_IDENTITY_MINOR = 2;
+
+// v1.2 carries `identityId` on the strict tuple, REQUIRED like every other
+// field: the same whole-tuple WYSIWYG replace as `@1.1`, one field wider. See
+// `EPIC_UPDATE_CHAT_RUN_SETTINGS_IDENTITY_MINOR` for what the host does with a
+// request that arrived below this line.
+export const updateChatRunSettingsRequestSchemaV12 = lazySchema(() =>
   z.object({
     epicId: z.string(),
     chatId: z.string(),
     settings: chatRunSettingsStrictSchema,
   }),
 );
-export type UpdateChatRunSettingsRequestV11 = z.infer<
-  typeof updateChatRunSettingsRequestSchemaV11
+export type UpdateChatRunSettingsRequestV12 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV12
 >;
 
 // Narrow, safe-by-construction field update: move a chat onto another

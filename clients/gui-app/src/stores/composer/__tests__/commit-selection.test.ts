@@ -32,6 +32,7 @@ describe("commitProfileSelection", () => {
       serviceTier: "standard",
       agentMode: "regular",
       profileId: "profile-b",
+      identityId: null,
     });
 
     const emitted: Array<{
@@ -99,6 +100,7 @@ describe("commitSelection - provider switch", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "profile-b",
+      identityId: null,
     });
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
       harnessId: "claude",
@@ -108,6 +110,7 @@ describe("commitSelection - provider switch", () => {
       serviceTier: "fast",
       agentMode: "regular",
       profileId: "profile-a",
+      identityId: null,
     });
 
     const emitted: Array<{ modelSlug: string; profileId: string | null }> = [];
@@ -163,6 +166,7 @@ describe("commitSelection - host scoping", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     const store = createComposerToolbarStore({

@@ -13,6 +13,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: "default",
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const TURN: ChatActiveTurn = {

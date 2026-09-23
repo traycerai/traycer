@@ -1264,6 +1264,13 @@ function chatRunSettingsToDesktopValue(
   return settings === null ? null : normalizeChatRunSettings(settings);
 }
 
+/**
+ * The one enumeration of a draft's settings tuple: it is both the equality key
+ * (`sameChatRunSettings`) and the desktop persistence shape. A field missing
+ * here is a change the draft stores discard as "unchanged" AND a value that is
+ * dropped on persist and restored as its default - so the literal is checked
+ * against every `ChatRunSettings` key, and the next field cannot be forgotten.
+ */
 function normalizeChatRunSettings(
   settings: ChatRunSettings,
 ): Record<string, DesktopJsonValue> {
@@ -1274,7 +1281,9 @@ function normalizeChatRunSettings(
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     agentMode: settings.agentMode,
-  };
+    profileId: settings.profileId,
+    identityId: settings.identityId,
+  } satisfies Record<keyof ChatRunSettings, DesktopJsonValue>;
 }
 
 function readLandingDraftWorkspaceSnapshotForHost(

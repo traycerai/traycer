@@ -957,6 +957,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
           serviceTier: null,
           agentMode: "regular",
           profileId: null,
+          identityId: null,
         };
   return {
     id,

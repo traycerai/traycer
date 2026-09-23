@@ -16,6 +16,7 @@ const SETTINGS = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
+  identityId: null,
 };
 
 const CONTENT = {

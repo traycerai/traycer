@@ -277,6 +277,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
       serviceTier: null,
       agentMode: "epic",
       profileId: null,
+      identityId: null,
     },
     restoreWorktreeIntent: null,
     displayWorktreeIntent: null,
@@ -335,6 +336,7 @@ const SEND_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 /**
@@ -416,6 +418,8 @@ function emitOwnerChatSnapshot(
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   callbacks().onSnapshot({
     kind: "snapshot",
@@ -694,6 +698,8 @@ function emitOwnerChatSnapshotWithQueue(
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   callbacks().onSnapshot({
     kind: "snapshot",
@@ -752,6 +758,8 @@ function emitOwnerWindowedChatSnapshot(
         activeSessionChain: null,
         claudePendingWakes: [],
         pinnedUserProviderHandle: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: "user-1", canAct: true },
       queue: { status: "idle", items: [] },

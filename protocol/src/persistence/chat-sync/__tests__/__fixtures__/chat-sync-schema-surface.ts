@@ -236,6 +236,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "identityId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -680,6 +691,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                         }
                       ]
                     },
+                    "identityId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "residual": {}
                   },
                   "required": [
@@ -690,6 +712,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                     "serviceTier",
                     "agentMode",
                     "profileId",
+                    "identityId",
                     "residual"
                   ],
                   "additionalProperties": false

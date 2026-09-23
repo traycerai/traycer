@@ -106,6 +106,7 @@ const HAIKU_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const SONNET_SETTINGS: ChatRunSettings = {
@@ -116,6 +117,7 @@ const SONNET_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 const WORKSPACE_A = {
   path: "/tmp/workspace-a",
@@ -512,6 +514,23 @@ describe("useLandingDraftStore", () => {
     );
     expect(settingsByDraftId.get(haikuDraftId)).toEqual(HAIKU_SETTINGS);
     expect(settingsByDraftId.get(sonnetDraftId)).toEqual(SONNET_SETTINGS);
+  });
+
+  // The equality key once enumerated fields by hand and omitted these two, so
+  // a change to only one of them compared "unchanged" and was discarded.
+  it.each([
+    ["identityId", { identityId: "identity-1" }],
+    ["profileId", { profileId: "work" }],
+  ] as const)("keeps a settings change to only %s", (_field, change) => {
+    const { createDraft, setDraftSettings } = useLandingDraftStore.getState();
+    const id = createDraft({ ...HAIKU_SETTINGS });
+
+    setDraftSettings(id, { ...HAIKU_SETTINGS, ...change });
+
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((candidate) => candidate.id === id);
+    expect(draft?.settings).toEqual({ ...HAIKU_SETTINGS, ...change });
   });
 
   it("keeps composer mode independent per draft", () => {
@@ -1232,6 +1251,46 @@ describe("useLandingDraftStore", () => {
     expect(restored).toHaveLength(1);
     expect(restored[0].content).toEqual(imageContent);
     expect(restored[0].selection).toEqual({ from: 2, to: 5 });
+  });
+
+  it("round-trips a draft's identity and profile through desktop persistence", () => {
+    const settings: ChatRunSettings = {
+      ...HAIKU_SETTINGS,
+      profileId: "work",
+      identityId: "identity-1",
+    };
+    const patches: DesktopPerWindowStatePatch[] = [];
+    setLandingDraftDesktopProjectionBridge({
+      update: (patch) => {
+        patches.push(patch);
+        return Promise.resolve();
+      },
+      flush: () => Promise.resolve(),
+      dispose: () => undefined,
+    });
+
+    try {
+      useLandingDraftStore.getState().createDraft(settings);
+
+      const outbound = patches.at(-1)?.landingDrafts;
+      expect(outbound).toHaveLength(1);
+      expect(outbound?.[0].settings).toEqual(settings);
+
+      useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+      applyLandingDraftDesktopProjection({
+        epicTabs: [],
+        activeTabId: null,
+        canvasByTabId: {},
+        landingDrafts: outbound ?? [],
+        activeLandingDraftId: patches.at(-1)?.activeLandingDraftId ?? null,
+      });
+    } finally {
+      setLandingDraftDesktopProjectionBridge(null);
+    }
+
+    const restored = useLandingDraftStore.getState().drafts;
+    expect(restored).toHaveLength(1);
+    expect(restored[0].settings).toEqual(settings);
   });
 
   it("drops an inbound draft whose doc `content` is not an array (malformed)", () => {

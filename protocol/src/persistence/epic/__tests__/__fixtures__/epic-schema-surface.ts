@@ -142,6 +142,17 @@ export const epicSchemaSurfaceBaseline = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "identityId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -6984,6 +6995,27 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "null"
                 }
               ]
+            },
+            "kind": {
+              "default": "conversation",
+              "type": "string",
+              "enum": [
+                "conversation",
+                "evolution"
+              ]
+            },
+            "evolutionTurnsSinceReview": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -8728,6 +8760,17 @@ export const epicSchemaSurfaceBaseline = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "identityId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -8737,7 +8780,8 @@ export const epicSchemaSurfaceBaseline = {
                     "reasoningEffort",
                     "serviceTier",
                     "agentMode",
-                    "profileId"
+                    "profileId",
+                    "identityId"
                   ],
                   "additionalProperties": false
                 },
@@ -15883,6 +15927,27 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "null"
                 }
               ]
+            },
+            "kind": {
+              "default": "conversation",
+              "type": "string",
+              "enum": [
+                "conversation",
+                "evolution"
+              ]
+            },
+            "evolutionTurnsSinceReview": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -15901,7 +15966,9 @@ export const epicSchemaSurfaceBaseline = {
             "events",
             "archivedAt",
             "pinnedUserProviderHandle",
-            "lastDeliveredRolesDigest"
+            "lastDeliveredRolesDigest",
+            "kind",
+            "evolutionTurnsSinceReview"
           ],
           "additionalProperties": false
         }

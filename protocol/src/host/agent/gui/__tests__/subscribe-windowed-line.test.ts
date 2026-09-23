@@ -284,7 +284,14 @@ describe("the chat.subscribe@1.6 freeze", () => {
   // Deliberately not a plain equality check against `chatSchema`: an equality
   // that can only ever be "fixed" by deleting it teaches the next person to
   // delete it, and then nothing watches this again.
-  const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = [];
+  const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = [
+    // Agent identity. `kind` marks the hidden chat an identity's evolution
+    // pass runs in; `evolutionTurnsSinceReview` is that pass's turn counter.
+    // Both are `.default(...)`-ed on the live record and neither appears on any
+    // frozen `chat.subscribe` copy, so a released peer never meets either.
+    "kind",
+    "evolutionTurnsSinceReview",
+  ];
 
   it("accounts for every live chatSchema field as either frozen into 1.6 or explicitly post-1.6", () => {
     const accountedFor = [

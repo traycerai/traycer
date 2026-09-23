@@ -126,6 +126,8 @@ function emptyChatSnapshot(
       archivedAt: null,
       pinnedUserProviderHandle: null,
       lastDeliveredRolesDigest: null,
+      kind: "conversation",
+      evolutionTurnsSinceReview: null,
     },
     access: { role: "owner", ownerUserId: TEST_USER_ID, canAct: true },
     queue: { status: "idle", items: [] },

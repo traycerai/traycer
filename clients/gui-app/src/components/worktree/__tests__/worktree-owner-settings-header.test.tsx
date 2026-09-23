@@ -225,6 +225,7 @@ function renderChatHeader(args: {
     serviceTier: args.serviceTier,
     agentMode: "regular",
     profileId: args.profileId,
+    identityId: null,
   };
   tuiAgent.current = null;
   wireProfiles.current = args.profiles;
@@ -627,6 +628,7 @@ describe("chat settings sourced from the host", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
 
     renderRegistryOnlyChat();
@@ -673,6 +675,7 @@ describe("chat settings sourced from the host", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
 
     renderChatHeader({

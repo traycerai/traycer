@@ -31,6 +31,7 @@ const LAST_RUN: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const harnessesData = vi.hoisted(() => ({

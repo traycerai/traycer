@@ -18,6 +18,7 @@ import {
 } from "@traycer/protocol/persistence/draft/index";
 import {
   draftComposerPortableSchema,
+  draftComposerPortableWriteSchema,
   draftHeadSchema,
 } from "@traycer/protocol/persistence/draft/schemas";
 import {
@@ -43,6 +44,9 @@ const RUN_SETTINGS = {
   serviceTier: null,
   agentMode: "regular" as const,
   profileId: null,
+  // Non-null on purpose: a round-trip that dropped the field would decode as
+  // the stock identity (`null`), so only a real id proves the draft carries it.
+  identityId: "identity-1",
 };
 
 const HOST_LOCAL = {
@@ -179,6 +183,44 @@ describe("draft/v1 document envelope", () => {
     const encoded = encodeDraftHead(COMPOSER_HEAD);
     expect(encoded.portable).toEqual(
       expect.objectContaining({ closed: false }),
+    );
+  });
+
+  it("carries the composer's agent identity through encode and decode", () => {
+    const decoded = decodeDraftHeadDocument(
+      serializeDraftHeadDocument(COMPOSER_HEAD),
+    );
+    expect(decoded.status).toBe("ok");
+    if (decoded.status === "ok" && decoded.record.kind === "draft") {
+      expect(decoded.record.portable.runSettings?.identityId).toBe(
+        "identity-1",
+      );
+    }
+    expect(encodeDraftHead(COMPOSER_HEAD).portable).toEqual(
+      expect.objectContaining({
+        runSettings: expect.objectContaining({ identityId: "identity-1" }),
+      }),
+    );
+  });
+
+  it("reads a head written before identityId as the stock identity, but refuses a writer that omits it", () => {
+    const { identityId: _omitted, ...preIdentitySettings } = RUN_SETTINGS;
+    const portable = {
+      content: EMPTY_DOC,
+      selection: null,
+      runSettings: preIdentitySettings,
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    };
+    // The reader is a courtesy to heads already on disk, exactly as `closed`'s
+    // default is.
+    expect(
+      draftComposerPortableSchema.parse(portable).runSettings?.identityId,
+    ).toBeNull();
+    // The writer is not: an omission would reset a drafted identity to stock.
+    expect(draftComposerPortableWriteSchema.safeParse(portable).success).toBe(
+      false,
     );
   });
 
@@ -331,6 +373,8 @@ describe("draft/v1 strict run-settings", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      // The one reader-side default: a head written before the field existed.
+      identityId: null,
     });
   });
 });

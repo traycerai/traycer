@@ -250,6 +250,7 @@ const TEST_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 function makeQueuedItem(queueItemId: string): ChatQueuedPromptItem {
