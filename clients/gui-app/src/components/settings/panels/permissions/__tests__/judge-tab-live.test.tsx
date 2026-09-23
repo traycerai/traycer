@@ -33,6 +33,8 @@ import {
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type {
+  AutoJudgeBlocked,
+  AutoJudgeEffective,
   AutoJudgeSelection,
   AutoJudgeSetRequest,
   AutoJudgeSetResponse,
@@ -47,6 +49,7 @@ import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fi
 import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 
 // ---- host boundary --------------------------------------------------------
@@ -270,6 +273,18 @@ const CLAUDE_STORED: AutoJudgeSelection = {
   profileId: null,
 };
 
+/** What one `autoJudge.get` answers: the record and the host's verdict. */
+interface JudgeAnswer {
+  readonly selection: AutoJudgeSelection | null;
+  readonly effective: AutoJudgeEffective;
+}
+
+/** One `autoJudge.get` the host has received and not yet answered. */
+interface HeldGet {
+  readonly succeed: (answer: JudgeAnswer) => void;
+  readonly fail: () => void;
+}
+
 /** One `autoJudge.set` the host has received and not yet answered. */
 interface HeldSet {
   readonly request: AutoJudgeSetRequest;
@@ -287,6 +302,17 @@ interface JudgeFixture {
   /** From now on, `autoJudge.get` requests wait until `releaseGets`. */
   readonly holdGets: () => void;
   readonly releaseGets: () => void;
+  /** What the record stores, before the first read. */
+  readonly setStored: (selection: AutoJudgeSelection | null) => void;
+  /** The `effective` every later `autoJudge.get` answers. */
+  readonly setEffective: (effective: AutoJudgeEffective) => void;
+  /** The `blocked` every later, non-intercepted `autoJudge.get` answers. */
+  readonly setBlocked: (blocked: AutoJudgeBlocked | null) => void;
+  /** The whole answer the next `autoJudge.set` echoes on success. */
+  readonly setEcho: (echo: JudgeAnswer) => void;
+  /** While on, each `autoJudge.get` waits in `heldGets` for the test. */
+  readonly interceptGets: (on: boolean) => void;
+  readonly heldGets: HeldGet[];
 }
 
 /**
@@ -303,6 +329,11 @@ function createFixture(): JudgeFixture {
   let getGate: Promise<void> | null = null;
   let releaseGate: () => void = () => undefined;
   const held: HeldSet[] = [];
+  const heldGets: HeldGet[] = [];
+  let intercept = false;
+  let effective: AutoJudgeEffective = { source: "fallback" };
+  let blocked: AutoJudgeBlocked | null = null;
+  let echo: JudgeAnswer | null = null;
 
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -316,9 +347,20 @@ function createFixture(): JudgeFixture {
         // The answer is what the host stores WHEN THE REQUEST ARRIVES.
         const answer = {
           selection: stored,
-          effective: { source: "fallback" as const },
-          blocked: null,
+          effective,
+          blocked,
         };
+        if (intercept) {
+          return new Promise<typeof answer>((resolve, reject) => {
+            heldGets.push({
+              succeed: (next) => {
+                stored = next.selection;
+                resolve({ ...next, blocked: null });
+              },
+              fail: () => reject(new Error("get refused")),
+            });
+          });
+        }
         if (getGate !== null) await getGate;
         return answer;
       },
@@ -327,12 +369,12 @@ function createFixture(): JudgeFixture {
           held.push({
             request: params,
             succeed: () => {
-              stored = params.selection;
-              resolve({
+              const answer: JudgeAnswer = echo ?? {
                 selection: params.selection,
                 effective: { source: "fallback" },
-                blocked: null,
-              });
+              };
+              stored = answer.selection;
+              resolve({ ...answer, blocked: null });
             },
             refuse: () => reject(new Error("refused")),
           });
@@ -357,6 +399,22 @@ function createFixture(): JudgeFixture {
     queryClient,
     messenger,
     held,
+    heldGets,
+    setStored: (selection): void => {
+      stored = selection;
+    },
+    setEffective: (next): void => {
+      effective = next;
+    },
+    setBlocked: (next): void => {
+      blocked = next;
+    },
+    setEcho: (next): void => {
+      echo = next;
+    },
+    interceptGets: (on): void => {
+      intercept = on;
+    },
     getCalls: (): number => getCalls,
     holdGets: (): void => {
       getGate = new Promise<void>((resolve) => {
@@ -466,7 +524,12 @@ beforeEach(() => {
   harnessesState.current = [
     harness({ id: "claude", label: "Claude Code", nativeAutoJudge: true }),
     harness({ id: "codex", label: "Codex", judgeDefaultModel: "gpt-mini" }),
+    harness({ id: "traycer", label: "Traycer" }),
   ];
+  modelsStore.set("traycer", {
+    kind: "ready",
+    models: [model("traycer", "traycer-fast", "Traycer Fast")],
+  });
   modelsStore.set("claude", {
     kind: "ready",
     models: [model("claude", "sonnet", "Claude Sonnet")],
@@ -674,6 +737,194 @@ describe("JudgeTab against the real query stack", () => {
       });
       expect(sentModels(fixture)).toEqual(["gpt-x"]);
       expect(sentModels(fixture)).not.toContain("");
+    });
+  });
+
+  describe("a verdict the host has since invalidated", () => {
+    const DEFAULT_VERDICT: AutoJudgeEffective = {
+      source: "default",
+      harnessId: "traycer",
+      model: "traycer-fast",
+    };
+
+    /** The app's own reaction to a catalog change, run from the test. */
+    function invalidateVerdict(fixture: JudgeFixture): Promise<void> {
+      const queryKey = hostQueryKeys.methodScope(
+        mockRemoteHostEntry.hostId,
+        "autoJudge.get",
+      );
+      expect(
+        fixture.queryClient.getQueryCache().findAll({ queryKey }).length,
+      ).toBeGreaterThan(0);
+      return fixture.queryClient
+        .cancelQueries({ queryKey })
+        .then(() => fixture.queryClient.invalidateQueries({ queryKey }));
+    }
+
+    function heldGetAt(fixture: JudgeFixture, index: number): HeldGet {
+      const call = fixture.heldGets.at(index);
+      if (call === undefined)
+        throw new Error(`no held autoJudge.get #${index}`);
+      return call;
+    }
+
+    function effectiveText(): string {
+      return screen.getByTestId("auto-judge-effective").textContent;
+    }
+
+    it("g: an availability transition shows no Traycer verdict while the re-read is pending or refused, and the fallback once it answers", async () => {
+      const fixture = createFixture();
+      fixture.setStored(null);
+      fixture.setEffective(DEFAULT_VERDICT);
+      renderTab(fixture);
+      await waitFor(() =>
+        expect(effectiveText()).toContain("Traycer Fast on Traycer"),
+      );
+      expect(effectiveText()).toBe(
+        "Now: Traycer Fast on Traycer · uses credits",
+      );
+
+      fixture.interceptGets(true);
+      let pending: Promise<void> = Promise.resolve();
+      await act(async () => {
+        pending = invalidateVerdict(fixture);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(fixture.heldGets).toHaveLength(1));
+      await flush();
+      expect(document.body.textContent).not.toContain("on Traycer");
+
+      await act(async () => {
+        heldGetAt(fixture, 0).fail();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(document.body.textContent).not.toContain("on Traycer");
+
+      // CONTROL: once the host answers the transition, the line is the
+      // fallback's.
+      fixture.interceptGets(false);
+      fixture.setEffective({ source: "fallback" });
+      await act(async () => {
+        await invalidateVerdict(fixture);
+      });
+      await pending;
+      await waitFor(() =>
+        expect(effectiveText()).toBe(
+          "Now: the conversation's own provider · your account",
+        ),
+      );
+    });
+
+    it("i: a stored judge's blocked verdict is withheld while the re-read is pending or refused, and the next verdict shows once it answers", async () => {
+      const fixture = createFixture();
+      fixture.setStored(CLAUDE_STORED);
+      fixture.setEffective({ source: "fallback" });
+      fixture.setBlocked({ reason: "unsupported-harness" });
+      renderTab(fixture);
+      await storedJudgeShown();
+      await waitFor(() =>
+        expect(screen.getByTestId("auto-judge-warning").textContent).toContain(
+          "can't run a judge on",
+        ),
+      );
+
+      fixture.interceptGets(true);
+      let pending: Promise<void> = Promise.resolve();
+      await act(async () => {
+        pending = invalidateVerdict(fixture);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(fixture.heldGets).toHaveLength(1));
+      await flush();
+      expect(screen.queryByTestId("auto-judge-warning")).toBeNull();
+
+      await act(async () => {
+        heldGetAt(fixture, 0).fail();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(screen.queryByTestId("auto-judge-warning")).toBeNull();
+
+      // CONTROL, and a different verdict: the line comes back from a current
+      // read, and it is the new one.
+      fixture.interceptGets(false);
+      fixture.setBlocked({ reason: "provider-disabled" });
+      await act(async () => {
+        await invalidateVerdict(fixture);
+      });
+      await pending;
+      await waitFor(() =>
+        expect(screen.getByTestId("auto-judge-warning").textContent).toContain(
+          "is turned off on this machine",
+        ),
+      );
+    });
+
+    describe("h: a save whose echo names a verdict the next read replaces", () => {
+      const AUTOMATIC_ECHO: JudgeAnswer = {
+        selection: null,
+        effective: DEFAULT_VERDICT,
+      };
+
+      async function chooseAutomaticHeld(fixture: JudgeFixture): Promise<void> {
+        fixture.setStored(CLAUDE_STORED);
+        fixture.setEffective({
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        });
+        renderTab(fixture);
+        await storedJudgeShown();
+        fireEvent.click(screen.getByRole("radio", { name: /Automatic/ }));
+        await waitFor(() => expect(fixture.held).toHaveLength(1));
+      }
+
+      it("h: while the post-save read is held or refused, no Traycer verdict shows", async () => {
+        const fixture = createFixture();
+        await chooseAutomaticHeld(fixture);
+        fixture.setEcho(AUTOMATIC_ECHO);
+        fixture.interceptGets(true);
+        await act(async () => {
+          heldAt(fixture, 0).succeed();
+          await Promise.resolve();
+        });
+        await waitFor(() => expect(fixture.heldGets).toHaveLength(1));
+        await flush();
+        expect(document.body.textContent).not.toContain("on Traycer");
+
+        await act(async () => {
+          heldGetAt(fixture, 0).fail();
+          await Promise.resolve();
+        });
+        await flush();
+        expect(document.body.textContent).not.toContain("on Traycer");
+      });
+
+      it("h-control: the post-save read answering fallback shows the fallback line", async () => {
+        const fixture = createFixture();
+        await chooseAutomaticHeld(fixture);
+        fixture.setEcho(AUTOMATIC_ECHO);
+        fixture.interceptGets(true);
+        await act(async () => {
+          heldAt(fixture, 0).succeed();
+          await Promise.resolve();
+        });
+        await waitFor(() => expect(fixture.heldGets).toHaveLength(1));
+        await act(async () => {
+          heldGetAt(fixture, 0).succeed({
+            selection: null,
+            effective: { source: "fallback" },
+          });
+          await Promise.resolve();
+        });
+        await flush();
+        await waitFor(() =>
+          expect(effectiveText()).toBe(
+            "Now: the conversation's own provider · your account",
+          ),
+        );
+      });
     });
   });
 });

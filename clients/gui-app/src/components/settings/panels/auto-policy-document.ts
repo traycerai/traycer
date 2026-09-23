@@ -183,6 +183,53 @@ export function splitAutoPolicySections(body: string): AutoPolicySections {
 }
 
 /**
+ * A line a section's text cannot keep through a save: the stored document
+ * would file it, and everything after it, somewhere else on the next read.
+ */
+export interface UnrepresentableSectionLine {
+  /** 1-based, counted in the text as typed. */
+  readonly line: number;
+  /** A depth-1 heading, which no section can keep. */
+  readonly topLevel: boolean;
+  /** Its title is a section's name or alias, which opens that section. */
+  readonly namesSection: boolean;
+}
+
+/**
+ * The first line of `text` that would not come back in `section` after a
+ * save, or `null` when all of it does.
+ *
+ * It is {@link splitAutoPolicySections}' own rule, read backwards:
+ * - a heading whose title names a section opens that section whatever its
+ *   depth, because the split recognises the name before it looks at depth -
+ *   so neither a section nor Notes can keep one;
+ * - a depth-1 heading closes any section into Notes. The join escalates the
+ *   section headings to `#` for a body carrying a `##` heading, and nothing is
+ *   shallower than `#`. Notes CAN keep one: they are written first, before any
+ *   section is open.
+ *
+ * Reject, never rewrite: the Rules tab holds Save off and names the line,
+ * rather than escaping it into something the user did not type.
+ */
+export function unrepresentableSectionLine(
+  section: AutoPolicySectionKey | "notes",
+  text: string,
+): UnrepresentableSectionLine | null {
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    const heading = HEADING_PATTERN.exec(line);
+    if (heading === null) continue;
+    const namesSection = CANONICAL_TITLES.has(
+      normalizeHeadingTitle(heading[2]),
+    );
+    const topLevel = section !== "notes" && heading[1].length === 1;
+    if (namesSection || topLevel) {
+      return { line: index + 1, topLevel, namesSection };
+    }
+  }
+  return null;
+}
+
+/**
  * The canonical stored form of a policy: Notes first, then the four sections
  * in the judge's order, one blank line between parts, each body trimmed.
  *
@@ -203,8 +250,10 @@ export function splitAutoPolicySections(body: string): AutoPolicySections {
  * a `## Allow` would close Allow and move every rule below it into notes. `#`
  * is the shallowest heading there is, so under it every body heading of depth
  * two or more stays put. A body line that is itself a `#` heading cannot be
- * kept inside any section by the host's rule - it was already notes when the
- * host read it, so a split never produces one inside a section.
+ * kept inside any section by the host's rule, and neither can a heading of any
+ * depth that names a section. A split never produces either inside a section,
+ * but a person can type one: the Rules tab refuses to save such text
+ * ({@link unrepresentableSectionLine}), so this never has to guess.
  *
  * An all-empty document joins to `""`, which `autoPolicy.set` reads as "clear
  * the policy".

@@ -328,6 +328,76 @@ describe("RulesTab", () => {
     });
   });
 
+  describe("text the split would move to another section", () => {
+    const LINE_ID = "auto-policy-section-unrepresentable-hardDeny";
+
+    it("a top-level heading in Never allow disables Save and names the line, until it is a ## heading", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "# Production\nDeploying to production" },
+      });
+
+      expect((await settledSave()).disabled).toBe(true);
+      expect(screen.getByTestId(LINE_ID).textContent).toBe(
+        "Line 1 starts a new section: use ## for a heading inside this section.",
+      );
+
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "## Production\nDeploying to production" },
+      });
+
+      expect(screen.queryByTestId(LINE_ID)).toBeNull();
+      expect(button("auto-policy-save").disabled).toBe(false);
+    });
+
+    it("a heading named after a section disables Save and says not to name it that", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "### Allow\nDeploying to production" },
+      });
+
+      expect((await settledSave()).disabled).toBe(true);
+      expect(screen.getByTestId(LINE_ID).textContent).toBe(
+        "Line 1 starts a new section: don't name a heading after a section.",
+      );
+    });
+
+    it("a top-level heading that also names a section gets both instructions", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "# Allow\nx" },
+      });
+
+      expect((await settledSave()).disabled).toBe(true);
+      expect(screen.getByTestId(LINE_ID).textContent).toBe(
+        "Line 1 starts a new section: use ## for a heading inside this section, and don't name it after a section.",
+      );
+    });
+
+    it("CONTROL: an unknown top-level heading in Notes is kept, so it shows no line and Save is enabled", async () => {
+      policy.current = record({ body: STORED_WITH_NOTES });
+      render(tab({}));
+      fireEvent.change(input("notes"), {
+        target: { value: "# Team\ntext" },
+      });
+
+      expect(
+        screen.queryByTestId("auto-policy-section-unrepresentable-notes"),
+      ).toBeNull();
+      expect((await settledSave()).disabled).toBe(false);
+    });
+
+    it("CONTROL: a ## heading in Never allow shows no line", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "## Production" },
+      });
+
+      await settledSave();
+      expect(screen.queryByTestId(LINE_ID)).toBeNull();
+    });
+  });
+
   describe("section order", () => {
     it("says a stored body in another order will be saved in Traycer's", () => {
       policy.current = record({

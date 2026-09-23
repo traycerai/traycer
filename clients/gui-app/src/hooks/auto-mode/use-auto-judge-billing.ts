@@ -8,11 +8,10 @@ import {
   type ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { HostRpcRegistry } from "@/lib/host";
 import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useAutoJudgeVerdictForClient } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -39,10 +38,6 @@ import {
   judgeProfileUnavailable,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
-
-// Stable params identity so the host-scoped query key stays referentially
-// constant across renders.
-const AUTO_JUDGE_GET_PARAMS = {};
 
 /**
  * Whether every read the billing answer depends on has settled.
@@ -376,36 +371,14 @@ export function useAutoJudgeBilling(
     "agent.gui.listHarnesses",
   );
   const autoModeHost = supported || catalogLineKnowsAutoMode(listHarnessesLine);
-  // The record is only as current as the facts the host computed it from.
-  // Under Automatic `effective` is derived per read from the Traycer harness
-  // row, and the harness catalog invalidates this read when that row moves
-  // (`useGuiHarnessesQueryForClient`). An invalidated record is the answer to a
-  // question the host would now answer differently, so it is withheld until
-  // the refetch lands (`record` below).
-  //
-  // `staleTime: Infinity` is what makes `isStale` mean exactly "no answer, or
-  // invalidated since" rather than "older than a minute" - and it would also
-  // stop a mount from ever re-asking, so `refetchOnMount: "always"` puts that
-  // back. It puts back MORE than there was: under the app's 60-second
-  // freshness window a composer mounted within a minute of the last answer
-  // reused it, and now every mount re-asks. That is deliberate - a selection
-  // saved in another window reaches this one no other way, and a mount is
-  // rare next to a render. It is the mount rule Settings' reader sets
-  // (`useAutoJudgeQuery`: `refetchOnMount: "always"` with
-  // `refetchOnWindowFocus: false`), which does NOT set `staleTime: Infinity`,
-  // because it shows every record it has rather than withholding a stale one.
-  const query = useHostQuery<HostRpcRegistry, "autoJudge.get">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "autoJudge.get",
-    params: AUTO_JUDGE_GET_PARAMS,
-    options: {
-      enabled: supported,
-      staleTime: Infinity,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: false,
-    },
-  });
+  // The record, or `undefined` while there is no CURRENT one: none has
+  // answered yet, or the one held was invalidated because an input the host
+  // derives it from moved (see `useAutoJudgeVerdictForClient`, the reader
+  // every surface naming the paying account shares). Treating the invalidated
+  // answer as unanswered keeps the row saying nothing, rather than the old
+  // pocket, until the host has answered again - and it keeps saying nothing if
+  // that refetch fails, since the answer is still unknown.
+  const record = useAutoJudgeVerdictForClient(client, supported);
   const providersQuery = useProvidersListForClient(client, {
     enabled: autoModeHost,
     subscribed: autoModeHost,
@@ -478,13 +451,6 @@ export function useAutoJudgeBilling(
     harnessesSettled,
     providerJudgeUnknown,
   });
-  // The record, or `undefined` while there is no CURRENT one: none has
-  // answered yet, or the one held was invalidated because an input the host
-  // derives it from moved (see the query's note above). Treating the
-  // invalidated answer as unanswered keeps the row saying nothing, rather than
-  // the old pocket, until the host has answered again - and it keeps saying
-  // nothing if that refetch fails, since the answer is still unknown.
-  const record = query.isStale ? undefined : query.data;
   const selection = record?.selection ?? null;
   // WHICH judge the host would call for this run, from `effective`: the
   // stored pick, Traycer's default, or - under Automatic's fallback - this

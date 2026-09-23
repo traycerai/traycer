@@ -3831,15 +3831,22 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         That is `HostScopeGate`'s own rule.
     - It re-provides the scoped binding, and keys the body by viewer AND host,
       so an in-flight judge pick never carries across an account switch or a
-      host switch. The Rules edit is the exception by design: the page holds it
-      (see Rules), because the policy belongs to the account, not the machine.
+      host switch. The Rules edit is the exception by design: Settings holds
+      it above the page (`RulesEditScope`, see Rules), because the policy
+      belongs to the account, not the machine.
     - A tab whose host lacks the method says so in one line: "This machine's
       host predates Auto mode. Update it to choose a judge and write a policy."
       for Judge and Rules, and "This machine's host doesn't record Auto mode
       decisions yet. Update it to see them." for Activity.
   - **The open intent** (`stores/tabs/settings-open-intent-store.ts`) carries
     `tab`, `draft` and `hostId`. The panel applies it during render, so the
-    first frame shows the requested tab. A `draft` always means Rules. A
+    first frame shows the requested tab. A `draft` always means Rules. The
+    draft itself is queued in the layout effect that acknowledges the intent,
+    before paint, through `enqueueIntentDraft`, which takes one draft per
+    intent id. It cannot be queued during render: the edit lives in the scope
+    above the page, and a render may only adjust its own component's state.
+    It is queued by the page, not the scope, so only a Settings surface
+    showing Permissions takes it. A
     `hostId` names the machine the caller had in mind: the composer's
     "Permission settings…" passes its run-target host
     (`useOpenPermissionSettings(hostId)`), and an approval card passes its
@@ -3881,10 +3888,23 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   - **Judge** (`judge-tab.tsx`, `judge-model-field.tsx`) - **Auto mode judge**:
     Automatic, or A specific model, over `autoJudge.get` / `autoJudge.set`
     (`~/.traycer/host/config/auto-judge.json`, `selection: null` = Automatic).
-    It reads through `useAutoJudgeQuery`, the same cache the composer's meta
-    line observes, so both surfaces agree. The harness catalog invalidates that
-    cache when the Traycer row's enabled / available / auth facts change (see
-    `auto-judge-billing.ts`).
+    Two readers share one cache entry with the composer's meta line, and the
+    harness catalog invalidates it when the Traycer row's enabled / available
+    / auth facts change (see `auto-judge-billing.ts`). The save invalidates it
+    too, after writing its echo.
+    - The SELECTION comes from `useAutoJudgeQuery`, at Settings' 60 s
+      `staleTime`. It seeds the controls and is what a pick hands off to, so
+      an aged or invalidated copy still shows what is stored.
+    - The VERDICT (`effective`, `blocked`) comes from `useAutoJudgeVerdict`,
+      the composer's own rule (`useAutoJudgeVerdictForClient`, which
+      `use-auto-judge-billing.ts` reads too). A
+      record the host has invalidated, or one never answered, is withheld
+      until a CURRENT read succeeds, and a failed re-read keeps it withheld.
+      `staleTime: Infinity`, so age alone hides nothing. An availability
+      transition, or a save whose echo the next read replaces, therefore
+      shows no Automatic status line and no warning line until the host has
+      answered again. Neither ever claims a verdict the host has since
+      withdrawn.
     - **Automatic** shows what it resolves to NOW, from the host's `effective`:
       - `null` → "No judge can run here · Auto mode asks you"
       - `fallback` → "Now: the conversation's own provider · your account"
@@ -3957,6 +3977,8 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         the cause; the tab only picks the sentence. Nothing past the host's
         own `blocked` verdict is reported until the harness catalog answers:
         an unanswered read is never evidence that something is gone. The line
+        also waits for a CURRENT verdict (see above), since `blocked` is
+        checked first. The line
         is silent while a pick is on screen, since the record is about to
         change or is not what the controls show. An uncommitted pick's own
         line (above) is the one shown then. The line is also silent under
@@ -3989,6 +4011,22 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         `panels/__tests__/__fixtures__/auto-policy-canonical-documents.json`,
         byte-identical to the host's copy under
         `domain/chat/auto-judge/__tests__/__fixtures__/`.
+    - **A line the split would move is refused, never rewritten.**
+      `unrepresentableSectionLine(section, text)`, beside the split and
+      sharing its title map, finds the first such line. There are two causes:
+      - a `#` heading in a section body, which no escalation keeps inside
+        its section
+      - in any body, a heading of any depth whose title normalises to a
+        section name or alias, which opens that section
+    - The section names the line and the fix in one sentence, for example
+      "Line 3 starts a new section: use ## for a heading inside this
+      section, and don't name it after a section." Its textarea is
+      `aria-invalid` and described by that sentence, and Save stays off while
+      any section holds such a line.
+    - Notes are written first, so an unknown `#` heading there round-trips
+      and is accepted: a stored document that opens with `# Title` stays
+      saveable. The refused inputs are not in the shared fixture, because
+      they are the GUI's refusal, not a document either side stores.
     - A stored body that is not already canonical shows "Saved in Traycer's
       section order." Saving writes the canonical form, which moves text but
       never drops it.
@@ -4003,7 +4041,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - Discard and "Save rules"
     - **Save is held off** while the record is not `fresh`, while the host
       cannot write (`autoPolicy.set`), and until the opening read has settled.
-      One banner joins the sentences that apply.
+      One banner joins the sentences that apply. It is also held off while a
+      section holds a line the split would move. That section's own line says
+      so (above).
       - `readState` is consulted before `body`: an unreadable read's
         `null` body is evidence of nothing, so the editor shows no text rather
         than an empty policy it could save over.
@@ -4019,12 +4059,21 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       Rules counts as a visit. From then on the tab stays force-mounted,
       hidden while another tab shows, so a save in flight, whose answer
       re-seeds the editor, survives a look elsewhere.
-    - **The edit belongs to the account, not the machine.** The page
-      (`useRulesEdit` in `permissions-settings-panel.tsx`) holds the editor's
-      last committed state (text, drafted markers, the last draft taken) and
-      the drafts not yet taken. It keys them by the signed-in viewer only.
+    - **The edit belongs to the account, and lives with the Settings
+      instance.** `RulesEditScope` (`rules-edit-scope.tsx`, state in
+      `rules-edit-context.ts`) holds the editor's last committed state (text,
+      drafted markers, the last draft taken) and the drafts not yet taken. It
+      keys them by the signed-in viewer only. It is mounted at the root of
+      both Settings surfaces: `SettingsModalContent`, and `SettingsSurface`,
+      above the phone's section index.
+      - Leaving Permissions for another section and coming back keeps the
+        edit and the drafts already taken. Judge's own "Open Providers" link
+        does exactly this. The section switch replaces the page, not the
+        scope.
+      - Closing Settings unmounts the scope and drops the edit, as Discard
+        does. A page rendered with no scope above it scopes one to itself.
       - A switch of machine re-keys the editor under the gate. The new mount
-        resumes from the page's copy and re-takes its opening read on the
+        resumes from the scope's copy and re-takes its opening read on the
         machine now showing. The unreadable and stale banners then govern
         Save exactly as for a fresh edit.
       - There is no warning dialog: the switch changes the reader, not the
@@ -4042,12 +4091,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         does not count: it would mark the edit clean, and the next fresh
         record, the text the edit was changing, would replace it silently.
       - The editor stays authoritative while mounted and reports each
-        committed state upward. If the page owned the state and the editor
+        committed state upward. If the scope owned the state and the editor
         wrote it back from an effect, a queued write could overwrite fresh
         keystrokes or append a draft twice.
     - **Drafts.** A prepared rule, from an approval card's "Allow from now on…"
-      or from Activity, reaches the page as a queued draft with a page-local
-      id. The editor appends it to its section in render, whether or not the
+      or from Activity, reaches the scope as a queued draft with a
+      scope-local id. The editor appends it to its section in render, whether or not the
       edit is already dirty, marks that section with "Applies to every
       repository on your account. Keep it specific.", scrolls to it, and
       reports the id consumed. So a remounted editor never applies a draft

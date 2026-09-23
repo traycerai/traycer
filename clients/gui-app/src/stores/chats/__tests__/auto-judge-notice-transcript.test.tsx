@@ -503,7 +503,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       expect(drawn.map(({ marker, message }) => ({ marker, message }))).toEqual(
         [{ marker: "fallback", message: FALLBACK_TEXT }],
       );
-      const [live] = drawn;
+      const live = drawn.at(0);
       if (live === undefined) throw new Error("live notice not drawn");
       renderRow(live.model);
       expect(screen.getByRole("note").textContent).toBe(FALLBACK_TEXT);

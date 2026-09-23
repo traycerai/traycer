@@ -15,7 +15,10 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { useAutoJudgeQuery } from "@/hooks/auto-mode/use-auto-judge-query";
+import {
+  useAutoJudgeQuery,
+  useAutoJudgeVerdict,
+} from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { autoJudgeModelLabel } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -242,7 +245,13 @@ function useJudgePick(
 function AutoJudgeControls(props: {
   readonly hostId: string | null;
 }): ReactNode {
+  // Two readers of one record. The SELECTION is shown whatever its age - the
+  // picker hands off to it - while the VERDICT (`effective`, `blocked`) is
+  // withheld from the moment it is invalidated until a re-read lands. That is
+  // the composer's rule, so Settings and the composer never name different
+  // accounts.
   const query = useAutoJudgeQuery();
+  const verdict = useAutoJudgeVerdict();
   const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
@@ -300,7 +309,7 @@ function AutoJudgeControls(props: {
         }}
       >
         <AutomaticOption
-          record={record}
+          verdict={verdict}
           pick={pick}
           harnesses={harnesses}
           copilotEnabled={
@@ -312,7 +321,7 @@ function AutoJudgeControls(props: {
         />
         <SpecificOption
           open={mode === "specific"}
-          record={record}
+          verdict={verdict}
           pick={pick}
           harnesses={harnesses}
           providers={providers}
@@ -324,12 +333,13 @@ function AutoJudgeControls(props: {
 }
 
 function AutomaticOption(props: {
-  readonly record: AutoJudgeGetResponse | undefined;
+  /** The CURRENT record, or `undefined` while it has none: see the caller. */
+  readonly verdict: AutoJudgeGetResponse | undefined;
   readonly pick: JudgePick;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly copilotEnabled: boolean;
 }): ReactNode {
-  const { record, pick } = props;
+  const { verdict, pick } = props;
   const writing = pick.draft !== null && !pick.uncommitted;
   return (
     <JudgeOption
@@ -338,10 +348,10 @@ function AutomaticOption(props: {
       description="Traycer's hosted model when Traycer inference is available. Otherwise the conversation's own provider, billed to your account there."
     >
       <div className="flex min-w-0 items-center gap-2">
-        {record !== undefined &&
-        record.selection === null &&
+        {verdict !== undefined &&
+        verdict.selection === null &&
         pick.draft === null ? (
-          <AutomaticStatus record={record} harnesses={props.harnesses} />
+          <AutomaticStatus record={verdict} harnesses={props.harnesses} />
         ) : null}
         {writing && pick.displayed === null ? <MutedAgentSpinner /> : null}
       </div>
@@ -359,7 +369,11 @@ function AutomaticOption(props: {
 function SpecificOption(props: {
   /** Whether "A specific model" is the chosen option, so its fields show. */
   readonly open: boolean;
-  readonly record: AutoJudgeGetResponse | undefined;
+  /**
+   * The CURRENT record, or `undefined` while it has none. The warning line
+   * reports the host's `blocked` verdict first, so it waits with it.
+   */
+  readonly verdict: AutoJudgeGetResponse | undefined;
   readonly pick: JudgePick;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
@@ -370,7 +384,7 @@ function SpecificOption(props: {
   const openProvider = useOpenJudgeProvider();
   const writing = pick.draft !== null && !pick.uncommitted;
   const cause = storedJudgeCause({
-    record: props.record,
+    record: props.verdict,
     pick,
     harnesses: props.harnesses,
     providers,
@@ -421,7 +435,7 @@ function SpecificOption(props: {
             <UncommittedPickLine pick={pick} />
             <JudgeWarning
               cause={cause}
-              stored={props.record?.selection ?? null}
+              stored={props.verdict?.selection ?? null}
               harnesses={props.harnesses}
               onOpenProvider={openProvider}
             />
@@ -436,7 +450,10 @@ function SpecificOption(props: {
 /**
  * What is wrong with the stored judge, or `null` - also while a pick is on
  * screen, since the record is about to change or is not what the controls
- * show. `judgeWarningCause` decides.
+ * show, and while the record's verdict is not current (`record` is then
+ * `undefined`): the host's `blocked` comes first in the order, so no later
+ * finding can be named as the first until it is known. `judgeWarningCause`
+ * decides.
  */
 function storedJudgeCause(input: {
   readonly record: AutoJudgeGetResponse | undefined;

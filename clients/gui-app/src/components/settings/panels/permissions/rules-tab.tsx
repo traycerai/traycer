@@ -36,10 +36,12 @@ import {
   autoPolicyReadStateFor,
   joinAutoPolicySections,
   splitAutoPolicySections,
+  unrepresentableSectionLine,
   type AutoPolicyOpeningRead,
   type AutoPolicySectionKey,
   type AutoPolicySections,
   type PendingRuleDraft,
+  type UnrepresentableSectionLine,
 } from "@/components/settings/panels/auto-policy-document";
 import {
   hasShippedAutoPolicySections,
@@ -443,6 +445,7 @@ function RulesEditor(props: {
     data === undefined ? editor.readState : autoPolicyReadStateFor(data);
   const showNotes =
     editor.baseline.notes.length > 0 || editor.sections.notes.length > 0;
+  const unrepresentable = unrepresentableLines(editor.sections);
 
   return (
     <div className="flex flex-col gap-4">
@@ -475,6 +478,7 @@ function RulesEditor(props: {
             key={key}
             sectionKey={key}
             value={editor.sections[key]}
+            unrepresentable={unrepresentable[key]}
             drafted={key !== "notes" && editor.drafted.includes(key)}
             // An unreadable record has no text to edit; a save in flight
             // captured the text at the click, and typing after it would be
@@ -511,6 +515,9 @@ function RulesEditor(props: {
         canWrite={canWrite}
         openingRead={openingRead}
         saving={saving}
+        unrepresentable={RULES_SECTION_ORDER.some(
+          (key) => unrepresentable[key] !== null,
+        )}
         onDiscard={discard}
         onSave={commit}
       />
@@ -625,6 +632,39 @@ function RulesBanner(props: {
   );
 }
 
+/** Each section's first line a save would move elsewhere, or `null`. */
+function unrepresentableLines(
+  sections: AutoPolicySections,
+): Readonly<Record<RulesSectionKey, UnrepresentableSectionLine | null>> {
+  return {
+    environment: unrepresentableSectionLine(
+      "environment",
+      sections.environment,
+    ),
+    allow: unrepresentableSectionLine("allow", sections.allow),
+    softDeny: unrepresentableSectionLine("softDeny", sections.softDeny),
+    hardDeny: unrepresentableSectionLine("hardDeny", sections.hardDeny),
+    notes: unrepresentableSectionLine("notes", sections.notes),
+  };
+}
+
+/**
+ * The one line under a section whose text a save would move: which line, and
+ * what to change. Save is off until it is fixed - rejected, never rewritten.
+ */
+function unrepresentableLineSentence(
+  found: UnrepresentableSectionLine,
+): string {
+  const start = `Line ${found.line} starts a new section: `;
+  if (found.topLevel && found.namesSection) {
+    return `${start}use ## for a heading inside this section, and don't name it after a section.`;
+  }
+  if (found.topLevel) {
+    return `${start}use ## for a heading inside this section.`;
+  }
+  return `${start}don't name a heading after a section.`;
+}
+
 // `onElement` is taken out of `props` because it is handed to `ref`: React's
 // refs rule would otherwise treat the whole props object as a ref.
 function RulesSection({
@@ -633,6 +673,8 @@ function RulesSection({
 }: {
   readonly sectionKey: RulesSectionKey;
   readonly value: string;
+  /** The first line a save would move out of this section, or `null`. */
+  readonly unrepresentable: UnrepresentableSectionLine | null;
   readonly drafted: boolean;
   readonly disabled: boolean;
   readonly shipped: ShippedAutoPolicySections;
@@ -643,6 +685,8 @@ function RulesSection({
   const copy = RULES_SECTION_COPY[props.sectionKey];
   const fieldId = useId();
   const descriptionId = useId();
+  const problemId = useId();
+  const { unrepresentable } = props;
   return (
     <section
       ref={onElement}
@@ -670,7 +714,12 @@ function RulesSection({
         </p>
         <Textarea
           id={fieldId}
-          aria-describedby={descriptionId}
+          aria-describedby={
+            unrepresentable === null
+              ? descriptionId
+              : `${descriptionId} ${problemId}`
+          }
+          aria-invalid={unrepresentable !== null}
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
           disabled={props.disabled}
@@ -682,6 +731,15 @@ function RulesSection({
           size="code"
           data-testid={`auto-policy-input-${props.sectionKey}`}
         />
+        {unrepresentable === null ? null : (
+          <p
+            id={problemId}
+            className="text-ui-xs text-destructive"
+            data-testid={`auto-policy-section-unrepresentable-${props.sectionKey}`}
+          >
+            {unrepresentableLineSentence(unrepresentable)}
+          </p>
+        )}
         {copy.builtIn === null ? null : (
           <BuiltInRules
             body={props.shipped[copy.builtIn]}
@@ -759,6 +817,8 @@ function RulesFooter(props: {
   readonly canWrite: boolean;
   readonly openingRead: AutoPolicyOpeningRead;
   readonly saving: boolean;
+  /** Some section holds a line a save would move; its own line says which. */
+  readonly unrepresentable: boolean;
   readonly onDiscard: () => void;
   readonly onSave: () => void;
 }): ReactNode {
@@ -770,7 +830,8 @@ function RulesFooter(props: {
   const saveBlocked =
     props.readState !== "fresh" ||
     !props.canWrite ||
-    props.openingRead !== "settled";
+    props.openingRead !== "settled" ||
+    props.unrepresentable;
   return (
     <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 bg-background py-3">
       {overCap ? (

@@ -76,8 +76,12 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 const judgeRecord = vi.hoisted(
   (): { current: AutoJudgeGetResponse | undefined } => ({ current: undefined }),
 );
+// One record for both readers: the selection's and the current verdict's.
+// Their freshness rules are exercised against the real cache in
+// `judge-tab-live.test.tsx`.
 vi.mock("@/hooks/auto-mode/use-auto-judge-query", () => ({
   useAutoJudgeQuery: () => ({ data: judgeRecord.current, isError: false }),
+  useAutoJudgeVerdict: () => judgeRecord.current,
 }));
 
 interface SetJudgeCallbacks {
