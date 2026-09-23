@@ -256,7 +256,10 @@ function editorHoldsRecord(
   body: string | null,
   readState: AutoPolicyReadState,
 ): boolean {
-  if (readState === "unreadable") return false;
+  // Only a FRESH record is evidence that nothing is left to save. A stale copy
+  // equal to the edit would mark it clean, and the next fresh record - the
+  // text the edit was changing - would then replace it without a word.
+  if (readState !== "fresh") return false;
   return (
     joinAutoPolicySections(editor.sections) ===
     joinAutoPolicySections(splitAutoPolicySections(body ?? ""))

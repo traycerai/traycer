@@ -1,3 +1,4 @@
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   cleanup,
   fireEvent,
@@ -19,9 +20,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () =>
     hostScopeFixture({ status: "following", hostId: "host-a" }),
 }));
-vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
-  useScopedHostBinding: () => ({ hostId: "host-a" }),
-}));
+vi.mock(
+  "@/components/settings/host-scope/use-scoped-host-binding",
+  async () => {
+    const { scopedHostBindingFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      useScopedHostBinding: (scope: HostScope) =>
+        scopedHostBindingFixture(scope),
+    };
+  },
+);
 vi.mock("@/hooks/host/use-host-capability-probe", () => ({
   useHostCapabilityProbe: (args: {
     readonly client: unknown;

@@ -1,3 +1,4 @@
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   cleanup,
   fireEvent,
@@ -26,9 +27,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () =>
     hostScopeFixture({ status: "following", hostId: "host-a" }),
 }));
-vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
-  useScopedHostBinding: () => ({ hostId: "host-a" }),
-}));
+vi.mock(
+  "@/components/settings/host-scope/use-scoped-host-binding",
+  async () => {
+    const { scopedHostBindingFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      useScopedHostBinding: (scope: HostScope) =>
+        scopedHostBindingFixture(scope),
+    };
+  },
+);
 vi.mock("@/hooks/host/use-host-capability-probe", () => ({
   useHostCapabilityProbe: (args: {
     readonly client: unknown;
@@ -603,5 +612,64 @@ describe("RulesTab", () => {
       body: joinAutoPolicySections(EMPTY_AUTO_POLICY_SECTIONS),
     });
     expect(setPolicyMutate.mock.calls[0][0].body).toBe("");
+  });
+
+  describe("re-seed on a record equal to the unsaved edit", () => {
+    const EDITED_ALLOW = "- Run the linter\n- Old rule";
+    const EDITED_BODY = joinAutoPolicySections({
+      environment: "Staging: k8s-staging",
+      allow: EDITED_ALLOW,
+      softDeny: "- Drop a table",
+      hardDeny: "- Push to main",
+      notes: "",
+    });
+
+    it("keeps the edit dirty when a stale equal record and then the fresh original arrive", () => {
+      const { rerender } = render(tab({}));
+      fireEvent.change(input("allow"), { target: { value: EDITED_ALLOW } });
+      expect(input("allow").value).toBe(EDITED_ALLOW);
+
+      policy.current = record({
+        body: EDITED_BODY,
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        readState: "stale",
+      });
+      rerender(tab({}));
+      policy.current = record({});
+      rerender(tab({}));
+
+      expect(input("allow").value).toBe(EDITED_ALLOW);
+      expect(button("auto-policy-discard").disabled).toBe(false);
+    });
+
+    it("re-seeds clean from a fresh newer record equal to the edit", () => {
+      const { rerender } = render(tab({}));
+      fireEvent.change(input("allow"), { target: { value: EDITED_ALLOW } });
+
+      policy.current = record({
+        body: EDITED_BODY,
+        updatedAt: "2026-09-11T00:00:00.000Z",
+      });
+      rerender(tab({}));
+
+      expect(input("allow").value).toBe(EDITED_ALLOW);
+      expect(button("auto-policy-discard").disabled).toBe(true);
+    });
+
+    it("leaves the edit in place for a stale record that differs, then the fresh original", () => {
+      const { rerender } = render(tab({}));
+      fireEvent.change(input("allow"), { target: { value: EDITED_ALLOW } });
+
+      policy.current = record({
+        body: STORED_WITH_NOTES,
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        readState: "stale",
+      });
+      rerender(tab({}));
+      policy.current = record({});
+      rerender(tab({}));
+
+      expect(input("allow").value).toBe(EDITED_ALLOW);
+    });
   });
 });

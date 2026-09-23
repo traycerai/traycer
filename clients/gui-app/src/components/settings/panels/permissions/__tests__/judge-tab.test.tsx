@@ -1,3 +1,4 @@
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   act,
   cleanup,
@@ -33,9 +34,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () =>
     hostScopeFixture({ status: "following", hostId: "host-a" }),
 }));
-vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
-  useScopedHostBinding: () => ({ hostId: "host-a" }),
-}));
+vi.mock(
+  "@/components/settings/host-scope/use-scoped-host-binding",
+  async () => {
+    const { scopedHostBindingFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      useScopedHostBinding: (scope: HostScope) =>
+        scopedHostBindingFixture(scope),
+    };
+  },
+);
 vi.mock("@/hooks/host/use-host-capability-probe", () => ({
   useHostCapabilityProbe: (args: {
     readonly client: unknown;
@@ -93,8 +102,17 @@ const catalog = vi.hoisted(
     models: Record<string, ReadonlyArray<GuiAgentModelOption>>;
   } => ({ harnesses: [], models: {} }),
 );
+// What the harness catalog query answers: data, a failure, or still pending.
+const catalogState = vi.hoisted(
+  (): { current: "answered" | "failed" | "pending" } => ({
+    current: "answered",
+  }),
+);
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({ data: { harnesses: catalog.harnesses } }),
+  useGuiHarnessesQuery: () =>
+    catalogState.current === "answered"
+      ? { data: { harnesses: catalog.harnesses }, isError: false }
+      : { data: undefined, isError: catalogState.current === "failed" },
   useGuiHarnessModelsQuery: (harnessId: string) => ({
     data: { models: catalog.models[harnessId] ?? [] },
   }),
@@ -241,6 +259,7 @@ beforeEach(() => {
   support.set = true;
   judgeRecord.current = { selection: null };
   setJudgeMutate.mockReset();
+  catalogState.current = "answered";
   catalog.harnesses = [
     harness({ id: "claude", label: "Claude Code", nativeAutoJudge: true }),
     harness({
@@ -658,5 +677,34 @@ describe("JudgeTab", () => {
       screen.getByText(/This machine's host can't change the judge/),
     ).not.toBeNull();
     expect(radio("Automatic").hasAttribute("disabled")).toBe(true);
+  });
+
+  describe("harness catalog", () => {
+    const CATALOG_ERROR =
+      "Couldn't load this machine's providers. Reopen Settings to try again.";
+
+    beforeEach(() => {
+      judgeRecord.current = { selection: CLAUDE_STORED };
+    });
+
+    it("says so when the catalog query failed", () => {
+      catalogState.current = "failed";
+      render(<JudgeTab />);
+
+      expect(screen.getByText(CATALOG_ERROR)).not.toBeNull();
+    });
+
+    it("stays silent while the catalog query is pending", () => {
+      catalogState.current = "pending";
+      render(<JudgeTab />);
+
+      expect(screen.queryByText(CATALOG_ERROR)).toBeNull();
+    });
+
+    it("stays silent once the catalog answered", () => {
+      render(<JudgeTab />);
+
+      expect(screen.queryByText(CATALOG_ERROR)).toBeNull();
+    });
   });
 });

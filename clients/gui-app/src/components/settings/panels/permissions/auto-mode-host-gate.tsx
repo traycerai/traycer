@@ -86,7 +86,11 @@ export function AutoModeHostGate(props: {
 
   const usable = isHostScopeUsable(scope.status);
   const binding = scopedBinding ?? realBinding;
-  const held = useHeldBinding(usable && support === true ? binding : null);
+  const held = useHeldBinding(
+    usable && support === true && binding !== null
+      ? { scopeHostId: scope.hostId, binding }
+      : null,
+  );
   const shown = gatedBinding({
     hostId: scope.hostId,
     usable,
@@ -108,17 +112,32 @@ export function AutoModeHostGate(props: {
 type GateBinding = HostRuntimeBinding<HostRpcRegistry>;
 
 /**
+ * A binding the body was rendered against, and the machine the SCOPE named
+ * when it was. The binding's own `hostId` cannot say which machine that was:
+ * a `following` binding names no host (`hostId: null`) by design, so the
+ * subtree tracks the effective host - and `following` is the default.
+ */
+interface HeldBinding {
+  readonly scopeHostId: string | null;
+  readonly binding: GateBinding;
+}
+
+/**
  * The binding the body was last rendered against, held so a scope that stops
  * serving does not unmount it. State adjusted during render rather than a ref,
  * because the body is rendered from it; compared member by member, so a
  * binding rebuilt from the same parts settles instead of re-rendering.
  */
-function useHeldBinding(live: GateBinding | null): GateBinding | null {
+function useHeldBinding(live: HeldBinding | null): HeldBinding | null {
   const [held, setHeld] = useState(live);
-  if (live !== null && (held === null || !sameBinding(live, held))) {
+  if (live !== null && (held === null || !sameHeld(live, held))) {
     setHeld(live);
   }
   return live ?? held;
+}
+
+function sameHeld(a: HeldBinding, b: HeldBinding): boolean {
+  return a.scopeHostId === b.scopeHostId && sameBinding(a.binding, b.binding);
 }
 
 function sameBinding(a: GateBinding, b: GateBinding): boolean {
@@ -140,11 +159,15 @@ function gatedBinding(input: {
   readonly usable: boolean;
   readonly support: boolean | null;
   readonly binding: GateBinding | null;
-  readonly held: GateBinding | null;
+  readonly held: HeldBinding | null;
 }): GateBinding | "unsupported" | null {
   // Held only for the machine it served, so no body ever renders on another
-  // machine's binding, whatever keys the gates around this one.
-  const held = input.held?.hostId === input.hostId ? input.held : null;
+  // machine's binding, whatever keys the gates around this one. Compared by
+  // the scope's host, never the binding's: see `HeldBinding`.
+  const held =
+    input.held !== null && input.held.scopeHostId === input.hostId
+      ? input.held.binding
+      : null;
   // A scope that cannot serve keeps whatever was already mounted; with nothing
   // mounted yet, nothing mounts.
   if (!input.usable) return held;

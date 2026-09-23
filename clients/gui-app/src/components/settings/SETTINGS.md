@@ -3818,7 +3818,15 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         `HostScopeGate` removes that risk by holding the body in a hidden
         `<Activity>`, which tears down its effects and subscriptions, so the
         held binding serves no reads.
-      - When the same host comes back, the body resumes as it was.
+      - The held entry is the binding PLUS the machine the scope named when
+        it was captured, and it is reused only while the scope still names
+        that machine. The binding's own `hostId` cannot answer that: a
+        `following` binding names no host (`hostId: null`), so the subtree
+        tracks the effective host, and `following` is the default. A
+        re-handshake, where support is briefly unknown again, holds the body
+        the same way.
+      - When the same host comes back, the body resumes as it was, whether
+        Settings is pinned (`ready`) or `following`.
       - A `vanished` scope, or no host at all, still unmounts it.
         That is `HostScopeGate`'s own rule.
     - It re-provides the scoped binding, and keys the body by viewer AND host,
@@ -3931,6 +3939,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       rollback. Only an unloaded record, or a host that cannot store a
       selection (`autoJudge.set` unsupported, stated in one line), disables the
       controls.
+    - **A failed read says so, one line each**, above the options: "Couldn't
+      read this machine's judge. Reopen Settings to try again." for the
+      record, and "Couldn't load this machine's providers. Reopen Settings to
+      try again." for the harness catalog. Without the catalog the Provider
+      field stays disabled, and the warning line below waits on it; an
+      errored query refetches on its next mount.
     - **At most one warning line** under the fields: the first thing wrong
       with the STORED record, one sentence, one fix. The checks run in this
       order:
@@ -4023,8 +4037,10 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         would have taken its answer. When the new machine's read returns a
         newer record whose text equals the edit, it re-seeds the editor
         anyway, so the user's own save never reads as a change made
-        elsewhere. The re-seed covers any newer record equal to the edit,
-        since nothing is left to save.
+        elsewhere. The re-seed covers any newer FRESH record equal to the
+        edit, since nothing is left to save. A `stale` copy equal to the edit
+        does not count: it would mark the edit clean, and the next fresh
+        record, the text the edit was changing, would replace it silently.
       - The editor stays authoritative while mounted and reports each
         committed state upward. If the page owned the state and the editor
         wrote it back from an effect, a queued write could overwrite fresh

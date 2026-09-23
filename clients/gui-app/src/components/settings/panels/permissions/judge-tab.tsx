@@ -244,8 +244,11 @@ function AutoJudgeControls(props: {
 }): ReactNode {
   const query = useAutoJudgeQuery();
   const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
-  const harnesses = useGuiHarnessesQuery({ enabled: true, subscribed: true })
-    .data?.harnesses;
+  const harnessesQuery = useGuiHarnessesQuery({
+    enabled: true,
+    subscribed: true,
+  });
+  const harnesses = harnessesQuery.data?.harnesses;
   const providers = useProvidersList({ enabled: true, subscribed: true }).data
     ?.providers;
   const record = query.data;
@@ -264,6 +267,18 @@ function AutoJudgeControls(props: {
         <p className="text-ui-sm font-medium text-warning-foreground">
           Couldn&apos;t read this machine&apos;s judge. Reopen Settings to try
           again.
+        </p>
+      ) : null}
+      {/* The Provider field stays disabled without its catalog, and every
+          finding about the stored judge past the host's own verdict waits on
+          it too; an errored query refetches on its next mount. */}
+      {harnesses === undefined && harnessesQuery.isError ? (
+        <p
+          className="text-ui-sm font-medium text-warning-foreground"
+          data-testid="auto-judge-providers-error"
+        >
+          Couldn&apos;t load this machine&apos;s providers. Reopen Settings to
+          try again.
         </p>
       ) : null}
       {canWrite ? null : (

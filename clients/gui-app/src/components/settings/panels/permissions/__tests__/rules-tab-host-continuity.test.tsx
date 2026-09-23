@@ -73,9 +73,17 @@ function useScope(): HostScope {
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => useScope(),
 }));
-vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
-  useScopedHostBinding: () => ({ hostId: scopeStore.get().hostId }),
-}));
+vi.mock(
+  "@/components/settings/host-scope/use-scoped-host-binding",
+  async () => {
+    const { scopedHostBindingFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      useScopedHostBinding: (scope: HostScope) =>
+        scopedHostBindingFixture(scope),
+    };
+  },
+);
 vi.mock("@/hooks/host/use-host-capability-probe", () => ({
   useHostCapabilityProbe: (): void => undefined,
 }));
