@@ -87,8 +87,9 @@ function escapeDoubleQuoted(value: string): string {
 
 // Quote a token for a reconstructed command line only when it isn't already a
 // bare shell-safe word, so simple values stay unquoted while paths/queries with
-// spaces or specials read correctly.
-function quoteArg(value: string): string {
+// spaces or specials read correctly. `tool-input-summary.ts` quotes argv
+// elements with it too, so the summary and the detail render one command alike.
+export function quoteArg(value: string): string {
   if (/^[\w./@:=+-]+$/.test(value)) return value;
   return `"${escapeDoubleQuoted(value)}"`;
 }

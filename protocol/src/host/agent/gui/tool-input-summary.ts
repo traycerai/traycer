@@ -6,6 +6,8 @@
  * can't drift between the activity view and the progress view.
  */
 
+import { quoteArg } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+
 const SUMMARY_MAX = 80;
 const ELLIPSIS = "…";
 
@@ -206,19 +208,77 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
   },
 };
 
+// Most to least telling, first hit wins. See `deriveToolInputSummary`.
 const GENERIC_PRIORITY_KEYS = [
   "path",
   "filePath",
+  "file_path",
+  "absolute_path",
+  "notebook_path",
   "file",
+  "directory",
   "url",
   "command",
   "cmd",
+  "argv",
+  "script",
   "query",
   "pattern",
   "name",
   "title",
   "description",
-];
+  "cwd",
+] as const;
+
+// The ranked keys whose value may be an argv array rather than a string.
+const COMMAND_KEYS: ReadonlySet<string> = new Set([
+  "command",
+  "cmd",
+  "argv",
+  "script",
+]);
+
+// Keys that only ever name a row, never describe the call.
+const ID_KEYS: ReadonlySet<string> = new Set([
+  "threadid",
+  "conversationid",
+  "callid",
+  "toolcallid",
+  "id",
+  "sessionid",
+]);
+
+// The named ids in any case, plus any other camelCase `...Id` or snake_case
+// `..._id` key: Codex's app-server params open with `threadId`, `turnId`,
+// `itemId`, so skipping only the first would surface the second.
+function isIdKey(key: string): boolean {
+  return (
+    ID_KEYS.has(key.toLowerCase()) ||
+    /[a-z0-9]I[dD]$/.test(key) ||
+    /_id$/i.test(key)
+  );
+}
+
+// Argv elements are literal, so `quoteArg` double-quotes any element that is not
+// a bare shell-safe word: `bash -lc "git push --force"` keeps its boundaries,
+// and a literal `|` or `>` cannot read as a pipe or a redirect.
+function asArgvLine(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const elements = value.filter(
+    (element): element is string => typeof element === "string",
+  );
+  if (elements.length !== value.length) return null;
+  if (!elements.some((element) => element.trim().length > 0)) return null;
+  return elements.map(quoteArg).join(" ");
+}
+
+function rankedValue(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = record[key];
+  return asString(value) ?? (COMMAND_KEYS.has(key) ? asArgvLine(value) : null);
+}
 
 function genericSummary(input: unknown): string | null {
   const record = asRecord(input);
@@ -229,10 +289,11 @@ function genericSummary(input: unknown): string | null {
     return null;
   }
   for (const key of GENERIC_PRIORITY_KEYS) {
-    const value = asString(record[key]);
+    const value = rankedValue(record, key);
     if (value !== null) return trim(value);
   }
-  for (const value of Object.values(record)) {
+  for (const [key, value] of Object.entries(record)) {
+    if (isIdKey(key)) continue;
     const stringValue = asString(value);
     if (stringValue !== null) return trim(stringValue);
   }
@@ -240,9 +301,34 @@ function genericSummary(input: unknown): string | null {
 }
 
 /**
- * Synthesize a one-line input summary for a tool. Falls back to the generic
- * first-string-field strategy when the tool is not in the registry. Returns
- * null when no usable string can be derived.
+ * Synthesize a one-line input summary for a tool. A tool in the registry uses
+ * its own summarizer; anything else, or a registry miss, takes the generic
+ * pass below. Returns null when no usable string can be derived.
+ *
+ * The registry matches exact lowercase names, so live approvals from Claude
+ * (`Bash`, `Edit`, `Task`), ACP and Codex (`command`) all take the generic
+ * pass, and its ranking is what the judge's transcript shows for them. A string
+ * input is summarized as itself. A record takes the first ranked key with a
+ * non-blank string, in this order:
+ *
+ * 1. The target file or directory: `path`, `filePath`, `file_path`,
+ *    `absolute_path`, `notebook_path`, `file`, `directory`.
+ * 2. `url`.
+ * 3. The command: `command`, `cmd`, `argv`, `script`. Here, and only here, an
+ *    array of strings also counts, joined by spaces, since Codex sends argv.
+ * 4. `query`, `pattern`.
+ * 5. `name`.
+ * 6. `title`, `description`. These are agent-authored, so they win only
+ *    when nothing above is present: Claude's `Task` is summarized by its
+ *    `description`, which is the accepted case.
+ * 7. `cwd`. It is context rather than the call's target, so it is last. Codex
+ *    sends it beside `command` on every command approval, and ranking it with
+ *    the paths would summarize each one as its working directory.
+ *
+ * With no ranked hit, the first non-blank string in insertion order wins,
+ * skipping id keys (`threadId`, `conversationId`, `callId`, `toolCallId`,
+ * `id`, `sessionId` in any case, and any other `...Id` / `..._id`), so a row
+ * never summarizes to an identifier.
  */
 export function deriveToolInputSummary(
   toolName: string,
