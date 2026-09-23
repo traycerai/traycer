@@ -1,7 +1,6 @@
 import { useRouterState } from "@tanstack/react-router";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
-import { RulesEditScope } from "@/components/settings/panels/permissions/rules-edit-scope";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
@@ -37,36 +36,31 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
   // the index falls through to General exactly as its `<Navigate>` did.
   const isMobile = useIsMobileViewport();
 
-  // The Rules edit is held here, above the section switch AND the phone's
-  // index, so an unsaved edit outlives a visit to another section and goes
-  // with this Settings instance.
   return (
-    <RulesEditScope>
-      <div
-        data-settings-touch-scope
-        className={cn(
-          "flex min-h-0 min-w-0 flex-1 bg-background text-foreground",
-          isMobile && "flex-col",
-        )}
-      >
-        {isMobile ? null : (
-          <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
-        )}
-        {/* The pane a page result scrolls to the top: see
+    <div
+      data-settings-touch-scope
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 bg-background text-foreground",
+        isMobile && "flex-col",
+      )}
+    >
+      {isMobile ? null : (
+        <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
+      )}
+      {/* The pane a page result scrolls to the top: see
           `useSettingsAnchorReveal`. Marked here, by the surface, rather than
           by each panel, so a bespoke panel cannot opt out of it. */}
-        <div
-          data-settings-panel-pane
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto"
-        >
-          {isMobile && section === null ? (
-            <SettingsSidebar mode={{ kind: "route" }} variant="mobile-list" />
-          ) : (
-            <SettingsPanelForSection section={section ?? "general"} />
-          )}
-        </div>
+      <div
+        data-settings-panel-pane
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto"
+      >
+        {isMobile && section === null ? (
+          <SettingsSidebar mode={{ kind: "route" }} variant="mobile-list" />
+        ) : (
+          <SettingsPanelForSection section={section ?? "general"} />
+        )}
       </div>
-    </RulesEditScope>
+    </div>
   );
 }
 

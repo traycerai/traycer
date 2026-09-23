@@ -54,13 +54,15 @@ type AutoModeTabMethod =
  * **Keyed by VIEWER and host**, and both halves are load-bearing. An in-flight
  * judge pick must never carry across a host switch - the judge is the
  * machine's - and a body's reads and mutations are the host's. The Rules EDIT
- * does carry across one, deliberately: the policy is the account's, so the
- * page holds the edit and the remounted editor resumes it (`useRulesEdit`).
+ * does carry across one, deliberately: the policy is the account's, so
+ * Settings holds the edit (`useRulesEdit`) and the remounted editor resumes
+ * it.
  * The viewer half: the policy query is partitioned by viewer, but partitioning
  * the cache does nothing about an editor already mounted - switching from
  * account A to B on a host that stays usable, with B's policy cached, would
  * leave A's draft on screen with B's mutation behind Save. A remount discards
- * the outgoing state whole, and the page drops A's edit with it.
+ * the outgoing state whole, and the Rules edit's own viewer partition drops
+ * A's edit with it.
  * `JSON.stringify` rather than a joined string: host ids carry `:`, and a
  * two-element array leaves nothing to reason about.
  */

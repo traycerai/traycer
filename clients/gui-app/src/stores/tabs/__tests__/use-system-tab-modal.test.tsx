@@ -263,7 +263,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         sort: "oldest",
         sortExplicit: true,
       });
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
 
     await waitFor(() => {
@@ -301,7 +301,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         repos: ["traycerai/traycer"],
         ownershipScopes: ["mine"],
       });
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
     await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
     expect(useTabsStore.getState().systemTabs.history).not.toBeNull();
@@ -325,7 +325,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         sort: "oldest",
         sortExplicit: true,
       });
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
@@ -417,7 +417,7 @@ describe("history scope survives promotion", () => {
     act(() => {
       // What `SystemTabModalHost` does right before it promotes.
       prepareHistoryScopeForPromotion();
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
     return unregister;
   }
@@ -470,7 +470,7 @@ describe("history scope survives promotion", () => {
       }),
     );
     act(() => {
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
     await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
     expect(router.state.location.search).not.toHaveProperty("historyScope");

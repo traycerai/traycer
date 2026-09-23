@@ -25,7 +25,6 @@ import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnosti
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
-import { RulesEditScope } from "@/components/settings/panels/permissions/rules-edit-scope";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
@@ -57,29 +56,25 @@ export function SettingsModalContent(
     : "general";
   return (
     <SettingsDensityContext.Provider value="compact">
-      {/* Above the section switch, so an unsaved Rules edit outlives a visit
-          to another section and goes with this Settings instance. */}
-      <RulesEditScope>
-        <div className="flex min-h-0 min-w-0 flex-1">
-          <SettingsSidebar
-            mode={{
-              kind: "modal",
-              activeSection: section,
-              onSelect: setSection,
-            }}
-            variant="rail"
-          />
-          {/* The pane a page result scrolls to the top: see
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <SettingsSidebar
+          mode={{
+            kind: "modal",
+            activeSection: section,
+            onSelect: setSection,
+          }}
+          variant="rail"
+        />
+        {/* The pane a page result scrolls to the top: see
             `useSettingsAnchorReveal`. Marked here, by the surface, rather
             than by each panel, so a bespoke panel cannot opt out of it. */}
-          <div
-            data-settings-panel-pane
-            className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
-          >
-            <SettingsPanelForSection section={section} />
-          </div>
+        <div
+          data-settings-panel-pane
+          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+        >
+          <SettingsPanelForSection section={section} />
         </div>
-      </RulesEditScope>
+      </div>
     </SettingsDensityContext.Provider>
   );
 }

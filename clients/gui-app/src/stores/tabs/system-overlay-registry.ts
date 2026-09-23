@@ -68,6 +68,13 @@ export interface SystemOverlayModule<K extends SystemOverlayKind> {
    * unmounting and the tab's body mounting later.
    */
   readonly prepareForPromotion: () => void;
+  /**
+   * Runs when a promotion that `prepareForPromotion` prepared for is refused
+   * (the tab navigation's `onRejected`): the modal stays open, and no tab will
+   * arrive to take what was handed over, so any handoff marked there must end
+   * here - or it would outlive the modal's real close.
+   */
+  readonly abandonPromotion: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +116,11 @@ export function overlayConsumesEscape(active: SystemModalActive): boolean {
 /** Lets the active overlay's body hand state over before promotion. */
 export function prepareOverlayForPromotion(active: SystemModalActive): void {
   SYSTEM_OVERLAYS[active.kind].prepareForPromotion();
+}
+
+/** Ends what `prepareOverlayForPromotion` handed over, for a refused promotion. */
+export function abandonOverlayPromotion(active: SystemModalActive): void {
+  SYSTEM_OVERLAYS[active.kind].abandonPromotion();
 }
 
 /**

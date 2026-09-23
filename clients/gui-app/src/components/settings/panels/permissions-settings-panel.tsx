@@ -33,11 +33,7 @@ import { ModesTab } from "@/components/settings/panels/permissions/modes-tab";
 import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
 import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
-import {
-  useHasRulesEditScope,
-  useRulesEdit,
-} from "@/components/settings/panels/permissions/rules-edit-context";
-import { RulesEditScope } from "@/components/settings/panels/permissions/rules-edit-scope";
+import { useRulesEdit } from "@/components/settings/panels/permissions/rules-edit-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   acknowledgeSettingsOpenIntent,
@@ -61,28 +57,18 @@ import {
  * BEFORE the tab's body mounts, so a composer's "Permission settings…" always
  * lands on its own machine's judge.
  *
- * The Rules edit lives ABOVE the page, with the Settings instance
- * (`RulesEditScope`), keyed by the signed-in account alone. The policy is the
- * account's - traycer-server stores it and every machine reads the same one -
- * so a switch of machine re-keys the editor under `HostScopeGate` but must not
- * lose an unsaved edit: the remounted editor resumes from the scope's copy and
- * re-takes its opening read on the machine now showing. Leaving Permissions
- * for another section replaces this page, and the scope outlives that too.
- * Only a switch of account, Discard, or closing Settings drops it.
+ * The Rules edit lives with this window's Settings, not with the page
+ * (`rules-edit-store.ts`), keyed by the signed-in account alone. The policy is
+ * the account's - traycer-server stores it and every machine reads the same
+ * one - so a switch of machine re-keys the editor under `HostScopeGate` but
+ * must not lose an unsaved edit: the remounted editor resumes from the stored
+ * copy and re-takes its opening read on the machine now showing. Leaving
+ * Permissions for another section, the modal's remount when theme editing
+ * releases it, a promotion to the Settings tab, and that tab's eviction all
+ * replace this page, and none of them touches the edit. Only a switch of
+ * account, Discard, or closing Settings drops it.
  */
 export function PermissionsSettingsPanel(): ReactNode {
-  // Each Settings surface mounts the scope at its root. A page rendered with
-  // none scopes one to itself: the edit then lasts as long as the page.
-  return useHasRulesEditScope() ? (
-    <PermissionsPage />
-  ) : (
-    <RulesEditScope>
-      <PermissionsPage />
-    </RulesEditScope>
-  );
-}
-
-function PermissionsPage(): ReactNode {
   const scope = useHostScope();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
@@ -121,11 +107,9 @@ function PermissionsPage(): ReactNode {
   // a draft handed to it is one - and stays mounted from then on.
   if (tab === "rules" && !rulesVisited) setRulesVisited(true);
   // The intent's machine becomes the Settings scope before paint, its draft is
-  // queued, and the intent is spent. The draft goes to the Rules edit, which
-  // the scope ABOVE this page holds, so it is queued here rather than during
-  // render (a render may only adjust its own component's state), and before
-  // paint. By this page, not by the scope: only a page that is showing takes
-  // an intent, so a second Settings surface mounted elsewhere never does.
+  // queued, and the intent is spent. The draft goes to the Rules edit, a store
+  // this page does not own, so it is queued here rather than during render (a
+  // render may only adjust its own component's state), and before paint.
   // LAYOUT, so the host-scoped bodies below never paint a frame of the
   // previous machine.
   useLayoutEffect(() => {
@@ -197,10 +181,9 @@ function PermissionsPage(): ReactNode {
         </TabsContent>
         {/* Mounted while hidden once visited, so a save in flight - whose
             answer re-seeds the editor - survives a look at another tab; the
-            edit itself lives with Settings (`RulesEditScope`). Never before
-            the first visit, so
-            opening on another tab starts no Rules read. Radix leaves a
-            force-mounted pane visible, hence the class. */}
+            edit itself lives with Settings (`rules-edit-store.ts`). Never
+            before the first visit, so opening on another tab starts no Rules
+            read. Radix leaves a force-mounted pane visible, hence the class. */}
         <TabsContent
           value="rules"
           forceMount={rulesVisited ? true : undefined}

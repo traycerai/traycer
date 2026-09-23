@@ -195,7 +195,7 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     );
 
     act(() => {
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
     // Wait for the full promotion transition: route path + history cursor.
     // Fixed scheduling margins previously papered over the same settle.

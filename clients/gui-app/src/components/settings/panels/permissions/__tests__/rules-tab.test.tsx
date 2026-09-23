@@ -396,6 +396,42 @@ describe("RulesTab", () => {
       await settledSave();
       expect(screen.queryByTestId(LINE_ID)).toBeNull();
     });
+
+    it("a heading behind leading spaces still disables Save and names the line", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "   # Production\nDeploying to production" },
+      });
+
+      expect((await settledSave()).disabled).toBe(true);
+      expect(screen.getByTestId(LINE_ID).textContent).toBe(
+        "Line 1 starts a new section: use ## for a heading inside this section.",
+      );
+    });
+
+    it("an indented section-named heading after a blank line names line 2", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: { value: "\n  ### Allow\nDeploying to production" },
+      });
+
+      expect((await settledSave()).disabled).toBe(true);
+      expect(screen.getByTestId(LINE_ID).textContent).toBe(
+        "Line 2 starts a new section: don't name a heading after a section.",
+      );
+    });
+
+    it("CONTROL: an indented heading after a prefix line stays in the section", async () => {
+      render(tab({}));
+      fireEvent.change(input("hardDeny"), {
+        target: {
+          value: "prefix\n   # Production\nDeploying to production",
+        },
+      });
+
+      expect((await settledSave()).disabled).toBe(false);
+      expect(screen.queryByTestId(LINE_ID)).toBeNull();
+    });
   });
 
   describe("section order", () => {

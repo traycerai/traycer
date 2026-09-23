@@ -2,6 +2,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRulesEditForTests } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
@@ -116,10 +117,12 @@ beforeEach(() => {
   useSettingsHostScopeStore.setState({ scopedHostId: null });
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
+  resetRulesEditForTests();
 });
 
 afterEach(() => {
   cleanup();
+  resetRulesEditForTests();
   window.innerWidth = initialInnerWidth;
 });
 

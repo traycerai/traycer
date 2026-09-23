@@ -3832,8 +3832,8 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     - It re-provides the scoped binding, and keys the body by viewer AND host,
       so an in-flight judge pick never carries across an account switch or a
       host switch. The Rules edit is the exception by design: Settings holds
-      it above the page (`RulesEditScope`, see Rules), because the policy
-      belongs to the account, not the machine.
+      it outside the page (`rules-edit-store.ts`, see Rules), because the
+      policy belongs to the account, not the machine.
     - A tab whose host lacks the method says so in one line: "This machine's
       host predates Auto mode. Update it to choose a judge and write a policy."
       for Judge and Rules, and "This machine's host doesn't record Auto mode
@@ -3843,10 +3843,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     first frame shows the requested tab. A `draft` always means Rules. The
     draft itself is queued in the layout effect that acknowledges the intent,
     before paint, through `enqueueIntentDraft`, which takes one draft per
-    intent id. It cannot be queued during render: the edit lives in the scope
-    above the page, and a render may only adjust its own component's state.
-    It is queued by the page, not the scope, so only a Settings surface
-    showing Permissions takes it. A
+    intent id. It cannot be queued during render: the edit lives in a store
+    the page does not own, and a render may only adjust its own component's
+    state. A
     `hostId` names the machine the caller had in mind: the composer's
     "Permission settings…" passes its run-target host
     (`useOpenPermissionSettings(hostId)`), and an approval card passes its
@@ -4018,6 +4017,13 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         its section
       - in any body, a heading of any depth whose title normalises to a
         section name or alias, which opens that section
+    - It reads the body as Save WRITES it. The join trims each body whole,
+      which takes the indentation off the first non-blank line, so
+      `   # Production` typed first becomes a heading on save although the
+      textarea never showed one. Only the ends are trimmed: an indented `#`
+      further down stays indented and is no heading to either parser, so it
+      is accepted. The line number is still counted in the text as typed,
+      blank leading lines included.
     - The section names the line and the fix in one sentence, for example
       "Line 3 starts a new section: use ## for a heading inside this
       section, and don't name it after a section." Its textarea is
@@ -4059,21 +4065,37 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       Rules counts as a visit. From then on the tab stays force-mounted,
       hidden while another tab shows, so a save in flight, whose answer
       re-seeds the editor, survives a look elsewhere.
-    - **The edit belongs to the account, and lives with the Settings
-      instance.** `RulesEditScope` (`rules-edit-scope.tsx`, state in
-      `rules-edit-context.ts`) holds the editor's last committed state (text,
-      drafted markers, the last draft taken) and the drafts not yet taken. It
-      keys them by the signed-in viewer only. It is mounted at the root of
-      both Settings surfaces: `SettingsModalContent`, and `SettingsSurface`,
-      above the phone's section index.
-      - Leaving Permissions for another section and coming back keeps the
-        edit and the drafts already taken. Judge's own "Open Providers" link
-        does exactly this. The section switch replaces the page, not the
-        scope.
-      - Closing Settings unmounts the scope and drops the edit, as Discard
-        does. A page rendered with no scope above it scopes one to itself.
+    - **The edit belongs to the account, and lives as long as this window's
+      Settings.** A per-window store, not persisted
+      (`panels/permissions/rules-edit-store.ts`), holds the editor's last
+      committed state (text, drafted markers, the last draft taken) and the
+      drafts not yet taken. The page reads it through `useRulesEdit`, and
+      nothing outside Settings reads it. It is keyed by the signed-in viewer
+      only: the partition applies on every read, so no frame shows one account
+      another's edit, and on every write.
+      - Settings is one instance per window, the modal or the Settings tab
+        and never both. No component lives as long as it does, which is why
+        the edit is a store. Everything below replaces the page and keeps the
+        edit and the drafts already taken:
+        - leaving Permissions for another section, as Judge's own "Open
+          Providers" link does
+        - the theme editor (Appearance ▸ Create theme), which flips the
+          modal to non-modal, and Radix remounts the modal's content
+        - "Open as tab", which replaces the modal's body with the tab's
+        - the strip evicting a hidden Settings tab and rebuilding it
+          (`durableState: reconstruct`)
+      - Only an actual close resets it. `SystemTabModalHost`, always mounted,
+        observes "Settings open": the modal shows Settings, or the Settings
+        tab exists. The reset fires on the transition to closed
+        (`useRulesEditLifetime`), so closing the modal, closing the tab, and
+        switching the modal to History all reset it.
+      - A promotion is not a close. The Settings overlay's
+        `prepareForPromotion` sets a handoff flag, and no reset fires while
+        it is set, even for a frame between the modal closing and the tab
+        arriving. The flag clears when Settings next reads as open, in
+        particular when the tab appears. Discard resets the text as before.
       - A switch of machine re-keys the editor under the gate. The new mount
-        resumes from the scope's copy and re-takes its opening read on the
+        resumes from the stored copy and re-takes its opening read on the
         machine now showing. The unreadable and stale banners then govern
         Save exactly as for a fresh edit.
       - There is no warning dialog: the switch changes the reader, not the
@@ -4091,12 +4113,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         does not count: it would mark the edit clean, and the next fresh
         record, the text the edit was changing, would replace it silently.
       - The editor stays authoritative while mounted and reports each
-        committed state upward. If the scope owned the state and the editor
+        committed state upward. If the store owned the state and the editor
         wrote it back from an effect, a queued write could overwrite fresh
         keystrokes or append a draft twice.
     - **Drafts.** A prepared rule, from an approval card's "Allow from now on…"
-      or from Activity, reaches the scope as a queued draft with a
-      scope-local id. The editor appends it to its section in render, whether or not the
+      or from Activity, reaches the store as a queued draft with an id that
+      counts up for the life of the edit. The editor appends it to its section in render, whether or not the
       edit is already dirty, marks that section with "Applies to every
       repository on your account. Keep it specific.", scrolls to it, and
       reports the id consumed. So a remounted editor never applies a draft

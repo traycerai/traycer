@@ -208,6 +208,14 @@ export interface UnrepresentableSectionLine {
  *   shallower than `#`. Notes CAN keep one: they are written first, before any
  *   section is open.
  *
+ * It reads the text as Save WRITES it, not as it was typed: the join trims
+ * each body whole ({@link joinAutoPolicySections}), which takes the
+ * indentation off the first non-blank line and can make that line a heading
+ * the textarea never showed as one. Only the ends are trimmed, so an indented
+ * `#` further down stays indented, and is no heading to either parser. The
+ * line it names is still counted in the text as typed, blank leading lines
+ * included.
+ *
  * Reject, never rewrite: the Rules tab holds Save off and names the line,
  * rather than escaping it into something the user did not type.
  */
@@ -215,7 +223,9 @@ export function unrepresentableSectionLine(
   section: AutoPolicySectionKey | "notes",
   text: string,
 ): UnrepresentableSectionLine | null {
-  for (const [index, line] of text.split(/\r?\n/).entries()) {
+  const trimmedLead = text.slice(0, text.length - text.trimStart().length);
+  const skippedLines = trimmedLead.split("\n").length - 1;
+  for (const [index, line] of text.trim().split(/\r?\n/).entries()) {
     const heading = HEADING_PATTERN.exec(line);
     if (heading === null) continue;
     const namesSection = CANONICAL_TITLES.has(
@@ -223,7 +233,7 @@ export function unrepresentableSectionLine(
     );
     const topLevel = section !== "notes" && heading[1].length === 1;
     if (namesSection || topLevel) {
-      return { line: index + 1, topLevel, namesSection };
+      return { line: skippedLines + index + 1, topLevel, namesSection };
     }
   }
   return null;

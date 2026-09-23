@@ -48,6 +48,38 @@ const CASES: ReadonlyArray<Case> = [
     expected: { line: 1, topLevel: false, namesSection: true },
   },
   { section: "notes", text: "# Team policy\ntext", expected: null },
+  {
+    section: "hardDeny",
+    text: "   # Production\nDeploying to production",
+    expected: { line: 1, topLevel: true, namesSection: false },
+  },
+  {
+    section: "hardDeny",
+    text: "\n  ### Allow\nDeploying to production",
+    expected: { line: 2, topLevel: false, namesSection: true },
+  },
+  {
+    section: "notes",
+    text: " \t## Allowed:\nDeploying to production",
+    expected: { line: 1, topLevel: false, namesSection: true },
+  },
+  {
+    section: "hardDeny",
+    text: "\r\n\r\n  # X\nrule",
+    expected: { line: 3, topLevel: true, namesSection: false },
+  },
+  {
+    section: "hardDeny",
+    text: "prefix\n   # Production\nDeploying to production",
+    expected: null,
+  },
+  {
+    section: "hardDeny",
+    text: "   ## Production\nDeploying to production",
+    expected: null,
+  },
+  { section: "notes", text: "   # Team policy\nNotes text", expected: null },
+  { section: "hardDeny", text: "rule\n# ", expected: null },
 ];
 
 const NAMING_TEXTS: ReadonlyArray<string> = [

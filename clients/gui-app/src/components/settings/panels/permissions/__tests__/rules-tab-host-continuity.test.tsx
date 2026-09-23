@@ -14,6 +14,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRulesEditForTests } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import {
   hostScopeFixture,
@@ -210,8 +211,12 @@ beforeEach(() => {
   useSettingsHostScopeStore.setState({ scopedHostId: null });
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
+  resetRulesEditForTests();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetRulesEditForTests();
+});
 
 function allowField(): HTMLTextAreaElement {
   const element = screen.getByTestId("auto-policy-input-allow");

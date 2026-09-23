@@ -49,7 +49,11 @@ export interface SystemTabModalApi {
   readonly openHistory: () => void;
   readonly close: () => void;
   readonly setSection: (section: SettingsSectionId) => void;
-  readonly promoteToTab: () => void;
+  /**
+   * Promotes the open modal into its strip tab. `onRejected` runs when the tab
+   * navigation is refused, leaving the modal open (`abandonOverlayPromotion`).
+   */
+  readonly promoteToTab: (onRejected: () => void) => void;
   /** Returns `true` when the modal is currently open for `kind`. */
   readonly isOverlayActive: (kind: SystemOverlayKind) => boolean;
 }
@@ -108,6 +112,7 @@ export function useSystemTabModalActions(): SystemTabModalActions {
             resetToGeneral: opts.resetToGeneral,
           }),
           "focus-existing",
+          null,
         );
         return;
       }
@@ -148,7 +153,11 @@ export function useSystemTabModalActions(): SystemTabModalActions {
     }
     const historyTab = useTabsStore.getState().systemTabs.history;
     if (historyTab !== null) {
-      navigateToTabClearingOverlay(resolveHistoryTabIntent(), "focus-existing");
+      navigateToTabClearingOverlay(
+        resolveHistoryTabIntent(),
+        "focus-existing",
+        null,
+      );
       return;
     }
     void router.navigate({
@@ -230,13 +239,17 @@ export function useSystemTabModalController(): SystemTabModalApi {
   const actions = useSystemTabModalActions();
   const navigateToTabClearingOverlay = useNavigateToTabClearingOverlay();
 
-  const promoteToTab = useCallback(() => {
-    if (active === null) return;
-    navigateToTabClearingOverlay(
-      overlayPromotionIntent(active),
-      "promote-modal",
-    );
-  }, [active, navigateToTabClearingOverlay]);
+  const promoteToTab = useCallback(
+    (onRejected: () => void) => {
+      if (active === null) return;
+      navigateToTabClearingOverlay(
+        overlayPromotionIntent(active),
+        "promote-modal",
+        onRejected,
+      );
+    },
+    [active, navigateToTabClearingOverlay],
+  );
 
   const isOverlayActive = useCallback(
     (kind: SystemOverlayKind): boolean => active?.kind === kind,
@@ -268,10 +281,15 @@ export function useSystemTabModalController(): SystemTabModalApi {
 function useNavigateToTabClearingOverlay(): (
   target: TabNavigationIntent,
   source: TabActivationSource,
+  onRejected: (() => void) | null,
 ) => void {
   const router = useRouter();
   return useCallback(
-    (target: TabNavigationIntent, source: TabActivationSource): void => {
+    (
+      target: TabNavigationIntent,
+      source: TabActivationSource,
+      onRejected: (() => void) | null,
+    ): void => {
       // Promotion carries the modal's visible state regardless of whether a
       // History tab already exists. Ordinary header activation intentionally
       // omits it so the navigation controller can restore the tab-owned route
@@ -288,6 +306,7 @@ function useNavigateToTabClearingOverlay(): (
           ...withOverlayCleared(prev),
           ...(historySearch ?? {}),
         }),
+        ...(onRejected === null ? {} : { onRejected }),
       });
     },
     [router],

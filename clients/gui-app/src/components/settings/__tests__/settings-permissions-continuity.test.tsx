@@ -2,8 +2,9 @@
  * The Rules editor's unsaved text across a walk through OTHER Settings
  * sections, through the REAL `SettingsModalContent` / `SettingsSurface`, the
  * real `PermissionsSettingsPanel` and `RulesTab`. Leaving Permissions inside
- * Settings must not drop the edit; closing Settings (unmounting the surface)
- * resets it.
+ * Settings must not drop the edit. Closing Settings resets it in the host
+ * (`useRulesEditLifetime`), so that is asserted through the real modal shell in
+ * `system-tab-modal-rules-edit.test.tsx`, not by unmounting content here.
  */
 import {
   act,
@@ -15,6 +16,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRulesEditForTests } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -146,8 +148,12 @@ beforeEach(() => {
   useSettingsHostScopeStore.setState({ scopedHostId: null });
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
+  resetRulesEditForTests();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetRulesEditForTests();
+});
 
 function allowField(): HTMLTextAreaElement {
   const element = screen.getByTestId("auto-policy-input-allow");
@@ -235,17 +241,6 @@ describe("Rules edit across sections inside Settings", () => {
     await openRules();
 
     expect(occurrences(allowField().value, DRAFTED)).toBe(1);
-  });
-
-  it("modal: closing Settings resets the edit to the record", async () => {
-    const first = render(<SettingsModalContent section="permissions" />);
-    await typeAndDeliverDraft();
-    first.unmount();
-
-    render(<SettingsModalContent section="permissions" />);
-    await openRules();
-
-    expect(allowField().value).toBe(STORED_ALLOW);
   });
 
   it("routed surface on a phone: keeps the edit through the index and another section", async () => {
