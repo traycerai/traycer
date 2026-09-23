@@ -8,6 +8,12 @@ import {
   type ChatFindRow,
 } from "@/components/chat/chat-find";
 import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  FIND_BLOCK_ATTR,
+  FIND_HIT_ATTR,
+  FIND_MIRROR_ATTR,
+  FIND_VISIBLE_ATTR,
+} from "@/lib/find-engine/find-blocks";
 
 class TestHighlight {
   readonly ranges: ReadonlyArray<Range>;
@@ -251,6 +257,128 @@ describe("chat find adapter", () => {
     expect(activeRange?.startContainer.parentElement).toBe(unit);
   });
 
+  it("repaints a replaced source block after DOM redraw without rescanning or navigating", async () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    row.append(unit);
+    document.body.append(row);
+    const makeBlock = () => {
+      const block = document.createElement("div");
+      block.setAttribute(FIND_BLOCK_ATTR, "mermaid");
+      const mirror = document.createElement("span");
+      mirror.setAttribute(FIND_MIRROR_ATTR, "");
+      mirror.textContent = "graph TD\nA[Save]";
+      const visible = document.createElement("figure");
+      visible.setAttribute(FIND_VISIBLE_ATTR, "");
+      const label = document.createElement("span");
+      label.textContent = "Save";
+      visible.append(label);
+      block.append(mirror, visible);
+      return { block, label };
+    };
+    const first = makeBlock();
+    unit.append(first.block);
+    const animate = vi.fn().mockReturnValue({ cancel: vi.fn() });
+    Object.defineProperty(first.block, "animate", {
+      configurable: true,
+      value: animate,
+    });
+    const scroll = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const revealTargets: ChatFindRevealTarget[] = [];
+    const revealMatch = vi.fn((target: ChatFindRevealTarget) => {
+      revealTargets.push(target);
+    });
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-source-redraw",
+      revealMatch,
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "source-unit", "graph TD\nA[Save]")]);
+    void adapter.search({ requestId: 21, query: "Save", matchCase: false });
+    expect(revealTargets).toHaveLength(1);
+    revealTargets[0]?.paint();
+    expect(first.block.getAttribute(FIND_HIT_ATTR)).toBe("active");
+    expect(revealMatch).toHaveBeenCalledTimes(1);
+    expect(animate).toHaveBeenCalledTimes(1);
+    const initialRowsCalls = getRowsCalls();
+    const initialScrollCalls = scroll.mock.calls.length;
+
+    const replacement = makeBlock();
+    unit.replaceChildren(replacement.block);
+    await Promise.resolve();
+    flushFrames();
+
+    expect(replacement.block.getAttribute(FIND_HIT_ATTR)).toBe("active");
+    const paintedLabels = [...registry.values.values()].flatMap(
+      (highlight) => highlight.ranges,
+    );
+    expect(
+      paintedLabels.some(
+        (range) => range.startContainer === replacement.label.firstChild,
+      ),
+    ).toBe(true);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(getRowsCalls()).toBe(initialRowsCalls);
+    expect(revealMatch).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenCalledTimes(initialScrollCalls);
+    expect(animate).toHaveBeenCalledTimes(1);
+    adapter.dispose();
+    row.remove();
+  });
+
+  it("stops watching the mounted unit after clear, no matches, dismissal, and disposal", async () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "needle";
+    row.append(unit);
+    document.body.append(row);
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-observer-lifetime",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    const matchedRows = [testRow("row-1", "unit-1", "needle")];
+    setRows(matchedRows);
+
+    const expectNoObservedRepaint = async () => {
+      const paintedCalls = registry.setCalls.length;
+      const rowCalls = getRowsCalls();
+      unit.append(document.createElement("span"));
+      await Promise.resolve();
+      flushFrames();
+      expect(registry.setCalls).toHaveLength(paintedCalls);
+      expect(getRowsCalls()).toBe(rowCalls);
+    };
+
+    void adapter.search({ requestId: 30, query: "needle", matchCase: false });
+    adapter.clear();
+    await expectNoObservedRepaint();
+
+    void adapter.search({ requestId: 31, query: "needle", matchCase: false });
+    setRows([testRow("row-1", "unit-1", "absent")]);
+    await expectNoObservedRepaint();
+
+    setRows(matchedRows);
+    void adapter.search({ requestId: 32, query: "needle", matchCase: false });
+    adapter.dismissActiveMatch();
+    await expectNoObservedRepaint();
+
+    void adapter.search({ requestId: 33, query: "needle", matchCase: false });
+    adapter.dispose();
+    await expectNoObservedRepaint();
+    row.remove();
+  });
+
   it("paints visible content-bearing header text inside buttons", () => {
     const registry = installMockHighlights();
     const row = document.createElement("div");
@@ -333,6 +461,57 @@ describe("chat find adapter", () => {
     flushFrames();
     expect(adapter.getSnapshot().exactHighlight).toBe("painted");
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("a passive repaint between a navigation and its reveal paint does not drop the reveal's scroll", () => {
+    installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "needle text";
+    row.append(unit);
+    // Held in an object: a `let` assigned only inside the callback stays
+    // narrowed to `null` for the type checker at the call site below.
+    const captured: { paint: (() => void) | null } = { paint: null };
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-reveal-passive-race",
+      // The real reveal controller invokes `paint` on a LATER animation frame,
+      // not synchronously on `revealMatch` itself - capture it instead of
+      // calling it right away, so a passive repaint can be driven to
+      // completion before the navigation's own paint ever runs.
+      revealMatch: (target) => {
+        captured.paint = target.paint;
+      },
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "needle text")]);
+
+    void adapter.search({ requestId: 21, query: "needle", matchCase: false });
+    const revealPaint = captured.paint;
+    if (revealPaint === null) throw new Error("reveal paint was not captured");
+
+    // A passive repaint - e.g. a virtual-row mount sync - races in before the
+    // reveal controller gets around to invoking the captured paint. It must
+    // repaint without scrolling, and without stealing the navigation's
+    // generation.
+    adapter.syncMountedHighlight();
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The reveal controller finally invokes the paint callback it was handed.
+    // It must still run (not be dropped as stale) and scroll the match into
+    // view - only the navigation paint may do that, and it must not have been
+    // skipped by the passive repaint in between.
+    revealPaint();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
   });
 
   it("keeps a missing exact DOM occurrence pending instead of clamping to another range", () => {

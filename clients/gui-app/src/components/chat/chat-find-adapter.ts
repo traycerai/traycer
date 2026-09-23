@@ -1,3 +1,4 @@
+import { FIND_VISIBLE_ATTR } from "@/lib/find-engine/find-blocks";
 import { findTextMatches } from "@/lib/find-engine/find-text";
 import { ChatFindHighlighter } from "@/components/chat/chat-find-highlighter";
 import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -137,6 +138,8 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   ) => HTMLElement | null;
   private readonly listeners = new Set<() => void>();
   private readonly highlighter: ChatFindHighlighter;
+  private readonly mountedObserver: MutationObserver;
+  private observedRoot: HTMLElement | null = null;
 
   private rows: ReadonlyArray<ChatFindRow> = [];
   // Refreshed with `rows`, never independently: the caveat has to describe the
@@ -163,6 +166,12 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.getMountedMessageRoot = options.getMountedMessageRoot;
     this.getMountedUnitRoot = options.getMountedUnitRoot;
     this.highlighter = new ChatFindHighlighter();
+    // Only the active unit is observed, only while find has a target. Async
+    // diagram rendering can replace its DOM without changing transcript rows.
+    // Ignore our own hit attributes so a repaint cannot schedule itself.
+    this.mountedObserver = new MutationObserver(() =>
+      this.syncMountedHighlight(),
+    );
     this.snapshot = createChatFindSnapshot({
       requestId: 0,
       status: "idle",
@@ -190,7 +199,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   search(input: TileFindInput): void {
     this.clearReveal();
     this.cancelScheduledPaint();
-    this.highlighter.clear();
+    this.clearHighlight();
     this.activeMatchDismissed = false;
     if (input.query.length === 0) {
       // An empty query needs no projection: skip the supplier entirely and let
@@ -244,7 +253,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   clear(): void {
     this.clearReveal();
     this.cancelScheduledPaint();
-    this.highlighter.clear();
+    this.clearHighlight();
     // Closing the bar must end scanning. notifyRowsChanged runs from a layout
     // effect on every `messages` change (i.e. every streaming token) and is
     // gated only on `snapshot.query.length`, so leaving the query/matches set
@@ -309,7 +318,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   dismissActiveMatch(): void {
     if (this.snapshot.query.length === 0) return;
     this.cancelScheduledPaint();
-    this.highlighter.clear();
+    this.clearHighlight();
     this.activeMatchDismissed = true;
     if (
       this.snapshot.activeUnitId === null &&
@@ -328,6 +337,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   dispose(): void {
     this.clearReveal();
     this.cancelScheduledPaint();
+    this.observeMountedRoot(null);
     this.highlighter.dispose();
     this.listeners.clear();
   }
@@ -354,7 +364,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
         activeUnitId: null,
         exactHighlight: "none",
       });
-      this.highlighter.clear();
+      this.clearHighlight();
       this.notify();
       return;
     }
@@ -375,7 +385,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
         activeUnitId: null,
         exactHighlight: "none",
       });
-      this.highlighter.clear();
+      this.clearHighlight();
       this.notify();
       return;
     }
@@ -394,7 +404,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
         activeUnitId: null,
         exactHighlight: "none",
       });
-      this.highlighter.clear();
+      this.clearHighlight();
       this.notify();
       return;
     }
@@ -443,12 +453,17 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   private requestHighlightPaint(): void {
-    this.cancelScheduledPaint();
+    // A passive repaint replaces only the passive frame already queued. It
+    // must not advance the generation: a navigation paint scheduled by the
+    // reveal controller waits on the current generation, and it is the one
+    // that scrolls the match into view. Bumping here dropped that paint
+    // whenever a row re-measured between the reveal's two frames, which a
+    // text hit hid behind the unit's own centering and a block hit did not.
+    this.cancelPassivePaintFrame();
     const activeMatch = this.matches.at(this.activeMatchIndex);
     if (activeMatch === undefined) return;
     const matchKey = chatFindMatchKey(activeMatch);
-    const generation = this.paintGeneration + 1;
-    this.paintGeneration = generation;
+    const generation = this.paintGeneration;
     this.paintFrameId = window.requestAnimationFrame(() => {
       this.paintFrameId = null;
       this.paintMatch(generation, matchKey, "unit", false);
@@ -478,8 +493,9 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
         ? this.getMountedUnitRoot(currentMatch.messageId, currentMatch.unitId)
         : this.getMountedMessageRoot(currentMatch.messageId);
     if (root === null) {
+      this.observeMountedRoot(null);
       if (this.getMountedMessageRoot(currentMatch.messageId) !== null) {
-        this.highlighter.clear();
+        this.clearHighlight();
         if (this.snapshot.exactHighlight !== "pending") {
           this.snapshot = {
             ...this.snapshot,
@@ -490,6 +506,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       }
       return;
     }
+    this.observeMountedRoot(root);
     // The unit-scope root walks only the active unit, so the per-unit ordinal is
     // correct. The message-scope fallback root walks every unit in the message,
     // so it must use the message-wide ordinal - otherwise an earlier matching
@@ -523,8 +540,33 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.notify();
   }
 
+  private observeMountedRoot(root: HTMLElement | null): void {
+    if (this.observedRoot === root) return;
+    this.mountedObserver.disconnect();
+    this.observedRoot = root;
+    if (root !== null) {
+      this.mountedObserver.observe(root, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: [FIND_VISIBLE_ATTR],
+      });
+    }
+  }
+
+  private clearHighlight(): void {
+    this.observeMountedRoot(null);
+    this.highlighter.clear();
+  }
+
+  /** Invalidates every pending paint, navigation paints included. */
   private cancelScheduledPaint(): void {
     this.paintGeneration += 1;
+    this.cancelPassivePaintFrame();
+  }
+
+  private cancelPassivePaintFrame(): void {
     if (this.paintFrameId === null) return;
     window.cancelAnimationFrame(this.paintFrameId);
     this.paintFrameId = null;
