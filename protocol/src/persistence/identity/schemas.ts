@@ -5,20 +5,21 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 /**
  * Public sub-schemas of the agent-identity index doc.
  *
- * An identity's root Tiptap room holds ONE Y.Doc with three top-level types:
+ * An identity's root Tiptap room holds ONE Y.Doc with these top-level types:
  *
- * | type        | shape                                          | written by |
- * | ----------- | ---------------------------------------------- | ---------- |
- * | `meta`      | the existing `room-metadata` record             | host       |
- * | `identity`  | a Y.Map matching {@link identityRecordSchema}   | host       |
- * | `documents` | a Y.Map of {@link identityDocumentEntrySchema}  | host       |
- * | `files`     | the file plane's manifest map                   | host       |
+ * | type                | shape                                                 | written by |
+ * | ------------------- | ----------------------------------------------------- | ---------- |
+ * | `meta`              | the existing `room-metadata` record                    | host       |
+ * | `identity`          | a Y.Map matching {@link identityRecordSchema}          | host       |
+ * | `documents`         | a Y.Map of {@link identityDocumentEntrySchema}         | host       |
+ * | `files`             | the file plane's manifest map                          | host       |
+ * | `skillReservations` | a Y.Map of {@link identitySkillReservationSchema}      | host       |
  *
- * Two of those are registered records and live here. `meta` reuses
+ * Three of those are registered records and live here. `meta` reuses
  * `room-metadata` unchanged, and `files` is the file plane's own manifest -
  * neither is redefined in this module.
  *
- * ## Both maps are HOST-ONLY
+ * ## Every map is HOST-ONLY
  *
  * The GUI edits fragment BODIES directly over `agentIdentity.file.subscribe`,
  * but asks the host to add, rename or delete a path. That is what makes the
@@ -174,3 +175,29 @@ export const identityDocumentEntrySchema = lazySchema(() =>
   }),
 );
 export type IdentityDocumentEntry = z.infer<typeof identityDocumentEntrySchema>;
+
+/**
+ * One entry of the `skillReservations` map, keyed by skill NAME: a host's
+ * claim on `skills/<name>/` while it installs a skill there.
+ *
+ * The skill installer checks that no document, file or reservation exists
+ * for the name and writes this entry in the same transaction, holds it while
+ * it copies and ingests, and deletes it once the skill's own entries exist or
+ * its install is undone. A second install of the name - from this host or any
+ * other of the account - sees the entry and is refused, instead of patching
+ * the first one's files.
+ *
+ * `owner` is a random id minted per install, never a credential. `createdAt`
+ * is how an abandoned claim (its host died mid-install) is recognised: a
+ * reader treats an entry older than the host's stale bound as reclaimable.
+ */
+export const identitySkillReservationSchema = lazySchema(() =>
+  z.object({
+    owner: z.string().min(1),
+    /** Wall-clock ms the claim was written. */
+    createdAt: z.number(),
+  }),
+);
+export type IdentitySkillReservation = z.infer<
+  typeof identitySkillReservationSchema
+>;

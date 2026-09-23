@@ -27,6 +27,12 @@ export type ComposerFlowState = {
   readonly inspectSession: ComposerInspectSession | null;
   readonly canInspect: boolean;
   readonly listScope: ProviderNativeScope;
+  /**
+   * Whether an already-installed candidate may be ticked. A provider root
+   * overwrites it from the source; an identity refuses a name it already
+   * holds, so there an installed row is shown but never selected.
+   */
+  readonly installedSelectable: boolean;
 };
 
 export type ComposerFlowSink = {
@@ -165,6 +171,8 @@ async function applyInspect(
     return;
   }
   const only = data.candidates[0];
+  const selectable = (candidate: ProviderSkillInspectCandidate): boolean =>
+    state.installedSelectable || !candidate.installed;
   // An uninstalled singleton is unambiguous and safe to land immediately.
   // An installed singleton is an overwrite - send it through the picker so
   // the badge and the "this replaces what is on disk" copy are visible
@@ -186,13 +194,16 @@ async function applyInspect(
     candidates: data.candidates,
   });
   if (data.candidates.length === 1) {
-    sink.setSelectedNames([only.name]);
+    sink.setSelectedNames(selectable(only) ? [only.name] : []);
   } else {
+    const names = new Set(
+      data.candidates.filter(selectable).map((candidate) => candidate.name),
+    );
     sink.setSelectedNames(
       preselectSkillNames(
         data.candidates,
         skillNamesFromSourceFlags(state.source),
-      ),
+      ).filter((name) => names.has(name)),
     );
   }
 }

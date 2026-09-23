@@ -18,6 +18,7 @@ import {
 import {
   identityDocumentRecordSchema,
   identityRecordValueSchema,
+  identitySkillReservationRecordSchema,
 } from "@traycer/protocol/persistence/_internal/identity-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
 
@@ -52,6 +53,10 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
  *   the identity's settings with it. The room's `meta` reuses `room-metadata`
  *   unchanged, and its `files` map is the file plane's manifest - neither is a
  *   record of its own here.
+ * - `identity-skill-reservation` - ONE value of the same room's
+ *   `doc.getMap("skillReservations")`: a host's claim on a skill name while it
+ *   installs that skill, so a second install of the name from any host is
+ *   refused rather than merged into the first.
  *
  * Cloud-catalog / task-ref / workspace-association caches are owned by
  * the cloud data client (internal, not in this repo) and are NOT versioned
@@ -133,6 +138,12 @@ export const identityDocumentRecordV100 = defineRecordContract({
   name: "identity-document",
   schemaVersion: { major: 1, minor: 0 } as const,
   schema: identityDocumentRecordSchema,
+});
+
+export const identitySkillReservationRecordV100 = defineRecordContract({
+  name: "identity-skill-reservation",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  schema: identitySkillReservationRecordSchema,
 });
 
 export const persistenceRecordRegistry = defineVersionedRecordRegistry({
@@ -221,6 +232,19 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
       downgradePathsFromLatest: {},
     },
   },
+  // Opens at 1.0 on the identity records' terms above.
+  "identity-skill-reservation": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: identitySkillReservationRecordV100,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 });
 
 export type PersistenceRecordRegistry = typeof persistenceRecordRegistry;
@@ -239,4 +263,8 @@ export type Identity = RecordValue<PersistenceRecordRegistry, "identity">;
 export type IdentityDocument = RecordValue<
   PersistenceRecordRegistry,
   "identity-document"
+>;
+export type IdentitySkillReservationRecord = RecordValue<
+  PersistenceRecordRegistry,
+  "identity-skill-reservation"
 >;

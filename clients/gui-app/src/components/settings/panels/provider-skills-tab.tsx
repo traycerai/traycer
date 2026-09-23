@@ -26,11 +26,15 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
+import { useActiveHostIdentitySkillTargets } from "@/hooks/identities/use-identity-skill-targets";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
-import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
+import {
+  ProviderSkillComposerDialog,
+  type SkillComposerProviderTarget,
+} from "./provider-skill-composer-dialog";
 import {
   isExternalDriftError,
   isSkillUpdateNoOp,
@@ -383,14 +387,16 @@ function ProviderSkillsTabBody({
     return (
       <>
         {composerOpen ? (
-          <ProviderSkillComposerDialog
-            providerLabel={providerLabel}
-            authoring={authoring}
-            listScope={effectiveScope}
-            providerRoot={providerRoot}
-            canProviderScope={canProviderScope}
+          <ProviderSkillComposerWithIdentities
+            provider={{
+              label: providerLabel,
+              authoring,
+              listScope: effectiveScope,
+              root: providerRoot,
+              canProviderScope,
+              onMutate: onComposerMutate,
+            }}
             pending={composerPending}
-            onMutate={onComposerMutate}
             onClose={() => {
               setComposerOpen(false);
             }}
@@ -1018,5 +1024,27 @@ function SkillRow({
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
     </li>
+  );
+}
+
+/**
+ * The composer, with this host's identities offered beside the provider as
+ * install targets. Its own component so the identity list and the installer
+ * mutations exist only while the composer is open.
+ */
+function ProviderSkillComposerWithIdentities(props: {
+  readonly provider: SkillComposerProviderTarget;
+  readonly pending: boolean;
+  readonly onClose: () => void;
+}): ReactNode {
+  const identitySkillTargets = useActiveHostIdentitySkillTargets(true);
+  return (
+    <ProviderSkillComposerDialog
+      provider={props.provider}
+      identities={identitySkillTargets.targets}
+      initialTarget={{ kind: "provider" }}
+      pending={props.pending || identitySkillTargets.pending}
+      onClose={props.onClose}
+    />
   );
 }

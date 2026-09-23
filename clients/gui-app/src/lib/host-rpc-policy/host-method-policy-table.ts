@@ -396,6 +396,9 @@ export const HOST_METHOD_POLL_TABLE = {
   // all — the Identities surface is hidden rather than degraded.
   "agentIdentity.list": { ...LATEST_SCHEDULING, poll: null },
   "agentIdentity.history.list": { ...LATEST_SCHEDULING, poll: null },
+  // Clones and scans a candidate skill source and writes nothing to the
+  // identity, so it coalesces like any other read.
+  "agentIdentity.skills.inspect": { ...LATEST_SCHEDULING, poll: null },
   "agentIdentity.create": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -443,6 +446,12 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "agentIdentity.history.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A mutation that answers only once the projection has ingested the files.
+  "agentIdentity.skills.import": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -544,10 +553,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
-  // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
-  // queue requests with this extended response budget so a slow-but-successful
-  // probe is not discarded client-side while the host finishes it; the value
-  // is declared once in `rate-limit-timing.ts` and must match exactly.
+  // Claude refresh-safe probe alone is budgeted 90s). `fetchProviderRateLimits`
+  // requests with this extended response budget so a slow-but-successful probe
+  // is not discarded client-side while the host finishes it; the value is
+  // declared once in `rate-limit-timing.ts` and must match exactly.
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,

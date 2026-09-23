@@ -157,7 +157,7 @@ export interface StatusBarProviderSegmentModel {
   readonly tightest: StatusBarRateLimitWindow | null;
 }
 
-/** One provider's cold-start trigger, for the queue-routed mount refresh. */
+/** One target's cold-start trigger, for the mount refresh. */
 export interface StatusBarRateLimitMountTarget {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
@@ -167,11 +167,14 @@ export interface StatusBarRateLimitMountTarget {
 
 /** Everything the one `↻` needs to fan out over the cluster's providers. */
 export interface StatusBarRateLimitRefreshModel {
-  /** Eligible `ephemeralProcess` targets, refreshed as ONE queued batch. */
-  readonly queueTargets: ReadonlyArray<{
+  /** Eligible `ephemeralProcess` targets, each refreshed by its own forced
+   *  fetch. */
+  readonly ephemeralTargets: ReadonlyArray<{
     readonly providerId: RateLimitProviderId;
     readonly profileId: string | null;
   }>;
+  /** Whether any of those targets is fetching right now. */
+  readonly ephemeralFetching: boolean;
   /** Eligible `httpFetch` observers, refreshed through their own queries. */
   readonly httpRefetches: ReadonlyArray<() => Promise<unknown>>;
   /** Whether any of those http observers is fetching right now. */
@@ -209,7 +212,7 @@ export interface StatusBarRateLimitSegments {
  *
  * Nothing here can fetch a reading: `useVisibleRateLimitProviders` observes the
  * usage cache with `PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS` (`enabled: false`) and
- * otherwise reads `providers.list`, which the app-shell queue already keeps
+ * otherwise reads `providers.list`, which the app-shell poll already keeps
  * subscribed on this window's host.
  */
 export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
@@ -287,7 +290,7 @@ function resolveTargets(
 /**
  * Whether this reader is allowed to make a reading happen.
  *
- * `live` is the strip: the http lane polls, the queue lane takes its cold start,
+ * `live` is the strip: the http lane polls, the ephemeral lane takes its cold start,
  * and the `↻` fans out. `passive` is a reader that must never cause a fetch -
  * it observes whatever the live readers have already written into the shared
  * cache and renders that. The two share every query KEY, which is the point: a
@@ -307,14 +310,14 @@ export type StatusBarRateLimitMode = "live" | "passive";
  * There are three anyway, and the extra split is deliberate. The two disabled
  * batches produce identical options but mean different things - one is a lane
  * that may never fetch here, the other a credential that cannot fetch anywhere -
- * and only the first is a queue lane. Keeping them apart is what lets
- * `mountTargets` be a plain index join over the queue batch rather than a filter
+ * and only the first is the ephemeral lane. Keeping them apart is what lets
+ * `mountTargets` be a plain index join over the ephemeral batch rather than a filter
  * over a mixed one, and it is what makes the lane split legible at the call site
  * instead of an emergent property of an equality nobody restates.
  *
  * `passive` collapses all three onto the disabled shape, LANE INCLUDED - the
  * http lane is the one that would otherwise fetch, so a mode that only silenced
- * the queue lane would silence the half that was already silent.
+ * the ephemeral lane would silence the half that was already silent.
  */
 function batchOptions(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
@@ -487,14 +490,15 @@ function clusterFor(
  *
  * **Two lanes, three batches, never one mixed batch.** `ephemeralProcess`
  * providers (codex, claude-code, grok) spawn a CLI subprocess to read usage, so
- * the serial queue owns every fetch of theirs and the observer here must stay
- * passive. `providerRateLimitQueryOptions` disables it by LANE, which is why the
+ * every fetch of theirs goes through `fetchProviderRateLimits`, which says
+ * whether the read is forced, and the observer here must stay passive.
+ * `providerRateLimitQueryOptions` disables it by LANE, which is why the
  * ephemeral batch passes each target's real `fetchEligible` rather than a
  * hardcoded `false`: even an eligible ephemeral target observes. Passing
  * `options: null` instead would be the bug this shape exists to prevent -
  * `use-host-queries.ts` defaults a missing `enabled` to `true` and calls the
- * host directly, which for these providers means a subprocess spawned outside
- * the queue.
+ * host directly with no `force`, which the wire reads as forced: a real CLI
+ * probe on every mount.
  *
  * The `httpFetch` lane splits once more, on eligibility, for the same
  * one-options-per-batch reason: an ineligible target sharing the polling batch's
@@ -527,7 +531,7 @@ export function useStatusBarRateLimitSegments(input: {
     )
     .flatMap((provider) => resolveTargets(provider, input.profileSelection))
     .map((target, order) => ({ ...target, order }));
-  const queueObserved = targets.filter(
+  const ephemeralObserved = targets.filter(
     (target) => target.lane === "ephemeralProcess",
   );
   const httpPolling = targets.filter(
@@ -537,15 +541,15 @@ export function useStatusBarRateLimitSegments(input: {
     (target) => target.lane === "httpFetch" && !target.fetchEligible,
   );
 
-  const queueObservedQueries = useHostQueriesWithResponseMap<
+  const ephemeralObservedQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
     ProviderRateLimitEnvelope
   >({
     client,
     cacheKeyIdentity: undefined,
-    requests: requestsFor(queueObserved),
-    options: batchOptions(queueObserved, input.mode),
+    requests: requestsFor(ephemeralObserved),
+    options: batchOptions(ephemeralObserved, input.mode),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
   const httpPollingQueries = useHostQueriesWithResponseMap<
@@ -582,8 +586,8 @@ export function useStatusBarRateLimitSegments(input: {
   const segments = sortProviderStatesByProviderOrder(
     [
       ...toSegments(
-        queueObserved,
-        queueObservedQueries,
+        ephemeralObserved,
+        ephemeralObservedQueries,
         rateLimits.providers,
         now,
       ),
@@ -601,14 +605,14 @@ export function useStatusBarRateLimitSegments(input: {
 
   return {
     cluster: clusterFor(input.providers.length, segments),
-    // Only the queue lane: an `httpFetch` observer is enabled and fetches its
+    // Only the ephemeral lane: an `httpFetch` observer is enabled and fetches its
     // own cold start on mount, so routing it through the mount hook as well
     // would put two fetches on one key. And none of it in `passive`, where a
     // cold provider stays cold: a preview that warmed the cache would be
     // reporting on a reading it caused.
-    mountTargets: queueObserved.flatMap((target, index) => {
+    mountTargets: ephemeralObserved.flatMap((target, index) => {
       if (passive || !target.fetchEligible) return [];
-      const envelope = queueObservedQueries[index].data;
+      const envelope = ephemeralObservedQueries[index].data;
       return [
         {
           providerId: target.provider.providerId,
@@ -619,7 +623,7 @@ export function useStatusBarRateLimitSegments(input: {
       ];
     }),
     refresh: {
-      queueTargets: queueObserved.flatMap((target) =>
+      ephemeralTargets: ephemeralObserved.flatMap((target) =>
         !passive && target.fetchEligible
           ? [
               {
@@ -629,6 +633,14 @@ export function useStatusBarRateLimitSegments(input: {
             ]
           : [],
       ),
+      // The passive observers still see a fetch the fetch function started on
+      // their key, so this is the ephemeral half of the spinner.
+      ephemeralFetching:
+        !passive &&
+        ephemeralObserved.some(
+          (target, index) =>
+            target.fetchEligible && ephemeralObservedQueries[index].isFetching,
+        ),
       httpRefetches: passive
         ? NO_REFETCHES
         : httpPollingQueries.map((query) => query.refetch),

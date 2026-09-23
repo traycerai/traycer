@@ -24,6 +24,7 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -142,17 +143,7 @@ function seedOverlay(
   queryClient: QueryClient,
   path: string,
 ): readonly unknown[] {
-  const key = hostQueryKeys.method(
-    mockLocalHostEntry.hostId,
-    "worktree.listAllForHost",
-    {
-      includeActivity: true,
-      activityPaths: [path],
-      cursor: null,
-      limit: null,
-      forceRefresh: false,
-    },
-  );
+  const key = perPathEnrichmentQueryKey(mockLocalHostEntry.hostId, path);
   queryClient.setQueryData(key, { worktrees: [], nextCursor: null });
   return key;
 }

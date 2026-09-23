@@ -30,7 +30,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => hostState.hostId,
 }));
 
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 
 function wrapperFor(queryClient: QueryClient) {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
@@ -40,7 +40,7 @@ function wrapperFor(queryClient: QueryClient) {
   };
 }
 
-describe("useRateLimitQueueScope", () => {
+describe("useProviderRateLimitFetchScope", () => {
   beforeEach(() => {
     hostState.hostId = "host-b";
     mocks.requestWithResponseTimeout.mockClear();
@@ -48,7 +48,7 @@ describe("useRateLimitQueueScope", () => {
 
   it("captures the context-selected host, client, and shared query cache", async () => {
     const queryClient = new QueryClient();
-    const { result } = renderHook(() => useRateLimitQueueScope(), {
+    const { result } = renderHook(() => useProviderRateLimitFetchScope(), {
       wrapper: wrapperFor(queryClient),
     });
     const scope = result.current;
@@ -57,7 +57,6 @@ describe("useRateLimitQueueScope", () => {
     if (scope === null) throw new Error("Expected a selected host scope");
 
     await scope.request(
-      "host-b",
       "host.getRateLimitUsage",
       {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
@@ -67,6 +66,9 @@ describe("useRateLimitQueueScope", () => {
       90_000,
     );
 
+    // No `hostId` first argument any more - the scope's own `hostId` is what
+    // names the target, and `request` forwards straight to
+    // `requestWithResponseTimeout` on the already-pinned client.
     expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
       "host.getRateLimitUsage",
       {
@@ -79,19 +81,18 @@ describe("useRateLimitQueueScope", () => {
   });
 
   // The scope routes through `requestWithResponseTimeout` rather than the plain
-  // `request` precisely so the QUEUE's budget decides how long to wait: an
+  // `request` precisely so the CALLER's budget decides how long to wait: an
   // `ephemeralProcess` read spawns a provider CLI and legitimately outruns the
   // client's default frame timeout. Asserting a second, different value keeps
   // this honest - a hard-coded constant would satisfy the case above.
   it("threads the caller's response budget through on every call", async () => {
-    const { result } = renderHook(() => useRateLimitQueueScope(), {
+    const { result } = renderHook(() => useProviderRateLimitFetchScope(), {
       wrapper: wrapperFor(new QueryClient()),
     });
     const scope = result.current;
     if (scope === null) throw new Error("Expected a selected host scope");
 
     await scope.request(
-      "host-b",
       "host.getRateLimitUsage",
       {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
@@ -110,7 +111,7 @@ describe("useRateLimitQueueScope", () => {
 
   it("returns null while the selected host client is unbound", () => {
     hostState.hostId = null;
-    const { result } = renderHook(() => useRateLimitQueueScope(), {
+    const { result } = renderHook(() => useProviderRateLimitFetchScope(), {
       wrapper: wrapperFor(new QueryClient()),
     });
     expect(result.current).toBeNull();

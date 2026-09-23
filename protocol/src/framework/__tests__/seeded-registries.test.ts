@@ -117,6 +117,7 @@ describe("seeded protocol registries", () => {
       "epic",
       "identity",
       "identity-document",
+      "identity-skill-reservation",
       "room-metadata",
     ]);
     expect(Object.keys(persistenceRecordRegistry.epic).sort()).toEqual([
@@ -143,6 +144,11 @@ describe("seeded protocol registries", () => {
     ]);
     expect(
       Object.keys(persistenceRecordRegistry["identity-document"]).sort(),
+    ).toEqual(["1"]);
+    expect(
+      Object.keys(
+        persistenceRecordRegistry["identity-skill-reservation"],
+      ).sort(),
     ).toEqual(["1"]);
   });
 

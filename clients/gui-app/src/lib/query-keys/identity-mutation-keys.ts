@@ -9,4 +9,6 @@ export const identityMutationKeys = {
   uploadBlob: () => ["agentIdentity.files.uploadBlob"] as const,
   loadOlderHistory: () => ["agentIdentity.history.loadOlder"] as const,
   restoreHistory: () => ["agentIdentity.history.restore"] as const,
+  inspectSkills: () => ["agentIdentity.skills.inspect"] as const,
+  importSkills: () => ["agentIdentity.skills.import"] as const,
 };

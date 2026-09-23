@@ -45,6 +45,12 @@ vi.mock("@/lib/identity-selectors", () => ({
   useIdentityFileIsDirty: () => false,
 }));
 
+// The skills group's "Install skill" entry has its own suite
+// (`identity-skill-install.test.tsx`); here it is a placeholder.
+vi.mock("@/components/identities/identity-skill-install", () => ({
+  IdentitySkillInstallButton: () => null,
+}));
+
 function groupsFixture(): readonly IdentityTreeGroup[] {
   return IDENTITY_FILE_GROUPS.map((group) => {
     if (group.id === "soul") {

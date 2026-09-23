@@ -21,6 +21,8 @@ import {
   agentIdentityHistoryListV10,
   agentIdentityHistoryRestoreV10,
   agentIdentityListV10,
+  agentIdentitySkillsImportV10,
+  agentIdentitySkillsInspectV10,
   agentIdentityUpdateV10,
 } from "@traycer/protocol/host/agent-identity/contracts";
 import { agentIdentityStateSubscribeV10 } from "@traycer/protocol/host/agent-identity/state-subscribe";
@@ -5439,6 +5441,34 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentIdentityHistoryRestoreV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.skills.inspect": {
+    // The provider installer's clone-scan-validate half, pointed at `<identityRoot>/skills`.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentitySkillsInspectV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.skills.import": {
+    // Installs the ticked candidates and waits for the projection's ingest to settle before answering.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentitySkillsImportV10,
           upgradeFromPreviousVersion: null,
         },
       },

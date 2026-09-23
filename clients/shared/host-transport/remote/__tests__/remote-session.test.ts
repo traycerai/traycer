@@ -7756,7 +7756,13 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
       // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
       // case does not leak into later rungs.
       const secondGap = redialTimestamps[1] - redialTimestamps[0];
-      expect(secondGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      // 1 ms below the backoff is allowed: both stamps are whole-millisecond
+      // `Date.now()` reads, while the timer runs on the event loop's own
+      // truncated clock, so a 1000 ms timer can measure as 999 here. The
+      // point is that this rung waits the backoff rather than 0 ms.
+      expect(secondGap).toBeGreaterThanOrEqual(
+        RECONNECT_INITIAL_BACKOFF_MS - 1,
+      );
       expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
     } finally {
       session.close();

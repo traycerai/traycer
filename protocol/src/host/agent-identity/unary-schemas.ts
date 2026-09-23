@@ -782,15 +782,6 @@ export type AgentIdentityHermesRunResponse = z.infer<
 >;
 
 // ─── Skill installer ────────────────────────────────────────────────────────
-//
-// NOT REGISTERED YET. `agentIdentity.skills.inspect` and `.import` are
-// registered by T13 (skill installer target for identities) together with their
-// host resolvers - the same four pieces the Hermes note above lists, held back
-// for the same resolver-coverage reason. From the registry entries they had:
-// `inspect` is the provider installer's clone-scan-validate half pointed at
-// `<identityRoot>/skills` and coalesces as a read; `import` installs the ticked
-// candidates, waits for the projection's ingest to settle before answering, and
-// is `fifo`.
 
 /**
  * `agentIdentity.skills.inspect@1.0` - clone, scan and validate a skill source
