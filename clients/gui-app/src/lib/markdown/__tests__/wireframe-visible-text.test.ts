@@ -56,7 +56,7 @@ describe("wireframeVisibleText", () => {
     expect(wireframeVisibleText("")).toBe("");
   });
 
-  it("includes an input's placeholder/value and a textarea's placeholder at their position in document order", () => {
+  it("places an input's caption and a textarea's placeholder at their position in document order", () => {
     const html = [
       "<h2>Sign in</h2>",
       '<input placeholder="Email">',
@@ -66,6 +66,34 @@ describe("wireframeVisibleText", () => {
     ].join("\n");
 
     expect(wireframeVisibleText(html)).toBe("Sign in Email Go Notes Save");
+  });
+
+  it("prefers a non-blank value over the placeholder, and falls back to the placeholder when the value is blank", () => {
+    const html = [
+      '<input value="Ada" placeholder="Name">',
+      '<input value="   " placeholder="Notes">',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Ada Notes");
+  });
+
+  it("counts a submit, button or reset input's value as its caption", () => {
+    const html = [
+      '<input type="submit" value="Save">',
+      '<input type="button" value="Cancel">',
+      '<input type="reset" value="Clear">',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Save Cancel Clear");
+  });
+
+  it("ignores a checkbox or radio input's value", () => {
+    const html = [
+      '<input type="checkbox" value="yes">',
+      '<input type="radio" value="on">',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("");
   });
 
   it("excludes hidden and password input values", () => {
@@ -79,5 +107,22 @@ describe("wireframeVisibleText", () => {
 
   it("contributes nothing for an input with neither a placeholder nor a value", () => {
     expect(wireframeVisibleText("<input>")).toBe("");
+  });
+
+  it("ignores a textarea's placeholder once it has content", () => {
+    const html = '<textarea placeholder="Notes">Existing text</textarea>';
+
+    expect(wireframeVisibleText(html)).toBe("Existing text");
+  });
+
+  it("removes elements hidden by an inline display:none or visibility:hidden style, leaving visible siblings", () => {
+    const html = [
+      "<p>Before</p>",
+      '<p style="display:none">Secret</p>',
+      '<span style="visibility:hidden">Ghost</span>',
+      "<p>After</p>",
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Before After");
   });
 });

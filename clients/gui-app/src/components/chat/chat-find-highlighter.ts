@@ -145,7 +145,14 @@ export class ChatFindHighlighter {
 
     this.unmarkBlocks();
     for (const [block, hits] of blocks) {
-      const visible = collectVisibleRanges(block, input.query, input.matchCase);
+      // A drawing can repeat a word its source holds once (a sequence
+      // diagram draws each participant top and bottom), so only as many
+      // drawn words as counted hits are painted and the counter adds up.
+      const visible = collectVisibleRanges(
+        block,
+        input.query,
+        input.matchCase,
+      ).slice(0, hits.count);
       painted.push(...visible);
       if (hits.activeOrdinal !== null) {
         // The k-th hit in the block's mirror is shown as the k-th word the

@@ -171,6 +171,37 @@ describe("ChatFindHighlighter", () => {
     return { root, block, foSpan };
   }
 
+  /**
+   * A mermaid block whose mirror holds a single "Carol" hit
+   * ("sequenceDiagram\n  participant Carol") but whose visible figure draws
+   * "Carol" twice, in two plain svg `<text>` nodes - the way a sequence
+   * diagram repeats a participant's name at the top and bottom of its
+   * lifeline.
+   */
+  function buildSequenceDiagramWithDuplicateVisibleCarol(): {
+    readonly root: HTMLDivElement;
+    readonly block: HTMLDivElement;
+    readonly firstCarol: SVGTextElement;
+    readonly secondCarol: SVGTextElement;
+  } {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const block = mermaidMirrorBlock("sequenceDiagram\n  participant Carol");
+    const figure = document.createElement("figure");
+    figure.setAttribute(FIND_VISIBLE_ATTR, "");
+    const svg = document.createElementNS(SVG_NS, "svg");
+    const firstCarol = document.createElementNS(SVG_NS, "text");
+    firstCarol.textContent = "Carol";
+    const secondCarol = document.createElementNS(SVG_NS, "text");
+    secondCarol.textContent = "Carol";
+    svg.append(firstCarol, secondCarol);
+    figure.append(svg);
+    block.append(figure);
+    root.append(block);
+
+    return { root, block, firstCarol, secondCarol };
+  }
+
   /** A wireframe block (mirror only, no visible region) plus a following paragraph. */
   function buildWireframeAndParagraph(): {
     readonly root: HTMLDivElement;
@@ -375,6 +406,30 @@ describe("ChatFindHighlighter", () => {
 
     expect(result).toBe(false);
     expect(root.querySelectorAll(`[${FIND_HIT_ATTR}]`)).toHaveLength(0);
+    highlighter.dispose();
+  });
+
+  it("caps a block's visible ranges at its mirror hit count, so a diagram that repeats a name is painted once", () => {
+    const { root, block, firstCarol } =
+      buildSequenceDiagramWithDuplicateVisibleCarol();
+    const highlighter = new ChatFindHighlighter();
+
+    const result = highlighter.paint({
+      root,
+      query: "carol",
+      matchCase: false,
+      activeMatchIndex: 0,
+      scrollActiveIntoView: false,
+    });
+
+    expect(result).toBe(true);
+    const active = activeRanges();
+    expect(active).toHaveLength(1);
+    expect(active[0].startContainer).toBe(firstCarol.firstChild);
+    expect(matchRanges()).toHaveLength(0);
+    // The mirror only counted one "Carol", so the cap keeps the block's
+    // visible ranges at one too - no hidden hit remains to mark.
+    expect(block.hasAttribute(FIND_HIT_ATTR)).toBe(false);
     highlighter.dispose();
   });
 });

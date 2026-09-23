@@ -3,6 +3,21 @@
 const NEVER_RENDERED_SELECTOR =
   "script, style, noscript, template, title, [hidden]";
 
+// Input types whose `value` is never drawn as a label.
+const UNLABELLED_INPUT_TYPES = new Set([
+  "hidden",
+  "password",
+  "checkbox",
+  "radio",
+  "file",
+  "image",
+  "color",
+  "range",
+]);
+
+// Input types whose `value` is the button's caption.
+const BUTTON_INPUT_TYPES = new Set(["button", "submit", "reset"]);
+
 /**
  * The words a person can read in a rendered wireframe.
  *
@@ -11,16 +26,28 @@ const NEVER_RENDERED_SELECTOR =
  * renders the same text as its find mirror so every counted hit has a home in
  * the block. Text nodes are joined with a space so words in neighbouring
  * elements do not run together; a word split across an inline element (rare
- * in a mockup) is the accepted cost of not laying the document out. A form
- * control shows its words through attributes rather than text nodes (a
- * placeholder, a submit button's value), so those count too, at the control's
- * place in the document.
+ * in a mockup) is the accepted cost of not laying the document out.
+ *
+ * A form control shows its words through attributes rather than text nodes,
+ * so it contributes what the browser would draw for it, at its place in the
+ * document: a button's caption, a text field's value or, when empty, its
+ * placeholder. Content hidden with an inline `display: none` or
+ * `visibility: hidden` is left out; hiding through a stylesheet rule is not
+ * seen, since the document is parsed and never laid out.
  */
 export function wireframeVisibleText(html: string): string {
   if (typeof DOMParser === "undefined") return "";
   const body = new DOMParser().parseFromString(html, "text/html").body;
   for (const element of body.querySelectorAll(NEVER_RENDERED_SELECTOR)) {
     element.remove();
+  }
+  for (const element of body.querySelectorAll<HTMLElement>("[style]")) {
+    if (
+      element.style.display === "none" ||
+      element.style.visibility === "hidden"
+    ) {
+      element.remove();
+    }
   }
   const words: string[] = [];
   const push = (text: string | null): void => {
@@ -35,12 +62,24 @@ export function wireframeVisibleText(html: string): string {
     if (node instanceof Text) {
       push(node.data);
     } else if (node instanceof HTMLInputElement) {
-      if (node.type === "hidden" || node.type === "password") continue;
-      push(node.getAttribute("placeholder"));
-      push(node.getAttribute("value"));
+      push(inputCaption(node));
     } else if (node instanceof HTMLTextAreaElement) {
-      push(node.getAttribute("placeholder"));
+      // A textarea's content is a text node the walk reaches on its own; the
+      // placeholder only shows while that content is empty.
+      if (node.value.trim().length === 0) {
+        push(node.getAttribute("placeholder"));
+      }
     }
   }
   return words.join(" ");
+}
+
+/** The words an input draws: its caption, its value, or its placeholder. */
+function inputCaption(input: HTMLInputElement): string | null {
+  const type = input.type;
+  if (UNLABELLED_INPUT_TYPES.has(type)) return null;
+  const value = input.getAttribute("value");
+  if (BUTTON_INPUT_TYPES.has(type)) return value;
+  if (value !== null && value.trim().length > 0) return value;
+  return input.getAttribute("placeholder");
 }
