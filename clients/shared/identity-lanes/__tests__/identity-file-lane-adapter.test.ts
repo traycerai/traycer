@@ -37,7 +37,7 @@ import {
  * `kind`, so a fixture that drifts from the contract fails at construction.
  */
 
-const IDENTITY_ID = "identity-1";
+const IDENTITY_ID = "identity_1";
 const PATH = "skills/reviewer/SKILL.md";
 const EPOCH = "epoch-1";
 

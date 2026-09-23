@@ -46,7 +46,7 @@ const RUN_SETTINGS = {
   profileId: null,
   // Non-null on purpose: a round-trip that dropped the field would decode as
   // the stock identity (`null`), so only a real id proves the draft carries it.
-  identityId: "identity-1",
+  identityId: "identity_1",
 };
 
 const HOST_LOCAL = {
@@ -193,12 +193,12 @@ describe("draft/v1 document envelope", () => {
     expect(decoded.status).toBe("ok");
     if (decoded.status === "ok" && decoded.record.kind === "draft") {
       expect(decoded.record.portable.runSettings?.identityId).toBe(
-        "identity-1",
+        "identity_1",
       );
     }
     expect(encodeDraftHead(COMPOSER_HEAD).portable).toEqual(
       expect.objectContaining({
-        runSettings: expect.objectContaining({ identityId: "identity-1" }),
+        runSettings: expect.objectContaining({ identityId: "identity_1" }),
       }),
     );
   });

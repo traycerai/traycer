@@ -157,8 +157,8 @@ const SERVER_FRAME_DIGESTS = {
   // settings tuple, the way `chatSchemaV16` and `chatRunSettingsSchemaPreAuto`
   // are - not an edit here.
   13: [
-    "26571f2a9df589794a59b6c56755f1eec60bdc56ee9e926aa7bbf234ac305743",
-    "63293f2d54c884a7e5d917c0a9bbb320f6f983fd27d08fca07d56f80d63854a8",
+    "5cd4121cfd8360c6ca0bc41944b46e133004ed027c109e8853970df6251b59ca",
+    "22d50843f7b95a6be5d9869b8387255c24f81a5314f44fc96dccdb07a7c7dd74",
   ],
 } as const;
 

@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { chatRunSettingsStrictSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  agentIdentityIdSchema,
+  chatRunSettingsStrictSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
@@ -69,7 +72,7 @@ export type DraftComposerMode = z.infer<typeof draftComposerModeSchema>;
  */
 const draftRunSettingsReadSchema = lazySchema(() =>
   chatRunSettingsStrictSchema.extend({
-    identityId: z.string().nullable().default(null),
+    identityId: agentIdentityIdSchema.nullable().default(null),
   }),
 );
 

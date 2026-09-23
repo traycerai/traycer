@@ -519,7 +519,7 @@ describe("useLandingDraftStore", () => {
   // The equality key once enumerated fields by hand and omitted these two, so
   // a change to only one of them compared "unchanged" and was discarded.
   it.each([
-    ["identityId", { identityId: "identity-1" }],
+    ["identityId", { identityId: "identity_1" }],
     ["profileId", { profileId: "work" }],
   ] as const)("keeps a settings change to only %s", (_field, change) => {
     const { createDraft, setDraftSettings } = useLandingDraftStore.getState();
@@ -1257,7 +1257,7 @@ describe("useLandingDraftStore", () => {
     const settings: ChatRunSettings = {
       ...HAIKU_SETTINGS,
       profileId: "work",
-      identityId: "identity-1",
+      identityId: "identity_1",
     };
     const patches: DesktopPerWindowStatePatch[] = [];
     setLandingDraftDesktopProjectionBridge({

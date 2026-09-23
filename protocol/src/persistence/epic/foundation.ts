@@ -9,6 +9,26 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
 /**
+ * The grammar of an agent identity's id - one ASCII alphanumeric, then up to 35
+ * more alphanumerics or underscores (36 max, no dash, no dot, no slash). The
+ * same rule `packages/common` enforces where identities are minted; the protocol
+ * cannot import it, so it is restated here and must move with it.
+ *
+ * Checked at the wire so a malformed id - a traversal string, an empty one -
+ * is a 400 at parse rather than a throw inside a host resolver that joins it
+ * into a room id, a blob key or a directory. Defined HERE, in the persistence
+ * base, because the chat's run-settings tuple carries an `identityId` and
+ * `persistence/` must not depend on `host/`; `host/agent-identity/schemas.ts`
+ * re-exports it for the `agentIdentity.*` family.
+ */
+export const AGENT_IDENTITY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]{0,35}$/;
+
+export const agentIdentityIdSchema = lazySchema(() =>
+  z.string().regex(AGENT_IDENTITY_ID_PATTERN),
+);
+export type AgentIdentityId = z.infer<typeof agentIdentityIdSchema>;
+
+/**
  * Foundational sub-schemas used across the epic persistence shape:
  * parent reference, token usage, harness ids, permission mode, and chat
  * run settings.
@@ -293,7 +313,7 @@ export const chatRunSettingsSchema = lazySchema(() =>
     // which derives from this live shape on purpose - so a published chat
     // carries its identity. That is a chat-sync record change and rides the
     // still-unreleased 1.6 minor; see the note in `chat-sync/version.ts`.
-    identityId: z.string().nullable().default(null),
+    identityId: agentIdentityIdSchema.nullable().default(null),
   }),
 );
 export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
@@ -443,7 +463,7 @@ export const chatRunSettingsStrictSchema = lazySchema(() =>
     serviceTier: z.string().nullable(),
     agentMode: agentModeSchema,
     profileId: z.string().nullable(),
-    identityId: z.string().nullable(),
+    identityId: agentIdentityIdSchema.nullable(),
   }),
 );
 export type ChatRunSettingsStrict = z.infer<typeof chatRunSettingsStrictSchema>;

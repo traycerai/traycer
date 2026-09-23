@@ -24,15 +24,25 @@
  * than rendering a section whose bodies it cannot open.
  */
 import { z } from "zod";
-import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  agentIdentityIdSchema,
+  guiHarnessIdSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * An identity's id - the ULID the cloud row is keyed by, and the container id
+ * An identity's id - the id the cloud row is keyed by, and the container id
  * that fills every task-id slot downstream (room derivation, blob key layout,
- * the artifact version log).
+ * the artifact version log). Every `identityId` in this family's requests,
+ * frames and summaries is this schema, so a malformed id is refused at the wire.
+ * Defined in the persistence base (see there for the grammar and why it lives
+ * there) and re-exported here as the family's own name.
  */
-export const agentIdentityIdSchema = lazySchema(() => z.string().min(1));
+export {
+  AGENT_IDENTITY_ID_PATTERN,
+  agentIdentityIdSchema,
+  type AgentIdentityId,
+} from "@traycer/protocol/persistence/epic/foundation";
 
 /**
  * A file's identity-root-relative path, as every method in this family names
