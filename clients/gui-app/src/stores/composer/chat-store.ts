@@ -769,7 +769,6 @@ export interface ChatMessage {
    * the user now. While set, the live assistant timer freezes.
    */
   pausedSinceMs?: number | null;
-  providerHistory?: "excluded";
   persistentMessageId: string | null;
   senderLabel: string | null;
   assistantMeta: AssistantTurnMeta | null;

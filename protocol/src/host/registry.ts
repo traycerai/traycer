@@ -839,6 +839,7 @@ import {
   hostCommunicationGraphCloudFeedSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
+import { hostInventorySubscribeV10 } from "@traycer/protocol/host/host-inventory";
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
@@ -11798,6 +11799,24 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // stay installed and FROZEN on their unstamped frames; the host gates
   // emission on the negotiated version exactly as it does for the @1.1 kinds,
   // the @1.2 cloud arm and the @1.3 head.
+  // Additive, post-v1.0.0 OPTIONAL stream method: the account's host registry,
+  // pushed by the viewer's own host instead of fetched by every window. The
+  // rows are the cloud's own `HostListItem`s, so a client keeps the projection
+  // it already runs. A host that predates it never advertises it and the
+  // client's subscription degrades to `unsupported`, whose contract is simply
+  // that the app's 60s `GET /api/v3/hosts` poll remains the directory's only
+  // refresh - one extra read per window, never a missing fleet. Never add it
+  // to the unary released floor - that list is fail-closed on the name set.
+  "host.hostInventory.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostInventorySubscribeV10,
+        },
+      },
+    },
+  },
   "host.chatRecords.subscribe": {
     1: {
       latestMinor: 4,

@@ -320,6 +320,7 @@ export function publishedChatSessionState(
     messages: input.conversion.messages,
     events: input.conversion.events,
     messageDelivery: null,
+    unacknowledgedDeliveryRestore: null,
     queue: { status: "idle", items: [] },
     // A copy has no live host stream, so no managed commands can ever arrive.
     managedCommands: [],
@@ -428,9 +429,6 @@ export function publishedChatSessionState(
     sendSeededUserMessage: () => null,
     deleteMessageSuffix: () => null,
     editUserMessage: () => null,
-    messageDeliveryEdit: () => null,
-    messageDeliveryRetry: () => null,
-    messageDeliveryCancel: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
     fallbackHoldForChoice: () => null,
@@ -447,6 +445,8 @@ export function publishedChatSessionState(
     stopBackgroundSession: () => null,
     pauseQueue: () => null,
     resumeQueue: () => null,
+    // A copy has no delivery view, so nothing is ever restored to acknowledge.
+    messageDeliveryRestored: () => null,
     queueEdit: () => null,
     queueCancel: () => null,
     queueReorder: () => null,
@@ -467,6 +467,7 @@ export function publishedChatSessionState(
     stateFailedSendRestoration: () => undefined,
     markNoticeDelivered: () => undefined,
     takeSetupFailedRestoration: () => null,
+    takeMessageDeliveryRestoration: () => null,
     setCurrentComposerSettings: () => undefined,
     dispose: () => undefined,
   };

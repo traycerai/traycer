@@ -241,9 +241,9 @@ const chatActionSchemaV110ToV114 = lazySchema(() =>
 export const chatActionSchema = lazySchema(() =>
   z.enum([
     ...chatActionSchemaV110ToV114.options,
-    "messageDeliveryEdit",
-    "messageDeliveryRetry",
-    "messageDeliveryCancel",
+    // `1.15`: a client has put a withdrawn opening's prompt back in its
+    // composer, so the host may drop the copy it kept for that.
+    "messageDeliveryRestored",
   ]),
 );
 export type ChatAction = z.infer<typeof chatActionSchema>;
@@ -3320,32 +3320,19 @@ const chatSubscribeClientFrameSchemaOptionsPreMessageDelivery = [
   fallbackReleaseChoiceClientFrameSchema,
 ] as const;
 
-const messageDeliveryActionFields = {
-  ...ownerActionFrameFields,
-  messageId: lazySchema(() => z.string()),
-  expectedRevision: lazySchema(() => z.number().int().positive()),
-};
 const chatSubscribeClientFrameSchemaOptions = [
   ...chatSubscribeClientFrameSchemaOptionsPreMessageDelivery,
+  // The one lifecycle action a client has. An opening is sent or withdrawn by
+  // the host alone; a client only acknowledges that it restored a withdrawn
+  // prompt, naming the revision it restored from. Acknowledging a prompt that
+  // is already claimed is a no-op, never an error: another device got there
+  // first.
   lazySchema(() =>
     z.object({
-      kind: z.literal("messageDeliveryEdit"),
-      ...messageDeliveryActionFields,
-      content: jsonContentSchema,
-      browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
-    }),
-  ),
-  lazySchema(() =>
-    z.object({
-      kind: z.literal("messageDeliveryRetry"),
-      ...messageDeliveryActionFields,
-      settings: chatRunSettingsSchema,
-    }),
-  ),
-  lazySchema(() =>
-    z.object({
-      kind: z.literal("messageDeliveryCancel"),
-      ...messageDeliveryActionFields,
+      kind: z.literal("messageDeliveryRestored"),
+      ...ownerActionFrameFields,
+      messageId: z.string(),
+      expectedRevision: z.number().int().positive(),
     }),
   ),
 ] as const;

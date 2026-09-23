@@ -1,11 +1,9 @@
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   CHAT_SYNC_1_1_READER_FLOOR,
-  CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR,
   CHAT_SYNC_READER_VERSION,
   CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
   chatHeadReaderSchema,
-  chatSyncReaderFloorForMessageBodies,
   chatSyncReaderFloorForTranscriptEvents,
   decodeChatHeadDocument,
   encodeChatHead,
@@ -463,94 +461,6 @@ describe("chatSyncReaderFloorForTranscriptEvents", () => {
         CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
       ),
     ).toEqual({ ok: true });
-  });
-});
-
-describe("chatSyncReaderFloorForMessageBodies", () => {
-  function excludedUserMessage(messageId: string): JsonObject {
-    return { role: "user", messageId, providerHistory: "excluded" };
-  }
-
-  function ordinaryUserMessage(messageId: string): JsonObject {
-    return { role: "user", messageId };
-  }
-
-  function assistantMessage(messageId: string): JsonObject {
-    return { role: "assistant", messageId, providerHistory: "excluded" };
-  }
-
-  it("is null for an empty body list", () => {
-    expect(chatSyncReaderFloorForMessageBodies([])).toBeNull();
-  });
-
-  it("is null when no body carries the marker", () => {
-    expect(
-      chatSyncReaderFloorForMessageBodies([
-        ordinaryUserMessage("m-1"),
-        ordinaryUserMessage("m-2"),
-      ]),
-    ).toBeNull();
-  });
-
-  it("returns the excluded-message floor for a marked user row", () => {
-    expect(
-      chatSyncReaderFloorForMessageBodies([
-        ordinaryUserMessage("m-1"),
-        excludedUserMessage("m-2"),
-      ]),
-    ).toEqual(CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR);
-  });
-
-  it("ignores the marker on a non-user role - the predicate is role-gated, not marker-gated", () => {
-    // The marker only carries this meaning on a `user` row; the predicate
-    // must not fire off the field alone, or an unrelated future use of the
-    // same key on another role would silently demand a reader floor for it.
-    expect(
-      chatSyncReaderFloorForMessageBodies([assistantMessage("m-1")]),
-    ).toBeNull();
-  });
-
-  it("does not throw on a body with no role at all", () => {
-    expect(() =>
-      chatSyncReaderFloorForMessageBodies([{ not: "a message" }]),
-    ).not.toThrow();
-    expect(
-      chatSyncReaderFloorForMessageBodies([{ not: "a message" }]),
-    ).toBeNull();
-  });
-
-  it("the floor it names is honoured by gateChatHeadVersion at the reader it pins, and refuses below it", () => {
-    const floor = chatSyncReaderFloorForMessageBodies([
-      excludedUserMessage("m-1"),
-    ]);
-    if (floor === null) throw new Error("expected a floor");
-
-    const belowFloor = gateChatHeadVersion(
-      { schemaVersion: CHAT_SYNC_SCHEMA_VERSION, minReaderVersion: floor },
-      { major: floor.major, minor: floor.minor - 1 },
-    );
-    expect(belowFloor.ok).toBe(false);
-    if (!belowFloor.ok) expect(belowFloor.reason).toBe("reader-below-minimum");
-
-    expect(
-      gateChatHeadVersion(
-        { schemaVersion: CHAT_SYNC_SCHEMA_VERSION, minReaderVersion: floor },
-        floor,
-      ),
-    ).toEqual({ ok: true });
-  });
-
-  it("is pinned at 1.6, not derived from CHAT_SYNC_SCHEMA_VERSION", () => {
-    expect(CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR).toEqual({
-      major: 1,
-      minor: 6,
-    });
-    expect(CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR.major).toBe(
-      CHAT_SYNC_SCHEMA_VERSION.major,
-    );
-    expect(CHAT_SYNC_EXCLUDED_MESSAGE_READER_FLOOR.minor).toBeLessThanOrEqual(
-      CHAT_SYNC_SCHEMA_VERSION.minor,
-    );
   });
 });
 

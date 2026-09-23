@@ -134,6 +134,7 @@ import {
   dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
   projectQueueWithPendingCancellations,
+  withdrawnMessageDeliveryId,
   type ChatSessionState,
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
@@ -213,6 +214,7 @@ import {
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import { useChatMessageDeliveryRestoreDriver } from "@/hooks/chats/use-chat-message-delivery-restore-driver";
 import { useEpicCreateSeedHoldDriver } from "@/hooks/chats/use-epic-create-seed-hold-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
@@ -2064,6 +2066,7 @@ function useChatTileSessionViewModel(
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
       queuedPromptMessageIds: queuedPromptIds,
+      withdrawnMessageId: withdrawnMessageDeliveryId(state.messageDelivery),
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,
@@ -2149,6 +2152,14 @@ function useChatTileSessionViewModel(
   useChatSetupFailureRestoreDriver({
     handle,
     nodeId: node.id,
+  });
+  // The opening the host withdrew before it started (`chat.subscribe@1.15`'s
+  // delivery view) comes back from the view alone, ahead of any draft - every
+  // local copy of that message stands aside for it.
+  useChatMessageDeliveryRestoreDriver({
+    handle,
+    nodeId: node.id,
+    profileUserId: profile?.userId ?? null,
   });
   // Ends the create-time binding-seed hold once THIS chat's worktree
   // provisioning has an outcome. A no-op for every tile whose (epic, chat) pair

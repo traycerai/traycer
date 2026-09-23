@@ -5305,6 +5305,7 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
     expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
+      messageId: frame.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
@@ -5356,6 +5357,7 @@ describe("createChatSessionStore", () => {
     // bury it instead.
     expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: first.clientActionId,
+      messageId: first.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
@@ -13151,6 +13153,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     expect(state.pendingUserMessages).toEqual([]);
     expect(state.failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
+      messageId: frame.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
@@ -13252,6 +13255,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     expect(state.pendingUserMessages).toEqual([]);
     expect(state.failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
+      messageId: frame.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",

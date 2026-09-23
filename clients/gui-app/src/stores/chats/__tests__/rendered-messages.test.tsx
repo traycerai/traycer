@@ -17,7 +17,10 @@ import type {
   ChatQueueSteerMode,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import type {
+  LiveAssistantMessage,
+  PendingUserMessage,
+} from "@/stores/chats/chat-session-store";
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
@@ -444,6 +447,7 @@ const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
   events: [],
   rowContext: {},
   pendingUserMessages: [],
+  withdrawnMessageId: null,
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
@@ -488,9 +492,12 @@ describe("useRenderedMessages", () => {
   it("keeps a message-delivery accepted row (providerHistory: excluded) as the canonical visible row, not hidden or duplicated", () => {
     // `providerHistory: "excluded"` is a PROVIDER-context fact (this row is
     // withheld from the model until the delivery reaches `started`) - it must
-    // never be read as a UI visibility flag. The row is the one and only
-    // representation of this prompt in the transcript; there is no separate
-    // queue-derived bubble for it to collide with.
+    // never be read as a UI visibility flag, and the rendered row carries no
+    // trace of it at all (the phase footer and row actions are driven
+    // entirely by `messageDelivery`/`deliveryPhase`, computed elsewhere). The
+    // row is the one and only representation of this prompt in the
+    // transcript; there is no separate queue-derived bubble for it to
+    // collide with.
     const accepted = {
       ...userMessage("message-1"),
       providerHistory: "excluded" as const,
@@ -500,14 +507,7 @@ describe("useRenderedMessages", () => {
     expect(driver.result.current).toHaveLength(1);
     const row = driver.result.current.at(0);
     expect(row?.persistentMessageId).toBe("message-1");
-    expect(row?.providerHistory).toBe("excluded");
-  });
-
-  it("renders an ordinary user row (no exclusion marker) with providerHistory left unset", () => {
-    const driver = renderRenderedMessages({
-      messages: [userMessage("message-1")],
-    });
-    expect(driver.result.current.at(0)?.providerHistory).toBeUndefined();
+    expect(row?.role).toBe("user");
   });
 
   it("projects an explicitly anchored send failure into a stable inline error row", () => {
@@ -3798,6 +3798,174 @@ const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
   reasoningEffort: null,
   serviceTier: null,
 };
+
+function withdrawnPendingMessage(
+  clientActionId: string,
+  messageId: string,
+  timestamp: number,
+): PendingUserMessage {
+  return {
+    clientActionId,
+    messageId,
+    content: CONTENT,
+    attachments: [],
+    sender: { type: "user", userId: "owner-1" },
+    settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
+    timestamp,
+    restore: { content: CONTENT, browserAnnotations: [] },
+    restoreWorktreeIntent: null,
+  };
+}
+
+describe("useRenderedMessages: withdrawn opening", () => {
+  it("hides a withdrawn message's PERSISTED row, leaving other persisted rows untouched", () => {
+    const messages = [userMessage("message-1"), userMessage("message-2")];
+    const control = renderRenderedMessages({ messages });
+    const withdrawn = renderRenderedMessages({
+      messages,
+      withdrawnMessageId: "message-1",
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(withdrawn.result.current.map((message) => message.id)).toEqual([
+      "message-2",
+    ]);
+  });
+
+  it("hides a withdrawn message's OPTIMISTIC (pending) row, leaving other pending rows untouched", () => {
+    const pendingUserMessages = [
+      withdrawnPendingMessage("action-1", "message-1", 1000),
+      withdrawnPendingMessage("action-2", "message-2", 2000),
+    ];
+    const control = renderRenderedMessages({ pendingUserMessages });
+    const withdrawn = renderRenderedMessages({
+      pendingUserMessages,
+      withdrawnMessageId: "message-1",
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(withdrawn.result.current.map((message) => message.id)).toEqual([
+      "message-2",
+    ]);
+  });
+
+  it("hides a withdrawn message's ACTIVE-TURN (nested steer) row, leaving the surrounding assistant parts untouched", () => {
+    // Mirrors "retains a hidden trailing retry boundary..." above: a steer
+    // block during a still-running turn nests a user row inside the
+    // activeTurn-sourced rendering, not the persisted one - this is the only
+    // way a "user" row lands in that bucket, so it is the one that proves the
+    // gate applies there too, not only to the ordinary persisted/pending rows.
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+    const assistant = codexAssistantMessage("turn-withdrawn-steer", 2000);
+    assistant.blocks = [
+      plainTextBlock("answer-before-steer", 2001, "Answer before steer."),
+      {
+        type: "steer",
+        blockId: "steer:withdrawn",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-withdrawn",
+        messageId: "message-1",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+    ];
+    const steered = {
+      ...userMessage("message-1"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+    const baseInput = {
+      messages: [assistant, steered],
+      activeTurn: { ...RUNNING_ACTIVE_TURN, turnId: "turn-withdrawn-steer" },
+      runStatus: "running" as const,
+    };
+
+    const control = renderRenderedMessages(baseInput);
+    const withdrawn = renderRenderedMessages({
+      ...baseInput,
+      withdrawnMessageId: "message-1",
+    });
+
+    const controlIds = control.result.current.map((message) => message.id);
+    const withdrawnIds = withdrawn.result.current.map((message) => message.id);
+    expect(controlIds).toContain("message-1");
+    expect(withdrawnIds).not.toContain("message-1");
+    // Nothing else moved: the withdrawn gate removes exactly that one row and
+    // leaves the surrounding assistant parts in place, at the same ids.
+    expect(withdrawnIds).toEqual(controlIds.filter((id) => id !== "message-1"));
+  });
+
+  it("draws no record-less stopped boundary for a withdrawn message: the event that names it anchors nothing", () => {
+    // A legacy chat can carry a `turn.stopped` naming the opening from a stop
+    // in the old setup window; on upgrade the opening is withdrawn. Without
+    // the withdrawn id, the event synthesizes a stopped assistant row anchored
+    // to the (hidden) user row - an orphan boundary under an empty transcript.
+    const stopped: ChatEvent = {
+      eventId: "event:turn.stopped:turn-pre-setup:11000",
+      type: "turn.stopped",
+      timestamp: 11_000,
+      clientActionId: null,
+      actor: null,
+      message: "Stop requested by owner.",
+      turnId: "turn-pre-setup",
+      messageId: "message-1",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: { reason: "Stop requested by owner." },
+    };
+    const control = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+      events: [stopped],
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "assistant:turn-pre-setup",
+    ]);
+    const withdrawn = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+      events: [stopped],
+      withdrawnMessageId: "message-1",
+    });
+    expect(withdrawn.result.current).toEqual([]);
+  });
+
+  it("a withdrawn id naming no row in this chat changes nothing", () => {
+    const messages = [userMessage("message-1"), userMessage("message-2")];
+    const control = renderRenderedMessages({ messages });
+    const withdrawn = renderRenderedMessages({
+      messages,
+      withdrawnMessageId: "message-does-not-exist",
+    });
+    expect(withdrawn.result.current.map((message) => message.id)).toEqual(
+      control.result.current.map((message) => message.id),
+    );
+  });
+
+  it("a null view renders identically to passing no withdrawnMessageId at all", () => {
+    const messages = [userMessage("message-1"), userMessage("message-2")];
+    const withDefault = renderRenderedMessages({ messages });
+    const withExplicitNull = renderRenderedMessages({
+      messages,
+      withdrawnMessageId: null,
+    });
+    expect(
+      withExplicitNull.result.current.map((message) => message.id),
+    ).toEqual(withDefault.result.current.map((message) => message.id));
+  });
+});
 
 describe("useRenderedMessages fork link integration", () => {
   it("projects chat.forked events into fork-source link rows", () => {

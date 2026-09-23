@@ -93,9 +93,6 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
     sendMessage: () => null,
     deleteMessageSuffix: () => null,
     editUserMessage: () => null,
-    messageDeliveryEdit: () => null,
-    messageDeliveryRetry: () => null,
-    messageDeliveryCancel: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
     stopBackgroundItem: () => null,
@@ -121,6 +118,7 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
     ackFailedSendRestoration: () => undefined,
     ackAcceptedAction: () => undefined,
     takeSetupFailedRestoration: () => null,
+    messageDeliveryRestored: () => null,
     ...overrides,
   };
 }

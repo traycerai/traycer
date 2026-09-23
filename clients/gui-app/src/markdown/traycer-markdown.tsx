@@ -6,6 +6,7 @@ import type { PluggableList } from "unified";
 import { CodeBlock, PreBlock } from "./components/code-block";
 import { MarkdownAnchor } from "./components/markdown-anchor";
 import { MermaidBlock } from "./components/mermaid-block";
+import { WireframeBlock } from "./components/wireframe-block";
 import { TraycerChatReference } from "./components/traycer-chat-reference";
 import { TraycerEpicReference } from "./components/traycer-epic-reference";
 import { TraycerSpecReference } from "./components/traycer-spec-reference";
@@ -27,8 +28,10 @@ import {
   TRAYCER_MERMAID_TAG,
   TRAYCER_SPEC_TAG,
   TRAYCER_TICKET_TAG,
+  TRAYCER_WIREFRAME_TAG,
 } from "./plugins/const";
 import { rehypeCustomMermaid } from "./plugins/rehype-custom-mermaid";
+import { rehypeCustomWireframe } from "./plugins/rehype-custom-wireframe";
 import { rehypeTraycerChat } from "./plugins/rehype-traycer-chat";
 import { rehypeTraycerEpic } from "./plugins/rehype-traycer-epic";
 import { rehypeTraycerSpec } from "./plugins/rehype-traycer-spec";
@@ -47,6 +50,7 @@ const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
 // full-document repair path, and TextSegment peels next-steps before render.
 const PRODUCT_REHYPE_PLUGINS: PluggableList = [
   rehypeCustomMermaid,
+  rehypeCustomWireframe,
   rehypeTraycerChat,
   rehypeTraycerEpic,
   rehypeTraycerSpec,
@@ -66,6 +70,9 @@ const DEFAULT_COMPONENTS = {
   td: TableCell as Components["td"],
   tr: TableRow as Components["tr"],
   [TRAYCER_MERMAID_TAG]: MermaidBlock as ComponentType<Record<string, unknown>>,
+  [TRAYCER_WIREFRAME_TAG]: WireframeBlock as ComponentType<
+    Record<string, unknown>
+  >,
   [TRAYCER_SPEC_TAG]: TraycerSpecReference as ComponentType<
     Record<string, unknown>
   >,

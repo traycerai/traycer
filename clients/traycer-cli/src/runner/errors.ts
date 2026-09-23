@@ -178,6 +178,48 @@ export const CLI_ERROR_CODES = {
 export type CliErrorCode =
   (typeof CLI_ERROR_CODES)[keyof typeof CLI_ERROR_CODES];
 
+// Codes the runner does NOT report to Sentry. A code belongs here when it
+// reports a user, input, auth, access or environment state the CLI already
+// handles with a typed result - an expired token, a missing argument, a host
+// that is busy or not running. Those are outcomes, not defects, and they
+// arrive in the hundreds of thousands.
+//
+// The default is captured: a code absent from this set is reported, so a newly
+// added failure mode reaches Sentry until someone deliberately opts it out.
+// Anything that means something on the machine is broken - install, verify,
+// spawn, service, port-repair, packaging, and UNEXPECTED itself - stays off
+// this list on purpose.
+export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
+  new Set<CliErrorCode>([
+    CLI_ERROR_CODES.INVALID_ARGUMENT,
+    CLI_ERROR_CODES.NOT_FOUND,
+    CLI_ERROR_CODES.FORBIDDEN,
+    CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+    CLI_ERROR_CODES.AUTH_REJECTED,
+    CLI_ERROR_CODES.AUTH_NETWORK,
+    CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    CLI_ERROR_CODES.HOST_BUSY,
+    CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
+    CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+    CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+    CLI_ERROR_CODES.HOST_UNSUPPORTED,
+    CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
+    CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    CLI_ERROR_CODES.AGENT_NOT_FOUND,
+    CLI_ERROR_CODES.AGENT_NOT_LOCAL,
+    CLI_ERROR_CODES.ROLE_FORBIDDEN,
+    CLI_ERROR_CODES.AGENT_ARCHIVE_BUSY,
+    CLI_ERROR_CODES.AGENT_RECORD_NOT_FOUND,
+    CLI_ERROR_CODES.CONFIG_INVALID,
+    CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
+    CLI_ERROR_CODES.CONFIG_MISSING_KEY,
+    CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
+    CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
+  ]);
+
 export interface CliErrorInit {
   readonly code: CliErrorCode;
   readonly message: string;

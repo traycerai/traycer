@@ -26,7 +26,6 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type {
   HostClient,
   HostRequester,
@@ -45,7 +44,6 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 
 const resolveMocks = vi.hoisted(() => ({
   resolveDraftImageBytes: vi.fn<
@@ -206,9 +204,6 @@ function fakeChatActions(
     sendMessage: () => null,
     deleteMessageSuffix: () => null,
     editUserMessage,
-    messageDeliveryEdit: () => null,
-    messageDeliveryRetry: () => null,
-    messageDeliveryCancel: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
     stopBackgroundItem: () => null,
@@ -234,6 +229,7 @@ function fakeChatActions(
     ackFailedSendRestoration: () => undefined,
     ackAcceptedAction: () => undefined,
     takeSetupFailedRestoration: () => null,
+    messageDeliveryRestored: () => null,
   };
 }
 
@@ -245,6 +241,7 @@ function baseInput(
     activeInlineEdit: null,
     canModifyMessages: true,
     canAct: true,
+    messageDelivery: null,
     interviewDeliveryRetryProtocolSupported: false,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,
@@ -271,32 +268,6 @@ function baseInput(
     // does not override this runs the pre-bridge behaviour unchanged.
     getDraftBlobBridgeSupported: () => false,
     ...overrides,
-  };
-}
-
-function pendingDeliveryAction(): PendingChatAction {
-  return {
-    clientActionId: "delivery-action-1",
-    action: "messageDeliveryRetry",
-    queueItemId: null,
-    checkpointId: null,
-    revertArtifacts: null,
-    interviewBlockId: null,
-    interviewDeliveryRetry: null,
-    messageId: TARGET_MESSAGE_ID,
-    restore: null,
-    sentContentHashes: null,
-    sender: null,
-    settings: null,
-    accountContext: null,
-    deliveryPolicy: null,
-    restoreWorktreeIntent: null,
-    displayWorktreeIntent: null,
-    messageConfirmedByHost: false,
-    hashOnlyRetry: false,
-    wireContent: null,
-    createdAt: 1,
-    connectionEpoch: 0,
   };
 }
 
@@ -348,201 +319,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   useAuthStore.setState({ profile: null, contextMetadata: null });
   resetDraftBlobTransportForTests();
-});
-
-describe("useChatMessageActions: accepted-message action projection", () => {
-  it("keeps a started delivery attached so an excluded row cannot render as Not sent", () => {
-    const delivery: ChatMessageDelivery = {
-      messageId: TARGET_MESSAGE_ID,
-      revision: 2,
-      state: {
-        phase: "started",
-        turnId: "turn-1",
-        assistantMessageId: "assistant-1",
-      },
-    };
-    const { result } = renderHook(
-      () => useChatMessageActions(baseInput({ messageDelivery: delivery })),
-      { wrapper },
-    );
-
-    const actions = result.current.messageActionsFor({
-      ...baseMessage(),
-      providerHistory: "excluded",
-    });
-    expect(actions?.type).toBe("user");
-    if (actions?.type !== "user") throw new Error("expected user actions");
-    expect(actions.delivery?.state).toEqual(delivery.state);
-    expect(actions.enabled).toBe(false);
-  });
-
-  it("keeps Delete available for an inherited excluded row with no live delivery", () => {
-    const dispatchUi = vi.fn();
-    const { result } = renderHook(
-      () => useChatMessageActions(baseInput({ dispatchUi })),
-      { wrapper },
-    );
-
-    const actions = result.current.messageActionsFor({
-      ...baseMessage(),
-      providerHistory: "excluded",
-    });
-    expect(actions?.type).toBe("user");
-    if (actions?.type !== "user") throw new Error("expected user actions");
-    expect(actions.delivery).toBeUndefined();
-    expect(actions.enabled).toBe(false);
-
-    act(() => actions.onDeleteRequest());
-    expect(dispatchUi).toHaveBeenCalledWith({
-      type: "setConfirmingDeleteMessageId",
-      confirmingDeleteMessageId: TARGET_MESSAGE_ID,
-    });
-  });
-
-  it("does not open a delivery edit while another delivery action is pending", () => {
-    const dispatchUi = vi.fn();
-    const delivery: ChatMessageDelivery = {
-      messageId: TARGET_MESSAGE_ID,
-      revision: 1,
-      state: { phase: "pending" },
-    };
-    const pending = pendingDeliveryAction();
-    const { result } = renderHook(
-      () =>
-        useChatMessageActions(
-          baseInput({
-            dispatchUi,
-            messageDelivery: delivery,
-            pendingActions: { [pending.clientActionId]: pending },
-          }),
-        ),
-      { wrapper },
-    );
-    const actions = result.current.messageActionsFor({
-      ...baseMessage(),
-      providerHistory: "excluded",
-    });
-    if (actions?.type !== "user") throw new Error("expected user actions");
-
-    act(() => actions.onEdit());
-
-    expect(dispatchUi).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "beginInlineEdit" }),
-    );
-  });
-
-  it("does not submit an open delivery edit while another delivery action is pending", () => {
-    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>();
-    const pending = pendingDeliveryAction();
-    const { result } = renderHook(
-      () =>
-        useChatMessageActions(
-          baseInput({
-            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
-            chatActions: {
-              ...fakeChatActions(() => null),
-              messageDeliveryEdit,
-            },
-            pendingActions: { [pending.clientActionId]: pending },
-          }),
-        ),
-      { wrapper },
-    );
-
-    act(() => result.current.revertOnEdit.onDontRevert());
-
-    expect(messageDeliveryEdit).not.toHaveBeenCalled();
-  });
-
-  it("does not submit an open delivery edit after its host revision changes", () => {
-    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>();
-    let delivery: ChatMessageDelivery = {
-      messageId: TARGET_MESSAGE_ID,
-      revision: 1,
-      state: { phase: "pending" },
-    };
-    const { result, rerender } = renderHook(
-      () =>
-        useChatMessageActions(
-          baseInput({
-            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
-            chatActions: {
-              ...fakeChatActions(() => null),
-              messageDeliveryEdit,
-            },
-            messageDelivery: delivery,
-          }),
-        ),
-      { wrapper },
-    );
-
-    delivery = { ...delivery, revision: 2 };
-    rerender();
-    act(() => result.current.revertOnEdit.onDontRevert());
-
-    expect(messageDeliveryEdit).not.toHaveBeenCalled();
-  });
-
-  it("does not submit an open delivery edit after delivery becomes uneditable", () => {
-    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>();
-    const delivery: ChatMessageDelivery = {
-      messageId: TARGET_MESSAGE_ID,
-      revision: 1,
-      state: {
-        phase: "started",
-        turnId: "turn-1",
-        assistantMessageId: "assistant-1",
-      },
-    };
-    const { result } = renderHook(
-      () =>
-        useChatMessageActions(
-          baseInput({
-            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
-            chatActions: {
-              ...fakeChatActions(() => null),
-              messageDeliveryEdit,
-            },
-            messageDelivery: delivery,
-          }),
-        ),
-      { wrapper },
-    );
-
-    act(() => result.current.revertOnEdit.onDontRevert());
-
-    expect(messageDeliveryEdit).not.toHaveBeenCalled();
-  });
-
-  it("submits a delivery edit without requiring a signed-in profile", () => {
-    const messageDeliveryEdit = vi.fn<ChatActions["messageDeliveryEdit"]>(
-      () => ({ clientActionId: "delivery-edit-1", messageId: "edit-1" }),
-    );
-    const delivery: ChatMessageDelivery = {
-      messageId: TARGET_MESSAGE_ID,
-      revision: 1,
-      state: { phase: "pending" },
-    };
-    const { result } = renderHook(
-      () =>
-        useChatMessageActions(
-          baseInput({
-            activeInlineEdit: inlineEdit({ messageDeliveryRevision: 1 }),
-            chatActions: {
-              ...fakeChatActions(() => null),
-              messageDeliveryEdit,
-            },
-            messageDelivery: delivery,
-            profile: null,
-          }),
-        ),
-      { wrapper },
-    );
-
-    act(() => result.current.revertOnEdit.onDontRevert());
-
-    expect(messageDeliveryEdit).toHaveBeenCalledOnce();
-  });
 });
 
 describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {

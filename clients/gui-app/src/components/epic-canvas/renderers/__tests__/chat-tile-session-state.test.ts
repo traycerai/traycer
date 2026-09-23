@@ -13,7 +13,6 @@ import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   emptyTranscriptWindow,
   type TranscriptWindow,
@@ -278,7 +277,7 @@ function pendingAction(
   return {
     wireContent: null,
     clientActionId: "ca-1",
-    action: "messageDeliveryEdit",
+    action: "editUserMessage",
     queueItemId: null,
     checkpointId: null,
     revertArtifacts: null,
@@ -306,7 +305,7 @@ function acceptedAction(
 ): AcceptedChatAction {
   return {
     clientActionId: "ca-1",
-    action: "messageDeliveryEdit",
+    action: "editUserMessage",
     queueItemId: null,
     checkpointId: null,
     revertArtifacts: null,
@@ -342,21 +341,15 @@ function normalizeState(input: {
   readonly messages?: ChatSessionState["messages"];
   readonly pendingActions?: Record<string, PendingChatAction>;
   readonly acceptedActions?: Record<string, AcceptedChatAction>;
-  readonly messageDelivery?: ChatSessionState["messageDelivery"];
 }): Pick<
   ChatSessionState,
-  | "messages"
-  | "pendingActions"
-  | "acceptedActions"
-  | "transcriptWindow"
-  | "messageDelivery"
+  "messages" | "pendingActions" | "acceptedActions" | "transcriptWindow"
 > {
   return {
     messages: input.messages ?? [],
     pendingActions: input.pendingActions ?? {},
     acceptedActions: input.acceptedActions ?? {},
     transcriptWindow: emptyTranscriptWindow(),
-    messageDelivery: input.messageDelivery ?? null,
   };
 }
 
@@ -376,30 +369,11 @@ describe("normalizeInlineEditForSession", () => {
     expect(normalizeInlineEditForSession(edit, state)).toBeNull();
   });
 
-  it("a SAME-id edit (a message-delivery in-place edit) does NOT clear via the durable-row shortcut, even though its own row already exists", () => {
-    // The row for `targetMessageId` was already in the transcript before the
-    // edit even opened - `transcriptHasUserRow` would trivially say "yes" on
-    // every render, which would close the editor the instant it opened. The
-    // fix is the `!==` guard: a same-id edit's completion can only be read off
-    // the ACTION record, never off row presence.
+  it("keeps an edit open while its dispatched row has not landed and its action is still pending", () => {
     const edit: InlineEditState = {
       ...inlineEditState(true),
       targetMessageId: "persisted-message-1",
-      pendingMessageId: "persisted-message-1",
-      pendingClientActionId: "ca-1",
-    };
-    const state = normalizeState({
-      messages: [userRow("persisted-message-1")],
-      pendingActions: { "ca-1": pendingAction({}) },
-    });
-    expect(normalizeInlineEditForSession(edit, state)).toBe(edit);
-  });
-
-  it("a same-id edit stays open while its action is still pending", () => {
-    const edit: InlineEditState = {
-      ...inlineEditState(true),
-      targetMessageId: "persisted-message-1",
-      pendingMessageId: "persisted-message-1",
+      pendingMessageId: "message-2",
       pendingClientActionId: "ca-1",
     };
     const state = normalizeState({
@@ -409,11 +383,11 @@ describe("normalizeInlineEditForSession", () => {
     expect(normalizeInlineEditForSession(edit, state)).toBe(edit);
   });
 
-  it("a same-id edit closes once its action moves from pending to ACCEPTED - the action ack, not the row", () => {
+  it("closes an edit once its action moves from pending to ACCEPTED, even before the replacement row lands", () => {
     const edit: InlineEditState = {
       ...inlineEditState(true),
       targetMessageId: "persisted-message-1",
-      pendingMessageId: "persisted-message-1",
+      pendingMessageId: "message-2",
       pendingClientActionId: "ca-1",
     };
     const state = normalizeState({
@@ -423,68 +397,11 @@ describe("normalizeInlineEditForSession", () => {
     expect(normalizeInlineEditForSession(edit, state)).toBeNull();
   });
 
-  it("does NOT resurrect a same-id edit as editable once its accepted-action entry is pruned, when the host revision proves it already landed", () => {
-    // The bug this guards: `acceptedActions` entries are pruned after a
-    // window. Without the durable revision check, a same-id edit whose
-    // acceptance was already recorded (and later pruned) would fall through
-    // to the last branch and reopen as an editable, dirty draft - resurrecting
-    // an edit that succeeded and was already rendered. The host's own
-    // `messageDelivery.revision` having advanced past what this edit
-    // captured is the durable proof the ledger-based check cannot give once
-    // the ledger entry is gone.
+  it("reopens editable (ids cleared) once its action is neither pending nor accepted - a rejected dispatch", () => {
     const edit: InlineEditState = {
       ...inlineEditState(true),
       targetMessageId: "persisted-message-1",
-      pendingMessageId: "persisted-message-1",
-      pendingClientActionId: "ca-1",
-      messageDeliveryRevision: 1,
-    };
-    const delivery: ChatMessageDelivery = {
-      messageId: "persisted-message-1",
-      revision: 2,
-      state: { phase: "cancelled" },
-    };
-    // Neither ledger has an entry for "ca-1" - it was pruned from
-    // `acceptedActions` and was never in `pendingActions` at this point.
-    const state = normalizeState({
-      messages: [userRow("persisted-message-1")],
-      messageDelivery: delivery,
-    });
-    expect(normalizeInlineEditForSession(edit, state)).toBeNull();
-  });
-
-  it("still reopens editable on a pruned action when the host revision has NOT advanced past what was captured (control)", () => {
-    // Isolates the revision check from the ledger check: with no ledger entry
-    // AND no revision proof of a landed edit, the ordinary rejected-dispatch
-    // behavior (reopen, ids cleared, draft preserved) still applies.
-    const edit: InlineEditState = {
-      ...inlineEditState(true),
-      targetMessageId: "persisted-message-1",
-      pendingMessageId: "persisted-message-1",
-      pendingClientActionId: "ca-1",
-      messageDeliveryRevision: 1,
-    };
-    const delivery: ChatMessageDelivery = {
-      messageId: "persisted-message-1",
-      revision: 1,
-      state: { phase: "pending" },
-    };
-    const state = normalizeState({
-      messages: [userRow("persisted-message-1")],
-      messageDelivery: delivery,
-    });
-    const normalized = normalizeInlineEditForSession(edit, state);
-    expect(normalized).not.toBeNull();
-    expect(normalized?.pendingClientActionId).toBeNull();
-    expect(normalized?.pendingMessageId).toBeNull();
-    expect(normalized?.dirty).toBe(true);
-  });
-
-  it("a same-id edit reopens editable (ids cleared) once its action is neither pending nor accepted - a rejected dispatch", () => {
-    const edit: InlineEditState = {
-      ...inlineEditState(true),
-      targetMessageId: "persisted-message-1",
-      pendingMessageId: "persisted-message-1",
+      pendingMessageId: "message-2",
       pendingClientActionId: "ca-1",
     };
     const state = normalizeState({

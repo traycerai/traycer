@@ -219,9 +219,6 @@ function chatActionsStub(): ChatActions {
     sendMessage: vi.fn(),
     deleteMessageSuffix: vi.fn(),
     editUserMessage,
-    messageDeliveryEdit: vi.fn(),
-    messageDeliveryRetry: vi.fn(),
-    messageDeliveryCancel: vi.fn(),
     revertFileChanges: vi.fn(),
     stopTurn: vi.fn(),
     stopBackgroundItem: vi.fn(),
@@ -247,6 +244,7 @@ function chatActionsStub(): ChatActions {
     ackFailedSendRestoration: vi.fn(),
     ackAcceptedAction: vi.fn(),
     takeSetupFailedRestoration: vi.fn(),
+    messageDeliveryRestored: vi.fn(),
   };
 }
 
@@ -259,6 +257,7 @@ function inputFor(
     activeInlineEdit,
     canModifyMessages: true,
     canAct: true,
+    messageDelivery: null,
     interviewDeliveryRetryProtocolSupported: true,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,

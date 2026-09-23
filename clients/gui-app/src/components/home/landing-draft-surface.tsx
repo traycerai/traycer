@@ -20,7 +20,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { restoreLandingSurfaceFocus } from "@/components/home/landing-surface-focus-restore";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { LandingAppearanceWallpaper } from "@/components/home/landing-appearance-wallpaper";
-import { Paintbrush } from "lucide-react";
+import { Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -353,7 +353,7 @@ function CustomizeStartPageButton() {
             openSettings({ section: "appearance", resetToGeneral: false });
           }}
         >
-          <Paintbrush className="size-3.5" />
+          <Palette className="size-3.5" />
         </Button>
       </TooltipWrapper>
     </div>

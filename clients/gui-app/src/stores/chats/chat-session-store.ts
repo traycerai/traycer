@@ -245,6 +245,10 @@ import {
   type DraftImageRefusalCause,
 } from "@/lib/drafts/draft-image-send-refusal";
 import { reinlineRefusedSendContent } from "@/lib/drafts/draft-image-retry-content";
+import {
+  readPersistedDeliveryRestoreAck,
+  writePersistedDeliveryRestoreAck,
+} from "@/lib/chats/delivery-restore-ack-persistence";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 export type ChatStreamClientHandle = Pick<
@@ -675,6 +679,13 @@ export type PendingChatActionSeed = Omit<PendingChatAction, "connectionEpoch">;
 
 export interface FailedSendRestorationState {
   readonly clientActionId: string;
+  /**
+   * The message this prompt was sent as, or `null` when the slot's author has
+   * no message behind it (a cancelled queue row). Read to find the slot a
+   * withdrawn opening must not keep: the host's delivery view is that
+   * message's one restorer - see {@link ChatSessionState.messageDelivery}.
+   */
+  readonly messageId: string | null;
   readonly content: JsonContent;
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
@@ -736,6 +747,28 @@ export interface LiveAssistantMessage {
 export interface SentChatMessageAction {
   readonly clientActionId: string;
   readonly messageId: string;
+}
+
+/**
+ * A withdrawn opening's prompt, taken for the composer by
+ * `takeMessageDeliveryRestoration`.
+ */
+export interface MessageDeliveryRestoration {
+  readonly messageId: string;
+  /**
+   * The delivery revision the prompt was taken from - the one the
+   * acknowledgement names.
+   */
+  readonly revision: number;
+  readonly content: JsonContent;
+}
+
+/** See {@link ChatSessionState.unacknowledgedDeliveryRestore}. */
+export interface UnacknowledgedDeliveryRestore {
+  readonly messageId: string;
+  readonly expectedRevision: number;
+  /** The acknowledgement on the wire, or `null` while none is. */
+  readonly clientActionId: string | null;
 }
 
 export interface EditUserMessageInput {
@@ -1108,7 +1141,34 @@ export interface ChatSessionState {
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
   readonly queue: ChatQueueState;
+  /**
+   * The host's delivery view of this chat's opening prompt
+   * (`chat.subscribe@1.15`), or `null`: no opening, or a host older than the
+   * view, where every path below behaves exactly as it always has.
+   *
+   * While it names a message - in ANY phase - it is that message's one
+   * restorer. No local copy may hand the message back or state it: not a
+   * pending or accepted send, not its optimistic row, not the restoration slot,
+   * not a setup-failure restore. When it turns `withdrawn`, every such copy is
+   * dropped in the same update that seats it, and what goes back to the
+   * composer is the view's own `restore`, through
+   * `takeMessageDeliveryRestoration`.
+   */
   readonly messageDelivery: ChatMessageDelivery | null;
+  /**
+   * A withdrawn opening this client put back in its composer and has not yet
+   * told the host about (`messageDeliveryRestored`). Kept until that action is
+   * acknowledged or the view stops waiting for it: sent as soon as the session
+   * can act, and again after a reconnect whose snapshot finds the earlier frame
+   * lost with its connection.
+   *
+   * Mirrored to this device's storage for as long as it is held
+   * (`delivery-restore-ack-persistence.ts`), because the composer draft the
+   * prompt went into survives a reload and this record would not. A store
+   * created for the chat afterwards starts from the mirrored record, so it
+   * resends the acknowledgement instead of taking the prompt a second time.
+   */
+  readonly unacknowledgedDeliveryRestore: UnacknowledgedDeliveryRestore | null;
   /**
    * Host-owned chat run state (`idle | running | stopping`). The single
    * source of truth the GUI reads for its in-progress indicators (response
@@ -1801,20 +1861,19 @@ export interface ChatSessionState {
   stopBackgroundSession: () => string | null;
   pauseQueue: () => string | null;
   resumeQueue: () => string | null;
-  messageDeliveryEdit: (input: {
+  /**
+   * Tell the host this client put a withdrawn opening's prompt back in its
+   * composer, naming the revision it restored from, so the host may stop
+   * keeping that copy. Recorded first
+   * ({@link ChatSessionState.unacknowledgedDeliveryRestore}) and sent when the
+   * session can act - now, or after the next snapshot - so a restore made
+   * while the connection is down is still acknowledged. Returns the action id
+   * when a frame went out, `null` while it waits.
+   */
+  messageDeliveryRestored: (input: {
     readonly messageId: string;
     readonly expectedRevision: number;
-    readonly content: JsonContent;
-    readonly browserAnnotations: Extract<
-      ChatOwnerActionFrame,
-      { kind: "messageDeliveryEdit" }
-    >["browserAnnotations"];
-  }) => { readonly clientActionId: string; readonly messageId: string } | null;
-  messageDeliveryRetry: (
-    delivery: ChatMessageDelivery,
-    settings: ChatRunSettings,
-  ) => string | null;
-  messageDeliveryCancel: (delivery: ChatMessageDelivery) => string | null;
+  }) => string | null;
   queueEdit: (queueItemId: string, content: JsonContent) => string | null;
   queueCancel: (queueItemId: string) => string | null;
   queueReorder: (
@@ -1919,8 +1978,31 @@ export interface ChatSessionState {
    * out) so a duplicate or replayed `setup.failed` event does not
    * double-restore. The matching action records stay in their slots so
    * downstream ack/accept reconciliation continues to work.
+   *
+   * Always `null` for a message the host's delivery view names
+   * ({@link ChatSessionState.messageDelivery}): the view restores that one.
    */
   takeSetupFailedRestoration: (messageId: string) => JsonContent | null;
+  /**
+   * The withdrawn opening's prompt, for the composer - once, and only when this
+   * client is the one to restore it: the view says `withdrawn` with a
+   * `restore`, the viewer owns the chat, neither this store nor another on
+   * this device has put it back already (see
+   * {@link ChatSessionState.unacknowledgedDeliveryRestore}), and either this
+   * store watched the message pending or preparing or no composer has claimed
+   * it yet (`restoreClaimed`). A client that watched the
+   * withdrawal happen takes the prompt even when another device already has;
+   * one that opens the chat afterwards does not push an old prompt into a
+   * composer that has moved on.
+   *
+   * Taking it marks the message handled, retracts the blob acks its images
+   * rode on - the host may have withdrawn it for bytes it no longer holds - and
+   * says why it came back, as the restoration slot does. A withdrawal with
+   * nothing to restore (an agent's opening, or one a later message already
+   * released) is marked handled and returns `null`. The caller acknowledges
+   * with `messageDeliveryRestored` once the composer has it.
+   */
+  takeMessageDeliveryRestoration: () => MessageDeliveryRestoration | null;
   setCurrentComposerSettings: (settings: ChatRunSettings) => void;
   dispose: () => void;
 }
@@ -2531,6 +2613,7 @@ function rejectionRestoration(input: {
   }
   return {
     clientActionId: frame.clientActionId,
+    messageId: pending.messageId,
     content: pending.restore.content,
     browserAnnotations: pending.restore.browserAnnotations,
     reason: `${frame.reason ?? "Message was not accepted."}${
@@ -2542,6 +2625,197 @@ function rejectionRestoration(input: {
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
   };
+}
+
+/**
+ * A snapshot's delivery view. A host older than the view sends none, which is
+ * the same answer as a view with nothing to say.
+ */
+function snapshotMessageDelivery(
+  snapshot: ChatSnapshotFrame["snapshot"],
+): ChatMessageDelivery | null {
+  return snapshot.messageDelivery ?? null;
+}
+
+/** The message a delivery view names, or `null` without one. */
+function deliveryMessageIdOf(
+  delivery: ChatMessageDelivery | null,
+): string | null {
+  return delivery === null ? null : delivery.messageId;
+}
+
+/**
+ * What a rejected action leaves behind for the user: the restoration slot it
+ * claims, the notice that says why, and the last copy of a prompt that lost the
+ * slot.
+ *
+ * Nothing, for a send of a message the host's delivery view names: the view is
+ * that prompt's one restorer ({@link ChatSessionState.messageDelivery}) and says
+ * why itself, so a slot here would put the prompt in the composer a second time
+ * and a notice would tell the user twice. The host refuses such a resend only
+ * once the opening is withdrawn, with the reason the view already carries.
+ */
+function rejectionSurfaces(input: {
+  readonly state: ChatSessionState;
+  readonly pending: PendingChatAction | null;
+  readonly frame: {
+    readonly reason: string | null;
+    readonly code: string | null;
+    readonly clientActionId: string;
+  };
+  readonly account: DeadSendAccount | null;
+}): Pick<
+  ChatSessionState,
+  "failedSendRestoration" | "errorNotices" | "lastCopyPrompts"
+> {
+  const { state, pending, frame, account } = input;
+  if (
+    pending?.action === "send" &&
+    messageDeliveryNames(state.messageDelivery, pending.messageId)
+  ) {
+    return {
+      failedSendRestoration: state.failedSendRestoration,
+      errorNotices: state.errorNotices,
+      lastCopyPrompts: state.lastCopyPrompts,
+    };
+  }
+  const noticeInput = {
+    frame,
+    pending,
+    // Displaced: the slot was already taken when this rejection landed, so
+    // first-writer-wins gave this prompt nothing.
+    displaced: state.failedSendRestoration !== null,
+    account,
+  };
+  return {
+    // Single slot, first writer wins until `ackFailedSendRestoration` clears
+    // it - the same rule `reconcileSnapshotChange` and the settled-turn pass
+    // already follow. Two rejections landing before the composer consumes the
+    // first would otherwise leave the earlier (longer-waiting) content
+    // unreachable.
+    failedSendRestoration:
+      rejectionRestoration({ state, pending, frame, account }) ??
+      state.failedSendRestoration,
+    errorNotices: appendErrorNotice(
+      state.errorNotices,
+      rejectionNotice(noticeInput),
+      state.deliveredNoticeActionIds,
+    ),
+    lastCopyPrompts: recordLastCopyPrompt(
+      state.lastCopyPrompts,
+      rejectionLastCopySend(noticeInput),
+    ),
+  };
+}
+
+/**
+ * Whether the host's delivery view names this message, in any phase - which
+ * makes the view its one restorer and every local copy of it silent. See
+ * {@link ChatSessionState.messageDelivery}.
+ */
+function messageDeliveryNames(
+  delivery: ChatMessageDelivery | null,
+  messageId: string | null,
+): boolean {
+  return delivery !== null && delivery.messageId === messageId;
+}
+
+/**
+ * The message a withdrawn opening names, or `null` for every other view. The
+ * rendered transcript drops that row the moment the view says so, rather than
+ * when the host's own removal arrives - on the windowed line that is a reindex
+ * and a resnapshot later.
+ */
+export function withdrawnMessageDeliveryId(
+  delivery: ChatMessageDelivery | null,
+): string | null {
+  return delivery?.state.phase === "withdrawn" ? delivery.messageId : null;
+}
+
+/**
+ * Whether the host is still keeping `messageId`'s withdrawn prompt for a
+ * composer to claim - the one thing a `messageDeliveryRestored` tells it. Once
+ * the view names another message, a later message has released the prompt, or
+ * a composer has claimed it, an acknowledgement changes nothing.
+ */
+function deliveryAwaitsRestoreAck(
+  delivery: ChatMessageDelivery,
+  messageId: string,
+): boolean {
+  if (delivery.messageId !== messageId) return false;
+  const state = delivery.state;
+  return (
+    state.phase === "withdrawn" &&
+    state.restore !== null &&
+    !state.restoreClaimed
+  );
+}
+
+type OpeningCopySlices = Pick<
+  ChatSessionState,
+  | "pendingActions"
+  | "acceptedActions"
+  | "pendingUserMessages"
+  | "queue"
+  | "hashOnlyRecoveries"
+  | "failedSendRestoration"
+>;
+
+/**
+ * Every copy this client still holds of an opening the host has withdrawn,
+ * dropped - a patch for the update that seats the withdrawal to spread, so no
+ * frame ever shows the withdrawal beside a copy of what it withdrew.
+ *
+ * The view is that prompt's one restorer
+ * ({@link ChatSessionState.messageDelivery}), so a copy that outlived the
+ * withdrawal would be a second one waiting for a door: a send record
+ * `takeSetupFailedRestoration` or a later reconcile could hand back once the
+ * view moves on, an optimistic row keeping edit and delete gated off, a
+ * recovery that would resend a message the host has closed, a restoration slot
+ * the handoff driver would put in the composer. Empty for every other view,
+ * which leaves the slices exactly as they were.
+ */
+function withoutWithdrawnOpeningCopies(
+  slices: OpeningCopySlices,
+  delivery: ChatMessageDelivery | null,
+): Partial<OpeningCopySlices> {
+  const messageId = withdrawnMessageDeliveryId(delivery);
+  if (messageId === null) return {};
+  const isCopy = (record: {
+    readonly action: ChatOwnerActionFrame["kind"];
+    readonly messageId: string | null;
+  }): boolean => record.action === "send" && record.messageId === messageId;
+  return {
+    pendingActions: withoutMatchingRecords(slices.pendingActions, isCopy),
+    acceptedActions: withoutMatchingRecords(slices.acceptedActions, isCopy),
+    pendingUserMessages: slices.pendingUserMessages.some(
+      (message) => message.messageId === messageId,
+    )
+      ? slices.pendingUserMessages.filter(
+          (message) => message.messageId !== messageId,
+        )
+      : slices.pendingUserMessages,
+    queue: removeOptimisticQueuedItemByMessageId(slices.queue, messageId),
+    hashOnlyRecoveries: withoutMatchingRecords(
+      slices.hashOnlyRecoveries,
+      (recovery) => recovery.messageId === messageId,
+    ),
+    failedSendRestoration:
+      slices.failedSendRestoration?.messageId === messageId
+        ? null
+        : slices.failedSendRestoration,
+  };
+}
+
+/** The record without the entries `matches` picks - the same object when none. */
+function withoutMatchingRecords<T>(
+  record: Readonly<Record<string, T>>,
+  matches: (value: T) => boolean,
+): Readonly<Record<string, T>> {
+  const kept = Object.entries(record).filter(([, value]) => !matches(value));
+  return kept.length === Object.keys(record).length
+    ? record
+    : Object.fromEntries(kept);
 }
 
 /**
@@ -3266,6 +3540,113 @@ export function createChatSessionStoreWithNotificationDependencies(
     sendBackgroundSessionStopFrame({ set, get });
   };
 
+  /**
+   * Openings the host's delivery view has named while pending or preparing -
+   * the ones this store WATCHED. A client that watched a withdrawal takes the
+   * prompt back even if another device already claimed it: this one was showing
+   * the row, so the prompt returning to its composer is what the user saw
+   * happen. See `takeMessageDeliveryRestoration`.
+   */
+  const watchedMessageDeliveryIds = new Set<string>();
+  /**
+   * Withdrawn openings this store has answered - restored, or found with
+   * nothing to restore. Never cleared: a withdrawal is final, so a message
+   * handled once has nothing left to hand back, and a second take would put the
+   * same prompt in the composer twice.
+   */
+  const handledMessageDeliveryIds = new Set<string>();
+  /**
+   * The acknowledgement an earlier store for this chat on this device still
+   * owed when it went away - a reload between the restore and the host's
+   * answer. The composer draft it restored into is persisted, so the prompt is
+   * already there: this store answers that message by resending the
+   * acknowledgement, never by taking the prompt again.
+   */
+  const inheritedDeliveryRestoreAck = readPersistedDeliveryRestoreAck(
+    options.chatId,
+  );
+  if (inheritedDeliveryRestoreAck !== null) {
+    handledMessageDeliveryIds.add(inheritedDeliveryRestoreAck.messageId);
+  }
+
+  /**
+   * Send the acknowledgement a restored opening still owes, if it can go now.
+   *
+   * State-based and called from every point that can make it sendable - the
+   * restore itself, each authoritative snapshot, each delivery change - for
+   * the reason `maybeDispatchPendingBackgroundSessionStop` is: what completes
+   * the obligation is the session becoming able to act, which arrives as a
+   * frame rather than a click.
+   *
+   * Nothing goes while one is in flight, while the session has no view (a line
+   * older than `1.15` cannot carry the frame, and the next snapshot says which
+   * line this is), or while it cannot act (`sendAction` refuses). A view that
+   * has moved on - to another message, to a prompt a later message released,
+   * or to one a composer already claimed - leaves nothing to acknowledge, so
+   * the marker goes. A frame lost with its connection is swept with that
+   * connection's pendings, and the next snapshot's call sends it again.
+   */
+  const flushUnacknowledgedDeliveryRestore = (
+    set: ChatSessionSetState,
+    get: ChatSessionGetState,
+  ): string | null => {
+    const state = get();
+    const marker = state.unacknowledgedDeliveryRestore;
+    if (marker === null) return null;
+    if (
+      marker.clientActionId !== null &&
+      Object.hasOwn(state.pendingActions, marker.clientActionId)
+    ) {
+      return null;
+    }
+    if (state.messageDelivery === null) return null;
+    if (!deliveryAwaitsRestoreAck(state.messageDelivery, marker.messageId)) {
+      set(() => ({ unacknowledgedDeliveryRestore: null }));
+      writePersistedDeliveryRestoreAck(options.chatId, null);
+      return null;
+    }
+    const clientActionId = uuidv4();
+    // Stamped BEFORE the frame goes, so no answer can outrun the id it settles.
+    // A frame that does not go leaves an id no pending action carries, which
+    // the next call reads as not in flight.
+    set(() => ({
+      unacknowledgedDeliveryRestore: { ...marker, clientActionId },
+    }));
+    return sendAction({
+      set,
+      get,
+      frame: {
+        kind: "messageDeliveryRestored",
+        hasBinaryPayload: false,
+        epicId: options.epicId,
+        chatId: options.chatId,
+        clientActionId,
+        messageId: marker.messageId,
+        expectedRevision: marker.expectedRevision,
+      },
+      pending: basicPending(clientActionId, "messageDeliveryRestored"),
+      pendingUserMessage: null,
+    });
+  };
+
+  /**
+   * The acknowledgement answered, whichever way: the host takes any revision it
+   * has reached and never refuses one, so there is nothing to retry.
+   */
+  const settleUnacknowledgedDeliveryRestore = (
+    set: ChatSessionSetState,
+    get: ChatSessionGetState,
+    clientActionId: string,
+  ): void => {
+    if (
+      get().unacknowledgedDeliveryRestore?.clientActionId !== clientActionId
+    ) {
+      return;
+    }
+    set(() => ({ unacknowledgedDeliveryRestore: null }));
+    writePersistedDeliveryRestoreAck(options.chatId, null);
+  };
+
   const closeStreamClient = (): void => {
     if (streamClient === null) return;
     const client = streamClient;
@@ -3535,6 +3916,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       // Filled by the updater, sent after it: the frames go out only once the
       // records are re-stamped, so a re-entrant snapshot cannot send them twice.
       let retransmitRestoreActions: ReadonlyArray<AcceptedChatAction> = [];
+      // The delivery view this snapshot seats. Both reconcile passes read the
+      // message it names - that message is the view's to restore - and a
+      // withdrawal drops every local copy in the same update.
+      const snapshotDelivery = snapshotMessageDelivery(frame.snapshot);
+      const deliveryViewMessageId = deliveryMessageIdOf(snapshotDelivery);
+      noteMessageDelivery(snapshotDelivery);
       set((state) => {
         const previousTurnId = snapshotPreviousTurnId(
           state.activeTurn,
@@ -3587,6 +3974,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             useAccountContextStore.getState().accountContext,
           worktreePartition,
           acceptedActions: state.acceptedActions,
+          deliveryViewMessageId,
           nowMs: now,
         });
         // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -3613,6 +4001,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               useAccountContextStore.getState().accountContext,
             worktreePartition,
             acceptedActions: state.acceptedActions,
+            deliveryViewMessageId,
           },
         );
         restoredWorktreeIntentForSnapshot =
@@ -3756,6 +4145,28 @@ export function createChatSessionStoreWithNotificationDependencies(
           ),
           frame.snapshot.queue,
         );
+        const queue = mergeQueueWithOptimisticQueuedItems(
+          frame.snapshot.queue,
+          queueWithoutSettledAcceptedSends(
+            state.queue,
+            pending.settledAcceptedActionIds,
+          ),
+          new Set([
+            ...Object.keys(pending.pendingActions),
+            ...Object.keys(state.hashOnlyRecoveries),
+          ]),
+        );
+        const openingCopies = withoutWithdrawnOpeningCopies(
+          {
+            pendingActions,
+            acceptedActions,
+            pendingUserMessages: settled.pendingUserMessages,
+            queue,
+            hashOnlyRecoveries: state.hashOnlyRecoveries,
+            failedSendRestoration: cancelRestorationsForSnapshot.slot,
+          },
+          snapshotDelivery,
+        );
         return {
           // Destructured rather than spread-and-overwritten: the point is
           // that neither array is RETAINED, and `{...chat, messages: []}`
@@ -3766,17 +4177,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           access: frame.snapshot.access,
           messages,
           events: frame.snapshot.chat.events,
-          queue: mergeQueueWithOptimisticQueuedItems(
-            frame.snapshot.queue,
-            queueWithoutSettledAcceptedSends(
-              state.queue,
-              pending.settledAcceptedActionIds,
-            ),
-            new Set([
-              ...Object.keys(pending.pendingActions),
-              ...Object.keys(state.hashOnlyRecoveries),
-            ]),
-          ),
+          queue,
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
           turnInProgress: frame.snapshot.turnInProgress,
@@ -3794,7 +4195,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // neighbours take: for these two `undefined` is a value ("no
           // traversal", "no offer") rather than an omission, and it is the one
           // that clears the card. See `ChatSessionState.pendingFallback`.
-          messageDelivery: frame.snapshot.messageDelivery ?? null,
+          messageDelivery: snapshotDelivery,
           pendingFallback: frame.snapshot.pendingFallback,
           pendingReturn: frame.snapshot.pendingReturn,
           lastFailedAttempt: frame.snapshot.lastFailedAttempt,
@@ -3909,6 +4310,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           // (which the new snapshot just refreshed) until the next
           // live `usage.updated` arrives.
           liveTurnUsage: null,
+          // Over the slices above: a withdrawn opening takes every local copy
+          // of itself with it in this same update (see
+          // `withoutWithdrawnOpeningCopies`).
+          ...openingCopies,
           // Last, on purpose: the caller's atomically-co-published state (see
           // the function doc) wins over anything the fold computed.
           ...extra,
@@ -3973,6 +4378,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       // turn-state frame - the turn could have settled while offline - so
       // advance it against the snapshot state directly.
       maybeDispatchPendingBackgroundSessionStop(set, get);
+      // The same for a restored opening's acknowledgement: this snapshot is
+      // what says the session can act again, and whether the view still
+      // wants one.
+      flushUnacknowledgedDeliveryRestore(set, get);
       // This snapshot is authoritative for which interviews are still
       // pending, so any stored draft whose block has left the set is an
       // orphan (its interview resolved, possibly while this window was
@@ -5565,18 +5974,23 @@ export function createChatSessionStoreWithNotificationDependencies(
           frame === deferredWindowedSnapshot
             ? deferredWindowedSnapshotAux
             : null;
-        set({
+        const seatedAux =
+          heldAux ?? deferredWindowedSnapshotAuxOf(frame.snapshot);
+        // The delivery view is seated now too, and for the outcome's reason:
+        // it is a fact about one message rather than about the transcript
+        // the tail gates, and a withdrawal it carries must take its row off
+        // screen now rather than when the tail arrives.
+        const heldDelivery = seatedAux.messageDelivery ?? null;
+        noteMessageDelivery(heldDelivery);
+        set((state) => ({
           ...aux,
-          messageDelivery:
-            (heldAux ?? deferredWindowedSnapshotAuxOf(frame.snapshot))
-              .messageDelivery ?? null,
-          lastFallbackOutcome: (
-            heldAux ?? deferredWindowedSnapshotAuxOf(frame.snapshot)
-          ).lastFallbackOutcome,
+          messageDelivery: heldDelivery,
+          ...withoutWithdrawnOpeningCopies(state, heldDelivery),
+          lastFallbackOutcome: seatedAux.lastFallbackOutcome,
           messages: records.messages,
           events: records.events,
           transcriptRowContext: records.rowContext,
-        });
+        }));
         // Re-entry with the frame already held keeps the supersessions
         // collected since it arrived; a NEW snapshot replaces both, because its
         // own aux is the newer authority for everything it carries.
@@ -5778,6 +6192,33 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     /**
+     * What a delivery view means for this store, noted just before every update
+     * that seats one - snapshot, deferred snapshot or `messageDeliveryChanged`.
+     *
+     * A message named pending or preparing is WATCHED
+     * (`watchedMessageDeliveryIds`). A withdrawal whose message still holds the
+     * restoration slot gives back the staging pick that slot's hand-back left,
+     * as `stateFailedSendRestoration` does for a prompt that is not going to
+     * the composer: the seat drops the slot (`withoutWithdrawnOpeningCopies`),
+     * and the view restores the prompt without it.
+     */
+    const noteMessageDelivery = (
+      delivery: ChatMessageDelivery | null,
+    ): void => {
+      if (delivery === null) return;
+      const phase = delivery.state.phase;
+      if (phase === "pending" || phase === "preparing") {
+        watchedMessageDeliveryIds.add(delivery.messageId);
+        return;
+      }
+      if (phase !== "withdrawn") return;
+      const slot = get().failedSendRestoration;
+      if (slot?.messageId === delivery.messageId) {
+        releaseStagingRevisionFor(slot.clientActionId);
+      }
+    };
+
+    /**
      * Put whatever prompt exists only in this store into the Drafts control,
      * as a closed start-page draft.
      *
@@ -5801,9 +6242,19 @@ export function createChatSessionStoreWithNotificationDependencies(
       // been sitting in the ring since long before teardown is exactly the
       // one that reaches the hour cap, and a list of "what THIS disposal
       // abandoned" is empty for it.
+      // A prompt the host's delivery view names is recorded, not lost: the view
+      // hands it back itself, so stashing it would be a second copy.
+      const delivery = state.messageDelivery;
       for (const source of unrecordedPromptSources(
-        state.failedSendRestoration,
-        Object.values(state.pendingActions),
+        messageDeliveryNames(
+          delivery,
+          state.failedSendRestoration?.messageId ?? null,
+        )
+          ? null
+          : state.failedSendRestoration,
+        Object.values(state.pendingActions).filter(
+          (action) => !messageDeliveryNames(delivery, action.messageId),
+        ),
         // No `deliveredLastCopyActionIds` filter here, and it would now be
         // actively wrong. Delivery deletes the entry for a TEXT-ONLY prompt,
         // in the same updater that adds the id to that set, so for those a
@@ -6173,6 +6624,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         const { [recovery.clientActionId]: _retired, ...remaining } =
           state.hashOnlyRecoveries;
+        const retired = {
+          hashOnlyRecoveries: remaining,
+          queue: removeOptimisticQueuedItemByClientActionId(
+            state.queue,
+            recovery.clientActionId,
+          ),
+          pendingUserMessages: state.pendingUserMessages.filter(
+            (message) => message.clientActionId !== recovery.clientActionId,
+          ),
+        };
+        // The host's delivery view names this message, so the host has it and
+        // the view is its one restorer: handing it back here or stating it
+        // would be a second copy. Only the recovery's own presentation goes.
+        if (messageDeliveryNames(state.messageDelivery, recovery.messageId)) {
+          return retired;
+        }
         // The restoration slot holds ONE prompt, and another refusal may
         // already own it. The first version kept the incumbent with `??` and
         // dropped this recovery's record, queue row and echo - destroying the
@@ -6186,17 +6653,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // discarded.
         const slotFree = state.failedSendRestoration === null;
         return {
-          hashOnlyRecoveries: remaining,
-          queue: removeOptimisticQueuedItemByClientActionId(
-            state.queue,
-            recovery.clientActionId,
-          ),
-          pendingUserMessages: state.pendingUserMessages.filter(
-            (message) => message.clientActionId !== recovery.clientActionId,
-          ),
+          ...retired,
           failedSendRestoration: slotFree
             ? {
                 clientActionId: recovery.clientActionId,
+                messageId: recovery.messageId,
                 content: recovery.restore.content,
                 browserAnnotations: recovery.restore.browserAnnotations,
                 reason: handedBackReason,
@@ -6300,6 +6761,13 @@ export function createChatSessionStoreWithNotificationDependencies(
       });
       if (disposed) {
         abandonHashOnlyRecovery(recovery, recovery.reason);
+        return;
+      }
+      // Retired while the bytes were read - a withdrawn opening drops its
+      // recovery with every other copy (`withoutWithdrawnOpeningCopies`) - so
+      // there is nothing left to send, and sending would resend a message the
+      // host has closed.
+      if (!Object.hasOwn(get().hashOnlyRecoveries, recovery.clientActionId)) {
         return;
       }
       const clientActionId = uuidv4();
@@ -6508,6 +6976,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         options.hostId,
       );
       if (retry === null) return false;
+      // The host refuses a resend of a message its delivery view names only
+      // once that opening is withdrawn, and a withdrawal is final: a retry
+      // would be refused the same way. The view hands the prompt back, and the
+      // loud path below stays silent for it (`rejectionSurfaces`).
+      if (messageDeliveryNames(get().messageDelivery, retry.messageId)) {
+        return false;
+      }
       // No first-writer-wins any more: the map gives every refusal its own
       // custody, so two hash-only sends refused close together BOTH recover.
       // The old single slot forced a choice between clobbering the first and
@@ -7535,14 +8010,6 @@ export function createChatSessionStoreWithNotificationDependencies(
               fallbackChoiceLease: choiceLease,
             };
           }
-          const rejectionNoticeInput = {
-            frame,
-            pending,
-            // Displaced: the slot was already taken when this rejection
-            // landed, so first-writer-wins gave this prompt nothing.
-            displaced: state.failedSendRestoration !== null,
-            account: rejectionAccountForFrame,
-          };
           return {
             // The rejected arm drops the entry WITHOUT restoring: the host
             // materializes before it honours a cancel and refuses with
@@ -7571,27 +8038,12 @@ export function createChatSessionStoreWithNotificationDependencies(
               [{ clientActionId: frame.clientActionId, kind: "refusal" }],
               connectionEpoch,
             ),
-            // Single slot, first writer wins until `ackFailedSendRestoration`
-            // clears it - the same rule `reconcileSnapshotChange` and the
-            // settled-turn pass already follow. Two rejections landing before
-            // the composer consumes the first would otherwise leave the
-            // earlier (longer-waiting) content unreachable.
-            failedSendRestoration:
-              rejectionRestoration({
-                state,
-                pending,
-                frame,
-                account: rejectionAccountForFrame,
-              }) ?? state.failedSendRestoration,
-            errorNotices: appendErrorNotice(
-              state.errorNotices,
-              rejectionNotice(rejectionNoticeInput),
-              state.deliveredNoticeActionIds,
-            ),
-            lastCopyPrompts: recordLastCopyPrompt(
-              state.lastCopyPrompts,
-              rejectionLastCopySend(rejectionNoticeInput),
-            ),
+            ...rejectionSurfaces({
+              state,
+              pending,
+              frame,
+              account: rejectionAccountForFrame,
+            }),
           };
         });
         // `queue` is one of the six, and this handler removes an optimistic
@@ -7603,6 +8055,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         commitWholeSetSliceBudget();
         // AFTER the updater above, which is this evidence's last reader.
         retireConsumedRetryEvidence(rejectedPending);
+        settleUnacknowledgedDeliveryRestore(set, get, frame.clientActionId);
         maybeDispatchPendingBackgroundSessionStop(set, get);
         // AFTER the reduction above, never inside it: the ack this handler is
         // processing may be the very one that mints the token a closed menu is
@@ -7677,8 +8130,17 @@ export function createChatSessionStoreWithNotificationDependencies(
       onMessageDeliveryChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId))
           return;
-        set({ messageDelivery: frame.delivery });
+        noteMessageDelivery(frame.delivery);
+        set((state) => ({
+          messageDelivery: frame.delivery,
+          ...withoutWithdrawnOpeningCopies(state, frame.delivery),
+        }));
+        // A withdrawal takes the opening's optimistic queue row with it, and
+        // the queue is one of the six budgeted slices.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux(() => ({ messageDelivery: frame.delivery }));
+        // A view that moved on retires an acknowledgement still waiting for it.
+        flushUnacknowledgedDeliveryRestore(set, get);
       },
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -7828,6 +8290,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 useAccountContextStore.getState().accountContext,
               worktreePartition,
               acceptedActions: state.acceptedActions,
+              deliveryViewMessageId: deliveryMessageIdOf(state.messageDelivery),
             },
           );
           restoredWorktreeIntentForTurnState =
@@ -8782,6 +9245,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       events: [],
       queue: EMPTY_QUEUE,
       messageDelivery: null,
+      unacknowledgedDeliveryRestore:
+        inheritedDeliveryRestoreAck === null
+          ? null
+          : { ...inheritedDeliveryRestoreAck, clientActionId: null },
       runStatus: "idle",
       activeTurn: null,
       turnLifecycleRevision: 0,
@@ -9742,65 +10209,28 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
       },
-      messageDeliveryEdit: (input) => {
-        const clientActionId = uuidv4();
-        const sent = sendAction({
-          set,
-          get,
-          frame: {
-            kind: "messageDeliveryEdit",
-            hasBinaryPayload: false,
-            epicId: options.epicId,
-            chatId: options.chatId,
-            clientActionId,
-            ...input,
-          },
-          pending: {
-            ...basicPending(clientActionId, "messageDeliveryEdit"),
-            sentContentHashes: hashOnlyImageHashes(input.content),
-          },
-          pendingUserMessage: null,
-        });
-        return sent === null
-          ? null
-          : { clientActionId, messageId: input.messageId };
-      },
-      messageDeliveryRetry: (delivery, settings) => {
-        const clientActionId = uuidv4();
-        return sendAction({
-          set,
-          get,
-          frame: {
-            kind: "messageDeliveryRetry",
-            hasBinaryPayload: false,
-            epicId: options.epicId,
-            chatId: options.chatId,
-            clientActionId,
-            messageId: delivery.messageId,
-            expectedRevision: delivery.revision,
-            settings,
-          },
-          pending: basicPending(clientActionId, "messageDeliveryRetry"),
-          pendingUserMessage: null,
-        });
-      },
-      messageDeliveryCancel: (delivery) => {
-        const clientActionId = uuidv4();
-        return sendAction({
-          set,
-          get,
-          frame: {
-            kind: "messageDeliveryCancel",
-            hasBinaryPayload: false,
-            epicId: options.epicId,
-            chatId: options.chatId,
-            clientActionId,
-            messageId: delivery.messageId,
-            expectedRevision: delivery.revision,
-          },
-          pending: basicPending(clientActionId, "messageDeliveryCancel"),
-          pendingUserMessage: null,
-        });
+      messageDeliveryRestored: (input) => {
+        // One acknowledgement per message: a second call while the first is
+        // still owed keeps the record it has, in flight or not.
+        if (
+          get().unacknowledgedDeliveryRestore?.messageId !== input.messageId
+        ) {
+          set(() => ({
+            unacknowledgedDeliveryRestore: {
+              messageId: input.messageId,
+              expectedRevision: input.expectedRevision,
+              clientActionId: null,
+            },
+          }));
+          // Kept beside the persisted draft the prompt just went into, so a
+          // reload before the host answers resends this rather than restoring
+          // the prompt a second time.
+          writePersistedDeliveryRestoreAck(options.chatId, {
+            messageId: input.messageId,
+            expectedRevision: input.expectedRevision,
+          });
+        }
+        return flushUnacknowledgedDeliveryRestore(set, get);
       },
       queueEdit: (queueItemId, content) => {
         const clientActionId = uuidv4();
@@ -10363,6 +10793,13 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       takeSetupFailedRestoration: (messageId) => {
         const state = get();
+        // The host's delivery view is this message's one restorer (see
+        // `ChatSessionState.messageDelivery`). The `setup.cancelled` a
+        // withdrawal emits names the same message, and it lands while the
+        // view still says pending.
+        if (messageDeliveryNames(state.messageDelivery, messageId)) {
+          return null;
+        }
         // STILL QUEUED means there is nothing to restore. Restoring pulls the
         // prompt into the composer and drops its optimistic echo, which is
         // right when the send was REJECTED - the message then exists nowhere
@@ -10435,6 +10872,61 @@ export function createChatSessionStoreWithNotificationDependencies(
         // neither missing-bytes site emits those.
         forgetRefusedContentBlobAcks(options.hostId, restored);
         return restored;
+      },
+      takeMessageDeliveryRestoration: () => {
+        const state = get();
+        const delivery = state.messageDelivery;
+        if (delivery === null) return null;
+        const withdrawn = delivery.state;
+        if (withdrawn.phase !== "withdrawn") return null;
+        const messageId = delivery.messageId;
+        if (handledMessageDeliveryIds.has(messageId)) return null;
+        // Another store on this device already put this prompt back in this
+        // chat's composer - a window that also watched it, or this window
+        // before a reload - and the host has not answered yet. Taking it again
+        // would merge it into that composer a second time.
+        if (
+          readPersistedDeliveryRestoreAck(options.chatId)?.messageId ===
+          messageId
+        ) {
+          handledMessageDeliveryIds.add(messageId);
+          return null;
+        }
+        // The owner's prompt, for the owner's composer. A viewer is shown the
+        // same view and must never pick it up - nor answer it for the owner.
+        if (state.access?.role !== "owner") return null;
+        if (withdrawn.restore === null) {
+          handledMessageDeliveryIds.add(messageId);
+          return null;
+        }
+        if (
+          withdrawn.restoreClaimed &&
+          !watchedMessageDeliveryIds.has(messageId)
+        ) {
+          return null;
+        }
+        handledMessageDeliveryIds.add(messageId);
+        const content = withdrawn.restore.content;
+        // Arm 5 of the class in {@link forgetRefusedContentBlobAcks}: the host
+        // can withdraw an opening for bytes it no longer holds
+        // (`missingHashes`), and the resend of this prompt must not trust the
+        // memo that said it did.
+        forgetRefusedContentBlobAcks(options.hostId, content);
+        // The restoration slot's feedback, spoken the same way: the prompt is
+        // back in the composer and this is why.
+        set((current) => ({
+          errorNotices: appendErrorNotice(
+            current.errorNotices,
+            {
+              code: SEND_RESTORED_NOTICE_CODE,
+              message: withdrawn.reason,
+              severity: "warning",
+              clientActionId: uuidv4(),
+            },
+            current.deliveredNoticeActionIds,
+          ),
+        }));
+        return { messageId, revision: delivery.revision, content };
       },
       dispose: () => {
         if (disposed) return;
@@ -10685,6 +11177,9 @@ function awardCancelRestorationSlot(
     lastCopy: null,
     failedSendRestoration: {
       clientActionId,
+      // A cancelled queue row: its prompt goes back as the user's own gesture,
+      // never as a message the host's delivery view could name.
+      messageId: null,
       content: restore.content,
       browserAnnotations: restore.browserAnnotations,
       reason: CANCELLED_AFTER_SETUP_FAILED_REASON,
@@ -11426,16 +11921,15 @@ function unrecordedPromptSources(
  * The digests this action asked the host to resolve from its own store - the
  * ones a `MISSING_ATTACHMENT_BYTES` refusal is actually ABOUT.
  *
- * Two shapes, because actions that can send bare keep their document in
+ * Two shapes, because the two actions that can send bare keep their document in
  * different places. A `send` freezes the whole prompt in `restore`, so the set
- * is read off that document. History edits and accepted-message delivery edits
- * have no `restore` at all - they re-open their own editor rather than handing
- * anything back - so the hashes are recorded at dispatch instead
- * (`sentContentHashes`), which is the only trace of what that edit put on the
- * wire.
+ * is read off that document. An `editUserMessage` has no `restore` at all - it
+ * re-opens its own editor rather than handing anything back - so the hashes are
+ * recorded at dispatch instead (`sentContentHashes`), which is the only trace
+ * of what that edit put on the wire.
  *
  * Empty for everything else, which is what keeps the marking below scoped to
- * the actions that can earn it.
+ * the two actions that can earn it.
  */
 function refusedHashOnlyDigests(
   pending: PendingChatAction,
@@ -11445,10 +11939,7 @@ function refusedHashOnlyDigests(
       ? []
       : hashOnlyImageHashes(pending.restore.content);
   }
-  if (
-    pending.action === "editUserMessage" ||
-    pending.action === "messageDeliveryEdit"
-  ) {
+  if (pending.action === "editUserMessage") {
     return pending.sentContentHashes ?? [];
   }
   return [];
@@ -11469,12 +11960,12 @@ function refusedHashOnlyDigests(
  *
  * ## The two halves divide at the decision, not at the door
  *
- * MARKING runs for `send` and both edit actions; the silent inline RETRY is
+ * MARKING runs for `send` AND `editUserMessage`; the silent inline RETRY is
  * send-only. Gating the whole function on `send` is what made a refused edit
- * permanent: the edit path became hash-only, so an `unsupported-format`
- * refusal of an edit reached nothing that could record the verdict, and every
- * later edit of that message sent the same undecodable digest bare and was
- * refused identically, with no way out but reloading the window.
+ * permanent: the edit path became hash-only, so an `unsupported-format` refusal
+ * of an edit reached nothing that could record the verdict, and every later
+ * edit of that message sent the same undecodable digest bare and was refused
+ * identically, with no way out but reloading the window.
  *
  * The retry stays send-only deliberately, and not for symmetry: re-sending a
  * send's bytes inline replays a message the host never recorded, while
@@ -11785,6 +12276,11 @@ function reconcileBackgroundStopAll(
  *     bytes are re-uploaded under it and the drain resumes - while this arm
  *     answers the user ABANDONING one, so the row goes and its content returns
  *     to the composer as the only copy left.
+ *  5. A WITHDRAWN OPENING (`takeMessageDeliveryRestoration`). The host hands the
+ *     prompt back through its delivery view, and it can withdraw one for bytes
+ *     it no longer holds (`missingHashes`). Retracted over the whole document
+ *     rather than those hashes alone, by the asymmetry below: the view's code is
+ *     not parsed here either.
  *
  * EVERY refusal reaching arm 1, not only the missing-bytes code: nothing in the
  * renderer parses that code, and the two errors are not symmetric - an
