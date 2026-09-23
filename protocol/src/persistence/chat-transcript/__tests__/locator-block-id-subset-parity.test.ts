@@ -81,7 +81,10 @@ function send(fields: {
   };
 }
 
-function plan(blockId: string, approvalId: string | null): Record<string, unknown> {
+function plan(
+  blockId: string,
+  approvalId: string | null,
+): Record<string, unknown> {
   return {
     type: "plan",
     blockId,
@@ -243,7 +246,10 @@ describe("transcriptLocatorBlockId: carrying-subset parity", () => {
       expect(transcriptLocatorBlockId(subset, locator)).toBe(whole);
     }
     expect(
-      transcriptLocatorBlockId(messages, { kind: "receipt", messageId: "rcpt-1" }),
+      transcriptLocatorBlockId(messages, {
+        kind: "receipt",
+        messageId: "rcpt-1",
+      }),
     ).toBe("send-a");
     expect(
       transcriptLocatorBlockId(messages, {
@@ -261,10 +267,16 @@ describe("transcriptLocatorBlockId: carrying-subset parity", () => {
       expect(transcriptLocatorBlockId(subset, locator)).toBe(whole);
     }
     expect(
-      transcriptLocatorBlockId(messages, { kind: "approval", approvalId: "appr-1" }),
+      transcriptLocatorBlockId(messages, {
+        kind: "approval",
+        approvalId: "appr-1",
+      }),
     ).toBe("plan-x");
     expect(
-      transcriptLocatorBlockId(messages, { kind: "approval", approvalId: "appr-2" }),
+      transcriptLocatorBlockId(messages, {
+        kind: "approval",
+        approvalId: "appr-2",
+      }),
     ).toBe("plan-z");
   });
 

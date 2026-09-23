@@ -178,7 +178,9 @@ const blocks: readonly ContentBlock[] = [
   taskCall("tc-list", "TaskList", [
     { id: "t9", text: "listed", status: "pending", action: "list" },
   ]),
-  todoBlock("todo-sem-2", [{ id: "s2", text: "semantic c", status: "pending" }]),
+  todoBlock("todo-sem-2", [
+    { id: "s2", text: "semantic c", status: "pending" },
+  ]),
   taskCall("tc-update-3", "TaskUpdate", [
     { id: "t3", text: "renamed", status: "completed", action: "update" },
   ]),
