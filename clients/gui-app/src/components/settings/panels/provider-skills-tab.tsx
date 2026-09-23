@@ -31,7 +31,10 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
-import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
+import {
+  ProviderSkillComposerDialog,
+  type SkillComposerProviderTarget,
+} from "./provider-skill-composer-dialog";
 import {
   isExternalDriftError,
   isSkillUpdateNoOp,
@@ -134,9 +137,6 @@ function ProviderSkillsTabBody({
 
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
-  // The composer can also install into one of this host's identities; the
-  // list is read only while the composer is open.
-  const identitySkillTargets = useActiveHostIdentitySkillTargets(composerOpen);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
   // own (the list is keyed by `source:path`), and the dialog wants the same
@@ -387,7 +387,7 @@ function ProviderSkillsTabBody({
     return (
       <>
         {composerOpen ? (
-          <ProviderSkillComposerDialog
+          <ProviderSkillComposerWithIdentities
             provider={{
               label: providerLabel,
               authoring,
@@ -396,9 +396,7 @@ function ProviderSkillsTabBody({
               canProviderScope,
               onMutate: onComposerMutate,
             }}
-            identities={identitySkillTargets.targets}
-            initialTarget={{ kind: "provider" }}
-            pending={composerPending || identitySkillTargets.pending}
+            pending={composerPending}
             onClose={() => {
               setComposerOpen(false);
             }}
@@ -1026,5 +1024,27 @@ function SkillRow({
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
     </li>
+  );
+}
+
+/**
+ * The composer, with this host's identities offered beside the provider as
+ * install targets. Its own component so the identity list and the installer
+ * mutations exist only while the composer is open.
+ */
+function ProviderSkillComposerWithIdentities(props: {
+  readonly provider: SkillComposerProviderTarget;
+  readonly pending: boolean;
+  readonly onClose: () => void;
+}): ReactNode {
+  const identitySkillTargets = useActiveHostIdentitySkillTargets(true);
+  return (
+    <ProviderSkillComposerDialog
+      provider={props.provider}
+      identities={identitySkillTargets.targets}
+      initialTarget={{ kind: "provider" }}
+      pending={props.pending || identitySkillTargets.pending}
+      onClose={props.onClose}
+    />
   );
 }

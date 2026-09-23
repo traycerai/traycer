@@ -68,16 +68,6 @@ const skillMocks = vi.hoisted(() => ({
   },
 }));
 
-// The composer's identity targets read the host's identity list; these
-// suites mount the tab without a QueryClient or host binding.
-vi.mock("@/hooks/identities/use-identity-skill-targets", () => ({
-  useActiveHostIdentitySkillTargets: () => ({
-    supported: false,
-    targets: [],
-    pending: false,
-  }),
-}));
-
 // Detail suite is about open/remove/readFile — not scope switching. Stub the
 // shared hook so F5's workspace resolution does not require a QueryClient.
 // Dynamic import: `vi.mock` is hoisted above static imports.

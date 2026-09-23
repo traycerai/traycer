@@ -14,8 +14,8 @@ const skillMocks = vi.hoisted(() => ({
   inspectScopes: [] as string[],
 }));
 
-// The composer's identity targets read the host's identity list; these
-// suites mount the tab without a QueryClient or host binding.
+// The composer's identity targets read the host's identity list; this
+// suite opens the composer without a QueryClient or host binding.
 vi.mock("@/hooks/identities/use-identity-skill-targets", () => ({
   useActiveHostIdentitySkillTargets: () => ({
     supported: false,

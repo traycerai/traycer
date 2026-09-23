@@ -13,6 +13,7 @@
  */
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import {
   identitySkillMutate,
@@ -83,10 +84,14 @@ export function useActiveHostIdentitySkillTargets(enabled: boolean): {
   readonly targets: readonly IdentitySkillTarget[];
   readonly pending: boolean;
 } {
+  // The id `useHostClient()` addresses, read reactively and without touching
+  // the client during render (under a host-scoped Settings binding both name
+  // the scoped host).
   const client = useHostClient();
+  const hostId = useAddressableHostId();
   return useIdentitySkillTargets({
     client,
-    hostId: client.getActiveHostId(),
+    hostId,
     enabled,
     pinned: null,
     onImported: () => {},
