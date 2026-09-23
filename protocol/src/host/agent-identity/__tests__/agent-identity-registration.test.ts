@@ -13,7 +13,7 @@ import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fi
  * `released-surface-compat` already proves the general rule - every non-floor
  * method states a degrade - by sweeping the whole registry. This file pins the
  * FAMILY: that its member list is exactly what the contract says it is, that
- * every member opens at 1.0 with no bridges, and that not one of the seventeen
+ * every member opens at 1.0 with no bridges, and that not one of the thirteen
  * names leaked into a released baseline.
  *
  * The last point is the one a sweep cannot make. A name added to
@@ -23,6 +23,10 @@ import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fi
  * edit fails a test that says why.
  */
 
+// `import.hermes.*` (T12) and `skills.*` (T13) have schemas but are not
+// registered until their host resolvers land - the host's resolver-coverage
+// gate fails an advertised method with no resolver. Each ticket adds its names
+// here when it registers them.
 const EXPECTED_UNARY_METHODS = [
   "agentIdentity.create",
   "agentIdentity.delete",
@@ -33,11 +37,7 @@ const EXPECTED_UNARY_METHODS = [
   "agentIdentity.files.uploadBlob",
   "agentIdentity.history.list",
   "agentIdentity.history.restore",
-  "agentIdentity.import.hermes.run",
-  "agentIdentity.import.hermes.scan",
   "agentIdentity.list",
-  "agentIdentity.skills.import",
-  "agentIdentity.skills.inspect",
   "agentIdentity.update",
 ] as const;
 
