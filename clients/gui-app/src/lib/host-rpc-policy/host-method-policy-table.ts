@@ -396,11 +396,6 @@ export const HOST_METHOD_POLL_TABLE = {
   // all — the Identities surface is hidden rather than degraded.
   "agentIdentity.list": { ...LATEST_SCHEDULING, poll: null },
   "agentIdentity.history.list": { ...LATEST_SCHEDULING, poll: null },
-  // A dry run: it reads what a Hermes import WOULD bring in and writes nothing,
-  // so it coalesces like any other read.
-  "agentIdentity.import.hermes.scan": { ...LATEST_SCHEDULING, poll: null },
-  // Reads a candidate skill's manifest. Same reasoning as the scan.
-  "agentIdentity.skills.inspect": { ...LATEST_SCHEDULING, poll: null },
   "agentIdentity.create": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -448,16 +443,6 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "agentIdentity.history.restore": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "agentIdentity.import.hermes.run": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "agentIdentity.skills.import": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
