@@ -45,7 +45,12 @@ function EnvCredentialSettingsAction({
       focus.setFocusHarnessId(harnessId);
       focus.setFocusTab("env");
     }
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+    });
   }, [harnessId, openSettings]);
   return (
     <div className="mt-1 flex">

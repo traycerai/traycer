@@ -4,11 +4,11 @@ import {
   Bell,
   Bot,
   Boxes,
-  Gavel,
   GitBranch,
   ListChecks,
   Globe,
   Keyboard,
+  KeyRound,
   LineChart,
   Palette,
   PanelBottom,
@@ -309,7 +309,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
     id: "permissions",
     label: "Permissions",
-    icon: Gavel,
+    // A key, the common permissions glyph; a gavel at sidebar size read as a
+    // broom.
+    icon: KeyRound,
     group: "host",
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent

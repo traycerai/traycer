@@ -244,7 +244,12 @@ export function FallbackGraceCard({
       } else {
         focus.setFocusHarnessId(failed.harnessId);
       }
-      openSettings({ section: "providers", resetToGeneral: false });
+      openSettings({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+      });
     };
     cancel.mutate({
       epicId,

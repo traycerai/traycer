@@ -8,6 +8,7 @@ import { getHistoryController } from "@/lib/persistent-history";
 import { hrefPathname } from "@/lib/routes";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
+import { armSettingsOpenIntent } from "@/stores/tabs/settings-open-intent-store";
 import {
   resolveHistoryTabIntent,
   resolveSettingsTabIntent,
@@ -79,6 +80,11 @@ export function useSystemTabModalActions(): SystemTabModalActions {
 
   const openSettings = useCallback(
     (opts: OpenSettingsModalOpts) => {
+      // The tab and draft ride a one-shot store rather than any of the three
+      // navigations below, because only two of them are routes: armed first,
+      // so the page reads the same intent whichever surface mounts it. A call
+      // with neither clears what an earlier one left unconsumed.
+      armSettingsOpenIntent(opts);
       // On phones the two-pane modal never opens: settings is only the
       // full-page drill-down. Every modal entry point (user menu, deep-links,
       // the bridge for palette/keybindings) funnels through here, so this one

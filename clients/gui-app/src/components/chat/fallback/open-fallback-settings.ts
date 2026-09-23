@@ -34,6 +34,8 @@ export function useOpenFallbackSettings(hostId: string | null): () => void {
     openSettings({
       section: FALLBACK_SETTINGS_SECTION_ID,
       resetToGeneral: false,
+      tab: null,
+      draft: null,
     });
   }, [hostId, openSettings]);
 }

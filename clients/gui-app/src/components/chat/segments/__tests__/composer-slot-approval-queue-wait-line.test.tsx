@@ -3,11 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatApprovalStateSchema } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
+import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { APPROVAL_PAUSED_LINE } from "@/components/chat/segments/approval-card-disclosure";
 
 afterEach(() => {
   cleanup();
 });
+
+const UNKNOWN_WORKSPACE: AutoModeRuleDraftWorkspace = {
+  remote: null,
+  branch: null,
+};
 
 function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
   return chatApprovalStateSchema.parse({
@@ -34,6 +40,8 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -49,6 +57,8 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -64,6 +74,8 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
 

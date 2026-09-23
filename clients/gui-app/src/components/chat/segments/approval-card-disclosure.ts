@@ -91,13 +91,26 @@ export function judgeWaitDisclosure(
  * There are three of these because the machine strings describe three
  * different things, and one sentence for all of them is FALSE for two: a card
  * carrying `auto: judge returned no verdict` sits directly under 37 s of the
- * judge's own reasoning about the action, so "Traycer couldn't run the judge"
+ * judge's own reasoning about the action, so "the judge couldn't run"
  * contradicts the paragraph above it. What the user is deciding is how much to
  * trust that paragraph, and that turns on whether the judge never ran, ran and
  * could not decide, or ran out of time.
+ *
+ * The never-ran sentence names its cause when the machine string carries one
+ * (see {@link judgeUnavailableCause}) and points at the setting that fixes it.
  */
-export const JUDGE_DID_NOT_RUN_HUMAN_LINE =
-  "Traycer couldn't run the judge, so it's asking you instead.";
+export function judgeCouldNotRunSentence(cause: string | null): string {
+  return cause === null
+    ? "The judge couldn't run."
+    : `The judge couldn't run: ${cause}.`;
+}
+
+/**
+ * The link after a couldn't-run sentence. Every cause in that family is fixed
+ * on the Judge tab: a provider that is off, signed out or not installed is
+ * chosen there, and so is a judge that can run.
+ */
+export const JUDGE_FIX_IN_SETTINGS_LABEL = "Fix in Permissions ▸ Judge";
 
 /** The judge answered, but not with a verdict this build could read. */
 export const JUDGE_NO_VERDICT_HUMAN_LINE =
@@ -195,18 +208,63 @@ export function judgeFailureFamily(text: string): JudgeFailureFamily | null {
   return null;
 }
 
+/** The human half of a machine string, and whether the Judge tab fixes it. */
+export interface JudgeUnavailableHumanLine {
+  readonly sentence: string;
+  /**
+   * Whether {@link JUDGE_FIX_IN_SETTINGS_LABEL} follows the sentence. Only
+   * for a judge that never ran: one that ran and could not decide, or ran out
+   * of time, is not a setting to fix.
+   */
+  readonly fixInJudgeSettings: boolean;
+}
+
+const JUDGE_UNAVAILABLE_PREFIX = "auto: judge unavailable (";
+
+/**
+ * The cause inside `auto: judge unavailable (…)`, or `null` for any other
+ * string.
+ *
+ * The host interpolates its `detail` there: a fixed clause it authored ("the
+ * judge provider is not signed in") or a provider's own error, filtered before
+ * it was ever put on the wire. Every other machine string carries no cause,
+ * and the sentence says only that the judge could not run.
+ */
+export function judgeUnavailableCause(text: string): string | null {
+  if (!text.startsWith(JUDGE_UNAVAILABLE_PREFIX) || !text.endsWith(")")) {
+    return null;
+  }
+  const cause = text
+    .slice(JUDGE_UNAVAILABLE_PREFIX.length, -1)
+    .trim()
+    .replace(/\.+$/u, "");
+  return cause.length > 0 ? cause : null;
+}
+
 /**
  * The sentence that goes beneath a machine string, for every machine string.
  *
- * Total on purpose: an unknown `auto: ` constant still gets the sentence the
- * card printed before this function existed, so a host that grows a new
- * failure mode degrades to today's copy rather than to a blank line.
+ * Total on purpose: an unknown `auto: ` constant still gets the couldn't-run
+ * sentence, so a host that grows a new failure mode degrades to a true line
+ * rather than to a blank one.
  */
-export function judgeUnavailableHumanLine(text: string): string {
+export function judgeUnavailableHumanLine(
+  text: string,
+): JudgeUnavailableHumanLine {
   const family = judgeFailureFamily(text);
-  if (family === "no-verdict") return JUDGE_NO_VERDICT_HUMAN_LINE;
-  if (family === "out-of-time") return JUDGE_OUT_OF_TIME_HUMAN_LINE;
-  return JUDGE_DID_NOT_RUN_HUMAN_LINE;
+  if (family === "no-verdict") {
+    return { sentence: JUDGE_NO_VERDICT_HUMAN_LINE, fixInJudgeSettings: false };
+  }
+  if (family === "out-of-time") {
+    return {
+      sentence: JUDGE_OUT_OF_TIME_HUMAN_LINE,
+      fixInJudgeSettings: false,
+    };
+  }
+  return {
+    sentence: judgeCouldNotRunSentence(judgeUnavailableCause(text)),
+    fixInJudgeSettings: true,
+  };
 }
 
 /** The wait line's companion, true for as long as the card is unanswered. */

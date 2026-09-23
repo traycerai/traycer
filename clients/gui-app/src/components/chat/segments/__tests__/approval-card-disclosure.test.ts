@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   APPROVAL_PAUSED_LINE,
   JUDGE_CAP_NOTICE,
-  JUDGE_DID_NOT_RUN_HUMAN_LINE,
+  JUDGE_FIX_IN_SETTINGS_LABEL,
   JUDGE_NO_VERDICT_HUMAN_LINE,
   JUDGE_OUT_OF_TIME_HUMAN_LINE,
   approvalWaitLine,
   isJudgeUnavailableReason,
+  judgeCouldNotRunSentence,
   judgeFailureFamily,
+  judgeUnavailableCause,
   judgeUnavailableHumanLine,
   judgeWaitDisclosure,
 } from "@/components/chat/segments/approval-card-disclosure";
@@ -27,9 +29,6 @@ describe("judgeWaitDisclosure", () => {
     });
   });
 
-  // The rungs are INCLUSIVE at 15 and 30 (`elapsedSeconds < RUNG`, not `<=`).
-  // 14/16/31 alone stay green under a `<` -> `<=` slip on either boundary;
-  // these two pin the exact edge so that slip goes red.
   it("shows the elapsed counter at exactly the first rung, without the cap notice", () => {
     expect(judgeWaitDisclosure(15)).toEqual({
       elapsedLabel: "15s",
@@ -53,14 +52,6 @@ describe("judgeWaitDisclosure", () => {
 });
 
 describe("JUDGE_CAP_NOTICE", () => {
-  // Pins the two load-bearing claims the sentence makes, replacing "Up to 2
-  // minutes, then it asks you" - a promise about the TOTAL wait that was
-  // false: the host's cap bounds one stage-2 CALL, this card's counter runs
-  // from `approval.requestedAt` (not from when the call actually started),
-  // and the judge admits one call per chat at a time, so a row queued behind
-  // a sibling can sit here well past the cap despite never having been told
-  // that. "one at a time" states the queue; "up to 2 minutes each" makes the
-  // cap PER CHECK rather than a total.
   it("is per check, and names the checks as serialized", () => {
     expect(JUDGE_CAP_NOTICE).toBe(
       "Checks run one at a time, up to 2 minutes each, then it asks you. Stop the turn to cancel.",
@@ -141,10 +132,6 @@ describe("APPROVAL_PAUSED_LINE", () => {
 });
 
 describe("judgeFailureFamily", () => {
-  // These are the host's machine strings (traycer-host/src/domain/chat/auto-judge/auto-judge-service.ts),
-  // restated as literals ON PURPOSE: they reach the client only as free text
-  // on the wire, and the point of this test is that a host that renames one
-  // goes red here. Do not import them, do not build them from a helper.
   it("classifies 'did not run' strings", () => {
     expect(judgeFailureFamily("auto: no judge configured")).toBe("did-not-run");
     expect(judgeFailureFamily("auto: judge failed")).toBe("did-not-run");
@@ -174,11 +161,6 @@ describe("judgeFailureFamily", () => {
     );
   });
 
-  // These four are deliberately null, not an oversight: the ticket names
-  // three families and each of these constants is already truthfully
-  // described by the "couldn't run the judge" fallback, so they stay out of
-  // the map rather than being force-fit into a family whose copy would be
-  // wrong for them.
   it("falls back to null for recognised-but-uncategorised 'auto: ' strings", () => {
     expect(judgeFailureFamily("auto: turn stopped")).toBeNull();
     expect(judgeFailureFamily("auto: judge preflight timed out")).toBeNull();
@@ -192,9 +174,6 @@ describe("judgeFailureFamily", () => {
     expect(judgeFailureFamily("This rewrites remote history.")).toBeNull();
   });
 
-  // The cap interpolates the host's stage-2 cap in minutes (2 today), so this
-  // matches on the prefix rather than the exact string - the client cannot
-  // read that host constant, and the match must survive it moving.
   it("classifies a different interpolated cap value via the prefix match", () => {
     expect(judgeFailureFamily("auto: judge exceeded 3 min")).toBe(
       "out-of-time",
@@ -202,57 +181,108 @@ describe("judgeFailureFamily", () => {
   });
 });
 
-describe("the three judge-unavailable human lines", () => {
-  it("are the exact sentences", () => {
-    expect(JUDGE_DID_NOT_RUN_HUMAN_LINE).toBe(
-      "Traycer couldn't run the judge, so it's asking you instead.",
+describe("judgeUnavailableCause", () => {
+  it("extracts the cause inside the parenthesised unavailable string", () => {
+    expect(
+      judgeUnavailableCause("auto: judge unavailable (not signed in)"),
+    ).toBe("not signed in");
+  });
+
+  it("strips trailing dots from the extracted cause", () => {
+    expect(
+      judgeUnavailableCause("auto: judge unavailable (not signed in...)"),
+    ).toBe("not signed in");
+  });
+
+  it("returns null for a string with no parenthesised cause", () => {
+    expect(judgeUnavailableCause("auto: judge timed out")).toBeNull();
+  });
+
+  it("returns null for the judge's own reasoning prose", () => {
+    expect(judgeUnavailableCause("This rewrites remote history.")).toBeNull();
+  });
+});
+
+describe("judgeCouldNotRunSentence", () => {
+  it("names the cause when one is given", () => {
+    expect(judgeCouldNotRunSentence("not signed in")).toBe(
+      "The judge couldn't run: not signed in.",
     );
-    expect(JUDGE_NO_VERDICT_HUMAN_LINE).toBe(
-      "The judge reviewed this but didn't reach a verdict, so it's asking you instead.",
-    );
-    expect(JUDGE_OUT_OF_TIME_HUMAN_LINE).toBe(
-      "The judge didn't finish in time, so it's asking you instead.",
-    );
+  });
+
+  it("falls back to the bare sentence when there is no cause", () => {
+    expect(judgeCouldNotRunSentence(null)).toBe("The judge couldn't run.");
+  });
+});
+
+describe("JUDGE_FIX_IN_SETTINGS_LABEL", () => {
+  it("is the exact link label", () => {
+    expect(JUDGE_FIX_IN_SETTINGS_LABEL).toBe("Fix in Permissions ▸ Judge");
   });
 });
 
 describe("judgeUnavailableHumanLine", () => {
-  it("returns the did-not-run line for a did-not-run string", () => {
-    expect(judgeUnavailableHumanLine("auto: no judge configured")).toBe(
-      JUDGE_DID_NOT_RUN_HUMAN_LINE,
-    );
+  it("returns the couldn't-run sentence with its cause and the settings link for a did-not-run string", () => {
+    expect(
+      judgeUnavailableHumanLine(
+        "auto: judge unavailable (traycer: not signed in)",
+      ),
+    ).toEqual({
+      sentence: "The judge couldn't run: traycer: not signed in.",
+      fixInJudgeSettings: true,
+    });
   });
 
-  it("returns the no-verdict line for a no-verdict string", () => {
-    expect(judgeUnavailableHumanLine("auto: judge returned no verdict")).toBe(
-      JUDGE_NO_VERDICT_HUMAN_LINE,
-    );
+  it("returns the bare couldn't-run sentence with the settings link for a cause-less did-not-run string", () => {
+    expect(judgeUnavailableHumanLine("auto: no judge configured")).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: true,
+    });
   });
 
-  it("returns the out-of-time line for an out-of-time string", () => {
-    expect(judgeUnavailableHumanLine("auto: judge timed out")).toBe(
-      JUDGE_OUT_OF_TIME_HUMAN_LINE,
-    );
+  it("returns the no-verdict line with no settings link", () => {
+    expect(
+      judgeUnavailableHumanLine("auto: judge returned no verdict"),
+    ).toEqual({
+      sentence: JUDGE_NO_VERDICT_HUMAN_LINE,
+      fixInJudgeSettings: false,
+    });
   });
 
-  it("falls back to the did-not-run line for an unrecognised 'auto: ' string", () => {
-    expect(judgeUnavailableHumanLine("auto: judge went fishing")).toBe(
-      JUDGE_DID_NOT_RUN_HUMAN_LINE,
-    );
+  it("returns the out-of-time line with no settings link", () => {
+    expect(judgeUnavailableHumanLine("auto: judge timed out")).toEqual({
+      sentence: JUDGE_OUT_OF_TIME_HUMAN_LINE,
+      fixInJudgeSettings: false,
+    });
   });
 
-  it("falls back to the did-not-run line for each recognised-but-uncategorised constant", () => {
-    expect(judgeUnavailableHumanLine("auto: turn stopped")).toBe(
-      JUDGE_DID_NOT_RUN_HUMAN_LINE,
-    );
-    expect(judgeUnavailableHumanLine("auto: judge preflight timed out")).toBe(
-      JUDGE_DID_NOT_RUN_HUMAN_LINE,
-    );
-    expect(judgeUnavailableHumanLine("auto: judge tools unavailable")).toBe(
-      JUDGE_DID_NOT_RUN_HUMAN_LINE,
-    );
+  it("falls back to the couldn't-run sentence with the settings link for an unrecognised 'auto: ' string", () => {
+    expect(judgeUnavailableHumanLine("auto: judge went fishing")).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: true,
+    });
+  });
+
+  it("falls back to the couldn't-run sentence for each recognised-but-uncategorised constant", () => {
+    expect(judgeUnavailableHumanLine("auto: turn stopped")).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: true,
+    });
+    expect(
+      judgeUnavailableHumanLine("auto: judge preflight timed out"),
+    ).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: true,
+    });
+    expect(judgeUnavailableHumanLine("auto: judge tools unavailable")).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: true,
+    });
     expect(
       judgeUnavailableHumanLine("auto: account policy could not be read"),
-    ).toBe(JUDGE_DID_NOT_RUN_HUMAN_LINE);
+    ).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: true,
+    });
   });
 });

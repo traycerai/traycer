@@ -103,7 +103,12 @@ export function MobileNavDrawer(): ReactNode {
       source: "direct_ui",
       section: "general",
     });
-    openSettings({ section: null, resetToGeneral: true });
+    openSettings({
+      section: null,
+      resetToGeneral: true,
+      tab: null,
+      draft: null,
+    });
   };
   const handleManageSubscription = () => {
     close();

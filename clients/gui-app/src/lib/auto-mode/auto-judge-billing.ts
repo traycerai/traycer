@@ -10,10 +10,20 @@
  * The Copilot line quotes TRAYCER'S OWN CALL RATE, never GitHub's monthly
  * allotment. The rate is a fact about our behaviour that we control and that
  * cannot go stale when GitHub reprices; the allotment is theirs, and it would.
+ *
+ * The composer's Auto row names the MODEL as well as the pocket ("Reviewed by
+ * Sonnet 5 on Traycer · uses credits"), so the run-level shape carries a model
+ * label. Which judge that is comes from `autoJudge.get`'s `effective`, and
+ * under Automatic's fallback it is the conversation's own harness - see
+ * {@link autoJudgeTarget}.
  */
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
-import type { AutoJudgeBlocked } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  AutoJudgeBlocked,
+  AutoJudgeEffective,
+  AutoJudgeSelection,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import type {
   GuiHarnessId,
   GuiHarnessOption,
@@ -52,7 +62,19 @@ export type AutoJudgeSelectionBilling =
     };
 
 export type AutoJudgeBilling =
-  | AutoJudgeSelectionBilling
+  /**
+   * A judge runs and is billed to Traycer credits (`traycer`) or to the user's
+   * own account at that vendor (`provider`). `modelLabel` is the display name
+   * of the model it runs on, resolved through that harness's catalog, or the
+   * raw slug when the catalog has no row for it.
+   */
+  | { readonly kind: "traycer"; readonly modelLabel: string }
+  | {
+      readonly kind: "provider";
+      readonly harnessId: string;
+      readonly harnessLabel: string;
+      readonly modelLabel: string;
+    }
   /**
    * The run's OWN provider reviews its own commands, and Traycer's judge never
    * runs at all.
@@ -71,8 +93,8 @@ export type AutoJudgeBilling =
       readonly harnessLabel: string;
     }
   /**
-   * The host reported a `blocked` reason, so NO judge runs and nothing is
-   * charged to anyone.
+   * The host reported that no judge can run (`effective: null`, or a
+   * `blocked` reason), so NO judge runs and nothing is charged to anyone.
    *
    * It carries no harness, on purpose: the stored selection is still there and
    * still readable, but it names a judge that will not be called, and a label
@@ -85,6 +107,85 @@ export type AutoJudgeBilling =
 
 const TRAYCER_BILLING: AutoJudgeSelectionBilling = { kind: "traycer" };
 const BLOCKED_BILLING: AutoJudgeBilling = { kind: "blocked" };
+
+/**
+ * Which judge a run's approvals would go to, before its model is named.
+ *
+ * - `judge` - this harness, on this model slug.
+ * - `none` - no judge can run: the host said so (`effective: null`, or a
+ *   `blocked` reason), and every command asks the user.
+ * - `unknown` - an input the answer needs has not arrived, or the host cannot
+ *   say. The row shows no meta line rather than a guess.
+ */
+export type AutoJudgeTarget =
+  | { readonly kind: "unknown" }
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "judge";
+      readonly harnessId: string;
+      readonly modelSlug: string;
+    };
+
+/** What {@link autoJudgeTarget} reads: the `autoJudge.get` answer and the run. */
+export interface AutoJudgeTargetInput {
+  readonly selection: AutoJudgeSelection | null;
+  readonly effective: AutoJudgeEffective | null | undefined;
+  readonly blocked: AutoJudgeBlocked | null | undefined;
+  readonly runHarnessId: string | null;
+  /** The composer's selected model; `""` while its catalog is loading. */
+  readonly runModelSlug: string;
+  /** The run harness's catalog `judgeDefaultModel`, or `null` for none. */
+  readonly runJudgeDefaultModel: string | null;
+}
+
+const UNKNOWN_TARGET: AutoJudgeTarget = { kind: "unknown" };
+const NO_JUDGE_TARGET: AutoJudgeTarget = { kind: "none" };
+
+/**
+ * The judge `autoJudge.get` says a run on `runHarnessId` would get.
+ *
+ * - `effective: null` is "no judge can run", WHATEVER `blocked` says: a `1.0`
+ *   host's `no-default` arrives upgraded as `blocked: unsupported-harness`
+ *   with `effective: null`, and a `1.1` host projects nothing else onto
+ *   `null`. The pocket is never derived from the stored selection there.
+ * - A `blocked` reason is "no judge can run" too.
+ * - `selection` / `default` name the harness and model outright.
+ * - `fallback` is Automatic falling back to the CONVERSATION'S OWN harness,
+ *   which a host-scoped read cannot name. The host judges on that harness's
+ *   `judgeDefaultModel` when its catalog row names one, otherwise on the
+ *   conversation's currently selected model - so that is what is named here,
+ *   from the composer's own run settings.
+ * - `undefined` is a host that predates `effective` (an unreleased `1.0`
+ *   build). A stored selection still names the judge; an unset one names a
+ *   server-flagged model this client cannot see, so it is `unknown`.
+ */
+export function autoJudgeTarget(input: AutoJudgeTargetInput): AutoJudgeTarget {
+  const { selection, effective, blocked } = input;
+  if (effective === null) return NO_JUDGE_TARGET;
+  if (blocked !== null && blocked !== undefined) return NO_JUDGE_TARGET;
+  if (effective === undefined) {
+    return selection === null
+      ? UNKNOWN_TARGET
+      : {
+          kind: "judge",
+          harnessId: selection.harnessId,
+          modelSlug: selection.model,
+        };
+  }
+  if (effective.source === "fallback") {
+    if (input.runHarnessId === null) return UNKNOWN_TARGET;
+    const modelSlug =
+      input.runJudgeDefaultModel ??
+      (input.runModelSlug.length > 0 ? input.runModelSlug : null);
+    if (modelSlug === null) return UNKNOWN_TARGET;
+    return { kind: "judge", harnessId: input.runHarnessId, modelSlug };
+  }
+  return {
+    kind: "judge",
+    harnessId: effective.harnessId,
+    modelSlug: effective.model,
+  };
+}
 
 /**
  * The billing shape of the host's stored judge selection. `null` - the record
@@ -119,17 +220,19 @@ export function autoJudgeBillingFor(
  *
  * Takes the decided boolean rather than the provider row, so the precedence
  * rule is one branch here and the LOOKUP is
- * {@link providerRunsItsOwnJudge}'s job.
+ * {@link providerRunsItsOwnJudge}'s job. `null` is an `unknown` target: the
+ * row says nothing rather than guess.
  */
 export function autoJudgeBillingForRun(input: {
-  readonly judgeHarnessId: string | null;
   readonly runHarnessId: string | null;
   readonly isProviderNative: boolean;
+  /** Which judge the host would call, from {@link autoJudgeTarget}. */
+  readonly target: AutoJudgeTarget;
   /**
-   * The host's `autoJudge.get` blocker, if it reported one. `undefined` is an
-   * older host that has no such field, and reads the same as `null`.
+   * The target model's display label, or `null` when its harness catalog has
+   * no row for the slug (the slug itself is shown then).
    */
-  readonly blocked: AutoJudgeBlocked | null | undefined;
+  readonly judgeModelLabel: string | null;
   /**
    * A CLIENT-DETECTED reason the stored judge cannot run - today an explicit
    * profile its provider no longer offers, or a model its harness no longer
@@ -149,14 +252,9 @@ export function autoJudgeBillingForRun(input: {
    * already lives.
    */
   readonly judgeRecordUnrunnable: boolean;
-}): AutoJudgeBilling {
-  const {
-    judgeHarnessId,
-    runHarnessId,
-    isProviderNative,
-    blocked,
-    judgeRecordUnrunnable,
-  } = input;
+}): AutoJudgeBilling | null {
+  const { runHarnessId, isProviderNative, target, judgeRecordUnrunnable } =
+    input;
   // Precedence, and the order is the whole content of this function.
   //
   // Provider-native FIRST: that provider's classifier decides inside the agent
@@ -170,17 +268,21 @@ export function autoJudgeBillingForRun(input: {
       harnessLabel: judgeHarnessLabel(runHarnessId),
     };
   }
-  // Then the blocker. The stored selection is still readable and still names a
-  // harness - which is exactly why it must not be billed: the host has already
-  // said it cannot run that judge, so every command escalates to the human and
-  // no pocket is touched.
-  if (blocked !== null && blocked !== undefined) return BLOCKED_BILLING;
+  // Then the host's own "no judge can run". The stored selection may still be
+  // readable and still name a harness - which is exactly why it must not be
+  // billed: every command escalates to the human and no pocket is touched.
+  if (target.kind === "none") return BLOCKED_BILLING;
   // Then the client-side equivalent, AFTER the provider-native arm for exactly
   // the same reason the host's blocker is: a provider running its own
   // classifier does not consult Traycer's stored judge, so a vanished profile
   // on that record describes a call that was never going to happen.
   if (judgeRecordUnrunnable) return BLOCKED_BILLING;
-  return autoJudgeBillingFor(judgeHarnessId);
+  if (target.kind === "unknown") return null;
+  const modelLabel = input.judgeModelLabel ?? target.modelSlug;
+  const pocket = autoJudgeBillingFor(target.harnessId);
+  return pocket.kind === "traycer"
+    ? { kind: "traycer", modelLabel }
+    : { ...pocket, modelLabel };
 }
 
 /**
@@ -255,23 +357,36 @@ function judgeHarnessLabel(harnessId: string): string {
 }
 
 /**
+ * The measured order of magnitude of Copilot premium requests an hour of Auto
+ * mode spends - Traycer's own call rate over real sessions, not a derivation
+ * from one call per command (a reviewed command can take two calls, or none on
+ * a cache hit).
+ */
+const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
+
+/**
  * The one-line disclosure on the composer's Auto row, so a user who never
- * opens Settings still learns which pocket is charged BEFORE turning the mode
- * on.
+ * opens Settings still learns which model reviews and which pocket is charged
+ * BEFORE turning the mode on.
  */
 export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
-  if (billing.kind === "traycer") return "Uses your Traycer credits.";
-  // Says what HAPPENS, not what is spent: "no judge" reads as a missing
-  // setting, while a user about to turn Auto on needs to know the mode will
-  // behave as if every command escalated. Same verb the approval card uses
-  // when a judge could not run ("so it's asking you instead").
-  if (billing.kind === "blocked") {
-    return "No judge can run on this machine, so Auto mode will ask you.";
+  switch (billing.kind) {
+    case "traycer":
+      return `Reviewed by ${billing.modelLabel} on Traycer · uses credits`;
+    case "provider":
+      // The metered case is named with its range, whether the user picked
+      // Copilot or Automatic fell back to a Copilot conversation.
+      if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
+        return `Reviewed by ${billing.modelLabel} on Copilot · uses premium requests (${COPILOT_PREMIUM_REQUESTS_PER_HOUR} per hour)`;
+      }
+      return `Reviewed by ${billing.modelLabel} on ${billing.harnessLabel} · your account`;
+    case "provider-native":
+      return `Reviewed by ${billing.harnessLabel}'s built-in classifier · no extra cost`;
+    // Says what HAPPENS, not what is missing: a user about to turn Auto on
+    // needs to know every command will come to them.
+    case "blocked":
+      return "No judge available on this machine · asks you instead";
   }
-  if (billing.kind === "provider-native") {
-    return `Reviewed by ${billing.harnessLabel}'s own classifier — no extra cost.`;
-  }
-  return `Uses your ${billing.harnessLabel} account.`;
 }
 
 /**
@@ -283,7 +398,7 @@ export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
  * the natural thing to reach for and doubles the spend on one account.
  */
 export function autoJudgeSelfBillingWarning(
-  billing: AutoJudgeBilling,
+  billing: AutoJudgeSelectionBilling | AutoJudgeBilling,
 ): string | null {
   if (billing.kind === "traycer") return null;
   // Nothing extra is spent, so there is nothing to warn about. Unreachable
@@ -305,7 +420,7 @@ export function autoJudgeSelfBillingWarning(
   // which was measured over real sessions rather than derived from one call per
   // command, and now says so.
   if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
-    return "Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use 60–350 of it.";
+    return `Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use ${COPILOT_PREMIUM_REQUESTS_PER_HOUR} of it.`;
   }
   return `Judge calls use your own ${billing.harnessLabel} account, on top of your chat replies — a reviewed command can take more than one call.`;
 }

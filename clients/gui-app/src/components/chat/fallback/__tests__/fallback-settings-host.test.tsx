@@ -69,6 +69,8 @@ function assertSettingsLandedOnTabHost(): void {
   expect(mocks.openSettings).toHaveBeenCalledWith({
     section: FALLBACK_SETTINGS_SECTION_ID,
     resetToGeneral: false,
+    tab: null,
+    draft: null,
   });
 }
 

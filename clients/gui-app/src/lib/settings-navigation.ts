@@ -28,5 +28,10 @@ export function navigateToSettingsSection(sectionId: SettingsSectionId): void {
     api.setSection(sectionId);
     return;
   }
-  api.openSettings({ section: sectionId, resetToGeneral: false });
+  api.openSettings({
+    section: sectionId,
+    resetToGeneral: false,
+    tab: null,
+    draft: null,
+  });
 }

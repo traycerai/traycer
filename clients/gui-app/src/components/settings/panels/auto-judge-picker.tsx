@@ -532,7 +532,12 @@ function AutoJudgeBlockedStatus(props: {
             size="inline-xs"
             className="text-current underline"
             onClick={() =>
-              openSettings({ section: "providers", resetToGeneral: false })
+              openSettings({
+                section: "providers",
+                resetToGeneral: false,
+                tab: null,
+                draft: null,
+              })
             }
           >
             Providers

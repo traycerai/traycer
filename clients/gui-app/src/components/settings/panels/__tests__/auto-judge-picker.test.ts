@@ -842,6 +842,8 @@ describe("<AutoJudgePicker /> status", () => {
     expect(mockedOpenSettings).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
     });
     expect(screen.queryByTestId("auto-judge-effective")).toBeNull();
   });

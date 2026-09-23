@@ -1663,6 +1663,8 @@ describe("<ProviderReauthBanner />", () => {
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: "providers",
         resetToGeneral: false,
+        tab: null,
+        draft: null,
       });
     });
 
@@ -1699,6 +1701,8 @@ describe("<ProviderReauthBanner />", () => {
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: "providers",
         resetToGeneral: false,
+        tab: null,
+        draft: null,
       });
     });
 
@@ -1729,6 +1733,8 @@ describe("<ProviderReauthBanner />", () => {
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: "providers",
         resetToGeneral: false,
+        tab: null,
+        draft: null,
       });
     });
   });

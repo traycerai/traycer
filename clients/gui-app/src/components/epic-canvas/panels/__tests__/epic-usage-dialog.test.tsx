@@ -359,6 +359,8 @@ describe("<EpicUsageDialog />", () => {
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "usage",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
     });
   });
 

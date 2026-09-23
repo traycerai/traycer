@@ -165,6 +165,8 @@ describe("back stays functional after promoting a system overlay to a tab", () =
       modalProbe.current?.openSettings({
         section: null,
         resetToGeneral: false,
+        tab: null,
+        draft: null,
       });
     });
     await waitFor(() =>

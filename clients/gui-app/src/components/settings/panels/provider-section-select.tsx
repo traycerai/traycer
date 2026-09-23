@@ -3,7 +3,6 @@ import {
   Boxes,
   Braces,
   Gauge,
-  Gavel,
   KeyRound,
   Puzzle,
   Server,
@@ -33,7 +32,7 @@ const PROVIDER_SECTION_ICONS: Record<ProviderTabKey, LucideIcon> = {
   general: SquareTerminal,
   // The same glyph as the host-scoped Permissions page in the sidebar: the
   // tab is that page's per-provider half.
-  permissions: Gavel,
+  permissions: KeyRound,
   env: Braces,
   modelProviders: Boxes,
   mcp: Server,

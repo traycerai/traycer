@@ -260,7 +260,11 @@ import {
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useAnySystemOverlayActive } from "@/stores/tabs/use-system-tab-modal";
+import {
+  useAnySystemOverlayActive,
+  useSystemTabModalActions,
+} from "@/stores/tabs/use-system-tab-modal";
+import { autoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeSnapshotCumulativeBundleDiffTile,
@@ -3412,6 +3416,13 @@ function useChatTileSessionViewModel(
     ],
   );
 
+  // The remote and branch this chat's binding records, which is what an
+  // approval card's "Allow from now on…" narrows its drafted rule by.
+  const ruleDraftWorkspace = useMemo(
+    () => autoModeRuleDraftWorkspace(state.worktreeBinding),
+    [state.worktreeBinding],
+  );
+  const { openSettings } = useSystemTabModalActions();
   const lowerApprovals = useMemo(
     () => ({
       pendingFileEditApprovals: state.pendingFileEditApprovals,
@@ -3420,6 +3431,8 @@ function useChatTileSessionViewModel(
       onApprovalDecision: dispatchApprovalDecision,
       highlightedApprovalId: composerHighlightBlockId,
       highlightedGeneration: composerHighlightGeneration,
+      ruleDraftWorkspace,
+      onOpenSettings: openSettings,
     }),
     [
       composerHighlightBlockId,
@@ -3428,6 +3441,8 @@ function useChatTileSessionViewModel(
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,
       dispatchApprovalDecision,
+      ruleDraftWorkspace,
+      openSettings,
     ],
   );
 

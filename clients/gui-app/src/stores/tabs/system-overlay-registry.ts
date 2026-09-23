@@ -12,6 +12,7 @@
 import type { ComponentType, ReactNode } from "react";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type {
+  OpenSettingsModalOpts,
   SystemModalActive,
   SystemOverlayKind,
 } from "@/stores/tabs/system-overlay-types";
@@ -123,12 +124,7 @@ export function routeIntentViaModalBridge(
   intent: TabNavigationIntent,
   api: {
     readonly openHistory: () => void;
-    readonly openSettings: (opts: {
-      readonly section:
-        | import("@/lib/settings-sections").SettingsSectionId
-        | null;
-      readonly resetToGeneral: boolean;
-    }) => void;
+    readonly openSettings: (opts: OpenSettingsModalOpts) => void;
   },
 ): boolean {
   if (intent.kind === "history") {
@@ -136,7 +132,12 @@ export function routeIntentViaModalBridge(
     return true;
   }
   if (intent.kind === "settings") {
-    api.openSettings({ section: intent.section, resetToGeneral: false });
+    api.openSettings({
+      section: intent.section,
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+    });
     return true;
   }
   return false;

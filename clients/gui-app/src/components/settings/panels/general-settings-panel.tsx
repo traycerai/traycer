@@ -108,6 +108,8 @@ export function GeneralSettingsPanel() {
                 turnActive={false}
                 judgeBilling={null}
                 closeFocus="trigger"
+                // A Settings surface must not open Settings.
+                onOpenPermissionSettings={null}
               />
             }
           />

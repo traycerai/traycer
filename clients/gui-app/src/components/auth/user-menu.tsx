@@ -124,6 +124,8 @@ export function UserMenu(props: UserMenuProps) {
                 getSystemTabModalApi()?.openSettings({
                   section: null,
                   resetToGeneral: true,
+                  tab: null,
+                  draft: null,
                 });
               }}
             >

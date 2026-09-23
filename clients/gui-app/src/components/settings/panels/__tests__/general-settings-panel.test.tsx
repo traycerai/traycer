@@ -681,18 +681,33 @@ describe("GeneralSettingsPanel", () => {
     // label AND description into one accessible name, so a name matcher of
     // "Auto" or /Auto/ ambiguously matches both radio items.
     // Spelled out rather than imported from `PERMISSION_OPTIONS`: this is the
-    // sentence a user reads before turning the mode on, and the previous
-    // wording ("asks you only when unsure") was wrong three ways over - a
-    // block cards, an unavailable judge cards, and the mode spends money. An
-    // assertion derived from the option registry would have followed that
-    // copy fix silently instead of making someone re-read it.
+    // sentence a user reads before turning the mode on. An assertion derived
+    // from the option registry would follow a copy change silently instead of
+    // making someone re-read it.
     fireEvent.click(
       screen.getByRole("menuitemradio", {
-        name: /Auto-approve edits\. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable\./,
+        name: /A judge approves routine commands and asks you about risky ones\./,
       }),
     );
 
     expect(useSettingsStore.getState().defaultPermission).toBe("auto");
+  });
+
+  // A Settings surface must not open Settings: the default-mode row's picker
+  // passes `onOpenPermissionSettings={null}`, so it renders no trailing item.
+  it("renders no trailing 'Permission settings…' item on the default-mode row", () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    renderPanel();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Full access" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Permission settings…" }),
+    ).toBeNull();
   });
 
   it("renders the Worktree branch prefix editor (moved from Worktrees)", () => {

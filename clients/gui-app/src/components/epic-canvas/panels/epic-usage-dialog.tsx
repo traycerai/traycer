@@ -179,7 +179,12 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
                 data-testid="epic-usage-view-full-dashboard"
                 onClick={() => {
                   onOpenChange(false);
-                  openSettings({ section: "usage", resetToGeneral: false });
+                  openSettings({
+                    section: "usage",
+                    resetToGeneral: false,
+                    tab: null,
+                    draft: null,
+                  });
                 }}
               >
                 View full usage →

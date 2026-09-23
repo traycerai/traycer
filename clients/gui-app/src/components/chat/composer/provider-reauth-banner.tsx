@@ -153,7 +153,12 @@ function ProfileUnavailableBanner({
         .getState()
         .setFocusHarnessId(providerIdToGuiHarnessId(providerId));
     }
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+    });
   };
   return (
     <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>

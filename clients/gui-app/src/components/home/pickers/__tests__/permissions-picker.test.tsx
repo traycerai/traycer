@@ -18,13 +18,10 @@ interface RenderPickerOptions {
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   readonly harnessLabel: string | null;
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
-  // The host-capability VETO on the "needs a newer Traycer" sentence. Stated
-  // rather than omitted: an absent prop reads as `false`, which is the
-  // pre-veto behaviour, so every case here would keep passing while the veto
-  // itself went untested.
   readonly hostKnowsAutoMode: boolean;
   readonly turnActive: boolean;
   readonly judgeBilling: AutoJudgeBilling | null;
+  readonly onOpenPermissionSettings: (() => void) | null;
 }
 
 const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
@@ -32,14 +29,10 @@ const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
   supportedPermissionModes: null,
   harnessLabel: "Claude Code",
   catalogSupportedModes: null,
-  // A host whose catalog line CAN spell `auto`. That is the ordinary case and
-  // the one every test about the auto row wants: with `false` the option is
-  // correctly disabled, so a description/meta/notice assertion would be
-  // asserting about a row the user cannot reach. The `false` direction has its
-  // own case below.
   hostKnowsAutoMode: true,
   turnActive: false,
   judgeBilling: null,
+  onOpenPermissionSettings: null,
 };
 
 // Plain object-spread merge rather than `??` defaults: several cases here
@@ -63,11 +56,12 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
       turnActive={options.turnActive}
       judgeBilling={options.judgeBilling}
       closeFocus="trigger"
+      onOpenPermissionSettings={options.onOpenPermissionSettings}
     />,
   );
 }
 
-describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
+describe("<PermissionsPicker /> - catalogSupportedModes copy", () => {
   it("blames a newer Traycer when the catalog lists modes but none includes auto", () => {
     renderPicker({
       supportedPermissionModes: [
@@ -77,8 +71,6 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
       ],
       harnessLabel: "Claude Code",
       catalogSupportedModes: ["supervised", "auto_accept_edits", "full_access"],
-      // Explicit, because this is the one case the veto is ABOUT: the upgrade
-      // sentence only appears for a host that cannot spell the mode.
       hostKnowsAutoMode: false,
     });
     openMenu();
@@ -139,15 +131,7 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
   });
 });
 
-// FIX 2 (P1): the Auto row must be gated on the HOST's own line, not the
-// row's constraint alone - a pre-`auto` host serves unconstrained rows like
-// any other, so the row predicate lit the option up on a machine whose
-// `chat.subscribe` line cannot carry the enum.
-describe("<PermissionsPicker /> - FIX 2 (P1): Auto option gated on hostKnowsAutoMode", () => {
-  // Matched on the label span's EXACT text, not a `startsWith("Auto")`
-  // prefix: "auto_accept_edits"'s own label ("Auto-accept edits") also starts
-  // with "Auto" and sits earlier in `PERMISSION_OPTIONS` order, so a prefix
-  // match would silently grab the wrong row.
+describe("<PermissionsPicker /> - Auto option gated on hostKnowsAutoMode", () => {
   function autoMenuItem(): HTMLElement {
     const item = screen
       .getAllByRole("menuitemradio")
@@ -199,31 +183,79 @@ describe("<PermissionsPicker /> - empty supportedPermissionModes means unconstra
   });
 });
 
-describe("<PermissionsPicker /> - C1 description + meta line", () => {
-  it("shows the exact auto description with the em dash", () => {
+describe("<PermissionsPicker /> - the four labels and one-line descriptions", () => {
+  it("shows every mode's label and description in menu order", () => {
     renderPicker({});
     openMenu();
 
+    const items = screen.getAllByRole("menuitemradio");
+    expect(
+      items.map((item) => item.querySelector(".font-medium")?.textContent),
+    ).toEqual(["Supervised", "Auto-accept edits", "Auto", "Full access"]);
+
+    expect(
+      screen.getByText("Asks before every command and file change."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Edits go through. Commands still ask."),
+    ).toBeTruthy();
     expect(
       screen.getByText(
-        "Auto-approve edits. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable.",
+        "A judge approves routine commands and asks you about risky ones.",
       ),
     ).toBeTruthy();
+    expect(screen.getByText("Runs everything. Nothing asks.")).toBeTruthy();
   });
+});
 
-  it("shows the Traycer-credits meta line for traycer billing", () => {
-    renderPicker({ judgeBilling: { kind: "traycer" } });
+describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
+  it("shows the traycer meta line naming the model", () => {
+    renderPicker({
+      judgeBilling: { kind: "traycer", modelLabel: "Sonnet 5" },
+    });
     openMenu();
 
     expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Uses your Traycer credits.",
+      "Reviewed by Sonnet 5 on Traycer · uses credits",
     );
   });
 
-  it("shows the provider-account meta line for provider billing", () => {
+  it("shows the provider-account meta line naming the model and the provider", () => {
     renderPicker({
       judgeBilling: {
         kind: "provider",
+        harnessId: "claude",
+        harnessLabel: "Claude Code",
+        modelLabel: "Sonnet",
+      },
+    });
+    openMenu();
+
+    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
+      "Reviewed by Sonnet on Claude Code · your account",
+    );
+  });
+
+  it("shows the Copilot premium-request meta line", () => {
+    renderPicker({
+      judgeBilling: {
+        kind: "provider",
+        harnessId: "copilot",
+        harnessLabel: "Copilot",
+        modelLabel: "GPT-5",
+      },
+    });
+    openMenu();
+
+    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
+      "Reviewed by GPT-5 on Copilot · uses premium requests (60–350 per hour)",
+    );
+  });
+
+  it("shows the provider-native no-extra-cost meta line", () => {
+    renderPicker({
+      judgeBilling: {
+        kind: "provider-native",
         harnessId: "claude",
         harnessLabel: "Claude Code",
       },
@@ -231,7 +263,35 @@ describe("<PermissionsPicker /> - C1 description + meta line", () => {
     openMenu();
 
     expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Uses your Claude Code account.",
+      "Reviewed by Claude Code's built-in classifier · no extra cost",
+    );
+  });
+
+  it("shows the blocked meta line when no judge can run", () => {
+    renderPicker({ judgeBilling: { kind: "blocked" } });
+    openMenu();
+
+    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
+      "No judge available on this machine · asks you instead",
+    );
+  });
+
+  // A fallback-derived billing is, by the time it reaches the picker, just
+  // another `judge` target resolved to its harness's own account - proving
+  // the picker renders it identically to an explicit selection.
+  it("shows a fallback-derived provider billing the same as an explicit provider selection", () => {
+    renderPicker({
+      judgeBilling: {
+        kind: "provider",
+        harnessId: "codex",
+        harnessLabel: "Codex",
+        modelLabel: "codex-judge-default",
+      },
+    });
+    openMenu();
+
+    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
+      "Reviewed by codex-judge-default on Codex · your account",
     );
   });
 
@@ -243,27 +303,23 @@ describe("<PermissionsPicker /> - C1 description + meta line", () => {
   });
 });
 
-describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
+describe("<PermissionsPicker /> - mid-turn notice", () => {
   it("shows the notice when a turn is active and the current value is not auto", () => {
     renderPicker({ turnActive: true, value: "full_access" });
     openMenu();
 
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
-    ).toBe(
-      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
-    );
+    ).toBe("Switches now. Anything already waiting still asks you.");
   });
 
-  it("shows the notice when a turn is active and the current value is supervised - the case the old copy was most wrong about", () => {
+  it("shows the notice when a turn is active and the current value is supervised", () => {
     renderPicker({ turnActive: true, value: "supervised" });
     openMenu();
 
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
-    ).toBe(
-      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
-    );
+    ).toBe("Switches now. Anything already waiting still asks you.");
   });
 
   it("is absent when no turn is active", () => {
@@ -285,37 +341,26 @@ describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
   });
 });
 
-describe("<PermissionsPicker /> - C6 mid-turn notice copy tripwire", () => {
-  // This sentence is pinned to `authorizingPermissionMode` in the HOST's
-  // `traycer-host/src/domain/chat/chat-session-manager.ts` (not in this
-  // submodule, read-only reference):
-  //
-  //   function authorizingPermissionMode(execution: ActiveExecution): PermissionMode {
-  //     if (execution.permissionMode === "auto" && execution.autoJudge === null) {
-  //       return "supervised";
-  //     }
-  //     return execution.permissionMode;
-  //   }
-  //
-  // i.e. a turn that enters `auto` mid-run with no judge bound collapses to
-  // `supervised` on the host, and `AUTO_MID_TURN_NOTICE` (`landing-options.ts`)
-  // is the GUI's prose description of that fact, shown in this picker at the
-  // moment of the choice.
-  //
-  // This assertion is a COPY TRIPWIRE ONLY: it pins the exact wording so an
-  // accidental rewording here is caught. It is explicitly NOT proof that the
-  // described collapsing behaviour is correctly implemented end-to-end - no
-  // GUI-only test can actually execute `authorizingPermissionMode`, which
-  // lives in a different repository (the internal host monorepo) that this
-  // suite has no access to and never imports from.
-  it("pins the mid-turn notice's exact wording (does not, and cannot, exercise authorizingPermissionMode)", () => {
-    renderPicker({ turnActive: true, value: "full_access" });
+describe("<PermissionsPicker /> - trailing 'Permission settings…' item", () => {
+  it("renders the item after a separator when a callback is given, and calls it on select", () => {
+    const onOpenPermissionSettings = vi.fn();
+    renderPicker({ onOpenPermissionSettings });
+    openMenu();
+
+    const item = screen.getByRole("menuitem", { name: "Permission settings…" });
+    expect(item).toBeTruthy();
+
+    fireEvent.click(item);
+
+    expect(onOpenPermissionSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no trailing item when onOpenPermissionSettings is null (the Settings default-mode row)", () => {
+    renderPicker({ onOpenPermissionSettings: null });
     openMenu();
 
     expect(
-      screen.getByTestId("permission-option-mid-turn-notice").textContent,
-    ).toBe(
-      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
-    );
+      screen.queryByRole("menuitem", { name: "Permission settings…" }),
+    ).toBeNull();
   });
 });

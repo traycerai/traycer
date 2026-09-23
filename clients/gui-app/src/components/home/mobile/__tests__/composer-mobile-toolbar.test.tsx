@@ -20,8 +20,18 @@ vi.mock("@/components/home/pickers/harness-model-picker", () => ({
 vi.mock("@/hooks/auto-mode/use-auto-judge-billing", () => ({
   useAutoJudgeBilling: () => null,
 }));
+// Same reason as the billing hook above: `useOpenPermissionSettings` reads
+// `useSystemTabModalActions()`, which resolves through the router - this test
+// renders without one, so the hook is mocked rather than pulling in a router.
+const openPermissionSettingsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/settings/use-open-permission-settings", () => ({
+  useOpenPermissionSettings: () => openPermissionSettingsMock,
+}));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  openPermissionSettingsMock.mockClear();
+});
 
 function makeStore(modelSlug: string) {
   return createComposerToolbarStore({
@@ -104,5 +114,17 @@ describe("ComposerMobileToolbar", () => {
     renderToolbar("claude-opus-5", onSubmit);
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onSubmit).toHaveBeenCalled();
+  });
+
+  it("wires the sheet's trailing row to useOpenPermissionSettings", async () => {
+    renderToolbar("claude-opus-5", vi.fn());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Permissions: Supervised" }),
+    );
+    await userEvent.click(
+      screen.getByTestId("composer-options-permission-settings"),
+    );
+
+    expect(openPermissionSettingsMock).toHaveBeenCalledTimes(1);
   });
 });
