@@ -34,11 +34,8 @@ import {
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import {
-  CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
   MAX_KEPT_CRASH_REPORTS,
-  STDERR_END_WAIT_TIMEOUT_MS,
-  STDERR_FLUSH_TIMEOUT_MS,
   StderrLogTee,
   type StderrTee,
   type CrashReportMatch,
@@ -48,6 +45,11 @@ import {
   findCrashReportSince,
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+  STDERR_FLUSH_TIMEOUT_MS,
+} from "../service/spawn-edge-bounds";
 import { hostHomeDir } from "../store/paths";
 import {
   HOST_CRASH_REPORT_TIMEOUT_MS,

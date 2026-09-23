@@ -55,7 +55,7 @@ import { assertHostNotBusy } from "./busy-check";
 import { readHostPidMetadata } from "./pid-metadata";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { hostHomeDir } from "../store/paths";
-import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../service/platforms/macos";
+import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../service/spawn-edge-bounds";
 import {
   installDispatchAckStamper,
   type DispatchAckStamper,

@@ -14,7 +14,6 @@ import {
 import {
   createLinuxController,
   setRestartStopGracesForTests,
-  SYSTEMD_TIMEOUT_STOP_SECONDS,
   type ProcessRunner,
 } from "../linux";
 import { serviceManifestPath, type ServiceLabel } from "../../label";
@@ -32,7 +31,8 @@ import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_FLUSH_TIMEOUT_MS,
-} from "../../../host/crash-diagnostics";
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+} from "../../spawn-edge-bounds";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
 import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
@@ -1115,9 +1115,12 @@ describe("linux service stop --force", () => {
 });
 
 describe("install — spawn-edge placement", () => {
-  it("show-environment and daemon-reload precede publish, and enable is the entry right after it", async () => {
+  it("show-environment precedes publish, and daemon-reload is the entry right after it - the install edge sits in front of the unit write", async () => {
     // `publish` pushes into the SAME log `recordingRunner` fills, in the
-    // order things actually happen - not a separately-kept count.
+    // order things actually happen - not a separately-kept count. The
+    // install edge (`atServiceInstallEdge`) sits in front of the unit's
+    // FIRST write, before `daemon-reload` even runs - not after it - so a
+    // refused publication touches nothing.
     const { calls, runner } = recordingRunner(() => false);
     const publish = vi.fn(async (): Promise<null> => {
       calls.push({ command: "publish", args: [] });
@@ -1131,14 +1134,22 @@ describe("install — spawn-edge placement", () => {
     );
     expect(verbs.filter((verb) => verb === "publish")).toHaveLength(1);
     const publishIndex = verbs.indexOf("publish");
-    expect(verbs.slice(0, publishIndex)).toEqual([
-      "show-environment",
-      "daemon-reload",
-    ]);
-    expect(verbs[publishIndex + 1]).toBe("enable");
+    expect(verbs.slice(0, publishIndex)).toEqual(["show-environment"]);
+    // `atServiceSpawnEdge()` runs again right before `enable --now` and
+    // returns the SAME already-published lease (no second "publish" entry
+    // above), so only one call separates the edge from `enable`.
+    expect(verbs[publishIndex + 1]).toBe("daemon-reload");
+    expect(verbs[publishIndex + 2]).toBe("enable");
   });
 
-  it("a refused publication rolls the unit back and rejects with a wrapped SERVICE_INSTALL_FAILED, not the raw refusal", async () => {
+  it("a refused publication at the install edge propagates raw, by identity - nothing was written, so nothing is rolled back", async () => {
+    // The install edge sits in front of the unit's FIRST write
+    // (`atServiceInstallEdge`, awaited before `serviceManifestPath` is even
+    // touched), so a refusal there leaves the previous registration - here,
+    // none - exactly as it was: no unit file, no `disable`, no
+    // `daemon-reload` rollback, and `enable` never issued. Nothing was
+    // written, so there is nothing to roll back, and the refusal propagates
+    // as itself rather than being wrapped into a SERVICE_INSTALL_FAILED.
     const { calls, runner } = recordingRunner(() => false);
     const publishError = new Error("proof write failed");
     const publish = vi.fn(async (): Promise<null> => {
@@ -1150,31 +1161,14 @@ describe("install — spawn-edge placement", () => {
       () => installWith(runner),
     ).catch((cause: unknown) => cause);
 
-    // Wrapped, not rethrown by identity: `atServiceSpawnEdgeReporting`
-    // reports the state the rollback leaves and the recovery command, the
-    // same as every other platform's install edge.
-    expect(rejection).not.toBe(publishError);
-    expect(rejection).toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { cause: "proof write failed", rollBackFailure: null },
-    });
-    const message = rejection instanceof Error ? rejection.message : "";
-    expect(message).toContain("proof write failed");
-    expect(message).toContain("is not registered and not running");
-    expect(message).toContain("Run 'traycer host service install'");
-    // The unit rollback ran exactly as it does for a refused `enable --now`
-    // itself: `disable --now` then a re-reload, and the manifest removed.
-    // `enable` itself never ran - the edge rejected before it was issued.
-    expect(calls.map(verbOf)).toEqual([
-      "show-environment",
-      "daemon-reload",
-      "disable",
-      "daemon-reload",
-    ]);
+    expect(rejection).toBe(publishError);
+    // Only the preflight ran before the edge rejected; no rollback verbs and
+    // no `enable` - the edge rejected before the unit was ever written.
+    expect(calls.map(verbOf)).toEqual(["show-environment"]);
     expect(await fileExists(unitFile())).toBe(false);
   });
 
-  it("an authority refusal at the pre-publish check leaves the rollback UNRUN - no disable, and the unit file still present - and rejects with the authority error", async () => {
+  it("an authority refusal at the pre-publish check leaves the rollback UNRUN, and the unit was never written - and rejects with the authority error", async () => {
     // Derive the exact pre-edge verify-call count by dry run, the same
     // technique `macos.test.ts` uses: `installService`'s own
     // `verifyServiceMutationAuthority()` calls around the manifest write
@@ -1215,43 +1209,44 @@ describe("install — spawn-edge placement", () => {
     expect(isServiceMutationAuthorityError(rejection)).toBe(true);
     expect(publish).not.toHaveBeenCalled();
     expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("daemon-reload");
     expect(calls.map(verbOf)).not.toContain("enable");
-    expect(await fileExists(unitFile())).toBe(true);
+    // The authority check that gates the edge fires BEFORE the unit's first
+    // write, same as an ordinary refusal there - so the file was never
+    // written, not "still present" from an earlier write.
+    expect(await fileExists(unitFile())).toBe(false);
   });
 
-  it("edge refusal plus a failing unit-file removal: the half-written wording, and details.rollBackFailure names the rm failure", async () => {
-    const publishError = new Error("proof write failed");
+  it("P2-1: re-registering over a LIVE unit - a refusal at the install edge propagates raw and leaves the old unit file byte-identical", async () => {
+    // The install-edge round's timeline pin: even when a unit file already
+    // exists (an existing registration being re-installed), the edge sits
+    // in front of the write, so a refused publication never touches it -
+    // the old bytes on disk are exactly what they were, and systemd is
+    // never told anything (no daemon-reload/enable/disable/stop).
+    const oldUnitContent = "[Unit]\nDescription=live-registration-fixture\n";
+    await writeFile(unitFile(), oldUnitContent, "utf8");
+    const { calls, runner } = recordingRunner(() => false);
+    const refusal = new Error("proof write failed");
     const publish = vi.fn(async (): Promise<null> => {
-      throw publishError;
+      throw refusal;
     });
-    const runner: ProcessRunner = async (command, args) => {
-      if (command === "systemctl" && args[1] === "disable") {
-        return Promise.reject(busError(command, args));
-      }
-      return ok();
-    };
-    RM_FAILURE.message = "permission denied";
 
-    try {
-      const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
-        publish,
-        () => installWith(runner),
-      ).catch((cause: unknown) => cause);
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => installWith(runner),
+    ).catch((cause: unknown) => cause);
 
-      expect(rejection).toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-        details: {
-          cause: "proof write failed",
-          rollBackFailure: "permission denied",
-        },
-      });
-      const message = rejection instanceof Error ? rejection.message : "";
-      expect(message).toContain(
-        "Undoing what it wrote before the launch failed too (permission denied), so its registration may be half-written.",
-      );
-    } finally {
-      RM_FAILURE.message = null;
-    }
+    // Identity-preserved raw propagation - the edge refused before any
+    // write, so there is nothing for a wrapper to describe.
+    expect(rejection).toBe(refusal);
+    expect(calls.map(verbOf)).toEqual(["show-environment"]);
+    expect(calls.map(verbOf)).not.toContain("daemon-reload");
+    expect(calls.map(verbOf)).not.toContain("enable");
+    expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("stop");
+    // The pre-existing unit is UNCHANGED - byte-identical to what was there
+    // before the re-register attempt.
+    expect(await readFile(unitFile(), "utf8")).toBe(oldUnitContent);
   });
 
   it("enable --now failure plus a failing unit-file removal: the 'failed too' wording, not a claimed removal", async () => {

@@ -16,10 +16,15 @@ import {
  * (`bootout`, `print`, `launchctl kill`, `systemctl stop` / `kill` /
  * `daemon-reload`, `schtasks /Create` / `/End` / `/Query`) are not edges.
  *
+ * Every install has one more edge, in front of its first write
+ * ({@link atServiceInstallEdge}), so a publication an install cannot make
+ * touches nothing.
+ *
  * Same request-scoped shape as `mutation-authority.ts`: a facade arms a hook
  * once around a controller call, and the controller never learns what the hook
  * does. Outside an armed scope the edge is a no-op, so a bare controller call
- * behaves exactly as before.
+ * behaves exactly as before. The bounds each path runs on after its first edge
+ * are in `spawn-edge-bounds.ts`.
  */
 const spawnEdgeHook = new AsyncLocalStorage<() => Promise<void>>();
 
@@ -38,6 +43,23 @@ export async function atServiceSpawnEdge(): Promise<void> {
 }
 
 /**
+ * An install's FIRST edge, awaited in front of its first write rather than its
+ * first launch: before macOS writes the launcher and plist (and boots out a
+ * loaded registration), before Linux writes the unit, before Windows writes
+ * the launcher and `/Create`s the task. A publication refused here has touched
+ * nothing - the previous registration, and a host it runs, stay exactly as
+ * they were - so the refusal propagates as itself and nothing is rolled back.
+ * The install's spawn edges after it return the same publication.
+ *
+ * That costs the grant's clock the install's own registration calls (the
+ * bare `bootout`, `daemon-reload`, `/Create`), which each platform's install
+ * bound counts (`spawn-edge-bounds.ts`).
+ */
+export async function atServiceInstallEdge(): Promise<void> {
+  await atServiceSpawnEdge();
+}
+
+/**
  * Whether `error` is a publication refused at a spawn edge that no layer has
  * reported yet. An authority loss is never one: that is its own hard stop.
  */
@@ -48,17 +70,14 @@ export function isUnreportedSpawnEdgeRefusal(error: unknown): boolean {
 }
 
 /**
- * What a controller call - or the caller around it - has done by the time a
- * spawn edge can refuse, and so what a refusal there must undo and tell the
- * operator.
+ * What a call had already done to the host by the time its spawn edge
+ * refused, and so what the operator has to be told.
  */
 export interface RefusedSpawnEdgeReport {
   readonly code: CliErrorCode;
-  /** Names the call and its target: "service install for 'ai.traycer.host'". */
+  /** Names the call and its target: "start of 'Traycer Host' after its stop". */
   readonly operation: string;
-  /** Undoes what the call wrote before the edge; `null` if it wrote nothing. */
-  readonly rollBack: (() => Promise<void>) | null;
-  /** The state the refusal leaves (after a successful rollback), as a sentence. */
+  /** The state the refusal leaves, as a sentence. */
   readonly leaves: string;
   /** The command that brings the host back, as a sentence. */
   readonly recovery: string;
@@ -66,47 +85,33 @@ export interface RefusedSpawnEdgeReport {
 
 /**
  * The operator error for a refused publication: what was refused, the state it
- * leaves - not registered, or stopped - and the command that brings the host
- * back. The refusal travels in `details.cause`.
+ * leaves, and the command that brings the host back. The refusal travels in
+ * `details.cause`.
  */
 export function refusedSpawnEdgeError(
   refusal: unknown,
   report: RefusedSpawnEdgeReport,
-  rollBackFailure: string | null,
 ): CliError {
-  const state =
-    rollBackFailure === null
-      ? report.leaves
-      : `Undoing what it wrote before the launch failed too (${rollBackFailure}), so its registration may be half-written.`;
   return cliError({
     code: report.code,
-    message: `${report.operation}: the host-start grant could not be published (${describeRefusal(refusal)}), so no start was requested. ${state} ${report.recovery}`,
-    details: { cause: describeRefusal(refusal), rollBackFailure },
+    message: `${report.operation}: the host-start grant could not be published (${describeRefusal(refusal)}), so no start was requested. ${report.leaves} ${report.recovery}`,
+    details: { cause: describeRefusal(refusal) },
     exitCode: 1,
   });
 }
 
 /**
- * {@link atServiceSpawnEdge} for a call whose first edge comes AFTER it has
- * already changed something - registered the service (every install), or
- * stopped the host (the Windows restart ladder). Publishing at the edge makes
- * a refusal there a new stopping point, after that work, so it is not
- * reported as a bare publication error:
+ * {@link atServiceSpawnEdge} for a start that follows the caller's own stop -
+ * the Windows restart ladder, and a relaunch after a stop. Publishing at the
+ * edge makes a refusal there a stopping point AFTER the host was stopped, so
+ * it is reported with the state that leaves and the command that brings the
+ * host back (`refusedSpawnEdgeError`), not as a bare publication error. It
+ * writes nothing before its edge, so there is nothing to roll back.
  *
- *  - what the call wrote is rolled back (best effort). A registration left
- *    behind is not inert: launchd loads a LaunchAgents plist at the next
- *    login, Task Scheduler runs a task at the next logon, and systemd starts
- *    an enabled unit - the reason Linux's `installService` already rolls
- *    back a failed `enable --now`;
- *  - the error says what state that leaves and names the command that
- *    brings the host back (`refusedSpawnEdgeError`).
- *
- * Not for an authority loss, which is rethrown as itself. That is a hard stop
- * callers classify by identity: every rollback write would be refused by the
- * same check, recovery belongs to whoever holds the authority now, and the
- * state it leaves is exactly what the controller's own per-command check in
- * front of the spawn call already leaves. A rollback that itself loses the
- * authority surfaces that loss instead, the harder of the two stops.
+ * Not for an authority loss, which is rethrown as itself: a hard stop callers
+ * classify by identity, and the state it leaves is exactly what the
+ * controller's own per-command check in front of the spawn call already
+ * leaves.
  */
 export async function atServiceSpawnEdgeReporting(
   report: RefusedSpawnEdgeReport,
@@ -115,16 +120,7 @@ export async function atServiceSpawnEdgeReporting(
     await atServiceSpawnEdge();
   } catch (refusal) {
     if (isServiceMutationAuthorityError(refusal)) throw refusal;
-    let rollBackFailure: string | null = null;
-    if (report.rollBack !== null) {
-      try {
-        await report.rollBack();
-      } catch (cause) {
-        if (isServiceMutationAuthorityError(cause)) throw cause;
-        rollBackFailure = describeRefusal(cause);
-      }
-    }
-    throw refusedSpawnEdgeError(refusal, report, rollBackFailure);
+    throw refusedSpawnEdgeError(refusal, report);
   }
 }
 
@@ -153,7 +149,9 @@ export interface ServiceSpawnEdgeLease {
  * Publishing at the edge rather than before the call is what makes the
  * grant's age bound derivable: everything the call does before its first
  * edge - probes, a Desktop host's cooperative stand-down, the Windows stop
- * ladder - no longer runs on the grant's clock.
+ * ladder - no longer runs on the grant's clock. An install's first edge is its
+ * install edge, in front of its first write, so a refused publication never
+ * leaves an install half-done.
  *
  * A call that reaches no edge publishes nothing, waits for nothing and cancels
  * nothing; its error, if any, propagates unchanged.

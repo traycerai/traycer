@@ -43,7 +43,6 @@ import {
   buildSystemdUnit,
   createLinuxController,
   setRestartStopGracesForTests,
-  SYSTEMD_TIMEOUT_STOP_SECONDS,
   SYSTEMD_UNIT_SERVICE_DIRECTIVES,
   type ProcessRunner,
 } from "../linux";
@@ -63,7 +62,8 @@ import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_FLUSH_TIMEOUT_MS,
-} from "../../../host/crash-diagnostics";
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+} from "../../spawn-edge-bounds";
 import type { ServiceLabel } from "../../label";
 import type { ServiceController } from "../../index";
 

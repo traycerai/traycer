@@ -23,15 +23,17 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
-  CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
-  STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_HEAD_MAX_BYTES,
   STDERR_TAIL_MAX_BYTES,
   StderrCaptureBuffer,
   type CrashReportMatch,
   type StderrTee,
 } from "../../host/crash-diagnostics";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+} from "../../service/spawn-edge-bounds";
 import {
   RESTART_EXIT_CODE,
   SHUTDOWN_FORCE_EXIT_MS,

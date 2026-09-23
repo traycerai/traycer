@@ -9,9 +9,9 @@ import {
 } from "vitest";
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   SHUTDOWN_FORCE_EXIT_MS,
@@ -23,11 +23,13 @@ import {
   classifyLaunchdPrintOutput,
   createMacosController,
   isSmAppServiceLaunchAgentPath,
-  LAUNCHCTL_RECYCLE_TIMEOUT_MS,
-  LAUNCHD_THROTTLE_INTERVAL_SECONDS,
   readRegisteredCliInvocation,
   type ProcessRunner,
 } from "../macos";
+import {
+  LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+  LAUNCHD_THROTTLE_INTERVAL_SECONDS,
+} from "../../spawn-edge-bounds";
 import {
   buildCompatibleHostStartScript,
   buildHostStartLauncherScript,
@@ -5417,7 +5419,14 @@ describe("macOS controller — spawn-edge placement", () => {
     expect(next !== undefined && spawnPredicate(next)).toBe(true);
   }
 
-  it("install (normal): the ownership print/bootout precede publish, and bootstrap is the entry right after it", async () => {
+  // The install edge moved in front of the first write (`atServiceInstallEdge`,
+  // `macos.ts`): publish now sits right after the two ownership prints and
+  // right BEFORE the launcher/plist writes, the conditional bootout and the
+  // bootstrap - not immediately before the bootstrap itself, as it did when
+  // the edge sat after the writes. Only launchctl calls land in `log` (the
+  // writes are local files), so the entry right after "publish" here is the
+  // bootout, and bootstrap follows it.
+  it("install (normal): both ownership prints precede publish; bootout then bootstrap follow it, in order", async () => {
     const { log, publish } = makeSharedLog();
     const controller = createMacosController(loggingRunner(log));
 
@@ -5429,27 +5438,41 @@ describe("macOS controller — spawn-edge placement", () => {
       }),
     );
 
-    expectEdgeImmediatelyPrecedesSpawn(log, (entry) =>
-      entry.startsWith("bootstrap"),
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const kinds = log.map((entry) =>
+      entry === "publish" ? "publish" : (entry.split(" ")[0] ?? ""),
     );
-    const publishIndex = log.indexOf("publish");
-    const preEdge = log.slice(0, publishIndex);
-    expect(preEdge.some((entry) => entry.startsWith("print"))).toBe(true);
-    expect(preEdge.some((entry) => entry.startsWith("bootout"))).toBe(true);
+    expect(kinds).toEqual([
+      "print",
+      "print",
+      "publish",
+      "bootout",
+      "bootstrap",
+      "kickstart",
+    ]);
+    // CLI label first, then the agent label - both before publish.
+    expect(log[0]).toContain(`/${label.id}`);
+    expect(log[0]).not.toContain(`/${label.id}.agent`);
+    expect(log[1]).toContain(`/${label.id}.agent`);
+    expect(log.indexOf("publish")).toBe(2);
   });
 
-  it("install through the bootstrap-reload race: publish sits right before the FIRST bootstrap, then two bootstraps and the kickstart follow with no second publish", async () => {
+  it("install through the bootstrap-reload race: publish sits before the writes/bootout, still runs exactly once, and two bootstraps plus the kickstart follow", async () => {
     const { log, publish } = makeSharedLog();
+    let bootstrapAttempts = 0;
     const runner: ProcessRunner = async (_command, args) => {
       log.push(args.join(" "));
       if (args[0] === "bootstrap") {
-        throw buildLaunchctlError({
-          command: "launchctl",
-          cmdArgs: args,
-          stderr: "Bootstrap failed: 37: Service is already loaded\n",
-          stdout: "",
-          exitCode: 37,
-        });
+        bootstrapAttempts += 1;
+        if (bootstrapAttempts === 1) {
+          throw buildLaunchctlError({
+            command: "launchctl",
+            cmdArgs: args,
+            stderr: "Bootstrap failed: 37: Service is already loaded\n",
+            stdout: "",
+            exitCode: 37,
+          });
+        }
       }
       return buildSuccessResult();
     };
@@ -5463,17 +5486,27 @@ describe("macOS controller — spawn-edge placement", () => {
       }),
     );
 
-    expectEdgeImmediatelyPrecedesSpawn(log, (entry) =>
-      entry.startsWith("bootstrap"),
-    );
+    // Exactly one publication for the whole call, however many edges it
+    // reaches (bootstrap x2, kickstart) - every one after the first reuses
+    // the same held publication.
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBe(2);
+    // Nothing before publish is a write/mutation call other than the two
+    // read-only ownership prints.
+    expect(
+      log
+        .slice(0, publishIndex)
+        .every((entry) => entry.startsWith("print") || entry === "publish"),
+    ).toBe(true);
     expect(log.filter((entry) => entry.startsWith("bootstrap"))).toHaveLength(
       2,
     );
     expect(log.filter((entry) => entry.startsWith("kickstart"))).toHaveLength(
       1,
     );
-    // The kickstart, the third edge, runs after both bootstraps with no
-    // second publication in between.
+    // The kickstart, the last edge on this path, runs after both bootstraps
+    // with no second publication in between.
     expect(log[log.length - 1]?.startsWith("kickstart")).toBe(true);
   });
 
@@ -5506,7 +5539,15 @@ describe("macOS controller — spawn-edge placement", () => {
     });
   });
 
-  it("install: a refused publication (plain error) rolls the plist and launcher back, and never bootstraps", async () => {
+  // The install edge used to sit AFTER the writes, so a refused publication
+  // there had to roll a half-written launcher/plist back and report that
+  // state (`atServiceSpawnEdgeReporting`, `rollBackFailure`). The edge now
+  // sits in front of the first write (`atServiceInstallEdge`, `macos.ts`), so
+  // a refusal there touches nothing - there is no rollback to perform or
+  // report, and the refusal propagates by identity, exactly like every other
+  // pre-write refusal in this file (the SMAppService-ownership refusal
+  // above, the authority-loss test below).
+  it("install: a refused publication (plain error) propagates by identity, before any write - no bootout, no bootstrap, nothing to roll back", async () => {
     const calls: string[] = [];
     const runner: ProcessRunner = async (_command, args) => {
       calls.push(args[0] ?? "");
@@ -5515,6 +5556,13 @@ describe("macOS controller — spawn-edge placement", () => {
     const controller = createMacosController(runner);
     const manifestPath = serviceManifestPath(label);
     const launcherPath = serviceLauncherScriptPath(label);
+    // A prior test in this describe block may have left a successful
+    // install's plist/launcher on disk (this file's tests share one label
+    // and never clean up on success) - start from a known-clean slate so
+    // this test's "nothing was written" claim is about THIS call, not an
+    // accident of run order.
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
     const publishError = new Error("proof write failed");
     const publish = vi.fn(async (): Promise<null> => {
       throw publishError;
@@ -5530,26 +5578,94 @@ describe("macOS controller — spawn-edge placement", () => {
         }),
     ).catch((cause: unknown) => cause);
 
-    // Wrapped, not rethrown by identity: `atServiceSpawnEdgeReporting`
-    // reports the state the rollback leaves and the recovery command.
-    expect(rejection).not.toBe(publishError);
-    expect(rejection).toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: {
-        cause: "proof write failed",
-        rollBackFailure: null,
-      },
-    });
-    const message = rejection instanceof Error ? rejection.message : "";
-    expect(message).toContain("proof write failed");
-    expect(message).toContain("is not registered");
-    expect(message).toContain("Run 'traycer host service install'");
+    expect(rejection).toBe(publishError);
+    expect(calls).toEqual(["print", "print"]);
+    expect(calls).not.toContain("bootout");
     expect(calls).not.toContain("bootstrap");
     expect(existsSync(manifestPath)).toBe(false);
     expect(existsSync(launcherPath)).toBe(false);
   });
 
-  it("install: an authority refusal at the pre-publish check leaves the plist and launcher IN PLACE, and rejects with the authority error", async () => {
+  // P2-1: the timeline pin for a refusal over an EXISTING, live registration
+  // rather than a fresh machine - the case the install edge's pre-write
+  // placement matters most for. The CLI label already owns a loaded,
+  // non-SMAppService job (so both ownership probes pass), and an old
+  // plist/launcher are already on disk from a prior install. A refused
+  // publication here must not touch either the loaded registration (no
+  // bootout, no bootstrap, no kickstart) or the on-disk files (byte-for-byte
+  // unchanged) - the two probes are the only launchctl calls that ran.
+  it("P2-1: a refused publication over a live registration leaves the loaded job and the old plist/launcher completely untouched", async () => {
+    const calls: string[] = [];
+    const manifestPath = serviceManifestPath(label);
+    const launcherPath = serviceLauncherScriptPath(label);
+    const oldPlistContent = "OLD PLIST CONTENT - pre-existing registration";
+    const oldLauncherContent =
+      "OLD LAUNCHER CONTENT - pre-existing registration";
+    await mkdir(dirname(manifestPath), { recursive: true });
+    await mkdir(dirname(launcherPath), { recursive: true });
+    await writeFile(manifestPath, oldPlistContent, "utf8");
+    await writeFile(launcherPath, oldLauncherContent, "utf8");
+
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      if (args[0] === "print") {
+        const target = args[1] ?? "";
+        if (target.endsWith(".agent")) {
+          // Agent label: not loaded (this is a CLI-owned, pre-split
+          // machine).
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        // CLI label: loaded, non-SMAppService ("cli-or-other") - a live
+        // registration the install would otherwise reload.
+        return buildSuccessResult();
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    // Propagated by identity - the install edge has no try/catch around it,
+    // unlike the later spawn edges' `-Reporting` wrapper.
+    expect(rejection).toBe(publishError);
+    // Only the two read-only ownership probes ran; no bootout, no
+    // bootstrap, no kickstart against the live job.
+    expect(calls).toEqual(["print", "print"]);
+    expect(calls).not.toContain("bootout");
+    expect(calls).not.toContain("bootstrap");
+    expect(calls).not.toContain("kickstart");
+    // The old files are byte-for-byte exactly what they were.
+    await expect(readFile(manifestPath, "utf8")).resolves.toBe(oldPlistContent);
+    await expect(readFile(launcherPath, "utf8")).resolves.toBe(
+      oldLauncherContent,
+    );
+
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
+  });
+
+  // The pre-write install edge means an authority loss caught at the edge's
+  // OWN pre-publish check (`runWithLeaseAtServiceSpawnEdge`'s hook, which
+  // revalidates authority before calling `publish`) never reaches a write:
+  // publish itself is never called, and neither is the launcher/plist write
+  // that would follow it in `installService`.
+  it("install: an authority refusal at the pre-publish check propagates as itself, before any write", async () => {
     // Every probe (`print`/`bootout`, through the wrapped runner) and every
     // explicit `verifyServiceMutationAuthority()` around the launcher and
     // manifest writes consults the SAME verifier the edge's own pre-publish
@@ -5588,6 +5704,11 @@ describe("macOS controller — spawn-edge placement", () => {
     const controller = createMacosController(runner);
     const manifestPath = serviceManifestPath(label);
     const launcherPath = serviceLauncherScriptPath(label);
+    // Same reason as the plain-error test above: start from a clean slate
+    // regardless of what an earlier successful install in this describe
+    // block left behind.
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
     const authorityError = new Error("mutation authority was lost");
     let verifyCalls = 0;
     const verify = async (): Promise<void> => {
@@ -5609,10 +5730,10 @@ describe("macOS controller — spawn-edge placement", () => {
     expect(isServiceMutationAuthorityError(rejection)).toBe(true);
     expect(publish).not.toHaveBeenCalled();
     expect(calls).not.toContain("bootstrap");
-    expect(existsSync(manifestPath)).toBe(true);
-    expect(existsSync(launcherPath)).toBe(true);
-    await rm(manifestPath, { force: true });
-    await rm(launcherPath, { force: true });
+    // The edge sits in front of the first write, so an authority loss caught
+    // there - before publish is even called - leaves nothing on disk.
+    expect(existsSync(manifestPath)).toBe(false);
+    expect(existsSync(launcherPath)).toBe(false);
   });
 
   it("start: the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {

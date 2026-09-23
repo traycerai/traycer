@@ -1,8 +1,10 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import {
+  atServiceInstallEdge,
   atServiceSpawnEdge,
   atServiceSpawnEdgeReporting,
   isUnreportedSpawnEdgeRefusal,
+  refusedSpawnEdgeError,
   runWithLeaseAtServiceSpawnEdge,
   type RefusedSpawnEdgeReport,
   type ServiceSpawnEdgeLease,
@@ -29,9 +31,49 @@ function makeLease(): ServiceSpawnEdgeLease & {
   };
 }
 
+function makeReport(): RefusedSpawnEdgeReport {
+  return {
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    operation: "service install for 'test.label'",
+    leaves: "the state it leaves",
+    recovery: "the recovery command",
+  };
+}
+
 describe("atServiceSpawnEdge", () => {
   it("is a no-op outside an armed scope", async () => {
     await expect(atServiceSpawnEdge()).resolves.toBeUndefined();
+  });
+});
+
+describe("atServiceInstallEdge", () => {
+  it("is a no-op outside an armed scope: resolves, throws nothing, and calls no hook", async () => {
+    const publish = vi.fn(async () => {
+      throw new Error("publish must not run outside an armed scope");
+    });
+
+    await expect(atServiceInstallEdge()).resolves.toBeUndefined();
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("inside an armed scope, publishes once and shares that one publication with later atServiceSpawnEdge() calls", async () => {
+    const lease = makeLease();
+    let publishCalls = 0;
+    const publish = vi.fn(async () => {
+      publishCalls += 1;
+      return lease;
+    });
+    const start = async (): Promise<void> => {
+      await atServiceInstallEdge();
+      await atServiceSpawnEdge();
+      await atServiceInstallEdge();
+      await atServiceSpawnEdge();
+    };
+
+    await runWithLeaseAtServiceSpawnEdge(publish, start);
+
+    expect(publishCalls).toBe(1);
   });
 });
 
@@ -355,14 +397,7 @@ describe("isUnreportedSpawnEdgeRefusal", () => {
 
     const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
       publish,
-      () =>
-        atServiceSpawnEdgeReporting({
-          code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-          operation: "op",
-          rollBack: null,
-          leaves: "leaves",
-          recovery: "recovery",
-        }),
+      () => atServiceSpawnEdgeReporting(makeReport()),
     ).catch((cause: unknown) => cause);
 
     expect(rejection).not.toBe(refusal);
@@ -370,44 +405,51 @@ describe("isUnreportedSpawnEdgeRefusal", () => {
   });
 });
 
-describe("atServiceSpawnEdgeReporting", () => {
-  function makeReport(
-    rollBack: (() => Promise<void>) | null,
-  ): RefusedSpawnEdgeReport {
-    return {
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      operation: "service install for 'test.label'",
-      rollBack,
-      leaves: "the state it leaves",
-      recovery: "the recovery command",
-    };
-  }
-
-  it("a plain refusal runs rollBack exactly once, then rejects with a wrapped CliError naming the refusal, with no rollback failure", async () => {
+describe("refusedSpawnEdgeError", () => {
+  it("produces a CliError whose details is exactly { cause: <string> }", () => {
     const refusal = new Error("plain refusal");
+
+    const error = refusedSpawnEdgeError(refusal, makeReport());
+
+    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_INSTALL_FAILED);
+    expect(error.exitCode).toBe(1);
+    expect(error.message).toBe(
+      "service install for 'test.label': the host-start grant could not be published (plain refusal), so no start was requested. the state it leaves the recovery command",
+    );
+    expect(error.details).toEqual({ cause: "plain refusal" });
+  });
+
+  it("stringifies a non-Error refusal for `cause`", () => {
+    const error = refusedSpawnEdgeError("plain string refusal", makeReport());
+
+    expect(error.details).toEqual({ cause: "plain string refusal" });
+    expect(error.message).toContain("plain string refusal");
+  });
+});
+
+describe("atServiceSpawnEdgeReporting", () => {
+  it("a plain refusal inside an armed scope rejects with the exact CliError message, details = { cause }", async () => {
+    const refusal = new Error("proof write failed");
     const publish = vi.fn(async () => {
       throw refusal;
     });
-    const rollBack = vi.fn(async () => undefined);
 
     const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
       publish,
-      () => atServiceSpawnEdgeReporting(makeReport(rollBack)),
+      () => atServiceSpawnEdgeReporting(makeReport()),
     ).catch((cause: unknown) => cause);
 
-    expect(rollBack).toHaveBeenCalledTimes(1);
+    expect(rejection).not.toBe(refusal);
     expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message:
-        "service install for 'test.label': the host-start grant could not be published (plain refusal), so no start was requested. the state it leaves the recovery command",
+        "service install for 'test.label': the host-start grant could not be published (proof write failed), so no start was requested. the state it leaves the recovery command",
       exitCode: 1,
-      details: { cause: "plain refusal", rollBackFailure: null },
+      details: { cause: "proof write failed" },
     });
-    // Not the same object as `refusal` - it is wrapped, not rethrown.
-    expect(rejection).not.toBe(refusal);
   });
 
-  it("an authority refusal never runs rollBack, and rejects with the authority error itself, unwrapped", async () => {
+  it("an authority-loss refusal is rethrown BY IDENTITY, never wrapped", async () => {
     const authorityError = new Error("mutation authority was lost");
     let verifyCalls = 0;
     const verify = async (): Promise<void> => {
@@ -417,103 +459,21 @@ describe("atServiceSpawnEdgeReporting", () => {
       if (verifyCalls === 2) throw authorityError;
     };
     const publish = vi.fn(async () => null);
-    const rollBack = vi.fn(async () => undefined);
-
-    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
-      runWithLeaseAtServiceSpawnEdge(publish, () =>
-        atServiceSpawnEdgeReporting(makeReport(rollBack)),
-      ),
-    ).catch((cause: unknown) => cause);
-
-    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
-    expect(publish).not.toHaveBeenCalled();
-    expect(rollBack).not.toHaveBeenCalled();
-  });
-
-  it("a rollback that throws a plain error is swallowed into `details.rollBackFailure`, and the wrapped refusal is still what rejects, with the half-written wording replacing `leaves`", async () => {
-    const refusal = new Error("plain refusal");
-    const publish = vi.fn(async () => {
-      throw refusal;
-    });
-    const rollbackError = new Error("disk");
-    const rollBack = vi.fn(async () => {
-      throw rollbackError;
-    });
-
-    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
-      publish,
-      () => atServiceSpawnEdgeReporting(makeReport(rollBack)),
-    ).catch((cause: unknown) => cause);
-
-    expect(rollBack).toHaveBeenCalledTimes(1);
-    expect(rejection).toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message:
-        "service install for 'test.label': the host-start grant could not be published (plain refusal), so no start was requested. Undoing what it wrote before the launch failed too (disk), so its registration may be half-written. the recovery command",
-      details: {
-        cause: "plain refusal",
-        rollBackFailure: "disk",
-      },
-    });
-  });
-
-  it("a rollback that throws an authority error replaces the refusal - rejects with the authority error itself, unwrapped", async () => {
-    const refusal = new Error("plain refusal");
-    const rollbackAuthorityError = new Error("rollback lost authority");
-    let verifyCalls = 0;
-    const verify = async (): Promise<void> => {
-      verifyCalls += 1;
-      // #1 entry, #2 the edge's pre-publish check (publish then throws the
-      // plain refusal before reaching #3, its post-publish check), #3 is
-      // rollBack's own `verifyServiceMutationAuthority()` call - the one
-      // this test fails, so the authority loss it produces is genuinely
-      // marked (`authorityFailures`), not just a same-shaped plain Error.
-      if (verifyCalls === 3) throw rollbackAuthorityError;
-    };
-    const publish = vi.fn(async () => {
-      throw refusal;
-    });
-    const rollBack = vi.fn(async () => {
-      await verifyServiceMutationAuthority();
-    });
 
     await expect(
       withServiceMutationAuthority(verify, () =>
         runWithLeaseAtServiceSpawnEdge(publish, () =>
-          atServiceSpawnEdgeReporting(makeReport(rollBack)),
+          atServiceSpawnEdgeReporting(makeReport()),
         ),
       ),
-    ).rejects.toBe(rollbackAuthorityError);
+    ).rejects.toBe(authorityError);
 
-    expect(rollBack).toHaveBeenCalledTimes(1);
+    expect(publish).not.toHaveBeenCalled();
   });
 
-  it("with rollBack: null (nothing was written before this edge), a plain refusal still wraps, without calling anything", async () => {
-    const refusal = new Error("plain refusal");
-    const publish = vi.fn(async () => {
-      throw refusal;
-    });
-
-    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
-      publish,
-      () => atServiceSpawnEdgeReporting(makeReport(null)),
-    ).catch((cause: unknown) => cause);
-
-    expect(rejection).toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message:
-        "service install for 'test.label': the host-start grant could not be published (plain refusal), so no start was requested. the state it leaves the recovery command",
-      details: { cause: "plain refusal", rollBackFailure: null },
-    });
-  });
-
-  it("outside any armed scope, rollBack never runs and nothing rejects", async () => {
-    const rollBack = vi.fn(async () => undefined);
-
+  it("outside any armed scope, resolves and throws nothing", async () => {
     await expect(
-      atServiceSpawnEdgeReporting(makeReport(rollBack)),
+      atServiceSpawnEdgeReporting(makeReport()),
     ).resolves.toBeUndefined();
-
-    expect(rollBack).not.toHaveBeenCalled();
   });
 });

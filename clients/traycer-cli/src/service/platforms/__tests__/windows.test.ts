@@ -7,8 +7,8 @@ import {
   it,
   vi,
 } from "vitest";
-import { existsSync, mkdtempSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -74,6 +74,57 @@ async function writeLeftoverLauncher(label: ServiceLabel): Promise<string> {
   await writeFile(launcherPath, "leftover-launcher", "utf8");
   return launcherPath;
 }
+
+// Per-test gates for the launcher-restore failure pins: `restorePreviousLauncher`'s
+// `writeFile`/`rm` (re-register / fresh-install restore) and `readPreviousLauncher`'s
+// `readFile` (the unreadable-existing-launcher pin) need to fail deterministically
+// while every OTHER filesystem call this suite makes - including the sandbox
+// helpers above - keeps hitting the real temp filesystem. Mirrors
+// linux-install-flow.test.ts's `RM_FAILURE` hoisted-flag shape, gated
+// additionally by path so only the launcher is ever affected. Staging writes
+// that same path, so a `writeFile` gate meant for the restore is armed at the
+// step that precedes the restore (the `/Create` call, or a staging fake after
+// its own write), never up front.
+const LAUNCHER_RESTORE_FAILURE = vi.hoisted(() => ({
+  readFile: null as { message: string; code: string } | null,
+  writeFile: null as string | null,
+  rm: null as string | null,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const isLauncherPath = (path: unknown): boolean =>
+    typeof path === "string" && path.endsWith("host-start-hidden.vbs");
+  return {
+    ...actual,
+    readFile: (async (...args: Parameters<typeof actual.readFile>) => {
+      const failure = LAUNCHER_RESTORE_FAILURE.readFile;
+      if (failure !== null && isLauncherPath(args[0])) {
+        throw Object.assign(new Error(failure.message), {
+          code: failure.code,
+        });
+      }
+      return actual.readFile(...args);
+    }) as typeof actual.readFile,
+    writeFile: (async (
+      path: Parameters<typeof actual.writeFile>[0],
+      data: Parameters<typeof actual.writeFile>[1],
+    ) => {
+      if (LAUNCHER_RESTORE_FAILURE.writeFile !== null && isLauncherPath(path)) {
+        throw new Error(LAUNCHER_RESTORE_FAILURE.writeFile);
+      }
+      return actual.writeFile(path, data);
+    }) as typeof actual.writeFile,
+    rm: (async (
+      path: Parameters<typeof actual.rm>[0],
+      options: Parameters<typeof actual.rm>[1],
+    ) => {
+      if (LAUNCHER_RESTORE_FAILURE.rm !== null && isLauncherPath(path)) {
+        throw new Error(LAUNCHER_RESTORE_FAILURE.rm);
+      }
+      return actual.rm(path, options);
+    }) as typeof actual.rm,
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
@@ -4729,6 +4780,332 @@ describe("Windows startService post-/Run spawn verification", () => {
   });
 });
 
+describe("Windows controller — installService launcher-restore behavior", () => {
+  // Real default staging deps in this block, except where one case injects a
+  // mid-staging throw: `stageTaskDefinition` genuinely writes the launcher
+  // through `writeHiddenHostLauncher`, so the bytes these tests check are the
+  // production write, not a stub's. The task XML it builds needs a logon
+  // identity, which only a Windows session sets, so one is stubbed.
+  beforeEach(() => {
+    vi.stubEnv("USERDOMAIN", "TESTBOX");
+    vi.stubEnv("USERNAME", "testuser");
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsStartEvidenceDepsForTests(null);
+    LAUNCHER_RESTORE_FAILURE.readFile = null;
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    LAUNCHER_RESTORE_FAILURE.rm = null;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsStartEvidenceDepsForTests(null);
+    LAUNCHER_RESTORE_FAILURE.readFile = null;
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    LAUNCHER_RESTORE_FAILURE.rm = null;
+  });
+
+  // `onCreate` runs as `/Create` is issued - after staging has written the
+  // launcher - so a gate it arms fails only the restore that follows.
+  function createFailingRunner(onCreate: () => void): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "schtasks" && args[0] === "/Create") {
+        onCreate();
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    return { runner, calls };
+  }
+
+  // Re-register, /Create fails. An existing launcher's OLD bytes must
+  // come back, not be removed - removing them (the old unconditional
+  // rollback) breaks the EXISTING task's next logon start, /Run and
+  // restart-on-failure alike, since that task is still registered and still
+  // points at this exact path.
+  it("re-register: /Create fails, restores the launcher to its OLD bytes, and leaves details.launcherRestoreFailure null", async () => {
+    const label = serviceLabelFor("win-restore-reregister-create-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const oldBytes = await readFile(launcherPath);
+    const seen = { bytesAtCreate: Buffer.alloc(0) };
+    const { runner } = createFailingRunner(() => {
+      seen.bytesAtCreate = readFileSync(launcherPath);
+    });
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
+      details: { launcherRestoreFailure: null },
+    });
+
+    // Staging really overwrote the launcher before `/Create` ran, so the old
+    // bytes below are the restore's doing, not a write that never happened.
+    expect(seen.bytesAtCreate.length).toBeGreaterThan(0);
+    expect(seen.bytesAtCreate.equals(oldBytes)).toBe(false);
+    const restoredBytes = await readFile(launcherPath);
+    expect(restoredBytes.equals(oldBytes)).toBe(true);
+    await rm(launcherPath, { force: true });
+  });
+
+  // Fresh install, /Create fails. No launcher existed before, so the
+  // one staging just wrote is an orphan with no task pointing at it -
+  // removed, not left behind as a stray file. This is the narrowed survivor
+  // of the old "/Create failure removes the launcher" test: it is EXPLICITLY
+  // the fresh-install case now, never the re-register one, which restores
+  // instead of removing.
+  it("fresh install: /Create fails, and the launcher it wrote is removed (not left as a stray file)", async () => {
+    const label = serviceLabelFor("win-restore-fresh-create-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = hiddenHostLauncherPathForTest(label);
+    expect(existsSync(launcherPath)).toBe(false);
+    const seen = { launcherAtCreate: false };
+    const { runner } = createFailingRunner(() => {
+      seen.launcherAtCreate = existsSync(launcherPath);
+    });
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
+      details: { launcherRestoreFailure: null },
+    });
+
+    // Staging wrote a launcher before `/Create` ran; the failure removed it.
+    expect(seen.launcherAtCreate).toBe(true);
+    expect(existsSync(launcherPath)).toBe(false);
+  });
+
+  // The restore itself fails too, re-register variant. `writeFile` on the
+  // launcher path is gated from `/Create` on, after staging's own write, so the
+  // real `restorePreviousLauncher` genuinely throws, and the message names the exact `launcherRestoreFailed` sentence
+  // for a present `previousLauncher`.
+  it("re-register: /Create fails AND restoring the OLD bytes also fails - the 'still registered' wording, with launcherRestoreFailure populated", async () => {
+    const label = serviceLabelFor("win-restore-reregister-restore-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const oldBytes = await readFile(launcherPath);
+    const { runner } = createFailingRunner(() => {
+      LAUNCHER_RESTORE_FAILURE.writeFile = "EACCES: permission denied";
+    });
+
+    const rejection: unknown = await createWindowsController(
+      runner,
+      noTimingDeps,
+    )
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { launcherRestoreFailure: "EACCES: permission denied" },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Restoring the launcher it overwrote failed too (EACCES: permission denied), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`,
+    );
+    // The failed restore leaves whatever staging wrote in place - NOT the
+    // old bytes, since the write-back never landed.
+    const bytesNow = await readFile(launcherPath);
+    expect(bytesNow.equals(oldBytes)).toBe(false);
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    await rm(launcherPath, { force: true });
+  });
+
+  // The restore itself fails too, fresh-install variant - `rm` on the
+  // launcher path is gated instead, and the message names the exact
+  // `launcherRestoreFailed` sentence for a `null` `previousLauncher`.
+  it("fresh install: /Create fails AND removing the orphaned launcher also fails - the 'no task runs it' wording, with launcherRestoreFailure populated", async () => {
+    const label = serviceLabelFor("win-restore-fresh-restore-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = hiddenHostLauncherPathForTest(label);
+    const { runner } = createFailingRunner(() => {
+      LAUNCHER_RESTORE_FAILURE.rm = "EBUSY: resource busy or locked";
+    });
+
+    const rejection: unknown = await createWindowsController(
+      runner,
+      noTimingDeps,
+    )
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { launcherRestoreFailure: "EBUSY: resource busy or locked" },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Removing the launcher it wrote failed too (EBUSY: resource busy or locked); no task runs it.`,
+    );
+    LAUNCHER_RESTORE_FAILURE.rm = null;
+    await rm(launcherPath, { force: true });
+  });
+
+  // Staging throws AFTER it already wrote the (new) launcher bytes - a
+  // fake `stageTaskDefinition` (this ONE case overrides the real deps,
+  // deliberately, since a mid-staging throw needs to be injected) models
+  // exactly that: it writes new bytes to the real launcher path and then
+  // throws. The original staging error must be rethrown BY IDENTITY, and the
+  // launcher restored to its OLD bytes.
+  it("staging throws after writing the launcher: the staging error is rethrown BY IDENTITY, and the launcher is restored to its OLD bytes", async () => {
+    const label = serviceLabelFor("win-restore-staging-throws");
+    const launcherPath = await writeLeftoverLauncher(label);
+    const oldBytes = await readFile(launcherPath);
+    const stagingError = new Error("stageTaskDefinition: disk full");
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => {
+        await writeFile(launcherPath, "mid-staging-new-bytes", "utf8");
+        throw stagingError;
+      },
+      removeStagedTaskDefinition: async () => undefined,
+    });
+    const runner: ProcessRunner = async () => success("");
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toBe(stagingError);
+
+    const bytesNow = await readFile(launcherPath);
+    expect(bytesNow.equals(oldBytes)).toBe(true);
+    await rm(launcherPath, { force: true });
+  });
+
+  // Staging throws AND the restore it triggers also fails: the wrapped
+  // `SERVICE_INSTALL_FAILED` staging-failed message, with the restore-failed
+  // sentence appended and `details.launcherRestoreFailure` populated. The gate
+  // is armed inside the staging fake, after its own write, so only the restore
+  // trips it.
+  it("staging throws after writing the launcher, and the restore also fails: SERVICE_INSTALL_FAILED naming both failures", async () => {
+    const label = serviceLabelFor("win-restore-staging-throws-restore-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const stagingError = new Error("stageTaskDefinition: disk full");
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => {
+        await writeFile(launcherPath, "mid-staging-new-bytes", "utf8");
+        LAUNCHER_RESTORE_FAILURE.writeFile = "EACCES: permission denied";
+        throw stagingError;
+      },
+      removeStagedTaskDefinition: async () => undefined,
+    });
+    const runner: ProcessRunner = async () => success("");
+
+    const rejection: unknown = await createWindowsController(
+      runner,
+      noTimingDeps,
+    )
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(rejection).not.toBe(stagingError);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { launcherRestoreFailure: "EACCES: permission denied" },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `staging the task definition for ${taskName} failed: stageTaskDefinition: disk full. Restoring the launcher it overwrote failed too (EACCES: permission denied), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`,
+    );
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    await rm(launcherPath, { force: true });
+  });
+
+  // An existing launcher that cannot be read at all. The install edge has
+  // ALREADY published by the time this check runs (`readPreviousLauncher`
+  // sits after it), so the publish call log proves that ordering; no
+  // `/Create` is ever issued, and the launcher itself is left exactly as it
+  // was - unreadable, but untouched.
+  it("an existing launcher that cannot be read: SERVICE_INSTALL_FAILED, no /Create, the launcher untouched, and the publish already happened", async () => {
+    const label = serviceLabelFor("win-restore-unreadable-launcher");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    LAUNCHER_RESTORE_FAILURE.readFile = {
+      message: "EACCES: permission denied, open",
+      code: "EACCES",
+    };
+    const calls: RecordedCall[] = [];
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      log.push(args[0] ?? command);
+      return success("");
+    };
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        createWindowsController(runner, noTimingDeps).install({
+          label,
+          cli: { command: "C:\\traycer.exe", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining("could not be read"),
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `service install for ${taskName}: the existing host launcher could not be read (EACCES: permission denied, open), so it was left untouched and nothing was installed.`,
+    );
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Create"),
+    ).toBe(false);
+    // The publish already happened by the time the read failure is
+    // classified - it is the very first thing installService does.
+    expect(log[0]).toBe("publish");
+    LAUNCHER_RESTORE_FAILURE.readFile = null;
+    const stillThere = await readFile(launcherPath);
+    expect(stillThere.toString("utf8")).toBe("leftover-launcher");
+    await rm(launcherPath, { force: true });
+  });
+});
+
 describe("Windows controller — spawn-edge placement", () => {
   function stageEvidenceForImmediateStart(): void {
     setWindowsStartEvidenceDepsForTests({
@@ -4777,7 +5154,7 @@ describe("Windows controller — spawn-edge placement", () => {
     expect(log[publishIndex + 1]).toBe(verb);
   }
 
-  it("install: /Create precedes publish, and /Run is the entry right after it", async () => {
+  it("install: publish precedes /Create - the install edge sits in front of every write - and /Run follows /Create", async () => {
     const { log, publish } = makeSharedLog();
     const runner: ProcessRunner = async (command, args) => {
       log.push(args[0] ?? command);
@@ -4795,8 +5172,16 @@ describe("Windows controller — spawn-edge placement", () => {
       }),
     );
 
-    expectPublishImmediatelyPrecedes(log, "/Run");
-    expect(log.slice(0, log.indexOf("publish"))).toContain("/Create");
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    // Nothing the runner can observe happens before publish: the install
+    // edge is the very first thing `installService` does, ahead of the
+    // (unobservable) launcher read and the staging write alike.
+    expect(publishIndex).toBe(0);
+    const createIndex = log.indexOf("/Create");
+    const runIndex = log.indexOf("/Run");
+    expect(createIndex).toBeGreaterThan(publishIndex);
+    expect(runIndex).toBeGreaterThan(createIndex);
   });
 
   it("start: publish is immediately before /Run", async () => {
@@ -4841,156 +5226,14 @@ describe("Windows controller — spawn-edge placement", () => {
     expect(preEdge.length).toBeGreaterThan(1);
   });
 
-  it("install: a refused publication rolls the task back - /Delete after /Create, /Create's exact args, no /Run - and rejects with a wrapped SERVICE_INSTALL_FAILED, not marked registration-committed", async () => {
-    interface RecordedCallWithOptions extends RecordedCall {
-      readonly tolerateNonZeroExit: boolean;
-    }
-    const calls: RecordedCallWithOptions[] = [];
-    const runner: ProcessRunner = async (command, args, options) => {
-      calls.push({
-        command,
-        args,
-        tolerateNonZeroExit: options.tolerateNonZeroExit,
-      });
-      return success("");
-    };
+  it("install: a refused publication propagates raw, by identity - it is the install's first edge, in front of every write, so there is nothing to roll back", async () => {
     setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
     stageEvidenceForImmediateStart();
-    const controller = createWindowsController(runner, noTimingDeps);
-    const label = serviceLabelFor("staging");
-    const taskName = windowsTaskName(label);
-    const launcherPath = await writeLeftoverLauncher(label);
-    const publishError = new Error("proof write failed");
-    const publish = vi.fn(async (): Promise<null> => {
-      throw publishError;
-    });
-
-    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
-      publish,
-      () =>
-        controller.install({
-          label,
-          cli: { command: "C:\\traycer.exe", args: [] },
-          enableLinger: false,
-        }),
-    ).catch((cause: unknown) => cause);
-
-    expect(rejection).not.toBe(publishError);
-    expect(rejection).toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { cause: "proof write failed", rollBackFailure: null },
-    });
-    const message = rejection instanceof Error ? rejection.message : "";
-    expect(message).toContain("proof write failed");
-    expect(message).toContain("is not registered and was not started");
-    expect(message).toContain("Run 'traycer host service install'");
-    const createIndex = calls.findIndex(
-      (c) => c.command === "schtasks" && c.args[0] === "/Create",
-    );
-    const deleteIndex = calls.findIndex(
-      (c) => c.command === "schtasks" && c.args[0] === "/Delete",
-    );
-    expect(createIndex).toBeGreaterThanOrEqual(0);
-    expect(deleteIndex).toBeGreaterThan(createIndex);
-    expect(calls[deleteIndex]?.args).toEqual([
-      "/Delete",
-      "/TN",
-      taskName,
-      "/F",
-    ]);
-    // Pin the addendum: the task was just /Create'd, so the rollback's own
-    // /Delete must not tolerate a non-zero exit - a failed delete means it
-    // is still registered.
-    expect(calls[deleteIndex]?.tolerateNonZeroExit).toBe(false);
-    expect(
-      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
-    ).toBe(false);
-    expect(didServiceRegistrationCommit(rejection)).toBe(false);
-    expect(existsSync(launcherPath)).toBe(false);
-  });
-
-  it("install: an authority refusal at the pre-publish check issues no /Delete, and rejects with the authority error itself", async () => {
-    // Derive the exact pre-edge verify-call count by dry run, the same
-    // technique the macOS and Linux install suites use: `installService`'s
-    // wrapped `run()` calls (the /Create probe among them) consult the SAME
-    // verifier the edge's own pre-publish check does.
-    const dryRunOrder: string[] = [];
-    const dryRunPublish = vi.fn(async (): Promise<null> => {
-      dryRunOrder.push("publish");
-      return null;
-    });
-    const dryRunLabel = serviceLabelFor("staging");
-    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
-    stageEvidenceForImmediateStart();
-    await withServiceMutationAuthority(
-      async () => {
-        dryRunOrder.push("verify");
-      },
-      () =>
-        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
-          createWindowsController(
-            async () => success(""),
-            noTimingDeps,
-          ).install({
-            label: dryRunLabel,
-            cli: { command: "C:\\traycer.exe", args: [] },
-            enableLinger: false,
-          }),
-        ),
-    );
-    const preEdgeVerifyCalls = dryRunOrder
-      .slice(0, dryRunOrder.indexOf("publish"))
-      .filter((entry) => entry === "verify").length;
-
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       return success("");
     };
-    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
-    stageEvidenceForImmediateStart();
-    const controller = createWindowsController(runner, noTimingDeps);
-    const label = serviceLabelFor("staging");
-    const launcherPath = await writeLeftoverLauncher(label);
-    const authorityError = new Error("mutation authority was lost");
-    let verifyCalls = 0;
-    const verify = async (): Promise<void> => {
-      verifyCalls += 1;
-      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
-    };
-    const publish = vi.fn(async (): Promise<null> => null);
-
-    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
-      runWithLeaseAtServiceSpawnEdge(publish, () =>
-        controller.install({
-          label,
-          cli: { command: "C:\\traycer.exe", args: [] },
-          enableLinger: false,
-        }),
-      ),
-    ).catch((cause: unknown) => cause);
-
-    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
-    expect(publish).not.toHaveBeenCalled();
-    expect(
-      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Delete"),
-    ).toBe(false);
-    expect(
-      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
-    ).toBe(false);
-    expect(existsSync(launcherPath)).toBe(true);
-    await rm(launcherPath, { force: true });
-  });
-
-  it("install: a refused publication whose rollback /Delete itself fails gives the half-written wording, and leaves the launcher in place", async () => {
-    const runner: ProcessRunner = async (command, args) => {
-      if (command === "schtasks" && args[0] === "/Delete") {
-        throw new Error("access denied");
-      }
-      return success("");
-    };
-    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
-    stageEvidenceForImmediateStart();
     const controller = createWindowsController(runner, noTimingDeps);
     const label = serviceLabelFor("staging");
     const launcherPath = await writeLeftoverLauncher(label);
@@ -5009,20 +5252,18 @@ describe("Windows controller — spawn-edge placement", () => {
         }),
     ).catch((cause: unknown) => cause);
 
-    expect(rejection).toMatchObject({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: {
-        cause: "proof write failed",
-        rollBackFailure: "access denied",
-      },
-    });
-    const message = rejection instanceof Error ? rejection.message : "";
-    expect(message).toContain(
-      "Undoing what it wrote before the launch failed too (access denied), so its registration may be half-written.",
-    );
-    // The rollback stops at the failed /Delete step - the launcher removal
-    // never runs.
+    expect(rejection).toBe(publishError);
+    expect(isUnreportedSpawnEdgeRefusal(rejection)).toBe(true);
+    // Not one process call: no /Create, /Delete, /End, /Query or /Run - the
+    // task a previous install registered is never addressed.
+    expect(calls).toEqual([]);
+    expect(didServiceRegistrationCommit(rejection)).toBe(false);
+    // The install edge sits in front of the launcher READ, let alone any
+    // write, so a leftover launcher from a previous install is left exactly
+    // as it was.
     expect(existsSync(launcherPath)).toBe(true);
+    const bytes = await readFile(launcherPath);
+    expect(bytes.toString("utf8")).toBe("leftover-launcher");
     await rm(launcherPath, { force: true });
   });
 
@@ -5060,7 +5301,7 @@ describe("Windows controller — spawn-edge placement", () => {
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start and is still stopped. Run 'traycer host service start' to start it again.`,
+      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start, and this command did not start it again. Run 'traycer host service start' to start it.`,
     );
   });
 
@@ -5085,7 +5326,7 @@ describe("Windows controller — spawn-edge placement", () => {
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start and is still stopped. Run 'traycer host service start' to start it again.`,
+      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start, and this command did not start it again. Run 'traycer host service start' to start it.`,
     );
   });
 

@@ -31,11 +31,11 @@ import {
   __setBeforeHostStartAdoptionClaimHookForTest,
   __setBeforeHostStartAdoptionReadHookForTest,
   consumeHostStartAdoption,
-  HOST_START_ADOPTION_MAX_AGE_MS,
   publishHostStartAdoption,
   readHostStartAdoptionNonce,
   type HostStartAdoptionConsumeResult,
 } from "../host-start-adoption";
+import { HOST_START_ADOPTION_MAX_AGE_MS } from "../../service/spawn-edge-bounds";
 
 const roots: string[] = [];
 

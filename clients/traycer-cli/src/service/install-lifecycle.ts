@@ -756,17 +756,12 @@ function reportRelaunchRefusedAfterInstallStop(
   cause: unknown,
 ): unknown {
   if (!isUnreportedSpawnEdgeRefusal(cause)) return cause;
-  return refusedSpawnEdgeError(
-    cause,
-    {
-      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      operation: `relaunch of '${label.id}' after the install stopped it`,
-      rollBack: null,
-      leaves: "The host was stopped for the install and is still stopped.",
-      recovery: "Run 'traycer host service start' to start it again.",
-    },
-    null,
-  );
+  return refusedSpawnEdgeError(cause, {
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    operation: `relaunch of '${label.id}' after the install stopped it`,
+    leaves: "The host was stopped for the install and is still stopped.",
+    recovery: "Run 'traycer host service start' to start it again.",
+  });
 }
 
 async function runWithPublishedHostStartAdoption(

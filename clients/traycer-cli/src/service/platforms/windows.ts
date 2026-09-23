@@ -1,14 +1,16 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
 import { markRegistrationCommitted } from "../cli-invocation-record";
 import {
+  atServiceInstallEdge,
   atServiceSpawnEdge,
   atServiceSpawnEdgeReporting,
   type RefusedSpawnEdgeReport,
 } from "../spawn-edge";
+import { WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS } from "../spawn-edge-bounds";
 import { createCliLogger } from "../../logger";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,7 +41,11 @@ import {
   WINDOWS_START_SPAWN_POLL_MS,
   WINDOWS_START_SPAWN_VERIFY_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
-import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  cliError,
+  isErrnoException,
+} from "../../runner/errors";
 import type { CliInvocation } from "../cli-binary";
 import { escapeXml } from "../escape-xml";
 import { windowsTaskName, type ServiceLabel } from "../label";
@@ -201,11 +207,45 @@ async function installService(
   run: ProcessRunner,
 ): Promise<void> {
   const taskName = windowsTaskName(options.label);
+  // The install edge: the grant is published here, in front of the first
+  // write - staging writes the persistent VBS launcher an existing task runs -
+  // so a publication that cannot be made leaves the launcher, the task and a
+  // running host exactly as they were. The `/Run` edge below returns this same
+  // publication.
+  await atServiceInstallEdge();
+  // What the launcher held before staging overwrites it, or `null` when there
+  // was none. A re-register overwrites the launcher an EXISTING task runs, and
+  // an install that fails before `/Create` succeeds leaves that task
+  // registered, so the failure puts these exact bytes back instead of
+  // deleting - or leaving half-written - the script the surviving task still
+  // points at.
+  const launcherPath = hiddenHostLauncherPath(options.label);
+  const previousLauncher = await readPreviousLauncher(launcherPath, taskName);
   // schtasks /Create /XML reads a UTF-16LE task definition from a private,
   // per-invocation staging directory. Keep staging separate from the runner so
   // the controller's install → verified `/Run` composition can be unit-tested
   // without touching a real user service surface.
-  const staged = await taskInstallDeps.stageTaskDefinition(options);
+  let staged: StagedWindowsTaskDefinition;
+  try {
+    staged = await taskInstallDeps.stageTaskDefinition(options);
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    const restoreFailure = await restorePreviousLauncher(
+      launcherPath,
+      previousLauncher,
+    );
+    if (restoreFailure === null) throw cause;
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `staging the task definition for ${taskName} failed: ${describeCause(cause)}. ${launcherRestoreFailed(taskName, previousLauncher, restoreFailure)}`,
+      details: {
+        task: taskName,
+        cause: describeCause(cause),
+        launcherRestoreFailure: restoreFailure,
+      },
+      exitCode: 1,
+    });
+  }
   // Set the moment `/Create` returns: from here the task exists with its
   // logon trigger, and any throw - the staging cleanup below included, whose
   // default verifies mutation authority first - is post-registration and must
@@ -219,7 +259,7 @@ async function installService(
       {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 30_000,
+        timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       },
     );
@@ -259,68 +299,111 @@ async function installService(
   }
   if (createFailure !== null) {
     if (isServiceMutationAuthorityError(createFailure)) throw createFailure;
-    // Roll the launcher back: `stageTaskDefinition` wrote the persistent
-    // VBS before /Create ran, and a launcher without a task is an orphan
-    // that outlives the failed install (only a later uninstall would
-    // collect it). Best-effort - the error the operator sees is the
-    // install failure, not the rollback's.
-    await verifyServiceMutationAuthority();
-    await rm(hiddenHostLauncherPath(options.label), { force: true }).catch(
-      () => undefined,
+    // Put the launcher back as it was: `stageTaskDefinition` wrote the
+    // persistent VBS before `/Create` ran. On a fresh install there was none,
+    // and a launcher without a task is an orphan, so it is removed. On a
+    // re-register the failed `/Create /F` left the EXISTING task registered,
+    // still running this very path, so its previous bytes are restored -
+    // removing them (as this rollback once did unconditionally) broke that
+    // task's next logon start, `/Run` and restart-on-failure alike.
+    const restoreFailure = await restorePreviousLauncher(
+      launcherPath,
+      previousLauncher,
     );
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}`,
-      details: { task: taskName, cause: describeCause(createFailure) },
+      message:
+        restoreFailure === null
+          ? `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}`
+          : `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}. ${launcherRestoreFailed(taskName, previousLauncher, restoreFailure)}`,
+      details: {
+        task: taskName,
+        cause: describeCause(createFailure),
+        launcherRestoreFailure: restoreFailure,
+      },
       exitCode: 1,
     });
   }
   // Registration is also the recovery launch. Verify this exact `/Run` so
   // callers never baseline after it and mistake IgnoreNew's suppressed second
-  // run for a failed repair.
-  //
-  // A publication refused at that `/Run`'s spawn edge stops after `/Create`,
-  // and the task it leaves is not inert: its LogonTrigger runs it at the next
-  // logon. So the refusal deletes the task and the launcher it points at -
-  // the same pair `uninstallService` removes - leaving nothing registered,
-  // which the next install creates afresh.
-  await runTaskAndVerifyStart(options.label, run, {
-    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-    operation: `service install for ${taskName}`,
-    rollBack: async () => {
-      // Not tolerant of a non-zero exit, unlike uninstall's: the task was
-      // `/Create`d a moment ago, so a failed `/Delete` means it is still
-      // registered, and the operator must not be told it was deleted.
-      await run("schtasks", ["/Delete", "/TN", taskName, "/F"], {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: 30_000,
-        tolerateNonZeroExit: false,
-      });
-      await verifyServiceMutationAuthority();
-      await rm(hiddenHostLauncherPath(options.label), { force: true });
-    },
-    leaves: `The scheduled task it created and its launcher were deleted, so ${taskName} is not registered and was not started.`,
-    recovery: `Run 'traycer host service install' to register and start it again.`,
-  });
+  // run for a failed repair. Its edge was published at the install edge, so
+  // it cannot refuse here.
+  await runTaskAndVerifyStart(options.label, run, null);
+}
+
+// The launcher's bytes before this install touches it, or `null` when there is
+// none. A launcher that exists but cannot be read stops the install here,
+// before anything is written: its bytes could not be put back.
+async function readPreviousLauncher(
+  launcherPath: string,
+  taskName: string,
+): Promise<Buffer | null> {
+  try {
+    return await readFile(launcherPath);
+  } catch (cause) {
+    if (isErrnoException(cause) && cause.code === "ENOENT") return null;
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install for ${taskName}: the existing host launcher could not be read (${describeCause(cause)}), so it was left untouched and nothing was installed.`,
+      details: { task: taskName, cause: describeCause(cause) },
+      exitCode: 1,
+    });
+  }
+}
+
+// Undo the launcher write of an install that failed before `/Create`
+// succeeded: restore its previous bytes, or remove it when there were none.
+// Returns why that failed, or `null`. Never swallowed - the caller's error
+// names it - and an authority loss is thrown as itself.
+async function restorePreviousLauncher(
+  launcherPath: string,
+  previousLauncher: Buffer | null,
+): Promise<string | null> {
+  try {
+    await verifyServiceMutationAuthority();
+    if (previousLauncher === null) {
+      await rm(launcherPath, { force: true });
+    } else {
+      await writeFile(launcherPath, previousLauncher);
+    }
+    return null;
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return describeCause(cause);
+  }
+}
+
+function launcherRestoreFailed(
+  taskName: string,
+  previousLauncher: Buffer | null,
+  restoreFailure: string,
+): string {
+  return previousLauncher === null
+    ? `Removing the launcher it wrote failed too (${restoreFailure}); no task runs it.`
+    : `Restoring the launcher it overwrote failed too (${restoreFailure}), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`;
 }
 
 // The report for a start that follows this controller's own stop - `restart`
 // ends its `/End` + kill ladder here, and `relaunchAfterRestart` is only ever
 // called after that same ladder ran (`stopForRestart`, or the install
-// lifecycle's pre-swap `stop` on the aborted-swap path). Nothing on Windows owes
-// the host a comeback (the ladder kills the supervisor along with the host,
-// and the task's only trigger is a logon), so a refusal here leaves it
-// STOPPED - where, before the grant moved to the edge, a refused publication
-// came first and left it running.
+// lifecycle's pre-swap `stop` on the aborted-swap path). The ladder kills the
+// supervisor along with the host, so a refusal here leaves the host stopped
+// by this command's own hand - where, before the grant moved to the edge, a
+// refused publication came first and left it running.
+//
+// It says what THIS command did, not that the host stays down: the task
+// carries `RestartOnFailure`, and whether Task Scheduler counts a killed
+// launcher tree as a failure is an OS semantic nothing here can pin down (see
+// the launcher's own note on exit 75), so the scheduler may bring the host
+// back within a minute through ordinary admission.
 function relaunchRefusedReport(label: ServiceLabel): RefusedSpawnEdgeReport {
   const taskName = windowsTaskName(label);
   return {
     code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
     operation: `start of ${taskName} after its stop`,
-    rollBack: null,
-    leaves: "The host was stopped before this start and is still stopped.",
-    recovery: `Run 'traycer host service start' to start it again.`,
+    leaves:
+      "The host was stopped before this start, and this command did not start it again.",
+    recovery: `Run 'traycer host service start' to start it.`,
   };
 }
 
@@ -1074,30 +1157,13 @@ async function startService(
   await runTaskAndVerifyStart(label, run, null);
 }
 
-/**
- * The longest a Windows start can take to launch its supervisor after its
- * spawn edge - the scheduler side of the host-start adoption window
- * (`HOST_START_ADOPTION_MAX_AGE_MS`).
- *
- * `/Run` returns once the scheduler ACCEPTS the request; the launch itself is
- * asynchronous. A start that succeeds has seen post-baseline spawn evidence
- * inside the verify window, so its supervisor launched by then: `/Run`'s 30s
- * + the 15s verify = 45s. A launch later than that has already failed the
- * start, and its child can only be adopted inside the parent's ack wait, which
- * ends before this window does.
- *
- * Everything before the edge - `/Create` on install, and on restart `/End`
- * plus the whole scan-then-kill loop - no longer runs on the grant's clock.
- */
-export const WINDOWS_RUN_SPAWN_EDGE_BOUND_MS =
-  WINDOWS_SCHTASKS_RUN_TIMEOUT_MS + WINDOWS_START_SPAWN_VERIFY_MS;
-
 async function runTaskAndVerifyStart(
   label: ServiceLabel,
   run: ProcessRunner,
-  // What a publication refused at this edge must undo and report, for a
-  // caller that changed something before it; `null` when it changed nothing
-  // (a plain start), and the refusal then propagates as itself.
+  // How a publication refused at this edge is reported, for a caller that
+  // stopped the host before it; `null` when nothing was stopped (a plain
+  // start) or the grant was already published (an install), and a refusal
+  // then propagates as itself.
   edgeRefusal: RefusedSpawnEdgeReport | null,
 ): Promise<void> {
   const taskName = windowsTaskName(label);

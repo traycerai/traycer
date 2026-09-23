@@ -26,11 +26,6 @@ import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
-import {
-  CRASH_REPORT_SCAN_TIMEOUT_MS,
-  STDERR_END_WAIT_TIMEOUT_MS,
-  STDERR_FLUSH_TIMEOUT_MS,
-} from "../../host/crash-diagnostics";
 import type {
   InstallServiceOptions,
   RestartStop,
@@ -38,7 +33,12 @@ import type {
   ServiceStatus,
   UninstallServiceOptions,
 } from "../index";
-import { atServiceSpawnEdge, atServiceSpawnEdgeReporting } from "../spawn-edge";
+import { atServiceInstallEdge, atServiceSpawnEdge } from "../spawn-edge";
+import {
+  SYSTEMCTL_CALL_TIMEOUT_MS,
+  SYSTEMCTL_JOB_TIMEOUT_MS,
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+} from "../spawn-edge-bounds";
 
 // Linux service controller - systemd-user. The unit's ExecStart points
 // at the per-user CLI binary with `host start` (the slot is baked into
@@ -133,7 +133,7 @@ async function assertSystemdUserReachable(
     await run("systemctl", ["--user", "show-environment"], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -155,6 +155,12 @@ async function installService(
   run: ProcessRunner,
 ): Promise<void> {
   await assertSystemdUserReachable(options.label, run);
+  // The install edge: the grant is published here, in front of the unit
+  // write, so a publication that cannot be made leaves the unit file, its
+  // enablement and a running host exactly as they were. The reachability
+  // probe above only reads. The `enable --now` edge below returns this same
+  // publication.
+  await atServiceInstallEdge();
   const manifestPath = serviceManifestPath(options.label);
   await verifyServiceMutationAuthority();
   await mkdir(dirname(manifestPath), { recursive: true });
@@ -184,7 +190,7 @@ async function installService(
       {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 10_000,
+        timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
         tolerateNonZeroExit: true,
       },
     ).catch((cause) => {
@@ -195,7 +201,7 @@ async function installService(
     await run("systemctl", ["--user", "daemon-reload"], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     }).catch((cleanupCause) => {
       if (isServiceMutationAuthorityError(cleanupCause)) throw cleanupCause;
@@ -222,20 +228,12 @@ async function installService(
   await run("systemctl", ["--user", "daemon-reload"], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: false,
   }).catch(registrationFailed);
-  // A spawn edge: `enable --now` starts the unit. A publication refused here
-  // stops after systemd has loaded the unit file, so it takes the same
-  // rollback, and is reported as the refusal it is, not as a systemd
-  // failure.
-  await atServiceSpawnEdgeReporting({
-    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-    operation: `service install for ${unitName(options.label)}`,
-    rollBack: rollBackUnit,
-    leaves: `The unit file it wrote was disabled and removed, so ${unitName(options.label)} is not registered and not running.`,
-    recovery: `Run 'traycer host service install' to register and start it again.`,
-  });
+  // A spawn edge: `enable --now` starts the unit. Already published at the
+  // install edge above; this returns the same publication.
+  await atServiceSpawnEdge();
   await run(
     "systemctl",
     ["--user", "enable", "--now", unitName(options.label)],
@@ -283,7 +281,7 @@ async function uninstallService(
   await run("systemctl", ["--user", "daemon-reload"], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   // A unit that ended up `failed` (e.g. it restart-looped before this
@@ -293,7 +291,7 @@ async function uninstallService(
   await run("systemctl", ["--user", "reset-failed", unitName(options.label)], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   }).catch((cause) => {
     if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -484,7 +482,7 @@ async function killUnit(
     {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     },
   );
@@ -600,7 +598,7 @@ async function stopService(
     {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     },
   );
@@ -803,7 +801,7 @@ async function probeUnitSettled(
     result = await run("systemctl", ["--user", "is-active", unitName(label)], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     });
   } catch (cause) {
@@ -869,81 +867,6 @@ export async function linuxServiceMayRespawn(
   const state = result.stdout.trim();
   return !(state === "inactive" || state === "failed" || state === "unknown");
 }
-
-/**
- * The unit's `TimeoutStopSec`, in SECONDS: how long systemd lets a stop job
- * run between the SIGTERM it sends the unit's cgroup and the SIGKILL it
- * escalates to. Pinned in `buildUnit` rather than left to systemd's default
- * (90s, or whatever `DefaultTimeoutStopSec` a distro or user.conf sets) so the
- * bound every blocking `systemctl` job below waits on is one this file names.
- *
- * Derived from what a deliberate stop legitimately takes, so it never cuts one
- * short - the host's shutdown, then the supervisor's post-mortem once its
- * child is gone, then headroom:
- *
- *     SHUTDOWN_FORCE_EXIT_MS       30s  host force-exit watchdog (protocol
- *                                       host/lifecycle-constants.ts)
- *   + STDERR_END_WAIT_TIMEOUT_MS    2s  host/crash-diagnostics.ts
- *   + STDERR_FLUSH_TIMEOUT_MS       1s  host/crash-diagnostics.ts
- *   + CRASH_REPORT_SCAN_TIMEOUT_MS  2s  host/crash-diagnostics.ts
- *   + STOP_EXIT_GRACE_MARGIN_MS     2s  protocol host/lifecycle-constants.ts
- *   = 37s
- *
- * The three post-mortem terms are the ones `runHostStart` awaits after its
- * child dies (host-start.ts names them where it stamps the child's death);
- * crash telemetry is fire-and-forget and not waited for.
- *
- * The margin is counted once. On a stop job the signaller owns the
- * escalation - systemd SIGTERMs the cgroup and the supervisor only forwards,
- * arming no SIGKILL of its own (host-start.ts) - so the host's watchdog is the
- * bound and `STOP_EXIT_GRACE_MARGIN_MS` is pure slack. The supervisor spends
- * that same margin as its own kill grace (`RACED_STOP_KILL_GRACE_MS`) only on
- * the raced path, which runs no stop job.
- *
- * Existing units adopt it when `installService` next re-registers them -
- * `host service install`, and the post-swap re-register of an existing
- * registration that `host update` / `host install` / ensure / apply run - and
- * keep systemd's default until then.
- *
- * The emitted value is part of `SYSTEMD_UNIT_SERVICE_DIRECTIVES`, and so part
- * of what the host's unit reader must admit (see there).
- */
-export const SYSTEMD_TIMEOUT_STOP_SECONDS = Math.ceil(
-  (SHUTDOWN_FORCE_EXIT_MS +
-    STDERR_END_WAIT_TIMEOUT_MS +
-    STDERR_FLUSH_TIMEOUT_MS +
-    CRASH_REPORT_SCAN_TIMEOUT_MS +
-    STOP_EXIT_GRACE_MARGIN_MS) /
-    1_000,
-);
-
-/**
- * The runner timeout for every `systemctl` verb that queues a start or restart
- * job, derived from the stop bound above.
- *
- * `systemctl` waits for the job it queues. A `restart` job is a stop followed
- * by a start, and a `start` - `enable --now` included - queues behind a stop
- * already in flight: after a restart's stop the unit can sit deactivating
- * while systemd SIGTERMs whatever is left in the cgroup. So any of these can
- * block for the whole stop bound before its start begins.
- *
- * 37s TimeoutStopSec + 15s = 52s, the 15s being what these calls had for the
- * start alone. Each of these calls is a spawn edge - the grant is published
- * immediately before it - and the stop is SIGKILL-bounded at 37s while a
- * `Type=simple` start is immediate, so this is also the longest a Linux
- * relaunch can take to launch its supervisor after publishing: one of the
- * bounds the host-start adoption window is derived from
- * (`HOST_START_ADOPTION_MAX_AGE_MS`).
- *
- * It was 15s - shorter than systemd's own bound. A slow but healthy stop then
- * killed `systemctl`, which withdraws nothing systemd has queued, and reported
- * a failure systemd went on to complete. A timeout past THIS budget is still a
- * failure, but reported as unconfirmed (`systemctlJobFailure`) - and so is a
- * stop in the 52-90s gap on a unit not yet re-registered with the pin, which
- * still runs on systemd's default.
- */
-export const SYSTEMCTL_JOB_TIMEOUT_MS =
-  SYSTEMD_TIMEOUT_STOP_SECONDS * 1_000 + 15_000;
 
 // The error for a `start` / `restart` that did not complete. Only a runner
 // TIMEOUT is special: systemd may already have queued the job, and killing

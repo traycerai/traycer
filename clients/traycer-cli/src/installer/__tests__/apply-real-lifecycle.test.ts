@@ -165,10 +165,10 @@ vi.mock("../../service/platforms/macos", async (importOriginal) => {
   };
 });
 
-// Shell out to schtasks / powershell / taskkill. `host-start-adoption.ts`
-// imports `WINDOWS_RUN_SPAWN_EDGE_BOUND_MS` from this module for its window
-// derivation, so a wholesale replacement here breaks at import time on any
-// platform, not only Windows - spread the actual module instead.
+// Shell out to schtasks / powershell / taskkill. `install-lifecycle.ts` and
+// `service/index.ts` import the real module - `createWindowsController` among
+// others - so a wholesale replacement here would drop those exports and work
+// only by luck of what a given test touches. Spread the actual module instead.
 vi.mock("../../service/platforms/windows", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../service/platforms/windows")>();
