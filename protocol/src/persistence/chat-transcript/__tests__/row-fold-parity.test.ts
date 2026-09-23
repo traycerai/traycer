@@ -1617,6 +1617,10 @@ const NO_LOADS = (load: TranscriptFoldLoad): TranscriptFoldLoadResult => {
       return { kind: "events", events: [] };
     case "pause-open":
       return { kind: "pause-open", turnId: null };
+    case "checkpoint-turns":
+      return { kind: "checkpoint-turns", turns: [] };
+    case "checkpoint-last-changes":
+      return { kind: "checkpoint-last-changes", changes: [] };
     case "unit-rows":
     case "rows-by-id":
       return { kind: "rows", rows: [] };

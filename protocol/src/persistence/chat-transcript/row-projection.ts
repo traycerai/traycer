@@ -13,9 +13,10 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 import {
+  checkpointChangePaths,
   checkpointEventTurnKey,
   latestCheckpointPerTurn,
-  overlappingCheckpointIds,
+  overlappingCheckpointKeys,
   turnCheckpointManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 
@@ -48,10 +49,13 @@ import {
   transcriptMessageFoldFactsEqual,
   turnRowUnitKey,
   userRowUnitKey,
+  type CheckpointPathChange,
+  type CheckpointTurnPaths,
   type PositionedEvent,
   type PositionedMessage,
   type PositionedMessageFacts,
   type PositionedTurnEvent,
+  type StoredCheckpointTurn,
   type StoredTranscriptRow,
   type TranscriptFoldChange,
   type TranscriptFoldLoad,
@@ -826,6 +830,16 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
  *
  * Only each turn's last checkpoint counts (`latestCheckpointPerTurn`). A turn
  * whose checkpoint was rewritten must not be flagged by its own rewrite.
+ *
+ * Keyed by turn all the way through: the rule runs over each turn's changed
+ * paths (`overlappingCheckpointKeys`), not over checkpoint ids mapped back to
+ * turns. Two turns whose checkpoints share an id are still two checkpoints, and
+ * the mapping would flag both whenever either overlapped. This is also the
+ * form the row fold can keep in a store - see `CheckpointOverlapLoads`.
+ *
+ * This is the whole-history rule. The row fold answers the same question from
+ * the store's path table without loading every checkpoint, and its parity test
+ * holds it to this function.
  */
 export function turnKeysWithLaterOverlappingChanges(
   events: readonly ChatEvent[],
@@ -841,24 +855,33 @@ export function turnKeysWithLaterOverlappingChanges(
     checkpointEventTurnKey,
   );
   const current = retained.flatMap((event) => {
-    if (event.turnId === null || event.metadata === null) return [];
-    const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
-    // A manifest this reader cannot parse is one whose overlap it cannot judge.
-    // Dropping it is the same answer the restore path gives a version mismatch
-    // ("cannot restore"), and it keeps an unreadable entry from silently
-    // reading as "touches nothing" and clearing a warning it should have kept.
-    if (!manifest.success) return [];
-    return [{ turnId: event.turnId, manifest: manifest.data }];
+    if (event.turnId === null) return [];
+    const paths = retainedCheckpointChangePaths(event);
+    return paths === null ? [] : [{ key: event.turnId, paths }];
   });
   if (current.length === 0) return EMPTY_TURN_KEYS;
-  const overlapping = overlappingCheckpointIds(
-    current.map((entry) => entry.manifest),
-  );
-  return new Set(
-    current.flatMap((entry) =>
-      overlapping.has(entry.manifest.checkpointId) ? [entry.turnId] : [],
-    ),
-  );
+  return overlappingCheckpointKeys(current);
+}
+
+/**
+ * The changed paths of a turn's retained `checkpoint.captured`, or `null` when
+ * the manifest cannot be judged: no metadata, or a manifest this reader cannot
+ * parse.
+ *
+ * An unjudgeable manifest is DROPPED rather than read, the same answer the
+ * restore path gives a version mismatch ("cannot restore"). It is still the
+ * turn's retained checkpoint - it supersedes the turn's earlier ones - which is
+ * why this runs after `latestCheckpointPerTurn` and never before.
+ *
+ * For the overlap answer, a dropped checkpoint and one that changed no path are
+ * the same: neither is ever overlapped, and neither overlaps another. The row
+ * fold relies on that when it records an unjudgeable checkpoint as changing no
+ * path.
+ */
+function retainedCheckpointChangePaths(event: ChatEvent): string[] | null {
+  if (event.metadata === null) return null;
+  const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
+  return manifest.success ? checkpointChangePaths(manifest.data) : null;
 }
 
 const EMPTY_TURN_KEYS: ReadonlySet<string> = new Set<string>();
@@ -1071,6 +1094,12 @@ export function foldTranscriptRowsInMemory(
       }
       case "pause-open":
         return { kind: "pause-open", turnId: null };
+      // Nothing is stored before a change that holds every record: each turn's
+      // checkpoint position and paths come from the change itself.
+      case "checkpoint-turns":
+        return { kind: "checkpoint-turns", turns: [] };
+      case "checkpoint-last-changes":
+        return { kind: "checkpoint-last-changes", changes: [] };
       case "unit-rows":
       case "rows-by-id":
         return { kind: "rows", rows: [] };
@@ -1335,6 +1364,195 @@ function* loadPauseOpen(
   return result.turnId;
 }
 
+// ---------------------------------------------------------------------------
+// Checkpoint overlap
+// ---------------------------------------------------------------------------
+
+/** A turn whose retained checkpoint this change replaced. */
+interface ReplacedCheckpoint {
+  /** The turn's first checkpoint position, which the replacement keeps. */
+  readonly position: number;
+  /** Its changed paths as the store held them before this change. */
+  readonly before: readonly string[];
+  /** Its changed paths after it. */
+  readonly after: readonly string[];
+}
+
+type CheckpointWorld = "before" | "after";
+
+/**
+ * # Checkpoint overlap, judged from the store's path table
+ *
+ * `turnKeysWithLaterOverlappingChanges` is the whole-history rule, and it
+ * needs every checkpoint in the chat. Running it at every turn end made each
+ * one read and parse the chat's whole checkpoint history, and keeping its
+ * answer in the fold state made that state grow with the turn count. So the
+ * store keeps each turn's retained changed paths instead (the fold reports
+ * them in `checkpointPaths`), and the fold judges only the turns it has to.
+ * It judges them with `overlappingCheckpointKeys`, the same rule, over the
+ * subset that rule's doc names as sufficient: the judged turns, plus the last
+ * changer of each of their paths, in position order.
+ *
+ * ## Which turns can change their answer
+ *
+ * Suppose a change replaces turn U's retained checkpoint: old paths O, new
+ * paths N, same position. Only a turn that is the LAST changer (U aside) of
+ * some path in O Δ N can change its answer. A turn that changed such a path
+ * before that last changer overlaps through it both before and after. A path
+ * in O ∩ N moved nobody. So the candidates are U and one last changer per
+ * path in the symmetric difference, and each is judged in both worlds.
+ *
+ * ## The loads
+ *
+ * Both loads are narrow. `checkpoint-turns` reads the named turns' stored
+ * paths. `checkpoint-last-changes` reads one row per path, with the replaced
+ * turns excluded because the fold holds their paths itself. Nothing reads
+ * every checkpoint.
+ */
+class CheckpointOverlapLoads {
+  readonly stored = new Map<string, StoredCheckpointTurn | null>();
+  readonly lastChanges = new Map<string, CheckpointPathChange | null>();
+
+  constructor(
+    private readonly replaced: ReadonlyMap<string, ReplacedCheckpoint>,
+    private readonly excluded: readonly string[],
+  ) {}
+
+  *loadTurns(
+    turnKeys: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(turnKeys)].filter(
+      (turnKey) => !this.stored.has(turnKey),
+    );
+    if (missing.length === 0) return;
+    const result = yield { kind: "checkpoint-turns", turnKeys: missing };
+    if (result.kind !== "checkpoint-turns") {
+      throw new Error(`row fold: checkpoint-turns answered with ${result.kind}`);
+    }
+    for (const turnKey of missing) this.stored.set(turnKey, null);
+    for (const turn of result.turns) this.stored.set(turn.turnKey, turn);
+  }
+
+  /** Loads the last changer of every path the named turns have in `world`. */
+  *loadLastChangesOf(
+    turnKeys: Iterable<string>,
+    world: CheckpointWorld,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const paths = new Set<string>();
+    for (const turnKey of turnKeys) {
+      for (const path of this.pathsOf(turnKey, world)) paths.add(path);
+    }
+    yield* this.loadLastChanges(paths);
+  }
+
+  *loadLastChanges(
+    paths: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(paths)].filter(
+      (path) => !this.lastChanges.has(path),
+    );
+    if (missing.length === 0) return;
+    const result = yield {
+      kind: "checkpoint-last-changes",
+      filePaths: missing,
+      excludeTurnKeys: this.excluded,
+    };
+    if (result.kind !== "checkpoint-last-changes") {
+      throw new Error(
+        `row fold: checkpoint-last-changes answered with ${result.kind}`,
+      );
+    }
+    for (const path of missing) this.lastChanges.set(path, null);
+    for (const change of result.changes) {
+      this.lastChanges.set(change.filePath, change);
+    }
+  }
+
+  /** A turn's changed paths in `world`; empty for a turn not yet loaded. */
+  pathsOf(turnKey: string, world: CheckpointWorld): readonly string[] {
+    const replaced = this.replaced.get(turnKey);
+    if (replaced !== undefined) return replaced[world];
+    return this.stored.get(turnKey)?.paths ?? [];
+  }
+
+  /**
+   * Which of `turnKeys` overlap in `world`. Every non-replaced turn must have
+   * been loaded, and the last changer of every path of every judged turn.
+   */
+  overlapping(
+    turnKeys: Iterable<string>,
+    world: CheckpointWorld,
+  ): ReadonlySet<string> {
+    const checkpoints = new Map<
+      string,
+      { readonly position: number; readonly paths: Set<string> }
+    >();
+    const note = (
+      turnKey: string,
+      position: number,
+      paths: readonly string[],
+    ): void => {
+      const held = checkpoints.get(turnKey);
+      if (held === undefined) {
+        checkpoints.set(turnKey, { position, paths: new Set(paths) });
+        return;
+      }
+      for (const path of paths) held.paths.add(path);
+    };
+    // Every replaced turn is a possible later changer of a judged path, and
+    // `checkpoint-last-changes` excluded them, so they enter here, in the
+    // world being judged.
+    for (const [turnKey, replaced] of this.replaced) {
+      note(turnKey, replaced.position, replaced[world]);
+    }
+    const judged: string[] = [];
+    const judgedPaths = new Set<string>();
+    for (const turnKey of new Set(turnKeys)) {
+      const replaced = this.replaced.get(turnKey);
+      if (replaced !== undefined) {
+        judged.push(turnKey);
+        for (const path of replaced[world]) judgedPaths.add(path);
+        continue;
+      }
+      const stored = this.stored.get(turnKey);
+      if (stored === undefined) {
+        throw new Error("row fold: a checkpoint turn was judged unloaded");
+      }
+      // A turn with no checkpoint changed nothing and overlaps nothing.
+      if (stored === null || stored.position === null) continue;
+      note(turnKey, stored.position, stored.paths);
+      judged.push(turnKey);
+      for (const path of stored.paths) judgedPaths.add(path);
+    }
+    for (const path of judgedPaths) {
+      const last = this.lastChanges.get(path);
+      if (last === undefined) {
+        throw new Error("row fold: a checkpoint path was judged unloaded");
+      }
+      if (last !== null) note(last.turnKey, last.position, [path]);
+    }
+    const overlapping = overlappingCheckpointKeys(
+      [...checkpoints.entries()]
+        .sort((a, b) => a[1].position - b[1].position)
+        .map(([key, held]) => ({ key, paths: [...held.paths] })),
+    );
+    return new Set(judged.filter((turnKey) => overlapping.has(turnKey)));
+  }
+}
+
+/** The changed paths `after` has and `before` lacks, and the reverse. */
+function symmetricDifference(
+  before: readonly string[],
+  after: readonly string[],
+): string[] {
+  const inBefore = new Set(before);
+  const inAfter = new Set(after);
+  return [
+    ...before.filter((path) => !inAfter.has(path)),
+    ...after.filter((path) => !inBefore.has(path)),
+  ];
+}
+
 function addToList(
   lists: Map<string, string[]>,
   key: string,
@@ -1545,7 +1763,12 @@ export function* foldTranscriptRows(
   const changeEventsByTurn = new Map<string, PositionedEvent[]>();
   const eventUnits = new Map<string, PositionedEvent>();
   let eventsThrough = prior.eventsThrough;
-  let checkpointsChanged = false;
+  // Per turn, the first and the last checkpoint this change appended. An
+  // event-keyed checkpoint (no `turnId`) never enters the overlap rule.
+  const changedCheckpoints = new Map<
+    string,
+    { readonly firstPosition: number; readonly last: ChatEvent }
+  >();
   let setupChanged = false;
 
   for (const touch of change.appendedEvents) {
@@ -1622,7 +1845,13 @@ export function* foldTranscriptRows(
     ) {
       addToList(stopTriggers, event.messageId, event.turnId);
     }
-    if (event.type === "checkpoint.captured") checkpointsChanged = true;
+    if (event.type === "checkpoint.captured" && event.turnId !== null) {
+      changedCheckpoints.set(event.turnId, {
+        firstPosition:
+          changedCheckpoints.get(event.turnId)?.firstPosition ?? touch.position,
+        last: event,
+      });
+    }
     if (SETUP_CARD_INPUT_EVENT_TYPE_SET.has(event.type)) setupChanged = true;
     if (eventMaterializesTranscriptRow(event)) {
       eventUnits.set(event.eventId, touch);
@@ -1641,22 +1870,47 @@ export function* foldTranscriptRows(
     }
   }
 
-  let overlapping: ReadonlySet<string> = new Set(prior.overlappingTurnKeys);
-  if (checkpointsChanged) {
-    const checkpoints = yield* loadEvents({
-      kind: "events-by-type",
-      types: ["checkpoint.captured"],
-    });
-    const next = turnKeysWithLaterOverlappingChanges(
-      checkpoints.map((positioned) => positioned.event),
-    );
-    for (const turnKey of next) {
-      if (!overlapping.has(turnKey)) touchedTurns.add(turnKey);
+  // --- Checkpoint overlap: the turns whose answer this change moved. ---
+  const replacedCheckpoints = new Map<string, ReplacedCheckpoint>();
+  const checkpointLoads = new CheckpointOverlapLoads(replacedCheckpoints, [
+    ...changedCheckpoints.keys(),
+  ]);
+  if (changedCheckpoints.size > 0) {
+    yield* checkpointLoads.loadTurns(changedCheckpoints.keys());
+    for (const [turnKey, changed] of changedCheckpoints) {
+      const stored = checkpointLoads.stored.get(turnKey) ?? null;
+      const storedPosition = stored?.position ?? null;
+      replacedCheckpoints.set(turnKey, {
+        position:
+          storedPosition === null
+            ? changed.firstPosition
+            : Math.min(storedPosition, changed.firstPosition),
+        before: stored?.paths ?? [],
+        // Unjudgeable reads as changing no path: the same answer for every
+        // turn, see `retainedCheckpointChangePaths`.
+        after: retainedCheckpointChangePaths(changed.last) ?? [],
+      });
     }
-    for (const turnKey of overlapping) {
-      if (!next.has(turnKey)) touchedTurns.add(turnKey);
+    const movedPaths = new Set<string>();
+    for (const replaced of replacedCheckpoints.values()) {
+      for (const path of symmetricDifference(replaced.before, replaced.after)) {
+        movedPaths.add(path);
+      }
     }
-    overlapping = next;
+    yield* checkpointLoads.loadLastChanges(movedPaths);
+    const candidates = new Set(replacedCheckpoints.keys());
+    for (const path of movedPaths) {
+      const last = checkpointLoads.lastChanges.get(path) ?? null;
+      if (last !== null) candidates.add(last.turnKey);
+    }
+    yield* checkpointLoads.loadTurns(candidates);
+    yield* checkpointLoads.loadLastChangesOf(candidates, "before");
+    yield* checkpointLoads.loadLastChangesOf(candidates, "after");
+    const before = checkpointLoads.overlapping(candidates, "before");
+    const after = checkpointLoads.overlapping(candidates, "after");
+    for (const turnKey of candidates) {
+      if (before.has(turnKey) !== after.has(turnKey)) touchedTurns.add(turnKey);
+    }
   }
 
   if (prior.activeTurnId !== change.activeTurnId) {
@@ -2030,6 +2284,13 @@ export function* foldTranscriptRows(
       touchedTurns.add(turnKey);
     }
   }
+
+  // Every re-described turn carries its overlap answer. The turns this change
+  // could move were judged above; any other is judged the same way, from its
+  // stored paths and their last changers.
+  yield* checkpointLoads.loadTurns(touchedTurns);
+  yield* checkpointLoads.loadLastChangesOf(touchedTurns, "after");
+  const overlapping = checkpointLoads.overlapping(touchedTurns, "after");
 
   // --- Bodies of what is re-described. ---
   const turnBodies = new Map<string, PositionedMessage[]>();
@@ -2444,13 +2705,18 @@ export function* foldTranscriptRows(
           steerLifecycle.steerRequestMessageIdsByQueueItemId,
         ),
       },
-      overlappingTurnKeys: [...overlapping],
       stopTriggers: recordFrom(stopTriggers),
       setup: setupState,
     },
     units,
     previousRows,
     eventRowTurnKeys,
+    checkpointPaths: new Map<string, CheckpointTurnPaths>(
+      [...replacedCheckpoints].map(([turnKey, replaced]) => [
+        turnKey,
+        { position: replaced.position, paths: replaced.after },
+      ]),
+    ),
   };
 }
 

@@ -112,30 +112,69 @@ export function isNoOpCheckpointEntry(
 export function overlappingCheckpointIds(
   manifests: ReadonlyArray<TurnCheckpointManifest>,
 ): ReadonlySet<string> {
-  // Only real changes drive the note: a no-op entry isn't part of this turn's
-  // change set and isn't restored, so an overlap with one would make the
-  // cumulative warning misleading.
-  //
-  // Record, per file path, the index of the last checkpoint that touches it. A
-  // checkpoint then overlaps iff any path it touches is touched again by a
-  // later one - one forward pass plus one scan, rather than the quadratic
-  // pairwise comparison this started as.
+  return overlappingCheckpointKeys(
+    manifests.map((manifest) => ({
+      key: manifest.checkpointId,
+      paths: checkpointChangePaths(manifest),
+    })),
+  );
+}
+
+/**
+ * The paths a checkpoint really changed: its entries' paths without the
+ * no-op ones, each once, in entry order.
+ *
+ * Only real changes drive the overlap note. A no-op entry is not part of the
+ * turn's change set and is not restored, so an overlap with one would make the
+ * cumulative warning misleading.
+ */
+export function checkpointChangePaths(
+  manifest: TurnCheckpointManifest,
+): string[] {
+  const paths = new Set<string>();
+  for (const entry of manifest.entries) {
+    if (!isNoOpCheckpointEntry(entry)) paths.add(entry.filePath);
+  }
+  return [...paths];
+}
+
+/**
+ * The overlap rule itself, over each checkpoint's {@link checkpointChangePaths}.
+ * {@link overlappingCheckpointIds} is this over whole manifests; a store that
+ * keeps only the paths calls it directly, so the rule has one definition
+ * whichever form the checkpoints are held in.
+ *
+ * A checkpoint overlaps iff a path it changed is changed again by a LATER one.
+ * Record, per path, the index of the last checkpoint that changes it; a
+ * checkpoint then overlaps iff any of its paths has a later last index. One
+ * forward pass plus one scan, rather than the quadratic pairwise comparison
+ * this started as.
+ *
+ * The answer for a checkpoint depends on its own paths and, for each of them,
+ * on the LAST checkpoint that changes it and nothing else. So a caller may pass
+ * any subset that holds the checkpoints it asks about plus the last changer of
+ * each of their paths, in their true relative order, and gets the whole-set
+ * answer for those checkpoints. That is what lets a store judge a few turns
+ * without loading every checkpoint in the chat.
+ *
+ * @param checkpoints In capture order; "later" means later in this array.
+ */
+export function overlappingCheckpointKeys<K>(
+  checkpoints: ReadonlyArray<{
+    readonly key: K;
+    readonly paths: ReadonlyArray<string>;
+  }>,
+): ReadonlySet<K> {
   const lastTouchIndexByPath = new Map<string, number>();
-  manifests.forEach((manifest, index) => {
-    manifest.entries
-      .filter((entry) => !isNoOpCheckpointEntry(entry))
-      .forEach((entry) => {
-        lastTouchIndexByPath.set(entry.filePath, index);
-      });
+  checkpoints.forEach((checkpoint, index) => {
+    for (const path of checkpoint.paths) lastTouchIndexByPath.set(path, index);
   });
   return new Set(
-    manifests.flatMap((manifest, index) => {
-      const touchedLater = manifest.entries.some(
-        (entry) =>
-          !isNoOpCheckpointEntry(entry) &&
-          (lastTouchIndexByPath.get(entry.filePath) ?? index) > index,
+    checkpoints.flatMap((checkpoint, index) => {
+      const touchedLater = checkpoint.paths.some(
+        (path) => (lastTouchIndexByPath.get(path) ?? index) > index,
       );
-      return touchedLater ? [manifest.checkpointId] : [];
+      return touchedLater ? [checkpoint.key] : [];
     }),
   );
 }

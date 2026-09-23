@@ -319,7 +319,12 @@ export function transcriptMessageFoldFactsEqual(
 // The fold state
 // ---------------------------------------------------------------------------
 
-export const TRANSCRIPT_FOLD_STATE_VERSION = 1;
+/**
+ * 2: the checkpoint-overlap set left the state for the store's path table
+ * (see {@link TranscriptFoldLoad}'s `checkpoint-turns`), so a version-1 state
+ * would carry a field this build no longer maintains.
+ */
+export const TRANSCRIPT_FOLD_STATE_VERSION = 2;
 
 /**
  * Where the record walk the increment re-runs starts.
@@ -379,8 +384,6 @@ export interface TranscriptFoldState {
     readonly messageIds: readonly string[];
     readonly requestMessageIdByQueueItemId: Readonly<Record<string, string>>;
   };
-  /** `turnKeysWithLaterOverlappingChanges` over the whole event log. */
-  readonly overlappingTurnKeys: readonly string[];
   /** User message id to the turns a `turn.stopped` naming it belongs to. */
   readonly stopTriggers: Readonly<Record<string, readonly string[]>>;
   readonly setup: {
@@ -408,7 +411,6 @@ export const EMPTY_TRANSCRIPT_FOLD_STATE: TranscriptFoldState = {
   openTurnKeys: [],
   steerTargets: {},
   completedSteer: { messageIds: [], requestMessageIdByQueueItemId: {} },
-  overlappingTurnKeys: [],
   stopTriggers: {},
   setup: { windowCount: 0, openWindow: false, cardAnchors: [] },
 };
@@ -533,6 +535,25 @@ export type TranscriptFoldLoad =
       readonly beforePosition: number;
     }
   | {
+      /**
+       * Each of these turns' retained checkpoint as the store holds it: see
+       * {@link StoredCheckpointTurn}. Nothing for a turn with neither.
+       */
+      readonly kind: "checkpoint-turns";
+      readonly turnKeys: readonly string[];
+    }
+  | {
+      /**
+       * For each path, the stored turn with the LATEST position whose retained
+       * checkpoint changed it, among turns not in `excludeTurnKeys`. Nothing for
+       * a path no such turn changed. The fold excludes the turns whose
+       * checkpoint this change replaces, since it holds their new paths itself.
+       */
+      readonly kind: "checkpoint-last-changes";
+      readonly filePaths: readonly string[];
+      readonly excludeTurnKeys: readonly string[];
+    }
+  | {
       /** The index rows the store holds for these units. */
       readonly kind: "unit-rows";
       readonly unitKeys: readonly string[];
@@ -546,6 +567,34 @@ export type TranscriptFoldLoad =
 /** An event as the store holds it, with the turn it was stored as decorating. */
 export interface PositionedTurnEvent extends PositionedEvent {
   readonly rowTurnKey: string;
+}
+
+/**
+ * One turn's retained checkpoint as the store holds it.
+ *
+ * `position` is the position of the turn's FIRST `checkpoint.captured` event,
+ * `null` when it has none: a turn keeps the place of its first checkpoint and
+ * the content of its last (`latestCheckpointPerTurn`), and a turn whose
+ * retained checkpoint changed no path keeps that place too, so it is read from
+ * the events rather than from the paths. A store may answer from before this
+ * change's events or after them - the fold takes the earlier of this and the
+ * change's own first checkpoint, which is the same number either way.
+ *
+ * `paths` are the changed paths of the turn's retained checkpoint as the fold
+ * last reported them in {@link TranscriptFoldResult}'s `checkpointPaths`,
+ * never this change's.
+ */
+export interface StoredCheckpointTurn {
+  readonly turnKey: string;
+  readonly position: number | null;
+  readonly paths: readonly string[];
+}
+
+/** The last stored turn to change a path, at its checkpoint position. */
+export interface CheckpointPathChange {
+  readonly filePath: string;
+  readonly turnKey: string;
+  readonly position: number;
 }
 
 /** A message's fold facts as the store holds them. */
@@ -571,6 +620,14 @@ export type TranscriptFoldLoadResult =
       readonly events: readonly PositionedTurnEvent[];
     }
   | { readonly kind: "pause-open"; readonly turnId: string | null }
+  | {
+      readonly kind: "checkpoint-turns";
+      readonly turns: readonly StoredCheckpointTurn[];
+    }
+  | {
+      readonly kind: "checkpoint-last-changes";
+      readonly changes: readonly CheckpointPathChange[];
+    }
   | { readonly kind: "rows"; readonly rows: readonly StoredTranscriptRow[] };
 
 export interface TranscriptFoldRow {
@@ -604,4 +661,17 @@ export type TranscriptFoldResult =
       readonly previousRows: readonly StoredTranscriptRow[];
       /** The turn each newly appended event decorates, for events that decorate one. */
       readonly eventRowTurnKeys: ReadonlyMap<string, string>;
+      /**
+       * Every turn whose retained checkpoint this change replaced, with the
+       * turn's checkpoint position and the new checkpoint's changed paths. The
+       * store replaces the paths it holds for each; an empty `paths` clears
+       * them.
+       */
+      readonly checkpointPaths: ReadonlyMap<string, CheckpointTurnPaths>;
     };
+
+/** What the store records for one turn's retained checkpoint. */
+export interface CheckpointTurnPaths {
+  readonly position: number;
+  readonly paths: readonly string[];
+}

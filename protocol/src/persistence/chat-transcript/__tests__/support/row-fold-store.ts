@@ -18,7 +18,10 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import {
   canonicalFoldJson,
   compareTranscriptRowOrder,
+  type CheckpointPathChange,
+  type CheckpointTurnPaths,
   type PositionedMessage,
+  type StoredCheckpointTurn,
   type TranscriptEventTouch,
   type TranscriptFoldChange,
   type TranscriptFoldLoad,
@@ -102,6 +105,8 @@ export class RowFoldStore {
   private readonly messagesMap = new Map<string, StoredMessageEntry>();
   private eventsArr: StoredEventEntry[] = [];
   private readonly units = new Map<string, StoredUnit>();
+  /** Each turn's retained checkpoint paths, as `checkpointPaths` reported them. */
+  private readonly checkpointPaths = new Map<string, CheckpointTurnPaths>();
   private state: TranscriptFoldState | null = null;
   private activeTurnId: string | null = null;
 
@@ -312,6 +317,46 @@ export class RowFoldStore {
           });
           return { kind: "pause-open", turnId };
         }
+        case "checkpoint-turns": {
+          // Positions from the events AFTER this change, as the SQLite store
+          // answers: the fold takes the earlier of this and its own.
+          const turns: StoredCheckpointTurn[] = load.turnKeys.flatMap(
+            (turnKey) => {
+              const position = this.firstCheckpointPosition(turnKey);
+              const stored = this.checkpointPaths.get(turnKey);
+              if (position === null && stored === undefined) return [];
+              return [{ turnKey, position, paths: stored?.paths ?? [] }];
+            },
+          );
+          loads.push({
+            kind: load.kind,
+            position: undefined,
+            resultCount: turns.length,
+          });
+          return { kind: "checkpoint-turns", turns };
+        }
+        case "checkpoint-last-changes": {
+          const excluded = new Set(load.excludeTurnKeys);
+          const changes: CheckpointPathChange[] = load.filePaths.flatMap(
+            (filePath) => {
+              let last: CheckpointPathChange | null = null;
+              for (const [turnKey, held] of this.checkpointPaths) {
+                if (excluded.has(turnKey)) continue;
+                if (!held.paths.includes(filePath)) continue;
+                if (last === null || held.position > last.position) {
+                  last = { filePath, turnKey, position: held.position };
+                }
+              }
+              return last === null ? [] : [last];
+            },
+          );
+          loads.push({
+            kind: load.kind,
+            position: undefined,
+            resultCount: changes.length,
+          });
+          return { kind: "checkpoint-last-changes", changes };
+        }
         case "unit-rows": {
           const rows = load.unitKeys.flatMap((unitKey) =>
             (this.units.get(unitKey)?.rows ?? []).map((row) => ({
@@ -397,6 +442,7 @@ export class RowFoldStore {
       );
     }
     this.state = roundtripped;
+    this.recordCheckpointPaths(result.checkpointPaths);
 
     for (let index = 0; index < this.eventsArr.length; index += 1) {
       const entry = this.eventsArr[index];
@@ -407,6 +453,28 @@ export class RowFoldStore {
     }
 
     return { continued: true, reason: null, loads, touchedUnitKeys };
+  }
+
+  private recordCheckpointPaths(
+    replaced: ReadonlyMap<string, CheckpointTurnPaths>,
+  ): void {
+    for (const [turnKey, paths] of replaced) {
+      this.checkpointPaths.set(turnKey, paths);
+    }
+  }
+
+  private firstCheckpointPosition(turnKey: string): number | null {
+    let first: number | null = null;
+    for (const entry of this.eventsArr) {
+      if (
+        entry.event.type !== "checkpoint.captured" ||
+        entry.event.turnId !== turnKey
+      ) {
+        continue;
+      }
+      if (first === null || entry.position < first) first = entry.position;
+    }
+    return first;
   }
 
   private liveMessagesSorted(): PositionedMessage[] {
@@ -426,6 +494,8 @@ export class RowFoldStore {
       })),
     });
     this.units.clear();
+    this.checkpointPaths.clear();
+    this.recordCheckpointPaths(result.checkpointPaths);
     for (const unit of result.units) {
       const skeleton = transcriptFoldUnitSkeleton(
         unit,
