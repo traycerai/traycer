@@ -19,6 +19,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 function b64ImageContent(): JsonContent {

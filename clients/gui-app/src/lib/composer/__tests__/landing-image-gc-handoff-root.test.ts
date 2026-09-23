@@ -52,6 +52,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 function hashOnlyImageDoc(hash: string): JsonContent {

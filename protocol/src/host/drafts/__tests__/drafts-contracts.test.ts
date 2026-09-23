@@ -61,6 +61,7 @@ const RUN_SETTINGS = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const WORKSPACE = {

@@ -681,8 +681,13 @@ export const hostFileTransferCloseV10 = defineRpcContract({
  * they ARE its type — so what inheritance reads locally and what crosses the
  * wire cannot drift. A GUI sender contributes its run-settings tuple
  * (harness, model, permission mode, reasoning effort, service tier, agent
- * mode, profile), `null` when the record carries none; a TUI sender
+ * mode, profile, identity), `null` when the record carries none; a TUI sender
  * contributes the launch tuple `agent.create` inherits from.
+ *
+ * The identity rides because children inherit it: a GUI child created by a
+ * sender on another machine must run as the identity a same-host child of the
+ * same sender would. A TUI sender carries none - identities bind to GUI chats.
+ * This line has never shipped, so the field is an in-place edit, not a minor.
  *
  * `hostId` is the ORIGIN host of the sender, and it is not taken on trust: the
  * target requires it to equal the dialing principal's `originHostId`, so a

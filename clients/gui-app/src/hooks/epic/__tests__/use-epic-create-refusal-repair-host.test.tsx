@@ -400,6 +400,7 @@ describe("a missing-attachment-bytes refusal retries once under the same idempot
     serviceTier: null,
     agentMode: "epic" as const,
     profileId: null,
+    identityId: null,
   };
 
   function hashOnlyDoc(hash: string): JsonContent {

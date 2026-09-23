@@ -12,6 +12,7 @@ function settings(overrides: Partial<ChatRunSettings>): ChatRunSettings {
     agentMode: "regular",
     profileId: "limited",
     ...overrides,
+    identityId: null,
   };
 }
 

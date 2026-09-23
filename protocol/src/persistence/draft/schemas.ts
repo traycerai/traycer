@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { chatRunSettingsStrictSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  agentIdentityIdSchema,
+  chatRunSettingsStrictSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
@@ -58,15 +61,26 @@ export type DraftComposerMode = z.infer<typeof draftComposerModeSchema>;
  * (the drafts minor is unreleased; this is an in-place dialect edit,
  * not a SQLite column / schema_version bump).
  *
- * Run settings are the STRICT tuple: every key required, explicit nulls.
- * There are no legacy draft rows to accommodate, so `.default(null)` would
- * only hide an omitting writer as a null-clobber.
+ * Run settings are the STRICT tuple: every key required, explicit nulls - and
+ * that includes the composer's agent identity, so a draft reopened on another
+ * device runs as the identity it was drafted under.
+ *
+ * `identityId` is the one exception, and only on READ, for the reason `closed`
+ * is: a 1.0 head written before the field existed must still decode, as the
+ * stock identity. The drafts minor is unreleased, so this is an in-place
+ * dialect edit rather than a new minor. The WRITE schema below requires it.
  */
+const draftRunSettingsReadSchema = lazySchema(() =>
+  chatRunSettingsStrictSchema.extend({
+    identityId: agentIdentityIdSchema.nullable().default(null),
+  }),
+);
+
 export const draftComposerPortableSchema = lazySchema(() =>
   z.object({
     content: jsonContentSchema,
     selection: draftSelectionSchema.nullable(),
-    runSettings: chatRunSettingsStrictSchema.nullable(),
+    runSettings: draftRunSettingsReadSchema.nullable(),
     composerMode: draftComposerModeSchema,
     blobHashes: z.array(sha256HexSchema),
     closed: z.boolean().default(false),
@@ -80,10 +94,13 @@ export type DraftComposerPortable = z.infer<typeof draftComposerPortableSchema>;
  * the write path it would silently turn an omitting client into a claim
  * that the draft is open, and because the host applies an upsert as a
  * whole-document LWW that write replaces a retained `closed: true` row.
- * Every write branch names the state explicitly.
+ * Every write branch names the state explicitly. The same goes for the run
+ * settings' `identityId`: a writer states the identity, and an omission is a
+ * validation error rather than a silent reset to the stock identity.
  */
 export const draftComposerPortableWriteSchema = lazySchema(() =>
   draftComposerPortableSchema.extend({
+    runSettings: chatRunSettingsStrictSchema.nullable(),
     closed: z.boolean(),
   }),
 );

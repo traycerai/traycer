@@ -46,6 +46,7 @@ const PROFILE_A_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "profile-a",
+  identityId: null,
 };
 
 // Same harness/model/permission/reasoning/tier/agentMode as PROFILE_A_SETTINGS
@@ -124,6 +125,8 @@ function emitSnapshot(harness: Harness): void {
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

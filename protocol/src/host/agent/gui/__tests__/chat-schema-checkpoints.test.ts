@@ -137,9 +137,28 @@ const SERVER_FRAME_DIGESTS = {
     "1de46aa26aebc0b902d91cf0b108e9b34cb0906bbd8a03dee5a60627c9e135d3",
     "882f4af25ef15550956d59c48c622c0c592f3c313b15b44b337e4a5b398bb809",
   ],
+  // RE-CAPTURED for agent identity, and it is the only entry that moved -
+  // `1.0`-`1.12` are byte-identical across that change, which is the freeze
+  // reporting that it held.
+  //
+  // `1.13` is the first line that binds the LIVE chat record and the LIVE
+  // settings tuple by reference (`1.7`-`1.12` sit on the `...PreAuto` copies),
+  // so the three new fields - `chat.kind`, `chat.evolutionTurnsSinceReview` and
+  // `settings.identityId` - land on it the moment they land on the persisted
+  // shapes. Nothing below it can follow, by construction.
+  //
+  // Re-capturing rather than freezing `1.13` properly is a deliberate call and
+  // a narrow one: released `chat.subscribe` is `1.8` (`host-v1.3.1`), so every
+  // line from `1.9` up is unreleased and no peer in the field speaks this one.
+  // The entry's value here is as a DRIFT tripwire over a superseded line, and
+  // it did its job - it is why this comment exists rather than the change
+  // passing unnoticed. If `1.13` ever needs to be frozen against the live
+  // shapes for real, that is hand-frozen copies of `chatSchema` and the run
+  // settings tuple, the way `chatSchemaV16` and `chatRunSettingsSchemaPreAuto`
+  // are - not an edit here.
   13: [
-    "0b21bf15572d520c23bc7d78428b1b5abf4b78970f07bea3accae6295082c1e4",
-    "4b319e48d65e2493146748cb326a652cdb204d78f647cf8c41defbfef503de6b",
+    "5cd4121cfd8360c6ca0bc41944b46e133004ed027c109e8853970df6251b59ca",
+    "22d50843f7b95a6be5d9869b8387255c24f81a5314f44fc96dccdb07a7c7dd74",
   ],
 } as const;
 

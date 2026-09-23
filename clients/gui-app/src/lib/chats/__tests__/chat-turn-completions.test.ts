@@ -157,6 +157,7 @@ describe("toChatTurnPhase", () => {
                 serviceTier: null,
                 agentMode: "regular",
                 profileId: "work",
+                identityId: null,
               },
               accountContext: { type: "PERSONAL" },
               delivery: "next_turn",

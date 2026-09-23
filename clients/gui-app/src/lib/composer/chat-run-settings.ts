@@ -45,6 +45,12 @@ export function buildChatRunSettings(input: {
     // mode; nothing reads it back.
     agentMode: "regular",
     profileId: selection.profileId,
+    // No composer picker writes this yet - T10/T11 own the Identities surface -
+    // so every settings tuple this builder produces runs with the stock
+    // identity, which is what `null` means. It is stated rather than omitted
+    // because the field is required on the tuple: a builder that left it out
+    // would not compile, and that is the point of the required shape.
+    identityId: null,
   };
 }
 

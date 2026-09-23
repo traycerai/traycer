@@ -2239,6 +2239,11 @@ function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
     // `null`, on an old serialized `ChatRunSettings`) so it still compares
     // equal to a fresh ambient commit instead of spuriously restamping.
     profileId: (a.profileId ?? null) === (b.profileId ?? null),
+    // Same `??` guard, and for the same reason one field up: the field is
+    // MISSING rather than `null` on a `ChatRunSettings` serialized before
+    // identities existed, and a queued item from that build must still compare
+    // equal to a fresh ambient commit instead of spuriously restamping.
+    identityId: (a.identityId ?? null) === (b.identityId ?? null),
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }

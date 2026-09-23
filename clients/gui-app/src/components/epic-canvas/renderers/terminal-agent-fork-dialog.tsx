@@ -916,6 +916,11 @@ function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
     // still switch between that harness's OTHER profiles via the rail
     // before forking.
     profileId: agent.profileId,
+    // A terminal agent has no identity to seed from: identities bind to GUI
+    // chats, and `ForkableTuiAgent` carries no such field. `null` is the stock
+    // identity, which is what the forked chat should run as until T10/T11 gives
+    // the composer a picker.
+    identityId: null,
   };
 }
 

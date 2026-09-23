@@ -70,6 +70,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 /** Hash-only, which is what every composer produces now. */
@@ -199,6 +200,8 @@ function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -720,6 +723,8 @@ function reconnectWithQueueItems(
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       // Spread into a fresh array: the parameter is readonly (this helper does

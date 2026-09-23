@@ -158,6 +158,45 @@ export const chatSchema = lazySchema(() =>
     // pre-`auto` because `chat.subscribe@1.7`/`@1.8` embed it and both shipped in
     // `cli-v1.3.0`; only the lines that bind THIS schema may carry the mode.
     settings: chatRunSettingsSchema.nullable().default(null),
+    /**
+     * What this chat IS, as opposed to what it runs as.
+     *
+     * `evolution` marks the short-lived chat an identity's every-N-turns
+     * review pass runs in: forked from the parent at its latest checkpoint,
+     * bound to the identity root alone, one turn, archived when it terminates.
+     * The sidebar and every chat list filter it out; the communication graph
+     * keeps it as a child of its parent, and history and usage facts record it
+     * like any other chat.
+     *
+     * A closed enum with a DEFAULT, which is what makes growing it same-major
+     * here: an absent key reads as `conversation`, so every chat persisted
+     * before the field parses unchanged, and no writer can produce
+     * `evolution` except a host that already understands it. The frozen
+     * `chat.subscribe` copies below do not carry the key at all, so a released
+     * peer never meets the value - the `chat.imported` precedent on
+     * `chatSchemaPreImported`, one field over.
+     *
+     * It is a `kind` rather than a boolean because the next hidden-chat class
+     * (a background compaction pass, say) is a third member, not a second flag
+     * that has to be reconciled with this one.
+     */
+    kind: z.enum(["conversation", "evolution"]).default("conversation"),
+    /**
+     * Clean completed turns since this chat's identity last ran an evolution
+     * pass, or `null` when the chat has no identity.
+     *
+     * `null` is the resting state and is NOT zero: zero means "an identity is
+     * attached and a pass has just been spawned", which is a different fact
+     * the counter has to be able to state. The host stamps it through a narrow
+     * writer beside the one `lastDeliveredRolesDigest` uses rather than through
+     * a whole-record write, because it moves on every turn and a whole-record
+     * write per turn is what that narrow-writer pattern exists to avoid.
+     *
+     * Only CLEAN completions count - a stopped or interrupted turn does not
+     * advance it - and it resets when a pass is spawned rather than when one
+     * finishes, so a pass that fails does not re-fire on the very next turn.
+     */
+    evolutionTurnsSinceReview: z.number().int().nullable().default(null),
   }),
 );
 export type Chat = z.infer<typeof chatSchema>;

@@ -480,6 +480,7 @@ function chatRunSettingsEq(
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
     profileId: a.profileId === b.profileId,
+    identityId: a.identityId === b.identityId,
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }
