@@ -135,7 +135,18 @@ export interface ChatProjection {
    * read as active.
    */
   readonly archivedAt: number | null;
+  /**
+   * What the chat IS (`Chat.kind`). `evolution` is the short-lived chat an
+   * identity's review pass runs in: every chat list treats it as archived
+   * (`chatListedAsArchived`), so it is absent from the default view and
+   * present under Archived, while the communication graph keeps it as its
+   * parent's child. A plane that does not state the field projects
+   * `conversation`.
+   */
+  readonly chatKind: ChatProjectionKind;
 }
+
+export type ChatProjectionKind = "conversation" | "evolution";
 
 export interface ChatsSlice {
   readonly byId: Readonly<Record<string, ChatProjection>>;

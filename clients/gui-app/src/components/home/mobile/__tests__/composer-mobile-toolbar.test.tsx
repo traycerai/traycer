@@ -31,6 +31,7 @@ function makeStore(modelSlug: string) {
       selection: { harnessId: "claude", modelSlug, profileId: null },
       reasoning: "",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

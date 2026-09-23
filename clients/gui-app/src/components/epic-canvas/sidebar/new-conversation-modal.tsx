@@ -1039,6 +1039,7 @@ export function NewConversationModalBody(props: {
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
+        identityId: toolbar.identityId,
       });
       if (settings.model.length === 0) return;
       // Global, single-selection billing context captured at create time; it

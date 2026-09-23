@@ -48,6 +48,7 @@ function chat(
     // ordering, not doc residency.
     docResident: false,
     archivedAt: null,
+    chatKind: "conversation",
     settings: null,
   };
 }

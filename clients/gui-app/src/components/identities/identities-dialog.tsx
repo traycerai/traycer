@@ -18,6 +18,7 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { identityTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
+import type { IdentitiesDialogMode } from "@/stores/dialogs/desktop-dialog-store";
 import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import { IdentitiesListPanel } from "./identities-list-panel";
 
@@ -26,13 +27,15 @@ export const IDENTITY_LIST_METHOD = "agentIdentity.list";
 
 export function IdentitiesDialog(props: {
   readonly hostId: string | null;
+  readonly mode: IdentitiesDialogMode;
   readonly onClose: () => void;
 }): ReactNode {
-  const { hostId, onClose } = props;
+  const { hostId, mode, onClose } = props;
   const client = useHostClientForHostId(hostId);
   const supported = useHostSupportsMethod(hostId, IDENTITY_LIST_METHOD);
   const navigate = useNavigate();
   const openingRow = useRef(false);
+  const createInputRef = useRef<HTMLInputElement>(null);
 
   const onOpen = (identity: AgentIdentitySummary) => {
     if (hostId === null) return;
@@ -60,6 +63,13 @@ export function IdentitiesDialog(props: {
       <DialogContent
         className="flex max-h-[80dvh] flex-col overflow-hidden sm:max-w-xl"
         aria-describedby={undefined}
+        onOpenAutoFocus={(event) => {
+          // "New identity" opens straight into naming one; the plain list
+          // keeps Radix's own first-focusable choice.
+          if (mode !== "create" || createInputRef.current === null) return;
+          event.preventDefault();
+          createInputRef.current.focus();
+        }}
         onCloseAutoFocus={(event) => {
           if (openingRow.current) event.preventDefault();
         }}
@@ -72,6 +82,7 @@ export function IdentitiesDialog(props: {
           hostId={hostId}
           client={client}
           supported={supported}
+          createInputRef={createInputRef}
           onOpen={onOpen}
         />
       </DialogContent>

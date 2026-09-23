@@ -531,6 +531,7 @@ function DelayedBranchValidationHarness() {
               },
               reasoning: "high",
               serviceTier: "",
+              identityId: null,
               permission: "supervised",
             },
           });

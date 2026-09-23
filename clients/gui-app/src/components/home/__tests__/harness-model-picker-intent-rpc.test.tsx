@@ -406,6 +406,7 @@ function renderPickerWithFixture(
       selection,
       reasoning: "",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

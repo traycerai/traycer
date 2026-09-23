@@ -417,6 +417,7 @@ function chatProjection(id: string, updatedAt: number): ChatProjection {
     docResident: false,
     settings: null,
     archivedAt: null,
+    chatKind: "conversation",
   };
 }
 

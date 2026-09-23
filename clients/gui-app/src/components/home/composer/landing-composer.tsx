@@ -631,6 +631,7 @@ export function LandingComposer(props: LandingComposerProps) {
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
         permission: toolbar.permission,
+        identityId: toolbar.identityId,
       },
     });
     // Nothing was created when a refusal comes back - the draft, its content

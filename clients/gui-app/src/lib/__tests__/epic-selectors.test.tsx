@@ -972,6 +972,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     // behavior, not doc residency.
     docResident: false,
     archivedAt: null,
+    chatKind: "conversation",
     settings,
   };
 }

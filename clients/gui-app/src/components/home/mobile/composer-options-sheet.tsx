@@ -40,12 +40,18 @@ interface ComposerOptionsSheetProps {
   /** See `PermissionsPicker`: which pocket this host's judge spends. */
   readonly judgeBilling: AutoJudgeBilling | null;
   readonly settingsLocked: boolean;
+  /**
+   * The identity rows (`ComposerIdentitySheetSection`), or `null` when the
+   * composer's host does not serve identities. A slot rather than props so
+   * this sheet stays free of the identity query.
+   */
+  readonly identitySection: ReactNode;
 }
 
 /**
- * Phone-width picker for agent mode and permissions, opened from the toolbar's
- * permission pill. Everything else the desktop toolbar shows stays inline on
- * the row; only these two need more width than a ~21rem row can give.
+ * Phone-width picker for permissions and the chat's identity, opened from the
+ * toolbar's permission pill. Everything else the desktop toolbar shows stays
+ * inline on the row; only these need more width than a ~21rem row can give.
  *
  * A flat one-level list, deliberately NOT the desktop dropdowns: those hide
  * their labels under `@max-lg`, and nesting a Radix dropdown inside a vaul
@@ -147,13 +153,14 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
               );
             })}
           </div>
+          {props.identitySection}
         </div>
       </DrawerContent>
     </Drawer>
   );
 }
 
-function OptionsSectionLabel(props: { readonly children: ReactNode }) {
+export function OptionsSectionLabel(props: { readonly children: ReactNode }) {
   return (
     <p className="px-3 pb-1 text-overline uppercase tracking-wide text-muted-foreground/70">
       {props.children}
@@ -161,7 +168,7 @@ function OptionsSectionLabel(props: { readonly children: ReactNode }) {
   );
 }
 
-interface OptionRowProps {
+export interface OptionRowProps {
   readonly icon: ReactNode;
   readonly label: string;
   readonly description: string;
@@ -175,7 +182,7 @@ interface OptionRowProps {
   readonly onSelect: () => void;
 }
 
-function OptionRow(props: OptionRowProps) {
+export function OptionRow(props: OptionRowProps) {
   return (
     <button
       type="button"

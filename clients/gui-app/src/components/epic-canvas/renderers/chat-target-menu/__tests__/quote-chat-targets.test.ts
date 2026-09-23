@@ -27,6 +27,7 @@ function chat(fields: {
     docResident: false,
     isTitleEditedByUser: false,
     archivedAt: fields.archivedAt,
+    chatKind: "conversation",
     settings: null,
   };
 }

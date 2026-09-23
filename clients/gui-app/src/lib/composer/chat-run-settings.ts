@@ -29,8 +29,9 @@ export function buildChatRunSettings(input: {
   permission: PermissionMode;
   reasoning: ReasoningLevel;
   serviceTier: ServiceTier;
+  identityId: string | null;
 }): ChatRunSettings {
-  const { selection, permission, reasoning, serviceTier } = input;
+  const { selection, permission, reasoning, serviceTier, identityId } = input;
   const trimmedServiceTier = serviceTier.trim();
   return {
     harnessId: selection.harnessId,
@@ -45,12 +46,10 @@ export function buildChatRunSettings(input: {
     // mode; nothing reads it back.
     agentMode: "regular",
     profileId: selection.profileId,
-    // No composer picker writes this yet - T10/T11 own the Identities surface -
-    // so every settings tuple this builder produces runs with the stock
-    // identity, which is what `null` means. It is stated rather than omitted
-    // because the field is required on the tuple: a builder that left it out
-    // would not compile, and that is the point of the required shape.
-    identityId: null,
+    // The composer's identity picker, or `null` (the host's stock identity).
+    // Required on the input for the reason it is required on the tuple: a
+    // builder that forgot it would silently strip the chat's identity.
+    identityId,
   };
 }
 

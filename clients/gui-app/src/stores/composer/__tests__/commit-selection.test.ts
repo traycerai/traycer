@@ -52,6 +52,7 @@ describe("commitProfileSelection", () => {
         },
         reasoning: "high",
         serviceTier: "fast",
+        identityId: null,
       },
       onSettingsChange: (settings) =>
         emitted.push({
@@ -125,6 +126,7 @@ describe("commitSelection - provider switch", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: (settings) =>
         emitted.push({
@@ -180,6 +182,7 @@ describe("commitSelection - host scoping", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,
@@ -206,6 +209,7 @@ describe("commitSelection - host scoping", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,
@@ -239,6 +243,7 @@ describe("commitSelection - host scoping", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,

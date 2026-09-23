@@ -194,6 +194,7 @@ function chat(
     // command's subpages, not doc residency.
     docResident: false,
     archivedAt: null,
+    chatKind: "conversation",
     settings: null,
   };
 }

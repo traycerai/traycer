@@ -418,6 +418,7 @@ describe("localChatLastActiveAtById / chatListLastActiveAtByKey", () => {
       isTitleEditedByUser: false,
       settings: null,
       archivedAt: null,
+      chatKind: "conversation",
       // A registry-homed row: these fixtures exercise the content clock, and
       // a chat's home has no part in it.
       docResident: false,

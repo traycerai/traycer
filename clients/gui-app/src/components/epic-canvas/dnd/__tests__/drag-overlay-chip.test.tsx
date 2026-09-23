@@ -844,6 +844,7 @@ describe("<EpicRootDragOverlayContent />", () => {
             docResident: null,
             settings: null,
             archivedAt: null,
+            chatKind: "conversation",
           } satisfies ChatProjection,
         ]),
       );

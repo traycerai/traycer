@@ -14,6 +14,7 @@
 import { useMemo } from "react";
 import {
   useEpicAgentActivityTiers,
+  useEpicEvolutionChatIds,
   useEpicTreeIndex,
   type AgentActivityTier,
 } from "@/lib/epic-selectors";
@@ -103,6 +104,7 @@ export function useChatArchiveHiddenIds(args: {
   const tree = useEpicTreeIndex();
   const openTileContentIds = useOpenTileContentIds(tabId);
   const activityTiers = useEpicAgentActivityTiers();
+  const evolutionChatIds = useEpicEvolutionChatIds();
   const appLocalNotificationRows = useAppLocalNotificationsStore(
     (state) => state.byId,
   );
@@ -110,8 +112,13 @@ export function useChatArchiveHiddenIds(args: {
     if (archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Unarchived) {
       return EMPTY_ALWAYS_VISIBLE_IDS;
     }
+    const evolution = new Set(evolutionChatIds);
     return chatIds.filter((chatId) => {
       if (openTileContentIds.has(chatId)) return true;
+      // An identity's review pass works and finishes in the background by
+      // design; its activity is not a request for the user's attention, so it
+      // stays under Archived unless the user opened it from there.
+      if (evolution.has(chatId)) return false;
       const indicatorState = selectNotificationIndicatorState(
         { byId: appLocalNotificationRows },
         { epicId, chatId },
@@ -128,6 +135,7 @@ export function useChatArchiveHiddenIds(args: {
     archiveVisibility,
     epicId,
     chatIds,
+    evolutionChatIds,
     notificationIndicators,
     openTileContentIds,
   ]);

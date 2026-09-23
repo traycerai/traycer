@@ -173,6 +173,7 @@ function createLandingToolbarStore(
       },
       reasoning: "",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,
@@ -219,6 +220,7 @@ function LandingRateLimitBannerHarness(props: {
     permission: toolbarState.permission,
     reasoning: toolbarState.reasoning,
     serviceTier: toolbarState.serviceTier,
+    identityId: null,
   });
 
   return (
@@ -673,6 +675,7 @@ describe("Landing rate-limit banner durability", () => {
           permission: toolbarStore.getState().permission,
           reasoning: toolbarStore.getState().reasoning,
           serviceTier: toolbarStore.getState().serviceTier,
+          identityId: null,
         }).profileId,
       ).toBe("work");
       // Task checkbox never appears on landing (affectedChatCount 0).
@@ -739,6 +742,7 @@ describe("Landing rate-limit banner durability", () => {
           permission: toolbarStore.getState().permission,
           reasoning: toolbarStore.getState().reasoning,
           serviceTier: toolbarStore.getState().serviceTier,
+          identityId: null,
         }).profileId,
       ).toBe("second");
     });

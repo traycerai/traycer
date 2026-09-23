@@ -47,6 +47,7 @@ function chatProjection(
     isTitleEditedByUser: false,
     docResident: false,
     archivedAt: null,
+    chatKind: "conversation",
     settings: null,
     ...overrides,
   };

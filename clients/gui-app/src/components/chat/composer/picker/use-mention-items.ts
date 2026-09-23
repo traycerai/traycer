@@ -79,6 +79,7 @@ import {
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import { chatListedAsArchived } from "@/lib/chats/chat-list-visibility";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 import type {
@@ -913,7 +914,7 @@ function buildChatMentionEntry(
     description: epicTitle,
     parentId: chat.parentId,
     updatedAt: chat.updatedAt,
-    archived: chat.archivedAt !== null,
+    archived: chatListedAsArchived(chat),
     agentInterface: "chat",
     // Every GUI-backed Agent's runtime supports A2A (provider-native via the
     // MCP bridge) - mirrors `canReceiveA2AMessages`'s `surface === "gui"` arm.

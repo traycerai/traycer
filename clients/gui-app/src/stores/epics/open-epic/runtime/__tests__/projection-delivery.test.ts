@@ -163,6 +163,7 @@ describe("projectedSlicesView", () => {
       docResident: false,
       settings: null,
       archivedAt: null,
+      chatKind: "conversation",
     };
   }
 
