@@ -22,6 +22,7 @@ import type { TabRef } from "@/stores/tabs/types";
 const persistedKinds = {
   epic: "epic",
   draft: "draft",
+  identity: "identity",
   history: "history",
   // Listed so the mapping stays exhaustive over `TabRef["kind"]` - NOT because
   // Home is ever journaled. Home is a per-window pinned singleton with no close

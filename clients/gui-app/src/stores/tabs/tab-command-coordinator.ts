@@ -22,6 +22,10 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import {
+  isOpenIdentityTab,
+  useIdentityTabsStore,
+} from "@/stores/identities/identity-tabs-store";
+import {
   isOpenLandingDraft,
   newestLandingDraftId,
   useLandingDraftStore,
@@ -362,6 +366,7 @@ function sourceHasRef(ref: TabRef): boolean {
       .getState()
       .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
+  if (ref.kind === "identity") return isOpenIdentityTab(ref.id);
   // Home owns no source record and no strip item, so it is never a placement
   // this reconciles - `resolveHomeActivation` is its only entry point.
   if (ref.kind === "home") return false;
@@ -1276,6 +1281,12 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
+    if (ref.kind === "identity") {
+      if (!isOpenIdentityTab(ref.id)) return null;
+      return this.activationForRef(layout, ref, () => {
+        useIdentityTabsStore.getState().setActiveTab(ref.id);
+      });
+    }
     if (ref.kind === "home") return this.resolveHomeActivation(layout);
     if (layout.systemTabs[ref.kind] === null) return null;
     return this.activationForRef(layout, ref, () => undefined);
@@ -1863,7 +1874,9 @@ export class TabCommandCoordinator {
     );
     const unexpectedRemovals = layoutRefs.some(
       (ref) =>
-        (ref.kind === "epic" || ref.kind === "draft") &&
+        (ref.kind === "epic" ||
+          ref.kind === "draft" ||
+          ref.kind === "identity") &&
         !sourceKeys.has(tabRefKey(ref)) &&
         !this.ledger.pendingRemovals.has(tabRefKey(ref)),
     );
@@ -1962,6 +1975,12 @@ export class TabCommandCoordinator {
     if (ref.kind === "draft") {
       this.applyExpectedSourceMutation(() => {
         useLandingDraftStore.getState().closeDraft(ref.id);
+      });
+      return;
+    }
+    if (ref.kind === "identity") {
+      this.applyExpectedSourceMutation(() => {
+        useIdentityTabsStore.getState().closeTab(ref.id);
       });
     }
   }
@@ -2097,7 +2116,9 @@ export class TabCommandCoordinator {
     const knownKeys = new Set(knownSources.map(tabRefKey));
     const removals = flattenLayoutRefs(layout).filter(
       (ref) =>
-        (ref.kind === "epic" || ref.kind === "draft") &&
+        (ref.kind === "epic" ||
+          ref.kind === "draft" ||
+          ref.kind === "identity") &&
         !knownKeys.has(tabRefKey(ref)),
     );
     const withoutMissing = removals.reduce(layoutWithRemovedRef, layout);
@@ -2175,6 +2196,19 @@ export class TabCommandCoordinator {
       )
         ? selected.id
         : null;
+    const activeIdentityTabId =
+      selected?.kind === "identity" && isOpenIdentityTab(selected.id)
+        ? selected.id
+        : null;
+    if (activeIdentityTabId !== useIdentityTabsStore.getState().activeTabId) {
+      this.applyExpectedSourceMutation(() => {
+        if (activeIdentityTabId === null) {
+          useIdentityTabsStore.getState().clearActiveTab();
+        } else {
+          useIdentityTabsStore.getState().setActiveTab(activeIdentityTabId);
+        }
+      });
+    }
     if (activeDraftId !== useLandingDraftStore.getState().activeDraftId) {
       this.applyExpectedSourceMutation(() => {
         if (activeDraftId === null) {

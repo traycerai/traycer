@@ -7,6 +7,7 @@ import {
   draftPathname,
   readActiveEpicIdFromPath,
   readActiveEpicTabIdFromPath,
+  readIdentityIdFromPath,
 } from "@/lib/routes";
 import {
   SETTINGS_SECTIONS,
@@ -18,6 +19,7 @@ import {
   existingEpicTabIntentWithNestedFocus,
   historyTabIntent,
   homeTabIntent,
+  identityTabIntent,
   openEpicTabIntent,
   settingsTabIntent,
   type EpicPostResolvePreparation,
@@ -52,6 +54,10 @@ import {
   type CoordinatedTabActivationTarget,
   type PairTabsCommand,
 } from "@/stores/tabs/tab-command-coordinator";
+import {
+  isOpenIdentityTab,
+  useIdentityTabsStore,
+} from "@/stores/identities/identity-tabs-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
@@ -71,6 +77,7 @@ export {
   existingEpicTabIntentWithNestedFocus,
   historyTabIntent,
   homeTabIntent,
+  identityTabIntent,
   newDraftTabIntent,
   openEpicFromListIntent,
   openExactEpicTabIntent,
@@ -287,6 +294,8 @@ function intentRef(intent: TabNavigationIntent): TabRef {
       return { kind: "epic", id: intent.tabId };
     case "draft":
       return { kind: "draft", id: intent.draftId };
+    case "identity":
+      return { kind: "identity", id: intent.identityId };
     case "history":
       return { kind: "history", id: "history" };
     case "settings":
@@ -421,6 +430,10 @@ function routedTabTarget(pathname: string): RoutedTabTarget | null {
   if (draftId !== null) {
     return { ref: { kind: "draft", id: draftId }, epicId: null };
   }
+  const identityId = readIdentityIdFromPath(pathname);
+  if (identityId !== null) {
+    return { ref: { kind: "identity", id: identityId }, epicId: null };
+  }
   if (isSettingsPath(pathname)) {
     return { ref: { kind: "settings", id: "settings" }, epicId: null };
   }
@@ -466,6 +479,9 @@ function intentForRef(
   }
   if (ref.kind === "draft") {
     return isOpenLandingDraftId(ref.id) ? draftTabIntent(ref.id) : null;
+  }
+  if (ref.kind === "identity") {
+    return isOpenIdentityTab(ref.id) ? identityTabIntent(ref.id) : null;
   }
   if (ref.kind === "history") return historyTabIntent();
   if (ref.kind === "home") return homeTabIntent();
@@ -523,6 +539,7 @@ function refIsMaterialized(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return isOpenLandingDraftId(ref.id);
   }
+  if (ref.kind === "identity") return isOpenIdentityTab(ref.id);
   // Home has no source record to materialize: the flag is the whole condition.
   if (ref.kind === "home") return isHomeTabEnabled();
   return useTabsStore.getState().systemTabs[ref.kind] !== null;
@@ -1572,6 +1589,9 @@ export class TabNavigationController {
       case "draft":
         this.resolveExternalDraft(location, ref.id, navigate);
         return;
+      case "identity":
+        this.resolveExternalIdentity(location, ref.id, navigate);
+        return;
       case "history":
       case "settings":
         this.resolveExternalSystem(location, ref.kind, navigate);
@@ -1741,6 +1761,34 @@ export class TabNavigationController {
     const activation = this.activateExternalTarget({ kind: "ref", ref });
     if (activation === null) this.issueLandingCorrection(location, navigate);
     else this.rememberRoute(ref, draftTabIntent(draftId), location.search);
+  }
+
+  /**
+   * `/identities/:id` reached from outside the strip - a deep link, a restored
+   * location, a typed URL. An identity tab with no source record is opened on
+   * the app-wide effective host, which is the one host a deep link can name;
+   * a tab that already exists keeps the host it was opened on.
+   */
+  private resolveExternalIdentity(
+    location: TabNavigationLocation,
+    identityId: string,
+    navigate: NavigateFn,
+  ): void {
+    const ref: TabRef = { kind: "identity", id: identityId };
+    if (!isOpenIdentityTab(identityId)) {
+      const hostId = activeHostIdOrNull();
+      if (hostId === null) {
+        this.issueLandingCorrection(location, navigate);
+        return;
+      }
+      useIdentityTabsStore
+        .getState()
+        .openTab({ identityId, hostId, title: "" });
+    }
+    const activation = this.activateExternalTarget({ kind: "ref", ref });
+    if (activation === null) this.issueLandingCorrection(location, navigate);
+    else
+      this.rememberRoute(ref, identityTabIntent(identityId), location.search);
   }
 
   private resolveExternalSystem(

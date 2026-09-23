@@ -10,6 +10,7 @@ export type DraftsDialogEntryPoint = "menu" | "palette";
 
 export type DesktopDialogKind =
   | "drafts"
+  | "identities"
   | "about-details"
   | "logs"
   | "open-epic-in-new-window"
@@ -67,6 +68,7 @@ export interface DesktopDialogState {
   } | null;
   readonly draftsEntryPoint: DraftsDialogEntryPoint;
   readonly openDrafts: (entryPoint: DraftsDialogEntryPoint) => void;
+  readonly openIdentities: () => void;
   readonly openAboutDetails: () => void;
   readonly openLogs: () => void;
   readonly openEpicInNewWindow: () => void;
@@ -98,6 +100,9 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   draftsEntryPoint: "menu",
   openDrafts: (entryPoint) => {
     set({ activeDialog: "drafts", draftsEntryPoint: entryPoint });
+  },
+  openIdentities: () => {
+    set({ activeDialog: "identities" });
   },
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });

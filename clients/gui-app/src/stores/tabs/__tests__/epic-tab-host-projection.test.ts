@@ -149,7 +149,7 @@ describe("epic tab host projection", () => {
     expect(third).not.toBe(first);
   });
 
-  it("carries hostId only on the epic tab variant", () => {
+  it("carries a projected hostId only on the epic tab variant", () => {
     useTabsStore.getState().openSystemTab({
       kind: "history",
       name: "History",
@@ -167,6 +167,8 @@ describe("epic tab host projection", () => {
     // Type-level: the `if` above narrows `historyTab` to the "history"
     // member of the `HeaderTab` union, which has no `hostId` property at
     // all (see `stores/tabs/types.ts`) - `historyTab.hostId` would fail to
-    // compile here. Only the "epic" variant carries a projected host.
+    // compile here. Only the "epic" variant carries a PROJECTED host; the
+    // "identity" variant carries one too, but bound at open time from its
+    // source record rather than projected from a session.
   });
 });

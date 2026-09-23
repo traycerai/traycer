@@ -19,6 +19,9 @@ import {
   type SettingsSection,
   type SettingsSectionGroupId,
 } from "@/lib/settings-sections";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
 import type {
@@ -35,12 +38,19 @@ export const navigationSource: ReactCommandSource = {
       (state) => state.bindings["app.settings.open"] ?? null,
     );
     const sectionItems = SETTINGS_SUBPAGE.useItems(ctx);
+    // Offered only when the effective host serves the `agentIdentity.*`
+    // family: the dialog it opens would otherwise only say "not supported".
+    const identitiesSupported = useHostSupportsMethod(
+      useEffectiveHostId(),
+      "agentIdentity.list",
+    );
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
       if (ctx.pathname !== "/epics") items.push(OPEN_EPICS_ITEM);
+      if (identitiesSupported) items.push(OPEN_IDENTITIES_ITEM);
       items.push(buildSettingsEntryItem(settingsChord, sectionItems));
       return items;
-    }, [ctx.pathname, settingsChord, sectionItems]);
+    }, [ctx.pathname, identitiesSupported, settingsChord, sectionItems]);
   },
 };
 
@@ -54,6 +64,19 @@ const OPEN_EPICS_ITEM: CommandItem = {
   shortcut: null,
   actionId: null,
   run: (ctx) => ctx.router.navigateToEpicList(),
+  subpage: null,
+};
+
+const OPEN_IDENTITIES_ITEM: CommandItem = {
+  id: "nav:identities",
+  label: "Open Identities",
+  description: null,
+  keywords: ["identities", "identity", "agent", "persona", "soul"],
+  group: "navigation",
+  scope: "actions",
+  shortcut: null,
+  actionId: null,
+  run: () => useDesktopDialogStore.getState().openIdentities(),
   subpage: null,
 };
 

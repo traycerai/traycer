@@ -46,6 +46,8 @@ import { draftTabModule } from "@/stores/tabs/kinds/draft";
 import { historyTabModule } from "@/stores/tabs/kinds/history";
 import { settingsTabModule } from "@/stores/tabs/kinds/settings";
 import { homeTabModule } from "@/stores/tabs/kinds/home";
+import { identityTabModule } from "@/stores/tabs/kinds/identity";
+import type { IdentityTab } from "@/stores/identities/identity-tabs-store";
 import {
   EMPTY_LANDING_DRAFT_CONTENT,
   emptyLandingDraftWorkspaceSnapshot,
@@ -96,6 +98,12 @@ const DRAFT_SOURCE: LandingDraftTab = {
   composerMode: "chat",
   workspace: emptyLandingDraftWorkspaceSnapshot(),
   ...freshLandingMirrorState(),
+};
+const IDENTITY_SOURCE: IdentityTab = {
+  id: "identity-1",
+  identityId: "identity-1",
+  hostId: "host-a",
+  title: "Reviewer",
 };
 const HISTORY_SOURCE: SystemTab = {
   id: "history",
@@ -246,6 +254,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       "epic",
       "history",
       "home",
+      "identity",
       "settings",
     ];
     expect(Object.keys(TAB_KINDS).length).toBe(expectedKinds.length);
@@ -350,11 +359,18 @@ describe("TAB_KINDS surface exhaustiveness", () => {
         surface: settingsTabModule.descriptor.surface,
         expectedNewWindow: "copy",
       },
-      // The only kind that answers `none`: Home is fixed to its window, so
-      // both halves of the capability pair have to say so.
+      // Home is fixed to its window, so both halves of the capability pair
+      // have to say so.
       {
         tab: homeTabModule.build(null),
         surface: homeTabModule.descriptor.surface,
+        expectedNewWindow: "none",
+      },
+      // An identity tab is bound to one host and one session; a second window
+      // for it would share that session under a tab id the route cannot name.
+      {
+        tab: identityTabModule.build(IDENTITY_SOURCE),
+        surface: identityTabModule.descriptor.surface,
         expectedNewWindow: "none",
       },
     ];

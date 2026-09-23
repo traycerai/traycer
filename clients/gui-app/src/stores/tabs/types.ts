@@ -88,6 +88,22 @@ export type HeaderTab = { readonly appearance?: HeaderTabAppearance | null } & (
       readonly canOpenInNewWindow: boolean;
     }
   | {
+      readonly kind: "identity";
+      readonly id: string;
+      readonly identityId: string;
+      /**
+       * Bound for life, and NEVER null: an identity tab exists only once its
+       * record named the host it was opened against, unlike an epic tab whose
+       * host is projected from a session that may not exist yet.
+       */
+      readonly hostId: string;
+      readonly route: string;
+      readonly name: string;
+      readonly icon: TabIcon | null;
+      readonly canDuplicate: boolean;
+      readonly canOpenInNewWindow: boolean;
+    }
+  | {
       readonly kind: "history";
       readonly id: "history";
       readonly route: string;
@@ -170,7 +186,11 @@ export interface TabSurfaceCapabilities {
   readonly newWindow: "copy" | "move" | "none";
   readonly readinessScope: "none" | "default-host" | "tab-host";
   readonly durableState: {
-    readonly owner: "epic-canvas" | "landing-draft" | "tabs-store";
+    readonly owner:
+      | "epic-canvas"
+      | "landing-draft"
+      | "identity-tabs"
+      | "tabs-store";
     readonly eviction: "reconstruct";
   };
 }
