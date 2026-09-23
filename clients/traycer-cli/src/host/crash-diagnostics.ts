@@ -92,27 +92,10 @@ export const MAX_KEPT_CRASH_REPORTS = 5;
  */
 export const CRASH_REPORT_SPAWN_SLACK_MS = 2_000;
 
-/**
- * Budget for the crash-report scan that runs BEFORE the synchronous terminal
- * marker write. The marker is readiness authority and must not be lost to a
- * slow disk - past the budget the marker is written without a `report=`.
- */
-export const CRASH_REPORT_SCAN_TIMEOUT_MS = 2_000;
-
-/** Budget for draining queued stderr tee writes before the terminal marker. */
-export const STDERR_FLUSH_TIMEOUT_MS = 1_000;
-
-/**
- * Budget for waiting on the child's stderr stream to END before the terminal
- * marker is written. `exit` fires when the process dies, NOT when its pipes
- * have drained, so finalizing on `exit` can write the marker while the fatal
- * text is still unread in the pipe - the capture is then empty in exactly the
- * abnormal-death case it exists for. Bounded because a grandchild holding the
- * inherited stderr fd can delay `close` indefinitely, and a diagnostics path
- * must never be able to hang the supervisor's exit: wait, then write whatever
- * has arrived.
- */
-export const STDERR_END_WAIT_TIMEOUT_MS = 2_000;
+// The post-mortem budgets - the crash-report scan, the stderr flush and the
+// wait for the child's stderr to end - live in `service/spawn-edge-bounds.ts`:
+// they are terms of the systemd stop bound, which must be derived in a module
+// that can never sit on an import cycle.
 
 /** Clamp for the one-line report digest embedded in logs/markers. */
 export const REPORT_SUMMARY_MAX_CHARS = 512;
