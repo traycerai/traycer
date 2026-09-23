@@ -1250,6 +1250,36 @@ describe("chat find projection", () => {
     );
     expect(text).not.toContain("/repo/work");
   });
+
+  // The notice row paints the host's text and nothing else, so that text is
+  // exactly what find indexes - under the segment's own anchor.
+  it("indexes an auto-mode judge notice by the host's text", () => {
+    const message =
+      "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.";
+    const synthesized: ChatMessageModel = {
+      ...makeMessage(35, "system"),
+      content: "",
+      segments: [
+        {
+          id: "notice-1",
+          kind: "auto-judge-notice",
+          marker: "fallback",
+          message,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows(
+      [synthesized],
+      TILE_INSTANCE_ID,
+      new Set(),
+    )[0];
+
+    expect(row.units.map((unit) => unit.unitId)).toEqual([
+      chatFindSegmentUnitId("notice-1"),
+    ]);
+    expect(rowSearchText(row)).toBe(message);
+  });
 });
 
 function interviewSegment(

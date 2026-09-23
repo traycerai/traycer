@@ -98,10 +98,9 @@ export type AutoJudgeBilling =
    *
    * It carries no harness, on purpose: the stored selection is still there and
    * still readable, but it names a judge that will not be called, and a label
-   * on this row would invite the reader to believe otherwise. The Settings
-   * surface already explains WHICH blocker and how to clear it
-   * (`AutoJudgeBlockedStatus`); the composer's one line only has to stop
-   * claiming a pocket.
+   * on this row would invite the reader to believe otherwise. Settings ▸
+   * Permissions ▸ Judge already explains WHICH blocker and how to clear it;
+   * the composer's one line only has to stop claiming a pocket.
    */
   | { readonly kind: "blocked" };
 

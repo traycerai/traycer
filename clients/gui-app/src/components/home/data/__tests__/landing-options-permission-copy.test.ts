@@ -4,7 +4,6 @@ import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_MODE_DETAILS,
   PERMISSION_OPTIONS,
-  permissionModeDetailLine,
 } from "@/components/home/data/landing-options";
 
 describe("PERMISSION_OPTIONS - labels, descriptions and icons", () => {
@@ -89,24 +88,5 @@ describe("PERMISSION_MODE_DETAILS", () => {
     expect(PERMISSION_MODE_DETAILS.full_access).toEqual({
       runsWithoutAsking: [{ text: "Everything, unreviewed", exception: null }],
     });
-  });
-});
-
-describe("permissionModeDetailLine", () => {
-  it("renders the bare text when there is no exception", () => {
-    expect(
-      permissionModeDetailLine({ text: "Reads and searches", exception: null }),
-    ).toBe("Reads and searches");
-  });
-
-  it("appends the exception in parentheses when one is present", () => {
-    expect(
-      permissionModeDetailLine({
-        text: "File edits in the workspace",
-        exception: "config, scripts and git internals still ask",
-      }),
-    ).toBe(
-      "File edits in the workspace (config, scripts and git internals still ask)",
-    );
   });
 });

@@ -180,18 +180,6 @@ export const PERMISSION_MODE_DETAILS: Readonly<
   },
 };
 
-/**
- * One detail item as a single line: "File edits in the workspace (config,
- * scripts and git internals still ask)".
- */
-export function permissionModeDetailLine(
-  item: PermissionModeDetailItem,
-): string {
-  return item.exception === null
-    ? item.text
-    : `${item.text} (${item.exception})`;
-}
-
 export const DEFAULT_PERMISSION: PermissionMode = "full_access";
 
 export function findPermissionLabel(mode: PermissionMode): string {

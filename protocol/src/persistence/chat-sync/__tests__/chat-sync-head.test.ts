@@ -1,6 +1,7 @@
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   CHAT_SYNC_1_1_READER_FLOOR,
+  CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR,
   CHAT_SYNC_READER_VERSION,
   CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
   chatHeadReaderSchema,
@@ -459,6 +460,83 @@ describe("chatSyncReaderFloorForTranscriptEvents", () => {
           minReaderVersion: CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
         },
         CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
+      ),
+    ).toEqual({ ok: true });
+  });
+});
+
+/** The host's Automatic-fallback billing notice, as it journals it. */
+function judgeFallbackNoticeEvent(): ChatEvent {
+  return {
+    ...makeChatEvent({
+      eventId: "e-notice",
+      type: "permission.blocked",
+      timestamp: 11,
+      metadata: { autoJudge: "fallback" },
+    }),
+    message:
+      "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.",
+    severity: "warning",
+  };
+}
+
+describe("chatSyncReaderFloorForTranscriptEvents and the judge notice row", () => {
+  it("returns the notice floor when an event carries a judge notice", () => {
+    expect(
+      chatSyncReaderFloorForTranscriptEvents([
+        ordinaryEvent(),
+        judgeFallbackNoticeEvent(),
+      ]),
+    ).toEqual(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR);
+  });
+
+  it("returns the HIGHER floor when a denial and a notice are both present, in either order", () => {
+    expect(
+      chatSyncReaderFloorForTranscriptEvents([
+        unattendedDenialEvent(),
+        judgeFallbackNoticeEvent(),
+      ]),
+    ).toEqual(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR);
+    expect(
+      chatSyncReaderFloorForTranscriptEvents([
+        judgeFallbackNoticeEvent(),
+        unattendedDenialEvent(),
+      ]),
+    ).toEqual(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR);
+  });
+
+  it("returns null for a permission.blocked with no notice marker", () => {
+    expect(
+      chatSyncReaderFloorForTranscriptEvents([
+        { ...judgeFallbackNoticeEvent(), metadata: null },
+      ]),
+    ).toBeNull();
+  });
+
+  it("is pinned at 1.6, above the denial floor and within today's schema version", () => {
+    expect(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR).toEqual({
+      major: 1,
+      minor: 6,
+    });
+    expect(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR.minor).toBeGreaterThan(
+      CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR.minor,
+    );
+    expect(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR.major).toBe(
+      CHAT_SYNC_SCHEMA_VERSION.major,
+    );
+    expect(CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR.minor).toBeLessThanOrEqual(
+      CHAT_SYNC_SCHEMA_VERSION.minor,
+    );
+    const floor = CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR;
+    const belowFloor = gateChatHeadVersion(
+      { schemaVersion: CHAT_SYNC_SCHEMA_VERSION, minReaderVersion: floor },
+      { major: floor.major, minor: floor.minor - 1 },
+    );
+    expect(belowFloor.ok).toBe(false);
+    expect(
+      gateChatHeadVersion(
+        { schemaVersion: CHAT_SYNC_SCHEMA_VERSION, minReaderVersion: floor },
+        floor,
       ),
     ).toEqual({ ok: true });
   });
