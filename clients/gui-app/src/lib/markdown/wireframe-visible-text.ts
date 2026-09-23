@@ -65,8 +65,9 @@ export function wireframeVisibleText(html: string): string {
       push(inputCaption(node));
     } else if (node instanceof HTMLTextAreaElement) {
       // A textarea's content is a text node the walk reaches on its own; the
-      // placeholder only shows while that content is empty.
-      if (node.value.trim().length === 0) {
+      // placeholder only shows while that content is empty. Exactly empty:
+      // a whitespace-only value hides the placeholder too.
+      if (node.value.length === 0) {
         push(node.getAttribute("placeholder"));
       }
     }
@@ -80,6 +81,8 @@ function inputCaption(input: HTMLInputElement): string | null {
   if (UNLABELLED_INPUT_TYPES.has(type)) return null;
   const value = input.getAttribute("value");
   if (BUTTON_INPUT_TYPES.has(type)) return value;
-  if (value !== null && value.trim().length > 0) return value;
+  // The placeholder shows only while the value is exactly empty; a
+  // whitespace-only value hides it and draws nothing readable itself.
+  if (value !== null && value.length > 0) return value;
   return input.getAttribute("placeholder");
 }

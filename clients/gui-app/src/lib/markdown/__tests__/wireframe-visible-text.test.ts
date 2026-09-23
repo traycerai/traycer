@@ -68,13 +68,22 @@ describe("wireframeVisibleText", () => {
     expect(wireframeVisibleText(html)).toBe("Sign in Email Go Notes Save");
   });
 
-  it("prefers a non-blank value over the placeholder, and falls back to the placeholder when the value is blank", () => {
+  it("prefers a value over the placeholder, and falls back to the placeholder only when the value is exactly empty", () => {
     const html = [
       '<input value="Ada" placeholder="Name">',
-      '<input value="   " placeholder="Notes">',
+      '<input value="" placeholder="Notes">',
     ].join("\n");
 
     expect(wireframeVisibleText(html)).toBe("Ada Notes");
+  });
+
+  it("hides the placeholder behind a whitespace-only value, as the browser does", () => {
+    const html = [
+      '<input value="   " placeholder="Notes">',
+      '<textarea placeholder="Comments">   </textarea>',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("");
   });
 
   it("counts a submit, button or reset input's value as its caption", () => {
