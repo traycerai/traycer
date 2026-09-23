@@ -131,7 +131,7 @@ describe("useNewConversationModalStore setSettings", () => {
   // The equality key once enumerated fields by hand and omitted these two, so
   // a change to only one of them compared "unchanged" and was discarded.
   it.each([
-    ["identityId", { identityId: "identity-1" }],
+    ["identityId", { identityId: "identity_1" }],
     ["profileId", { profileId: "work" }],
   ] as const)("keeps a change to only %s", (_field, change) => {
     const epicId = "epic-1";

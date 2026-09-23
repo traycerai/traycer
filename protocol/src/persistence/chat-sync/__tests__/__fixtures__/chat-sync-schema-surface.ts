@@ -241,7 +241,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                       "default": null,
                       "anyOf": [
                         {
-                          "type": "string"
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,35}$"
                         },
                         {
                           "type": "null"
@@ -695,7 +696,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                       "default": null,
                       "anyOf": [
                         {
-                          "type": "string"
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,35}$"
                         },
                         {
                           "type": "null"

@@ -18,7 +18,7 @@ import {
 const SHA = "a".repeat(64);
 
 const REQUEST = {
-  identityId: "identity-1",
+  identityId: "identity_1",
   path: "skills/a/logo.png",
   sha256: SHA,
   offset: 0,
