@@ -200,7 +200,8 @@ export class RowFoldStore {
     }
 
     const loads: LoadRecord[] = [];
-    const liveMessagesSorted = (): PositionedMessage[] => this.liveMessagesSorted();
+    const liveMessagesSorted = (): PositionedMessage[] =>
+      this.liveMessagesSorted();
     const factsOf = (positioned: PositionedMessage) => ({
       position: positioned.position,
       messageId: positioned.message.messageId,
@@ -231,7 +232,11 @@ export class RowFoldStore {
                 load.turnKeys.includes(assistantTurnKey(positioned.message)),
             )
             .map(factsOf);
-          loads.push({ kind: load.kind, position: undefined, resultCount: facts.length });
+          loads.push({
+            kind: load.kind,
+            position: undefined,
+            resultCount: facts.length,
+          });
           return { kind: "facts", facts };
         }
         case "messages-of-turns": {
@@ -316,7 +321,11 @@ export class RowFoldStore {
               unitState: row.unitState,
             })),
           );
-          loads.push({ kind: load.kind, position: undefined, resultCount: rows.length });
+          loads.push({
+            kind: load.kind,
+            position: undefined,
+            resultCount: rows.length,
+          });
           return { kind: "rows", rows };
         }
         case "rows-by-id": {
@@ -330,7 +339,11 @@ export class RowFoldStore {
                 unitState: row.unitState,
               })),
           );
-          loads.push({ kind: load.kind, position: undefined, resultCount: rows.length });
+          loads.push({
+            kind: load.kind,
+            position: undefined,
+            resultCount: rows.length,
+          });
           return { kind: "rows", rows };
         }
       }
@@ -352,7 +365,12 @@ export class RowFoldStore {
     if (!result.continued) {
       this.declines.push({ op: this.opIndex, reason: result.reason });
       this.fullRebuild();
-      return { continued: false, reason: result.reason, loads, touchedUnitKeys: [] };
+      return {
+        continued: false,
+        reason: result.reason,
+        loads,
+        touchedUnitKeys: [],
+      };
     }
 
     const touchedUnitKeys: string[] = [];
@@ -363,7 +381,11 @@ export class RowFoldStore {
         transcriptPreviewProjection,
         null,
       );
-      this.units.set(unit.unitKey, { unitKey: unit.unitKey, rows: unit.rows, skeleton });
+      this.units.set(unit.unitKey, {
+        unitKey: unit.unitKey,
+        rows: unit.rows,
+        skeleton,
+      });
     }
 
     const roundtripped = JSON.parse(
@@ -410,9 +432,15 @@ export class RowFoldStore {
         transcriptPreviewProjection,
         null,
       );
-      this.units.set(unit.unitKey, { unitKey: unit.unitKey, rows: unit.rows, skeleton });
+      this.units.set(unit.unitKey, {
+        unitKey: unit.unitKey,
+        rows: unit.rows,
+        skeleton,
+      });
     }
-    this.state = JSON.parse(JSON.stringify(result.state)) as TranscriptFoldState;
+    this.state = JSON.parse(
+      JSON.stringify(result.state),
+    ) as TranscriptFoldState;
     for (let index = 0; index < this.eventsArr.length; index += 1) {
       const entry = this.eventsArr[index];
       const turnKey = result.eventRowTurnKeys.get(entry.event.eventId) ?? null;
@@ -457,7 +485,9 @@ export class RowFoldStore {
     return {
       chatId: this.chatId,
       activeTurnId: this.activeTurnId,
-      messages: this.liveMessagesSorted().map((positioned) => positioned.message),
+      messages: this.liveMessagesSorted().map(
+        (positioned) => positioned.message,
+      ),
       events: this.eventsArr.map((entry) => entry.event),
     };
   }

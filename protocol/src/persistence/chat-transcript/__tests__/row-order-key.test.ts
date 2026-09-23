@@ -69,7 +69,9 @@ function order(input: {
 describe("encodeTranscriptRowOrder / decodeTranscriptRowOrder roundtrip", () => {
   it("roundtrips createdAt over edge floats", () => {
     for (const value of EDGE_FLOATS) {
-      const encoded = encodeTranscriptRowOrder(order({ createdAt: value, position: 0 }));
+      const encoded = encodeTranscriptRowOrder(
+        order({ createdAt: value, position: 0 }),
+      );
       const decoded = decodeTranscriptRowOrder(encoded);
       // `-0` is folded to `0` by the encoder (the comparator treats them
       // equal), so it is excluded from the exact-value check and covered by
@@ -82,7 +84,9 @@ describe("encodeTranscriptRowOrder / decodeTranscriptRowOrder roundtrip", () => 
 
   it("roundtrips position over edge floats", () => {
     for (const value of EDGE_FLOATS) {
-      const encoded = encodeTranscriptRowOrder(order({ createdAt: 0, position: value }));
+      const encoded = encodeTranscriptRowOrder(
+        order({ createdAt: 0, position: value }),
+      );
       const decoded = decodeTranscriptRowOrder(encoded);
       if (!Object.is(value, -0)) {
         expect(decoded.position, `position=${value}`).toBe(value);
@@ -127,7 +131,9 @@ describe("encodeTranscriptRowOrder / decodeTranscriptRowOrder roundtrip", () => 
         card: Math.floor(r() * 0xffffffff),
       });
       const encoded = encodeTranscriptRowOrder(sample);
-      expect(encoded.length, `sample ${i}`).toBe(TRANSCRIPT_ROW_ORDER_KEY_LENGTH);
+      expect(encoded.length, `sample ${i}`).toBe(
+        TRANSCRIPT_ROW_ORDER_KEY_LENGTH,
+      );
       expect(encoded, `sample ${i}`).toMatch(/^[0-9a-f]+$/);
     }
   });
@@ -162,9 +168,10 @@ describe("encodeTranscriptRowOrder / decodeTranscriptRowOrder roundtrip", () => 
       const keyA = encodeTranscriptRowOrder(a);
       const keyB = encodeTranscriptRowOrder(b);
       const stringSign = keyA < keyB ? -1 : keyA > keyB ? 1 : 0;
-      expect(stringSign, `pair ${i}: a=${JSON.stringify(a)} b=${JSON.stringify(b)}`).toBe(
-        comparatorSign,
-      );
+      expect(
+        stringSign,
+        `pair ${i}: a=${JSON.stringify(a)} b=${JSON.stringify(b)}`,
+      ).toBe(comparatorSign);
     }
   });
 

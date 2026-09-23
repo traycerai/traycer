@@ -1100,7 +1100,9 @@ export function foldTranscriptRowsInMemory(
   if (!result.continued) {
     // From the empty state with every record in hand there is nothing the
     // fold cannot see; declining here is a bug in the fold, not an input.
-    throw new Error(`row-projection: the full fold declined (${result.reason})`);
+    throw new Error(
+      `row-projection: the full fold declined (${result.reason})`,
+    );
   }
   return result;
 }
@@ -1174,8 +1176,9 @@ export const SETUP_CARD_INPUT_EVENT_TYPES: readonly ChatEvent["type"][] = [
   "chat.forked",
 ];
 
-const SETUP_CARD_INPUT_EVENT_TYPE_SET: ReadonlySet<ChatEvent["type"]> =
-  new Set(SETUP_CARD_INPUT_EVENT_TYPES);
+const SETUP_CARD_INPUT_EVENT_TYPE_SET: ReadonlySet<ChatEvent["type"]> = new Set(
+  SETUP_CARD_INPUT_EVENT_TYPES,
+);
 
 /**
  * Every event type any row, row context or row digest of the projection reads.
@@ -1445,7 +1448,11 @@ interface WalkEntry {
 export function* foldTranscriptRows(
   prior: TranscriptFoldState,
   change: TranscriptFoldChange,
-): Generator<TranscriptFoldLoad, TranscriptFoldResult, TranscriptFoldLoadResult> {
+): Generator<
+  TranscriptFoldLoad,
+  TranscriptFoldResult,
+  TranscriptFoldLoadResult
+> {
   const notContinued = (reason: string): TranscriptFoldResult => ({
     continued: false,
     reason,
@@ -1492,12 +1499,16 @@ export function* foldTranscriptRows(
         prior.messagesThrough !== null &&
         touch.position <= prior.messagesThrough
       ) {
-        return notContinued("a message was inserted below the folded positions");
+        return notContinued(
+          "a message was inserted below the folded positions",
+        );
       }
       walkNeeded = true;
     } else {
       if (touch.previous.facts.v !== TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION) {
-        return notContinued("a message's stored fold facts are another version");
+        return notContinued(
+          "a message's stored fold facts are another version",
+        );
       }
       if (touch.previous.position !== touch.position) {
         return notContinued("a message changed position in place");
@@ -1539,7 +1550,9 @@ export function* foldTranscriptRows(
 
   for (const touch of change.appendedEvents) {
     if (touch.previous !== null) {
-      if (canonicalFoldJson(touch.previous) === canonicalFoldJson(touch.event)) {
+      if (
+        canonicalFoldJson(touch.previous) === canonicalFoldJson(touch.event)
+      ) {
         continue;
       }
       if (
@@ -1797,7 +1810,8 @@ export function* foldTranscriptRows(
     if (
       walkFrom !== null &&
       [...walkTurnKeys].some(
-        (turnKey) => (turnFacts.get(turnKey)?.firstPosition ?? walkFrom) < walkFrom,
+        (turnKey) =>
+          (turnFacts.get(turnKey)?.firstPosition ?? walkFrom) < walkFrom,
       )
     ) {
       // A turn that started before the region gained a record there.
@@ -1849,7 +1863,7 @@ export function* foldTranscriptRows(
       }
       seat = Math.min(seat, folded.firstPosition);
     }
-    for (let moved = true; moved; ) {
+    for (let moved = true; moved;) {
       moved = false;
       for (const { folded } of turnsByFirst) {
         if (folded.firstPosition < seat && folded.lastPosition >= seat) {
@@ -1902,7 +1916,10 @@ export function* foldTranscriptRows(
     spans.forEach((keys, index) => {
       if (keys.length < 2) return;
       for (const turnKey of keys) {
-        markingSpans.set(turnKey, [...(markingSpans.get(turnKey) ?? []), index]);
+        markingSpans.set(turnKey, [
+          ...(markingSpans.get(turnKey) ?? []),
+          index,
+        ]);
       }
     });
     const markedElsewhere = new Set(walkRegion.spanKeysMarkedElsewhere);
@@ -2485,7 +2502,10 @@ function eventUnitRow(positioned: PositionedEvent): TranscriptFoldRow | null {
       descriptor: {
         rowId: autoJudgeUnattendedDenialRowId(event.eventId),
         createdAt: event.timestamp,
-        source: { kind: "auto-judge-unattended-denial", eventId: event.eventId },
+        source: {
+          kind: "auto-judge-unattended-denial",
+          eventId: event.eventId,
+        },
         context: EMPTY_ROW_CONTEXT,
       },
       unitState: null,

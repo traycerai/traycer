@@ -259,7 +259,8 @@ function promptQueueItem(fields: {
       agentMode: "epic",
     },
     status: fields.status,
-    targetTurnId: fields.steerRequest === null ? null : fields.steerRequest.targetTurnId,
+    targetTurnId:
+      fields.steerRequest === null ? null : fields.steerRequest.targetTurnId,
     steerRequest: fields.steerRequest,
     fallbackReason: null,
     createdAt: fields.ts,
@@ -288,7 +289,11 @@ function steerRequestedEvent(
           messageId,
           ts,
           status: "steer_requested",
-          steerRequest: { mode: "interrupt_restart", targetTurnId: turnId, requestedAt: ts },
+          steerRequest: {
+            mode: "interrupt_restart",
+            targetTurnId: turnId,
+            requestedAt: ts,
+          },
         }),
       ],
     },
@@ -332,7 +337,13 @@ function steerRetractBySnapshot(
     ts,
     metadata: {
       items: [
-        promptQueueItem({ queueItemId, messageId, ts, status: "pending", steerRequest: null }),
+        promptQueueItem({
+          queueItemId,
+          messageId,
+          ts,
+          status: "pending",
+          steerRequest: null,
+        }),
       ],
     },
   });
@@ -400,7 +411,10 @@ function pauseOpenEvent(
   type: "approval.requested" | "interview.requested",
   ts: number,
   turnId: string,
-  correlation: { readonly approvalId: string | null; readonly blockId: string | null },
+  correlation: {
+    readonly approvalId: string | null;
+    readonly blockId: string | null;
+  },
 ): ChatEvent {
   return ev({
     ...EVENT_DEFAULTS,
@@ -421,7 +435,10 @@ function pauseCloseEvent(
     | "interview.errored",
   ts: number,
   turnId: string | null,
-  correlation: { readonly approvalId: string | null; readonly blockId: string | null },
+  correlation: {
+    readonly approvalId: string | null;
+    readonly blockId: string | null;
+  },
 ): ChatEvent {
   return ev({
     ...EVENT_DEFAULTS,
@@ -458,9 +475,10 @@ function assertRowParity(store: RowFoldStore, label: string): void {
   expect(storeRows, `${label}: rows vs legacy oracle`).toEqual(oracleRows);
 
   const projectedRows = roundtrip(projectTranscriptRows(input));
-  expect(projectedRows, `${label}: projectTranscriptRows vs legacy oracle`).toEqual(
-    oracleRows,
-  );
+  expect(
+    projectedRows,
+    `${label}: projectTranscriptRows vs legacy oracle`,
+  ).toEqual(oracleRows);
 
   const storeSkeleton = roundtrip(store.skeletonSorted());
   const freshSkeleton = roundtrip(
@@ -472,14 +490,17 @@ function assertRowParity(store: RowFoldStore, label: string): void {
 
   const orders = store.allOrders();
   const encoded = orders.map(encodeTranscriptRowOrder);
-  expect(new Set(encoded).size, `${label}: order keys unique`).toBe(encoded.length);
+  expect(new Set(encoded).size, `${label}: order keys unique`).toBe(
+    encoded.length,
+  );
   const byComparator = [...orders]
     .sort(compareTranscriptRowOrder)
     .map(encodeTranscriptRowOrder);
   const byEncodedString = [...encoded].sort();
-  expect(byEncodedString, `${label}: order key sort matches comparator sort`).toEqual(
-    byComparator,
-  );
+  expect(
+    byEncodedString,
+    `${label}: order key sort matches comparator sort`,
+  ).toEqual(byComparator);
 }
 
 interface StepOptions {
@@ -494,9 +515,10 @@ function applyStep(
 ) {
   const result = store.apply(change);
   if (!result.continued) {
-    expect(options.mayDecline, `${label}: unexpected decline (${result.reason})`).toBe(
-      true,
-    );
+    expect(
+      options.mayDecline,
+      `${label}: unexpected decline (${result.reason})`,
+    ).toBe(true);
   }
   assertRowParity(store, label);
   return result;
@@ -532,7 +554,10 @@ const LIVE_CHAT_FEATURES: Features = {
   activeTurnFlips: true,
 };
 
-const HISTORY_EDIT_FEATURES: Features = { ...LIVE_CHAT_FEATURES, historyEdits: true };
+const HISTORY_EDIT_FEATURES: Features = {
+  ...LIVE_CHAT_FEATURES,
+  historyEdits: true,
+};
 
 const EVENTS_FEATURES: Features = {
   ...LIVE_CHAT_FEATURES,
@@ -547,7 +572,10 @@ const LEGACY_FEATURES: Features = {
   historyEdits: true,
 };
 
-const ACTIVE_FLIP_FEATURES: Features = { ...EVENTS_FEATURES, activeTurnFlips: true };
+const ACTIVE_FLIP_FEATURES: Features = {
+  ...EVENTS_FEATURES,
+  activeTurnFlips: true,
+};
 
 const BATCH_FEATURES: Features = { ...EVENTS_FEATURES, historyEdits: true };
 
@@ -562,7 +590,11 @@ function newModel(): ChatModel {
   return { users: [], turns: [], messages: [], clock: 1000 };
 }
 
-function blocksFor(r: () => number, model: ChatModel, features: Features): unknown[] {
+function blocksFor(
+  r: () => number,
+  model: ChatModel,
+  features: Features,
+): unknown[] {
   const kind = r();
   const text = textBlock(model.clock);
   if (kind < 0.1) return [];
@@ -570,7 +602,9 @@ function blocksFor(r: () => number, model: ChatModel, features: Features): unkno
   if (features.steerBlocks && kind < 0.4 && model.users.length > 0) {
     const targetUser = pick(r, model.users);
     const mode: "safe_point" | "interrupt_restart" =
-      features.interruptRestart && r() < 0.5 ? "interrupt_restart" : "safe_point";
+      features.interruptRestart && r() < 0.5
+        ? "interrupt_restart"
+        : "safe_point";
     return [text, steerBlock(model.clock, freshId("q"), targetUser, mode)];
   }
   return [text];
@@ -602,17 +636,25 @@ function randomOp(
     if (model.turns.length === 0 || r() < 0.4) {
       turnId = freshId("t");
       model.turns.push(turnId);
-      if (r() < 0.5) events.push(turnEvent("turn.started", model.clock, turnId, null));
+      if (r() < 0.5)
+        events.push(turnEvent("turn.started", model.clock, turnId, null));
     } else {
-      turnId = r() < 0.8 ? model.turns[model.turns.length - 1] : pick(r, model.turns);
+      turnId =
+        r() < 0.8 ? model.turns[model.turns.length - 1] : pick(r, model.turns);
     }
     const blocks = blocksFor(r, model, features);
     const id = freshId("m");
     upserts.push(
-      assistantMessage(id, features.legacyRecords && r() < 0.15 ? null : turnId, model.clock, blocks, {
-        turnProfile: r() < 0.15,
-        startedAt,
-      }),
+      assistantMessage(
+        id,
+        features.legacyRecords && r() < 0.15 ? null : turnId,
+        model.clock,
+        blocks,
+        {
+          turnProfile: r() < 0.15,
+          startedAt,
+        },
+      ),
     );
     model.messages.push(id);
     if (r() < 0.3) activeTurnId = turnId;
@@ -629,7 +671,10 @@ function randomOp(
       const blocks = blocksFor(r, model, features);
       const id = freshId("m");
       upserts.push(
-        assistantMessage(id, turnId, model.clock, blocks, { turnProfile: r() < 0.2, startedAt: model.clock }),
+        assistantMessage(id, turnId, model.clock, blocks, {
+          turnProfile: r() < 0.2,
+          startedAt: model.clock,
+        }),
       );
       model.messages.push(id);
     }
@@ -650,10 +695,15 @@ function randomOp(
     const turnId = pick(r, model.turns);
     if (r() < 0.5) {
       events.push(
-        pauseOpenEvent(r() < 0.5 ? "approval.requested" : "interview.requested", model.clock, turnId, {
-          approvalId: r() < 0.5 ? freshId("appr") : null,
-          blockId: r() < 0.5 ? freshId("blk") : null,
-        }),
+        pauseOpenEvent(
+          r() < 0.5 ? "approval.requested" : "interview.requested",
+          model.clock,
+          turnId,
+          {
+            approvalId: r() < 0.5 ? freshId("appr") : null,
+            blockId: r() < 0.5 ? freshId("blk") : null,
+          },
+        ),
       );
     } else {
       events.push(
@@ -670,28 +720,66 @@ function randomOp(
         ts: model.clock,
         turnId,
         checkpointId: freshId("cp"),
-        entries: [{ filePath: pick(r, ["/w/a.ts", "/w/b.ts", "/w/c.ts"]), beforeHash: "h0", afterHash: "h1" }],
+        entries: [
+          {
+            filePath: pick(r, ["/w/a.ts", "/w/b.ts", "/w/c.ts"]),
+            beforeHash: "h0",
+            afterHash: "h1",
+          },
+        ],
       }),
     );
   } else if (features.setupCards && x < 0.94) {
-    const triggering = model.users.length > 0 && r() < 0.5 ? pick(r, model.users) : null;
+    const triggering =
+      model.users.length > 0 && r() < 0.5 ? pick(r, model.users) : null;
     events.push(
-      setupEvent(pick(r, ["setup.creating", "setup.running", "setup.succeeded"] as const), model.clock, "/repo", triggering),
+      setupEvent(
+        pick(r, [
+          "setup.creating",
+          "setup.running",
+          "setup.succeeded",
+        ] as const),
+        model.clock,
+        "/repo",
+        triggering,
+      ),
     );
   } else if (model.turns.length > 0 && x < 0.97) {
     const turnId = pick(r, model.turns);
-    const type = pick(r, ["turn.completed", "turn.stopped", "turn.interrupted"] as const);
+    const type = pick(r, [
+      "turn.completed",
+      "turn.stopped",
+      "turn.interrupted",
+    ] as const);
     events.push(
-      turnEvent(type, model.clock, turnId, type === "turn.stopped" && model.users.length > 0 ? pick(r, model.users) : null),
+      turnEvent(
+        type,
+        model.clock,
+        turnId,
+        type === "turn.stopped" && model.users.length > 0
+          ? pick(r, model.users)
+          : null,
+      ),
     );
   } else if (features.activeTurnFlips) {
-    activeTurnId = model.turns.length > 0 && r() < 0.5 ? pick(r, model.turns) : null;
+    activeTurnId =
+      model.turns.length > 0 && r() < 0.5 ? pick(r, model.turns) : null;
   }
 
-  applyStep(store, { upserts, removes, events, activeTurnId }, { mayDecline: false }, label);
+  applyStep(
+    store,
+    { upserts, removes, events, activeTurnId },
+    { mayDecline: false },
+    label,
+  );
 }
 
-function runFuzzedFamily(name: string, features: Features, seeds: number, ops: number): void {
+function runFuzzedFamily(
+  name: string,
+  features: Features,
+  seeds: number,
+  ops: number,
+): void {
   describe(`fuzz family: ${name}`, () => {
     for (let seed = 1; seed <= seeds; seed += 1) {
       it(`seed ${seed}`, () => {
@@ -701,7 +789,10 @@ function runFuzzedFamily(name: string, features: Features, seeds: number, ops: n
         for (let op = 0; op < ops; op += 1) {
           randomOp(store, model, r, features, `${name} seed ${seed} op ${op}`);
         }
-        expect(store.declines, `${name} seed ${seed}: unexpected declines`).toEqual([]);
+        expect(
+          store.declines,
+          `${name} seed ${seed}: unexpected declines`,
+        ).toEqual([]);
       });
     }
   });
@@ -722,70 +813,189 @@ describe("b. history edits: explicit scenarios", () => {
   it("removes a tail range (checkpoint restore), then re-upserts one removed id at a NEW position", () => {
     const store = new RowFoldStore("chat-tail-remove");
     const u1 = userMessage("u1", 1000, null);
-    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001)], { turnProfile: false, startedAt: 1001 });
+    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
+      turnProfile: false,
+      startedAt: 1001,
+    });
     const u2 = userMessage("u2", 1002, null);
-    const a2 = assistantMessage("a2", "t2", 1003, [textBlock(1003)], { turnProfile: false, startedAt: 1003 });
-    applyStep(store, { upserts: [u1, a1, u2, a2], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
-    applyStep(store, { upserts: [], removes: ["u2", "a2"], events: [], activeTurnId: null }, { mayDecline: false }, "remove tail");
+    const a2 = assistantMessage("a2", "t2", 1003, [textBlock(1003)], {
+      turnProfile: false,
+      startedAt: 1003,
+    });
+    applyStep(
+      store,
+      {
+        upserts: [u1, a1, u2, a2],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed",
+    );
+    applyStep(
+      store,
+      { upserts: [], removes: ["u2", "a2"], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove tail",
+    );
     const reinserted = userMessage("u2", 1002, null);
-    applyStep(store, { upserts: [reinserted], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "reinsert removed id");
+    applyStep(
+      store,
+      { upserts: [reinserted], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "reinsert removed id",
+    );
   });
 
   it("removes middle records", () => {
     const store = new RowFoldStore("chat-middle-remove");
     const msgs = [
       userMessage("u1", 1000, null),
-      assistantMessage("a1", "t1", 1001, [textBlock(1001)], { turnProfile: false, startedAt: 1001 }),
+      assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
+        turnProfile: false,
+        startedAt: 1001,
+      }),
       userMessage("u2", 1002, null),
-      assistantMessage("a2", "t2", 1003, [textBlock(1003)], { turnProfile: false, startedAt: 1003 }),
+      assistantMessage("a2", "t2", 1003, [textBlock(1003)], {
+        turnProfile: false,
+        startedAt: 1003,
+      }),
       userMessage("u3", 1004, null),
-      assistantMessage("a3", "t3", 1005, [textBlock(1005)], { turnProfile: false, startedAt: 1005 }),
+      assistantMessage("a3", "t3", 1005, [textBlock(1005)], {
+        turnProfile: false,
+        startedAt: 1005,
+      }),
     ];
-    applyStep(store, { upserts: msgs, removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
-    applyStep(store, { upserts: [], removes: ["u2", "a2"], events: [], activeTurnId: null }, { mayDecline: false }, "remove middle");
+    applyStep(
+      store,
+      { upserts: msgs, removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
+    applyStep(
+      store,
+      { upserts: [], removes: ["u2", "a2"], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove middle",
+    );
   });
 
   it("rewrites an old user's sessionAnchor (fallback hop)", () => {
     const store = new RowFoldStore("chat-fallback-hop");
-    const users = Array.from({ length: 5 }, (_, i) => userMessage(`u${i}`, 1000 + i, anchor("original")));
-    applyStep(store, { upserts: users, removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
+    const users = Array.from({ length: 5 }, (_, i) =>
+      userMessage(`u${i}`, 1000 + i, anchor("original")),
+    );
+    applyStep(
+      store,
+      { upserts: users, removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
     const rewritten = userMessage("u0", 1000, anchor("hopped"));
-    applyStep(store, { upserts: [rewritten], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "fallback hop");
+    applyStep(
+      store,
+      { upserts: [rewritten], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "fallback hop",
+    );
   });
 
   it("rewrites old assistant blocks so facts change (add/remove steer targets, autonomous toggle, turnProfile added)", () => {
     const store = new RowFoldStore("chat-facts-rewrite");
     const u1 = userMessage("u1", 1000, null);
-    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001)], { turnProfile: false, startedAt: 1001 });
-    applyStep(store, { upserts: [u1, a1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
-
-    const addSteer = assistantMessage("a1", "t1", 1001, [textBlock(1001), steerBlock(1001, "q1", "u1", "safe_point")], {
+    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
       turnProfile: false,
       startedAt: 1001,
     });
-    applyStep(store, { upserts: [addSteer], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "add steer target");
+    applyStep(
+      store,
+      { upserts: [u1, a1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
 
-    const removeSteer = assistantMessage("a1", "t1", 1001, [textBlock(1001)], { turnProfile: false, startedAt: 1001 });
-    applyStep(store, { upserts: [removeSteer], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "remove steer target");
+    const addSteer = assistantMessage(
+      "a1",
+      "t1",
+      1001,
+      [textBlock(1001), steerBlock(1001, "q1", "u1", "safe_point")],
+      {
+        turnProfile: false,
+        startedAt: 1001,
+      },
+    );
+    applyStep(
+      store,
+      { upserts: [addSteer], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "add steer target",
+    );
 
-    const autonomousToggle = assistantMessage("a1", "t1", 1001, [autonomousResumeBlock(1001), textBlock(1001)], {
+    const removeSteer = assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
       turnProfile: false,
       startedAt: 1001,
     });
-    applyStep(store, { upserts: [autonomousToggle], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "autonomous toggle");
+    applyStep(
+      store,
+      { upserts: [removeSteer], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove steer target",
+    );
 
-    const withProfile = assistantMessage("a1", "t1", 1001, [autonomousResumeBlock(1001), textBlock(1001)], {
-      turnProfile: true,
-      startedAt: 1001,
-    });
-    applyStep(store, { upserts: [withProfile], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "turnProfile added");
+    const autonomousToggle = assistantMessage(
+      "a1",
+      "t1",
+      1001,
+      [autonomousResumeBlock(1001), textBlock(1001)],
+      {
+        turnProfile: false,
+        startedAt: 1001,
+      },
+    );
+    applyStep(
+      store,
+      {
+        upserts: [autonomousToggle],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "autonomous toggle",
+    );
+
+    const withProfile = assistantMessage(
+      "a1",
+      "t1",
+      1001,
+      [autonomousResumeBlock(1001), textBlock(1001)],
+      {
+        turnProfile: true,
+        startedAt: 1001,
+      },
+    );
+    applyStep(
+      store,
+      { upserts: [withProfile], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "turnProfile added",
+    );
   });
 
   it("appends a late record to an old turn, and interleaves a turn's records across two user records", () => {
     const store = new RowFoldStore("chat-late-append-split-turn");
     const u1 = userMessage("u1", 1000, null);
-    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001)], { turnProfile: false, startedAt: 1001 });
-    applyStep(store, { upserts: [u1, a1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
+    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
+      turnProfile: false,
+      startedAt: 1001,
+    });
+    applyStep(
+      store,
+      { upserts: [u1, a1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
 
     for (let i = 0; i < 30; i += 1) {
       applyStep(
@@ -793,7 +1003,13 @@ describe("b. history edits: explicit scenarios", () => {
         {
           upserts: [
             userMessage(`filler-u${i}`, 1002 + i, null),
-            assistantMessage(`filler-a${i}`, `filler-t${i}`, 1002 + i, [textBlock(1002 + i)], { turnProfile: false, startedAt: 1002 + i }),
+            assistantMessage(
+              `filler-a${i}`,
+              `filler-t${i}`,
+              1002 + i,
+              [textBlock(1002 + i)],
+              { turnProfile: false, startedAt: 1002 + i },
+            ),
           ],
           removes: [],
           events: [],
@@ -804,11 +1020,27 @@ describe("b. history edits: explicit scenarios", () => {
       );
     }
 
-    const lateRecord = assistantMessage("a1-late", "t1", 2500, [textBlock(2500)], { turnProfile: false, startedAt: 1001 });
-    applyStep(store, { upserts: [lateRecord], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "late record on old turn");
+    const lateRecord = assistantMessage(
+      "a1-late",
+      "t1",
+      2500,
+      [textBlock(2500)],
+      { turnProfile: false, startedAt: 1001 },
+    );
+    applyStep(
+      store,
+      { upserts: [lateRecord], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "late record on old turn",
+    );
 
     const u2 = userMessage("u2", 1001.5, null);
-    applyStep(store, { upserts: [u2], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "interleaved user");
+    applyStep(
+      store,
+      { upserts: [u2], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "interleaved user",
+    );
   });
 });
 
@@ -821,25 +1053,87 @@ describe("c. events: pause correlation", () => {
   it("closes a pause open in a LATER change, correlated by approvalId", () => {
     const store = new RowFoldStore("chat-pause-later-close");
     const u1 = userMessage("u1", 1000, null);
-    applyStep(store, { upserts: [u1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
+    applyStep(
+      store,
+      { upserts: [u1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
     const turnId = "t1";
-    applyStep(store, { upserts: [], removes: [], events: [turnEvent("turn.started", 1001, turnId, null)], activeTurnId: turnId }, { mayDecline: false }, "turn.started");
-    const open = pauseOpenEvent("approval.requested", 1002, turnId, { approvalId: "appr-1", blockId: null });
-    applyStep(store, { upserts: [], removes: [], events: [open], activeTurnId: turnId }, { mayDecline: false }, "pause open");
-    applyStep(store, emptyChange(turnId), { mayDecline: false }, "unrelated change");
-    const close = pauseCloseEvent("approval.resolved", 1010, null, { approvalId: "appr-1", blockId: null });
-    applyStep(store, { upserts: [], removes: [], events: [close], activeTurnId: turnId }, { mayDecline: false }, "pause close later");
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [turnEvent("turn.started", 1001, turnId, null)],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "turn.started",
+    );
+    const open = pauseOpenEvent("approval.requested", 1002, turnId, {
+      approvalId: "appr-1",
+      blockId: null,
+    });
+    applyStep(
+      store,
+      { upserts: [], removes: [], events: [open], activeTurnId: turnId },
+      { mayDecline: false },
+      "pause open",
+    );
+    applyStep(
+      store,
+      emptyChange(turnId),
+      { mayDecline: false },
+      "unrelated change",
+    );
+    const close = pauseCloseEvent("approval.resolved", 1010, null, {
+      approvalId: "appr-1",
+      blockId: null,
+    });
+    applyStep(
+      store,
+      { upserts: [], removes: [], events: [close], activeTurnId: turnId },
+      { mayDecline: false },
+      "pause close later",
+    );
   });
 
   it("closes a pause carrying a DIFFERENT turnId than the open - attributed to the OPEN's turn", () => {
     const store = new RowFoldStore("chat-pause-different-turn");
     const turnA = "t-a";
     const turnB = "t-b";
-    applyStep(store, { upserts: [], removes: [], events: [turnEvent("turn.started", 1000, turnA, null)], activeTurnId: turnA }, { mayDecline: false }, "turn A started");
-    const open = pauseOpenEvent("interview.requested", 1001, turnA, { approvalId: null, blockId: "blk-1" });
-    applyStep(store, { upserts: [], removes: [], events: [open], activeTurnId: turnA }, { mayDecline: false }, "interview open");
-    const close = pauseCloseEvent("interview.resolved", 1005, turnB, { approvalId: null, blockId: "blk-1" });
-    applyStep(store, { upserts: [], removes: [], events: [close], activeTurnId: turnB }, { mayDecline: false }, "interview close, different turnId");
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [turnEvent("turn.started", 1000, turnA, null)],
+        activeTurnId: turnA,
+      },
+      { mayDecline: false },
+      "turn A started",
+    );
+    const open = pauseOpenEvent("interview.requested", 1001, turnA, {
+      approvalId: null,
+      blockId: "blk-1",
+    });
+    applyStep(
+      store,
+      { upserts: [], removes: [], events: [open], activeTurnId: turnA },
+      { mayDecline: false },
+      "interview open",
+    );
+    const close = pauseCloseEvent("interview.resolved", 1005, turnB, {
+      approvalId: null,
+      blockId: "blk-1",
+    });
+    applyStep(
+      store,
+      { upserts: [], removes: [], events: [close], activeTurnId: turnB },
+      { mayDecline: false },
+      "interview close, different turnId",
+    );
   });
 });
 
@@ -847,16 +1141,56 @@ describe("c. events: turn.stopped variants", () => {
   it("stops a turn with no assistant records (synthesized stopped row), with and without a trigger user", () => {
     const store = new RowFoldStore("chat-stopped-no-records");
     const u1 = userMessage("u1", 1000, null);
-    applyStep(store, { upserts: [u1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
-    applyStep(store, { upserts: [], removes: [], events: [turnEvent("turn.stopped", 1001, "t-empty", "u1")], activeTurnId: null }, { mayDecline: false }, "stopped with trigger");
-    applyStep(store, { upserts: [], removes: [], events: [turnEvent("turn.stopped", 1002, "t-empty-2", null)], activeTurnId: null }, { mayDecline: false }, "stopped without trigger");
+    applyStep(
+      store,
+      { upserts: [u1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [turnEvent("turn.stopped", 1001, "t-empty", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "stopped with trigger",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [turnEvent("turn.stopped", 1002, "t-empty-2", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "stopped without trigger",
+    );
   });
 
   it("removes the trigger user of an already-stopped turn", () => {
     const store = new RowFoldStore("chat-stopped-trigger-removed");
     const u1 = userMessage("u1", 1000, null);
-    applyStep(store, { upserts: [u1], removes: [], events: [turnEvent("turn.stopped", 1001, "t-empty", "u1")], activeTurnId: null }, { mayDecline: false }, "seed with trigger");
-    applyStep(store, { upserts: [], removes: ["u1"], events: [], activeTurnId: null }, { mayDecline: false }, "remove trigger");
+    applyStep(
+      store,
+      {
+        upserts: [u1],
+        removes: [],
+        events: [turnEvent("turn.stopped", 1001, "t-empty", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed with trigger",
+    );
+    applyStep(
+      store,
+      { upserts: [], removes: ["u1"], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove trigger",
+    );
   });
 });
 
@@ -865,19 +1199,61 @@ describe("c. events: checkpoint overlap", () => {
     const store = new RowFoldStore("chat-checkpoint-overlap");
     applyStep(
       store,
-      { upserts: [], removes: [], events: [checkpointEvent({ ts: 1000, turnId: "t1", checkpointId: "c1", entries: [{ filePath: "/w/a.ts", beforeHash: "h0", afterHash: "h1" }] })], activeTurnId: null },
+      {
+        upserts: [],
+        removes: [],
+        events: [
+          checkpointEvent({
+            ts: 1000,
+            turnId: "t1",
+            checkpointId: "c1",
+            entries: [
+              { filePath: "/w/a.ts", beforeHash: "h0", afterHash: "h1" },
+            ],
+          }),
+        ],
+        activeTurnId: null,
+      },
       { mayDecline: false },
       "checkpoint 1",
     );
     applyStep(
       store,
-      { upserts: [], removes: [], events: [checkpointEvent({ ts: 1001, turnId: "t2", checkpointId: "c2", entries: [{ filePath: "/w/a.ts", beforeHash: "h1", afterHash: "h2" }] })], activeTurnId: null },
+      {
+        upserts: [],
+        removes: [],
+        events: [
+          checkpointEvent({
+            ts: 1001,
+            turnId: "t2",
+            checkpointId: "c2",
+            entries: [
+              { filePath: "/w/a.ts", beforeHash: "h1", afterHash: "h2" },
+            ],
+          }),
+        ],
+        activeTurnId: null,
+      },
       { mayDecline: false },
       "checkpoint 2 overlaps",
     );
     applyStep(
       store,
-      { upserts: [], removes: [], events: [checkpointEvent({ ts: 1001, turnId: "t2", checkpointId: "c2-rewrite", entries: [{ filePath: "/w/b.ts", beforeHash: "h0", afterHash: "h1" }] })], activeTurnId: null },
+      {
+        upserts: [],
+        removes: [],
+        events: [
+          checkpointEvent({
+            ts: 1001,
+            turnId: "t2",
+            checkpointId: "c2-rewrite",
+            entries: [
+              { filePath: "/w/b.ts", beforeHash: "h0", afterHash: "h1" },
+            ],
+          }),
+        ],
+        activeTurnId: null,
+      },
       { mayDecline: false },
       "checkpoint 2 rewritten to not overlap",
     );
@@ -888,25 +1264,140 @@ describe("c. events: setup windows", () => {
   it("partitions creating/running/succeeded/failed/cancelled, a worktree.missing re-bind, and a genesis pin", () => {
     const store = new RowFoldStore("chat-setup-windows");
     const u1 = userMessage("u1", 1000, null);
-    applyStep(store, { upserts: [u1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.creating", 999, "/repo", "u1")], activeTurnId: null }, { mayDecline: false }, "genesis window creating");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.running", 1000, "/repo", "u1")], activeTurnId: null }, { mayDecline: false }, "genesis window running");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.succeeded", 1001, "/repo", "u1")], activeTurnId: null }, { mayDecline: false }, "genesis window succeeded");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("worktree.missing", 1002, "/repo", null)], activeTurnId: null }, { mayDecline: false }, "worktree missing");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.running", 1003, "/repo", null)], activeTurnId: null }, { mayDecline: false }, "re-bind window running");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.failed", 1004, "/repo", null)], activeTurnId: null }, { mayDecline: false }, "re-bind window failed");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.running", 1005, "/repo", null)], activeTurnId: null }, { mayDecline: false }, "re-bind window retried");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.cancelled", 1006, "/repo", null)], activeTurnId: null }, { mayDecline: false }, "re-bind window cancelled");
+    applyStep(
+      store,
+      { upserts: [u1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.creating", 999, "/repo", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "genesis window creating",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.running", 1000, "/repo", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "genesis window running",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.succeeded", 1001, "/repo", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "genesis window succeeded",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("worktree.missing", 1002, "/repo", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "worktree missing",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.running", 1003, "/repo", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "re-bind window running",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.failed", 1004, "/repo", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "re-bind window failed",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.running", 1005, "/repo", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "re-bind window retried",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.cancelled", 1006, "/repo", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "re-bind window cancelled",
+    );
   });
 
   it("a mid-chat setup window anchors above its triggering message and moves the card when the anchor row moves", () => {
     const store = new RowFoldStore("chat-setup-anchor-move");
     const u1 = userMessage("u1", 1000, anchor("original"));
-    applyStep(store, { upserts: [u1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.creating", 1000.5, "/repo", "u1")], activeTurnId: null }, { mayDecline: false }, "mid-chat setup card");
-    applyStep(store, { upserts: [], removes: [], events: [setupEvent("setup.succeeded", 1001, "/repo", "u1")], activeTurnId: null }, { mayDecline: false }, "mid-chat setup succeeded");
+    applyStep(
+      store,
+      { upserts: [u1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.creating", 1000.5, "/repo", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "mid-chat setup card",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [setupEvent("setup.succeeded", 1001, "/repo", "u1")],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "mid-chat setup succeeded",
+    );
     const rewritten = userMessage("u1", 1000, anchor("hopped"));
-    applyStep(store, { upserts: [rewritten], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "anchor row rewritten");
+    applyStep(
+      store,
+      { upserts: [rewritten], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "anchor row rewritten",
+    );
   });
 });
 
@@ -916,35 +1407,127 @@ describe("c. events: interrupt_restart steer lifecycle retractions", () => {
     const u1 = userMessage("u1", 1000, null);
     const u2 = userMessage("u2", 1001, null);
     const u3 = userMessage("u3", 1002, null);
-    applyStep(store, { upserts: [u1, u2, u3], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
+    applyStep(
+      store,
+      { upserts: [u1, u2, u3], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
 
     const turnId = "t1";
-    applyStep(store, { upserts: [], removes: [], events: [steerRequestedEvent(1003, turnId, "q1", "u1")], activeTurnId: turnId }, { mayDecline: false }, "steer requested u1");
-    applyStep(store, { upserts: [], removes: [], events: [steerRequestedEvent(1004, turnId, "q2", "u2")], activeTurnId: turnId }, { mayDecline: false }, "steer requested u2");
-    applyStep(store, { upserts: [], removes: [], events: [steerRequestedEvent(1005, turnId, "q3", "u3")], activeTurnId: turnId }, { mayDecline: false }, "steer requested u3");
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [steerRequestedEvent(1003, turnId, "q1", "u1")],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "steer requested u1",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [steerRequestedEvent(1004, turnId, "q2", "u2")],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "steer requested u2",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [steerRequestedEvent(1005, turnId, "q3", "u3")],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "steer requested u3",
+    );
 
-    applyStep(store, { upserts: [], removes: [], events: [steerRetractByMessage("queue.fallback", 1006, "u1")], activeTurnId: turnId }, { mayDecline: false }, "retract by messageId");
-    applyStep(store, { upserts: [], removes: [], events: [steerRetractByQueueItem("queue.resumed", 1007, "q2")], activeTurnId: turnId }, { mayDecline: false }, "retract by queueItemId");
-    applyStep(store, { upserts: [], removes: [], events: [steerRetractBySnapshot("queue.cancelled", 1008, "q3", "u3")], activeTurnId: turnId }, { mayDecline: false }, "retract by items snapshot");
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [steerRetractByMessage("queue.fallback", 1006, "u1")],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "retract by messageId",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [steerRetractByQueueItem("queue.resumed", 1007, "q2")],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "retract by queueItemId",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [steerRetractBySnapshot("queue.cancelled", 1008, "q3", "u3")],
+        activeTurnId: turnId,
+      },
+      { mayDecline: false },
+      "retract by items snapshot",
+    );
   });
 
   it("appends the steer user before AND after the block naming it", () => {
     const store = new RowFoldStore("chat-steer-user-before-and-after");
     const u1 = userMessage("u1", 1000, null);
-    const a1 = assistantMessage("a1", "t1", 1001, [textBlock(1001), steerBlock(1001, "q1", "u1", "safe_point")], {
-      turnProfile: false,
-      startedAt: 1001,
-    });
-    applyStep(store, { upserts: [u1, a1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "steer target exists before the block");
+    const a1 = assistantMessage(
+      "a1",
+      "t1",
+      1001,
+      [textBlock(1001), steerBlock(1001, "q1", "u1", "safe_point")],
+      {
+        turnProfile: false,
+        startedAt: 1001,
+      },
+    );
+    applyStep(
+      store,
+      { upserts: [u1, a1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "steer target exists before the block",
+    );
 
     // A steer naming a user id BEFORE that record exists (orphaned until inserted).
-    const a2 = assistantMessage("a2", "t2", 1002, [textBlock(1002), steerBlock(1002, "q2", "future-u", "safe_point")], {
-      turnProfile: false,
-      startedAt: 1002,
-    });
-    applyStep(store, { upserts: [a2], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "steer block names a not-yet-existing user");
+    const a2 = assistantMessage(
+      "a2",
+      "t2",
+      1002,
+      [textBlock(1002), steerBlock(1002, "q2", "future-u", "safe_point")],
+      {
+        turnProfile: false,
+        startedAt: 1002,
+      },
+    );
+    applyStep(
+      store,
+      { upserts: [a2], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "steer block names a not-yet-existing user",
+    );
     const futureUser = userMessage("future-u", 999, null);
-    applyStep(store, { upserts: [futureUser], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "the named user appears afterward");
+    applyStep(
+      store,
+      { upserts: [futureUser], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "the named user appears afterward",
+    );
   });
 });
 
@@ -955,19 +1538,34 @@ describe("c. events: row-materializing event kinds", () => {
       ...EVENT_DEFAULTS,
       type: "chat.forked",
       ts: 1000,
-      metadata: { sourceChatId: "src-1", sourceHostId: "host-1", sourceChatTitle: "Old chat" },
+      metadata: {
+        sourceChatId: "src-1",
+        sourceHostId: "host-1",
+        sourceChatTitle: "Old chat",
+      },
     });
     const imported = ev({
       ...EVENT_DEFAULTS,
       type: "chat.imported",
       ts: 999,
-      metadata: { sourceProvider: "claude", nativeSessionId: "native-1", importedAt: 999, sourceCwd: "/repo" },
+      metadata: {
+        sourceProvider: "claude",
+        nativeSessionId: "native-1",
+        importedAt: 999,
+        sourceCwd: "/repo",
+      },
     });
     const denied = ev({
       ...EVENT_DEFAULTS,
       type: "approval.denied",
       ts: 1001,
-      metadata: { autoJudge: { attendanceReason: "agent-created", rule: "r1", reason: "no human attending" } },
+      metadata: {
+        autoJudge: {
+          attendanceReason: "agent-created",
+          rule: "r1",
+          reason: "no human attending",
+        },
+      },
     });
     const failed = ev({
       ...EVENT_DEFAULTS,
@@ -976,7 +1574,17 @@ describe("c. events: row-materializing event kinds", () => {
       message: "network error",
       metadata: { notificationAnchor: true, code: "ECONNRESET" },
     });
-    applyStep(store, { upserts: [], removes: [], events: [forked, imported, denied, failed], activeTurnId: null }, { mayDecline: false }, "row-materializing events");
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [forked, imported, denied, failed],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "row-materializing events",
+    );
   });
 });
 
@@ -1023,7 +1631,13 @@ describe("explicit decline tests", () => {
     };
     const result = runFold(
       badState,
-      { chatId: "c", activeTurnId: null, upsertedMessages: [], removedMessages: [], appendedEvents: [] },
+      {
+        chatId: "c",
+        activeTurnId: null,
+        upsertedMessages: [],
+        removedMessages: [],
+        appendedEvents: [],
+      },
       NO_LOADS,
     );
     expect(result.continued).toBe(false);
@@ -1031,7 +1645,10 @@ describe("explicit decline tests", () => {
 
   it("declines when a message's stored fold facts version does not match", () => {
     const message = userMessage("u1", 1000, null);
-    const priorState: TranscriptFoldState = { ...EMPTY_TRANSCRIPT_FOLD_STATE, messagesThrough: 0 };
+    const priorState: TranscriptFoldState = {
+      ...EMPTY_TRANSCRIPT_FOLD_STATE,
+      messagesThrough: 0,
+    };
     const result = runFold(
       priorState,
       {
@@ -1061,9 +1678,24 @@ describe("explicit decline tests", () => {
   });
 
   it("declines when a row-relevant event is rewritten in place with a different body", () => {
-    const original = ev({ ...EVENT_DEFAULTS, id: "ev-fixed", type: "turn.started", ts: 1000, turnId: "t-a" });
-    const rewritten = ev({ ...EVENT_DEFAULTS, id: "ev-fixed", type: "turn.started", ts: 1000, turnId: "t-b" });
-    const priorState: TranscriptFoldState = { ...EMPTY_TRANSCRIPT_FOLD_STATE, eventsThrough: 0 };
+    const original = ev({
+      ...EVENT_DEFAULTS,
+      id: "ev-fixed",
+      type: "turn.started",
+      ts: 1000,
+      turnId: "t-a",
+    });
+    const rewritten = ev({
+      ...EVENT_DEFAULTS,
+      id: "ev-fixed",
+      type: "turn.started",
+      ts: 1000,
+      turnId: "t-b",
+    });
+    const priorState: TranscriptFoldState = {
+      ...EMPTY_TRANSCRIPT_FOLD_STATE,
+      eventsThrough: 0,
+    };
     const result = runFold(
       priorState,
       {
@@ -1079,9 +1711,24 @@ describe("explicit decline tests", () => {
   });
 
   it("continues on an IDENTICAL rewrite of a row-relevant event", () => {
-    const original = ev({ ...EVENT_DEFAULTS, id: "ev-fixed", type: "turn.started", ts: 1000, turnId: "t-a" });
-    const identical = ev({ ...EVENT_DEFAULTS, id: "ev-fixed", type: "turn.started", ts: 1000, turnId: "t-a" });
-    const priorState: TranscriptFoldState = { ...EMPTY_TRANSCRIPT_FOLD_STATE, eventsThrough: 0 };
+    const original = ev({
+      ...EVENT_DEFAULTS,
+      id: "ev-fixed",
+      type: "turn.started",
+      ts: 1000,
+      turnId: "t-a",
+    });
+    const identical = ev({
+      ...EVENT_DEFAULTS,
+      id: "ev-fixed",
+      type: "turn.started",
+      ts: 1000,
+      turnId: "t-a",
+    });
+    const priorState: TranscriptFoldState = {
+      ...EMPTY_TRANSCRIPT_FOLD_STATE,
+      eventsThrough: 0,
+    };
     const result = runFold(
       priorState,
       {
@@ -1097,9 +1744,23 @@ describe("explicit decline tests", () => {
   });
 
   it("continues on a rewrite of a NON-row-relevant event type", () => {
-    const original = ev({ ...EVENT_DEFAULTS, id: "ev-fixed", type: "queue.added", ts: 1000 });
-    const rewritten = ev({ ...EVENT_DEFAULTS, id: "ev-fixed", type: "queue.added", ts: 1000, message: "different" });
-    const priorState: TranscriptFoldState = { ...EMPTY_TRANSCRIPT_FOLD_STATE, eventsThrough: 0 };
+    const original = ev({
+      ...EVENT_DEFAULTS,
+      id: "ev-fixed",
+      type: "queue.added",
+      ts: 1000,
+    });
+    const rewritten = ev({
+      ...EVENT_DEFAULTS,
+      id: "ev-fixed",
+      type: "queue.added",
+      ts: 1000,
+      message: "different",
+    });
+    const priorState: TranscriptFoldState = {
+      ...EMPTY_TRANSCRIPT_FOLD_STATE,
+      eventsThrough: 0,
+    };
     const result = runFold(
       priorState,
       {
@@ -1138,7 +1799,12 @@ describe("mechanism tests on a large chat", () => {
     for (let i = 0; i < 1000; i += 1) {
       const uid = `u${i}`;
       const ts = 1000 + i * 2;
-      const userResult = store.apply({ upserts: [userMessage(uid, ts, null)], removes: [], events: [], activeTurnId: null });
+      const userResult = store.apply({
+        upserts: [userMessage(uid, ts, null)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      });
       expect(userResult.continued, `seed user ${i}`).toBe(true);
       const turnId = `t${i}`;
       if (i === 5) {
@@ -1146,7 +1812,12 @@ describe("mechanism tests on a large chat", () => {
         earlyUserId = uid;
       }
       const assistantResult = store.apply({
-        upserts: [assistantMessage(`a${i}`, turnId, ts + 1, [textBlock(ts + 1)], { turnProfile: false, startedAt: ts + 1 })],
+        upserts: [
+          assistantMessage(`a${i}`, turnId, ts + 1, [textBlock(ts + 1)], {
+            turnProfile: false,
+            startedAt: ts + 1,
+          }),
+        ],
         removes: [],
         events: [],
         activeTurnId: null,
@@ -1158,7 +1829,12 @@ describe("mechanism tests on a large chat", () => {
 
   it("appending a tail record issues facts-from with a NON-null position and answers < 50 facts", () => {
     const { store } = buildLargeChat();
-    const result = store.apply({ upserts: [userMessage("tail-user", 999_999, null)], removes: [], events: [], activeTurnId: null });
+    const result = store.apply({
+      upserts: [userMessage("tail-user", 999_999, null)],
+      removes: [],
+      events: [],
+      activeTurnId: null,
+    });
     expect(result.continued).toBe(true);
     const factsFrom = result.loads.filter((load) => load.kind === "facts-from");
     expect(factsFrom.length, "expected exactly one facts-from load").toBe(1);
@@ -1170,17 +1846,35 @@ describe("mechanism tests on a large chat", () => {
   it("a streaming upsert with unchanged facts issues NO facts-from load", () => {
     const { store } = buildLargeChat();
     const ts = 1000 + 499 * 2 + 1;
-    const streamed = assistantMessage("a499", "t499", ts, [textBlock(ts), textBlock(ts)], { turnProfile: false, startedAt: ts });
-    const result = store.apply({ upserts: [streamed], removes: [], events: [], activeTurnId: null });
+    const streamed = assistantMessage(
+      "a499",
+      "t499",
+      ts,
+      [textBlock(ts), textBlock(ts)],
+      { turnProfile: false, startedAt: ts },
+    );
+    const result = store.apply({
+      upserts: [streamed],
+      removes: [],
+      events: [],
+      activeTurnId: null,
+    });
     expect(result.continued).toBe(true);
-    expect(result.loads.filter((load) => load.kind === "facts-from")).toEqual([]);
+    expect(result.loads.filter((load) => load.kind === "facts-from")).toEqual(
+      [],
+    );
     assertRowParity(store, "streaming upsert mechanism");
   });
 
   it("an edit of an early user sessionAnchor issues facts-from position: null (widen) and still continues", () => {
     const { store, earlyUserId } = buildLargeChat();
     const rewritten = userMessage(earlyUserId, 1000, anchor("hopped"));
-    const result = store.apply({ upserts: [rewritten], removes: [], events: [], activeTurnId: null });
+    const result = store.apply({
+      upserts: [rewritten],
+      removes: [],
+      events: [],
+      activeTurnId: null,
+    });
     expect(result.continued).toBe(true);
     const factsFrom = result.loads.filter((load) => load.kind === "facts-from");
     expect(factsFrom.some((load) => load.position === null)).toBe(true);
@@ -1189,7 +1883,12 @@ describe("mechanism tests on a large chat", () => {
 
   it("a turn whose walked state did not change is absent from the re-described units", () => {
     const { store, earlyTurnKey } = buildLargeChat();
-    const result = store.apply({ upserts: [userMessage("tail-user-2", 999_998, null)], removes: [], events: [], activeTurnId: null });
+    const result = store.apply({
+      upserts: [userMessage("tail-user-2", 999_998, null)],
+      removes: [],
+      events: [],
+      activeTurnId: null,
+    });
     expect(result.continued).toBe(true);
     expect(result.touchedUnitKeys).not.toContain(turnRowUnitKey(earlyTurnKey));
     expect(result.touchedUnitKeys.length).toBeLessThan(1000);
@@ -1206,10 +1905,25 @@ describe("g. long agent chats", () => {
   it("one user message then 45 autonomous turns, an old open turn gaining a late record, then an old user edit - all continue", () => {
     const store = new RowFoldStore("chat-long-agent");
     const u1 = userMessage("u1", 1000, anchor("orig"));
-    applyStep(store, { upserts: [u1], removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed user");
+    applyStep(
+      store,
+      { upserts: [u1], removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed user",
+    );
 
     const openTurnId = "t-open-0";
-    applyStep(store, { upserts: [], removes: [], events: [turnEvent("turn.started", 1001, openTurnId, null)], activeTurnId: openTurnId }, { mayDecline: false }, "open turn started");
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [turnEvent("turn.started", 1001, openTurnId, null)],
+        activeTurnId: openTurnId,
+      },
+      { mayDecline: false },
+      "open turn started",
+    );
 
     for (let i = 1; i <= 45; i += 1) {
       const turnId = `t-auto-${i}`;
@@ -1218,7 +1932,12 @@ describe("g. long agent chats", () => {
       applyStep(
         store,
         {
-          upserts: [assistantMessage(`a-auto-${i}`, turnId, ts, blocks, { turnProfile: false, startedAt: ts })],
+          upserts: [
+            assistantMessage(`a-auto-${i}`, turnId, ts, blocks, {
+              turnProfile: false,
+              startedAt: ts,
+            }),
+          ],
           removes: [],
           events: [turnEvent("turn.completed", ts, turnId, null)],
           activeTurnId: null,
@@ -1231,7 +1950,12 @@ describe("g. long agent chats", () => {
     applyStep(
       store,
       {
-        upserts: [assistantMessage("a-open-late", openTurnId, 2100, [textBlock(2100)], { turnProfile: false, startedAt: 1001 })],
+        upserts: [
+          assistantMessage("a-open-late", openTurnId, 2100, [textBlock(2100)], {
+            turnProfile: false,
+            startedAt: 1001,
+          }),
+        ],
         removes: [],
         events: [],
         activeTurnId: openTurnId,
@@ -1241,7 +1965,17 @@ describe("g. long agent chats", () => {
     );
 
     const rewritten = userMessage("u1", 1000, anchor("hopped-late"));
-    applyStep(store, { upserts: [rewritten], removes: [], events: [], activeTurnId: openTurnId }, { mayDecline: false }, "old user edited after long autonomous run");
+    applyStep(
+      store,
+      {
+        upserts: [rewritten],
+        removes: [],
+        events: [],
+        activeTurnId: openTurnId,
+      },
+      { mayDecline: false },
+      "old user edited after long autonomous run",
+    );
   });
 });
 
@@ -1254,18 +1988,32 @@ describe("f. batches: one change carries several touches at once", () => {
     const store = new RowFoldStore("chat-batch");
     const seedMsgs = [
       userMessage("u1", 1000, null),
-      assistantMessage("a1", "t1", 1001, [textBlock(1001)], { turnProfile: false, startedAt: 1001 }),
+      assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
+        turnProfile: false,
+        startedAt: 1001,
+      }),
       userMessage("u2", 1002, null),
     ];
-    applyStep(store, { upserts: seedMsgs, removes: [], events: [], activeTurnId: null }, { mayDecline: false }, "seed");
+    applyStep(
+      store,
+      { upserts: seedMsgs, removes: [], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "seed",
+    );
 
     const batch: RowFoldChangeInput = {
       upserts: [
         userMessage("u3", 1003, null),
-        assistantMessage("a2", "t2", 1004, [textBlock(1004)], { turnProfile: false, startedAt: 1004 }),
+        assistantMessage("a2", "t2", 1004, [textBlock(1004)], {
+          turnProfile: false,
+          startedAt: 1004,
+        }),
       ],
       removes: ["u2"],
-      events: [turnEvent("turn.started", 1003, "t2", null), turnEvent("turn.completed", 1005, "t2", null)],
+      events: [
+        turnEvent("turn.started", 1003, "t2", null),
+        turnEvent("turn.completed", 1005, "t2", null),
+      ],
       activeTurnId: null,
     };
     applyStep(store, batch, { mayDecline: false }, "batched change");

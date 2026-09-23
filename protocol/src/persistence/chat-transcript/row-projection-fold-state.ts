@@ -147,9 +147,7 @@ function orderedFloatHex(value: number): string {
   } else {
     high = (high | 0x80000000) >>> 0;
   }
-  return (
-    high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0")
-  );
+  return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
 }
 
 function floatFromOrderedHex(hex: string): number {
@@ -558,8 +556,14 @@ export interface PositionedMessageFacts {
 }
 
 export type TranscriptFoldLoadResult =
-  | { readonly kind: "messages"; readonly messages: readonly PositionedMessage[] }
-  | { readonly kind: "facts"; readonly facts: readonly PositionedMessageFacts[] }
+  | {
+      readonly kind: "messages";
+      readonly messages: readonly PositionedMessage[];
+    }
+  | {
+      readonly kind: "facts";
+      readonly facts: readonly PositionedMessageFacts[];
+    }
   | { readonly kind: "events"; readonly events: readonly PositionedEvent[] }
   | {
       /** The answer to `events-of-turns`. */
