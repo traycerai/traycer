@@ -125,6 +125,15 @@ describe("wireframeVisibleText", () => {
     expect(wireframeVisibleText(html)).toBe("");
   });
 
+  it("draws a password field's placeholder while it is empty, and nothing once it has a value", () => {
+    const emptyHtml = '<input type="password" placeholder="Password">';
+    const filledHtml =
+      '<input type="password" value="hunter2" placeholder="Password">';
+
+    expect(wireframeVisibleText(emptyHtml)).toBe("Password");
+    expect(wireframeVisibleText(filledHtml)).toBe("");
+  });
+
   it("contributes nothing for an input with neither a placeholder nor a value", () => {
     expect(wireframeVisibleText("<input>")).toBe("");
   });
@@ -171,6 +180,28 @@ describe("wireframeVisibleText", () => {
     expect(wireframeVisibleText(html)).toBe("Monthly");
   });
 
+  it("draws a hidden selected option as the closed dropdown's caption", () => {
+    const html = [
+      "<select>",
+      "  <option hidden disabled selected>Choose a plan</option>",
+      "  <option>Free</option>",
+      "</select>",
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Choose a plan");
+  });
+
+  it("falls back to the first option that is not disabled when nothing is selected", () => {
+    const html = [
+      "<select>",
+      "  <option disabled>Pick one</option>",
+      "  <option>Free</option>",
+      "</select>",
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Free");
+  });
+
   it("leaves a list box alone, counting every option's text instead of only one", () => {
     const multipleHtml = [
       "<select multiple>",
@@ -187,5 +218,17 @@ describe("wireframeVisibleText", () => {
 
     expect(wireframeVisibleText(multipleHtml)).toBe("Red Blue");
     expect(wireframeVisibleText(sizedHtml)).toBe("One Two");
+  });
+
+  it("draws only the summary of a closed details element, and everything of an open one", () => {
+    const closedHtml =
+      "<details><summary>Advanced</summary><p>Retry count</p></details>";
+    const openHtml =
+      "<details open><summary>Advanced</summary><p>Retry count</p></details>";
+    const noSummaryHtml = "<details><p>Retry count</p></details>";
+
+    expect(wireframeVisibleText(closedHtml)).toBe("Advanced");
+    expect(wireframeVisibleText(openHtml)).toBe("Advanced Retry count");
+    expect(wireframeVisibleText(noSummaryHtml)).toBe("Details");
   });
 });

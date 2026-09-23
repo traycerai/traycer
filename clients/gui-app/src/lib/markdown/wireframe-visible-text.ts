@@ -3,10 +3,9 @@
 const NEVER_RENDERED_SELECTOR =
   "script, style, noscript, template, title, [hidden]";
 
-// Input types whose `value` is never drawn as a label.
+// Input types that draw no words at all.
 const UNLABELLED_INPUT_TYPES = new Set([
   "hidden",
-  "password",
   "checkbox",
   "radio",
   "file",
@@ -25,6 +24,9 @@ const DEFAULT_BUTTON_CAPTIONS = new Map([
   ["reset", "Reset"],
 ]);
 
+// What Chromium writes on a closed details element that has no summary.
+const DEFAULT_DETAILS_SUMMARY = "Details";
+
 /**
  * The words a person can read in a rendered wireframe.
  *
@@ -35,13 +37,13 @@ const DEFAULT_BUTTON_CAPTIONS = new Map([
  * elements do not run together; a word split across an inline element (rare
  * in a mockup) is the accepted cost of not laying the document out.
  *
- * A form control shows its words through attributes rather than text nodes,
- * so it contributes what the browser would draw for it, at its place in the
- * document: a button's caption, a text field's value or, when empty, its
- * placeholder, a closed dropdown's chosen option. Content hidden with an
- * inline `display: none` or `visibility: hidden` is left out; hiding through
- * a stylesheet rule is not seen, since the document is parsed and never laid
- * out.
+ * This is an approximation of what Chromium draws for static markup, not a
+ * layout: the controls a mockup commonly uses are modelled (a button's
+ * caption, a text field's value or else its placeholder, a closed dropdown's
+ * chosen option, a closed details element's summary) and content hidden with
+ * the `hidden` attribute or an inline `display: none` / `visibility: hidden`
+ * is left out. What only a layout or a script would decide, such as hiding
+ * through a stylesheet rule or text a script writes, is not seen.
  */
 export function wireframeVisibleText(html: string): string {
   if (typeof DOMParser === "undefined") return "";
@@ -74,10 +76,20 @@ export function wireframeVisibleText(html: string): string {
 }
 
 /**
- * Drops what the document never draws and collapses a closed dropdown to the
- * one option it shows, so the walk that follows meets only drawn text.
+ * Drops what the document never draws and collapses the controls that draw
+ * one line out of many (a closed dropdown, a closed details element) to that
+ * line, so the walk that follows meets only drawn text.
  */
 function reduceToWhatIsDrawn(body: HTMLElement): void {
+  const doc = body.ownerDocument;
+  // Read each closed dropdown's caption BEFORE hidden nodes go: the common
+  // `<option hidden selected>Choose…</option>` placeholder is hidden from the
+  // popup yet drawn on the closed control.
+  const dropdownCaptions = new Map<HTMLSelectElement, string>();
+  for (const select of body.querySelectorAll("select")) {
+    if (select.multiple || select.size > 1) continue;
+    dropdownCaptions.set(select, dropdownCaption(select));
+  }
   for (const element of body.querySelectorAll(NEVER_RENDERED_SELECTOR)) {
     element.remove();
   }
@@ -89,17 +101,25 @@ function reduceToWhatIsDrawn(body: HTMLElement): void {
       element.remove();
     }
   }
-  // A closed dropdown draws only its chosen option; a list box (multiple, or
-  // sized to several rows) draws every option and keeps its text nodes.
-  for (const select of body.querySelectorAll("select")) {
-    if (select.multiple || select.size > 1) continue;
-    const chosen =
-      select.querySelector("option[selected]") ??
-      select.querySelector("option");
-    select.replaceWith(
-      body.ownerDocument.createTextNode(chosen?.textContent ?? ""),
+  for (const [select, caption] of dropdownCaptions) {
+    if (select.isConnected) select.replaceWith(doc.createTextNode(caption));
+  }
+  // A closed details element draws only its summary; an open one draws all.
+  for (const details of body.querySelectorAll("details:not([open])")) {
+    const summary = details.querySelector(":scope > summary");
+    details.replaceWith(
+      doc.createTextNode(summary?.textContent ?? DEFAULT_DETAILS_SUMMARY),
     );
   }
+}
+
+/** The option a closed dropdown draws: the selected one, else the first that is not disabled. */
+function dropdownCaption(select: HTMLSelectElement): string {
+  const chosen =
+    select.querySelector("option[selected]") ??
+    select.querySelector("option:not([disabled])") ??
+    select.querySelector("option");
+  return chosen?.textContent ?? "";
 }
 
 /** The words an input draws: its caption, its value, or its placeholder. */
@@ -113,6 +133,13 @@ function inputCaption(input: HTMLInputElement): string | null {
   if (BUTTON_INPUT_TYPES.has(type)) {
     if (value !== null) return value;
     return DEFAULT_BUTTON_CAPTIONS.get(type) ?? null;
+  }
+  // A password field masks its value but still draws its placeholder while
+  // empty.
+  if (type === "password") {
+    return value !== null && value.length > 0
+      ? null
+      : input.getAttribute("placeholder");
   }
   // The placeholder shows only while the value is exactly empty; a
   // whitespace-only value hides it and draws nothing readable itself.
