@@ -13,7 +13,13 @@
  */
 import { createContext, useContext, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { AgentIdentitySummary } from "@traycer/protocol/host/agent-identity/schemas";
 import type {
   AgentIdentityHermesRunRequest,
@@ -436,6 +442,59 @@ describe("<HermesImportPanel /> target picker", () => {
         identityId: "identity-b",
         title: null,
       }),
+    );
+  });
+
+  it("forgets the picked existing identity and the typed title on a re-scan", async () => {
+    identitiesListMock.data = {
+      identities: [
+        {
+          identityId: "identity-b",
+          title: "Support",
+          description: null,
+          updatedAt: 0,
+        },
+      ],
+    };
+
+    renderPanel(null);
+    await scanProfile();
+
+    // Pick an existing identity, then go back to a new one with a typed title.
+    fireEvent.click(screen.getByTestId("hermes-import-target-existing"));
+    fireEvent.click(screen.getByText("Support"));
+    fireEvent.click(screen.getByTestId("hermes-import-target-new"));
+    fireEvent.change(screen.getByTestId("hermes-import-title"), {
+      target: { value: "Typed" },
+    });
+    // Before a re-scan, the flip restores the pick.
+    fireEvent.click(screen.getByTestId("hermes-import-target-existing"));
+    expect(screen.getByTestId("hermes-import-summary").textContent).toBe(
+      "Import the soul, 2 memory files and 1 skill into “Support”.",
+    );
+    fireEvent.click(screen.getByTestId("hermes-import-target-new"));
+    const typedTitle = screen.getByTestId(
+      "hermes-import-title",
+    ) as HTMLInputElement;
+    expect(typedTitle.value).toBe("Typed");
+
+    // A re-scan of another profile: the title re-defaults and the existing
+    // pick is gone, so the flip lands unpicked and Import stays disabled.
+    scanMock.mockResolvedValue({ ...PROFILE_RESPONSE, profileName: "other" });
+    fireEvent.click(screen.getByTestId("hermes-import-scan"));
+    await waitFor(() => {
+      const title = screen.getByTestId(
+        "hermes-import-title",
+      ) as HTMLInputElement;
+      expect(title.value).toBe("Hermes (other)");
+    });
+    fireEvent.click(screen.getByTestId("hermes-import-target-existing"));
+    expect(screen.getByTestId("hermes-import-summary").textContent).toBe(
+      "Import the soul, 2 memory files and 1 skill into “the selected identity”.",
+    );
+    expect(screen.getByTestId("hermes-import-run")).toHaveProperty(
+      "disabled",
+      true,
     );
   });
 

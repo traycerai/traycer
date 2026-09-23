@@ -43,14 +43,17 @@ import { identityRefusalCopy } from "@/lib/identities/refusal-copy";
 import { cn } from "@/lib/utils";
 import {
   countHermesSelection,
-  defaultHermesIdentityTitle,
   defaultHermesSelection,
   HERMES_DEFAULT_DIRECTORY,
   hermesImportSummary,
   hermesItemRelPath,
   hermesRunRequest,
   hermesRunSubmittable,
+  hermesTargetMemoryForScan,
+  hermesTargetOfKind,
+  rememberHermesTarget,
   type HermesImportTarget,
+  type HermesTargetMemory,
 } from "./hermes-import-model";
 
 type ScanState =
@@ -83,12 +86,19 @@ export function HermesImportPanel(props: {
   const [directory, setDirectory] = useState(HERMES_DEFAULT_DIRECTORY);
   const [scanState, setScanState] = useState<ScanState>({ phase: "idle" });
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [target, setTarget] = useState<HermesImportTarget>({
-    kind: "new",
-    title: defaultHermesIdentityTitle(null),
-  });
+  const [targetMemory, setTargetMemory] = useState<HermesTargetMemory>(() =>
+    hermesTargetMemoryForScan(null),
+  );
+  const [target, setTarget] = useState<HermesImportTarget>(() =>
+    hermesTargetOfKind("new", hermesTargetMemoryForScan(null)),
+  );
   const [runState, setRunState] = useState<RunState>({ phase: "idle" });
   const identities = useIdentityListForClient(client, client !== null);
+
+  const changeTarget = (next: HermesImportTarget): void => {
+    setTarget(next);
+    setTargetMemory((current) => rememberHermesTarget(current, next));
+  };
 
   const submitScan = async (): Promise<void> => {
     const trimmed = directory.trim();
@@ -100,13 +110,13 @@ export function HermesImportPanel(props: {
       setScanState({ phase: "scanned", directory: trimmed, response });
       if (response.kind === "profile") {
         setSelected(defaultHermesSelection(response.items));
+        // A new scan is a new profile: what the picker remembered about the
+        // last one (a typed title, a picked identity) goes with it. A target
+        // already on an existing identity keeps that identity in view.
+        const memory = hermesTargetMemoryForScan(response.profileName);
+        setTargetMemory(memory);
         setTarget((current) =>
-          current.kind === "new"
-            ? {
-                kind: "new",
-                title: defaultHermesIdentityTitle(response.profileName),
-              }
-            : current,
+          current.kind === "new" ? hermesTargetOfKind("new", memory) : current,
         );
       }
     } catch (error) {
@@ -233,7 +243,8 @@ export function HermesImportPanel(props: {
           selected={selected}
           onToggle={toggle}
           target={target}
-          onTargetChange={setTarget}
+          targetMemory={targetMemory}
+          onTargetChange={changeTarget}
           identities={identities.data?.identities ?? null}
           identitiesFailed={identities.isError}
           running={run.isPending}
@@ -257,6 +268,7 @@ function HermesScanBody(props: {
   readonly selected: ReadonlySet<string>;
   readonly onToggle: (relPath: string) => void;
   readonly target: HermesImportTarget;
+  readonly targetMemory: HermesTargetMemory;
   readonly onTargetChange: (target: HermesImportTarget) => void;
   readonly identities: readonly AgentIdentitySummary[] | null;
   readonly identitiesFailed: boolean;
@@ -269,6 +281,7 @@ function HermesScanBody(props: {
     selected,
     onToggle,
     target,
+    targetMemory,
     onTargetChange,
     identities,
     identitiesFailed,
@@ -329,6 +342,7 @@ function HermesScanBody(props: {
       </div>
       <HermesTargetPicker
         target={target}
+        memory={targetMemory}
         onChange={onTargetChange}
         identities={identities}
         identitiesFailed={identitiesFailed}
@@ -484,24 +498,21 @@ function HermesUnreadableRow(props: {
   );
 }
 
+/**
+ * Stateless: the target and what a radio flip restores (`memory`) both
+ * belong to the panel, which resets them on every scan.
+ */
 function HermesTargetPicker(props: {
   readonly target: HermesImportTarget;
+  readonly memory: HermesTargetMemory;
   readonly onChange: (target: HermesImportTarget) => void;
   readonly identities: readonly AgentIdentitySummary[] | null;
   readonly identitiesFailed: boolean;
   readonly disabled: boolean;
-}): ReadonlyNode {
-  const { target, onChange, identities, identitiesFailed, disabled } = props;
-  const [newTitle, setNewTitle] = useState(
-    target.kind === "new" ? target.title : "",
-  );
-  const [existingId, setExistingId] = useState(
-    target.kind === "existing" ? target.identityId : "",
-  );
+}): ReactNode {
+  const { target, memory, onChange, identities, identitiesFailed, disabled } =
+    props;
   const rows = identities ?? [];
-  // The title the scan seeded arrives after this mounts; follow it until the
-  // user types.
-  const shownTitle = target.kind === "new" ? target.title : newTitle;
 
   return (
     <div className="flex flex-col gap-2" data-testid="hermes-import-target">
@@ -509,13 +520,11 @@ function HermesTargetPicker(props: {
       <RadioGroup
         value={target.kind}
         disabled={disabled}
-        onValueChange={(value) => {
-          if (value === "new") {
-            onChange({ kind: "new", title: newTitle });
-          } else {
-            onChange({ kind: "existing", identityId: existingId });
-          }
-        }}
+        onValueChange={(value) =>
+          onChange(
+            hermesTargetOfKind(value === "new" ? "new" : "existing", memory),
+          )
+        }
         className="sm:grid-cols-2"
       >
         <div className="flex items-center gap-2">
@@ -545,24 +554,22 @@ function HermesTargetPicker(props: {
       </RadioGroup>
       {target.kind === "new" ? (
         <Input
-          value={shownTitle}
+          value={target.title}
           aria-label="New identity name"
           placeholder="Identity name"
           disabled={disabled}
-          onChange={(event) => {
-            setNewTitle(event.target.value);
-            onChange({ kind: "new", title: event.target.value });
-          }}
+          onChange={(event) =>
+            onChange({ kind: "new", title: event.target.value })
+          }
           data-testid="hermes-import-title"
         />
       ) : (
         <Select
           value={target.identityId.length > 0 ? target.identityId : undefined}
           disabled={disabled}
-          onValueChange={(identityId) => {
-            setExistingId(identityId);
-            onChange({ kind: "existing", identityId });
-          }}
+          onValueChange={(identityId) =>
+            onChange({ kind: "existing", identityId })
+          }
         >
           <SelectTrigger
             size="sm"
@@ -584,8 +591,6 @@ function HermesTargetPicker(props: {
     </div>
   );
 }
-
-type ReadonlyNode = ReactNode;
 
 function OutcomeGlyph(props: {
   readonly outcome: AgentIdentityHermesRunItemResult["outcome"];

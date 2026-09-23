@@ -49,6 +49,44 @@ export function defaultHermesIdentityTitle(profileName: string | null): string {
   return profileName === null ? "Hermes identity" : `Hermes (${profileName})`;
 }
 
+/**
+ * What the target picker remembers across a flip of the radio: the title
+ * typed for a new identity and the existing identity last picked, so going
+ * "existing" → "new" → "existing" restores the pick. Owned by the panel and
+ * replaced on every scan ({@link hermesTargetMemoryForScan}), so a pick made
+ * against an earlier scan never resurfaces after a re-scan.
+ */
+export type HermesTargetMemory = {
+  readonly title: string;
+  readonly identityId: string;
+};
+
+export function hermesTargetMemoryForScan(
+  profileName: string | null,
+): HermesTargetMemory {
+  return { title: defaultHermesIdentityTitle(profileName), identityId: "" };
+}
+
+/** The memory after the user settled on `target`. */
+export function rememberHermesTarget(
+  memory: HermesTargetMemory,
+  target: HermesImportTarget,
+): HermesTargetMemory {
+  return target.kind === "new"
+    ? { ...memory, title: target.title }
+    : { ...memory, identityId: target.identityId };
+}
+
+/** The target the radio lands on for `kind`, from what is remembered. */
+export function hermesTargetOfKind(
+  kind: HermesImportTarget["kind"],
+  memory: HermesTargetMemory,
+): HermesImportTarget {
+  return kind === "new"
+    ? { kind: "new", title: memory.title }
+    : { kind: "existing", identityId: memory.identityId };
+}
+
 export type HermesSelectionCounts = {
   readonly soul: boolean;
   readonly memories: number;

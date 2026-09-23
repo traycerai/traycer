@@ -13,6 +13,9 @@ import {
   hermesImportSummary,
   hermesRunRequest,
   hermesRunSubmittable,
+  hermesTargetMemoryForScan,
+  hermesTargetOfKind,
+  rememberHermesTarget,
   type HermesImportTarget,
 } from "@/components/session-import/hermes-import-model";
 
@@ -278,6 +281,45 @@ describe("hermesRunRequest", () => {
     });
 
     expect(request.directory).toBe("~/.hermes/profiles/acme");
+  });
+});
+
+describe("target memory", () => {
+  it("starts a scan with the profile's default title and no picked identity", () => {
+    expect(hermesTargetMemoryForScan("acme")).toEqual({
+      title: "Hermes (acme)",
+      identityId: "",
+    });
+    expect(hermesTargetMemoryForScan(null)).toEqual({
+      title: "Hermes identity",
+      identityId: "",
+    });
+  });
+
+  it("remembers each kind's last value independently, and a radio flip restores it", () => {
+    let memory = hermesTargetMemoryForScan("acme");
+    memory = rememberHermesTarget(memory, existingTarget("identity-b"));
+    memory = rememberHermesTarget(memory, newTarget("Typed"));
+    expect(memory).toEqual({ title: "Typed", identityId: "identity-b" });
+
+    expect(hermesTargetOfKind("existing", memory)).toEqual(
+      existingTarget("identity-b"),
+    );
+    expect(hermesTargetOfKind("new", memory)).toEqual(newTarget("Typed"));
+  });
+
+  it("a fresh scan's memory carries nothing over: the existing pick is unset again", () => {
+    const before = rememberHermesTarget(
+      hermesTargetMemoryForScan("acme"),
+      existingTarget("identity-b"),
+    );
+    expect(hermesTargetOfKind("existing", before).kind).toBe("existing");
+
+    const after = hermesTargetMemoryForScan("other");
+    expect(hermesTargetOfKind("existing", after)).toEqual(existingTarget(""));
+    expect(hermesTargetOfKind("new", after)).toEqual(
+      newTarget("Hermes (other)"),
+    );
   });
 });
 
