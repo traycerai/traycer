@@ -371,7 +371,7 @@ export function useAutoJudgeBilling(
       judgeModelsQuery.isSuccess,
     );
   // The host's own verdict that it CANNOT run the judge it has stored
-  // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
+  // (`provider-disabled`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
   const blocked = query.data?.blocked ?? null;
   // The provider-native answer needs the two catalog reads and nothing else;

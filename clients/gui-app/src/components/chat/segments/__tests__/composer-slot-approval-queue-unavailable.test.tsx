@@ -38,6 +38,7 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
             reason: {
               rule: "Force push",
               text: "auto: judge unavailable (traycer: not signed in)",
+              tier: null,
             },
           }),
         ]}
@@ -64,6 +65,7 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
             reason: {
               rule: "Force push",
               text: "This rewrites remote history.",
+              tier: null,
             },
           }),
         ]}
@@ -87,6 +89,7 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
             reason: {
               rule: "Force push",
               text: "auto: judge returned no verdict",
+              tier: null,
             },
           }),
         ]}
@@ -113,6 +116,7 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
             reason: {
               rule: "Force push",
               text: "auto: judge timed out",
+              tier: null,
             },
           }),
         ]}

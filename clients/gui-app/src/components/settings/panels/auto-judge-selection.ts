@@ -85,10 +85,14 @@ export function autoJudgeSeed(
   effective: AutoJudgeEffective | null | undefined,
 ): AutoJudgeSeed {
   // New hosts identify the default themselves. The empty-model seed is only
-  // the compatibility fallback for a host that cannot report that fact.
+  // the compatibility fallback for a host that cannot report that fact, and
+  // for Automatic falling back to the conversation's own provider, which names
+  // no single harness for a picker to seed.
   const resolved =
     selection ??
-    (effective === null || effective === undefined
+    (effective === null ||
+    effective === undefined ||
+    effective.source === "fallback"
       ? null
       : {
           harnessId: effective.harnessId,

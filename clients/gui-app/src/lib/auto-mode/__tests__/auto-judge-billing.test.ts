@@ -393,11 +393,7 @@ describe("autoJudgeSelfBillingWarning (provider-native)", () => {
 });
 
 describe("autoJudgeBillingForRun (blocked)", () => {
-  const BLOCKED_REASONS = [
-    "provider-disabled",
-    "no-default",
-    "unsupported-harness",
-  ] as const;
+  const BLOCKED_REASONS = ["provider-disabled", "unsupported-harness"] as const;
 
   // A REAL, non-traycer `judgeHarnessId` on every case - the defect this
   // guards against was a stored provider selection getting billed to that
@@ -452,7 +448,7 @@ describe("autoJudgeBillingForRun (blocked)", () => {
         judgeHarnessId: "traycer",
         runHarnessId: "claude",
         isProviderNative: true,
-        blocked: { reason: "no-default" },
+        blocked: { reason: "provider-disabled" },
         judgeRecordUnrunnable: false,
       }),
     ).toEqual({

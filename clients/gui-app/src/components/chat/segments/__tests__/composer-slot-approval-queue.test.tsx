@@ -90,6 +90,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
             reason: {
               rule: "Force push",
               text: "This rewrites remote history.",
+              tier: null,
             },
           }),
         ]}
@@ -113,6 +114,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
             reason: {
               rule: "Force push",
               text: "This rewrites remote history.",
+              tier: null,
             },
           }),
         ]}

@@ -452,7 +452,7 @@ function AutoJudgeStatus(props: {
     return (
       <AutoJudgeBlockedStatus
         blocked={blocked}
-        harnessId={effective?.harnessId ?? selection?.harnessId ?? "traycer"}
+        harnessId={blockedJudgeHarnessId(effective, selection)}
       />
     );
   }
@@ -465,6 +465,16 @@ function AutoJudgeStatus(props: {
     );
   }
   if (effective === null) return null;
+  if (effective.source === "fallback") {
+    return (
+      <span
+        className="text-ui-xs text-muted-foreground"
+        data-testid="auto-judge-effective"
+      >
+        Automatic: the conversation&apos;s own provider
+      </span>
+    );
+  }
   const modelMatch =
     catalog.modelsHarnessId === effective.harnessId
       ? resolveModelBySlug(catalog.models, effective.model)
@@ -484,6 +494,21 @@ function AutoJudgeStatus(props: {
       · {modelLabel}
     </span>
   );
+}
+
+/** The harness a blocker names: the effective judge's, else the stored one's. */
+function blockedJudgeHarnessId(
+  effective: AutoJudgeEffective | null | undefined,
+  selection: AutoJudgeSelection | null,
+): string {
+  if (
+    effective !== null &&
+    effective !== undefined &&
+    effective.source !== "fallback"
+  ) {
+    return effective.harnessId;
+  }
+  return selection?.harnessId ?? "traycer";
 }
 
 function AutoJudgeBlockedStatus(props: {
@@ -515,10 +540,6 @@ function AutoJudgeBlockedStatus(props: {
           , or pick another judge.
         </>
       );
-      break;
-    case "no-default":
-      message =
-        "This machine has no default judge model, so no judge will run. Pick a judge above.";
       break;
     case "unsupported-harness":
       message = `This machine does not support the ${providerLabel} judge. Pick another judge above.`;
