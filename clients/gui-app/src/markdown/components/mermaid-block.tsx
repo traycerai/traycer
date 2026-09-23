@@ -184,7 +184,9 @@ function MermaidRenderSession(props: {
         className="tc-node-mermaid__preview m-0"
         role={render.status === "pending" ? "img" : undefined}
         aria-label={render.status === "pending" ? ariaLabel : undefined}
-        {...{ [FIND_VISIBLE_ATTR]: "" }}
+        // Only a drawn diagram has words the painter may colour; the error
+        // body quotes the failing source and would otherwise take the hits.
+        {...(render.status === "ready" ? { [FIND_VISIBLE_ATTR]: "" } : {})}
       >
         {render.status === "pending" ? (
           <div className="tc-node-block__skeleton" aria-hidden="true">
@@ -204,7 +206,10 @@ function MermaidRenderSession(props: {
           </MermaidExpandButton>
         ) : null}
         {render.status === "error" ? (
-          <div className="tc-node-block__error" role="alert">
+          // Chat find counts the fence on its source, which the mirror already
+          // carries, so the error text must stay out of the find walk or the
+          // counter and the painter drift apart.
+          <div className="tc-node-block__error" role="alert" data-find-skip="">
             <div className="tc-node-block__error-title">
               Mermaid parse error
             </div>
