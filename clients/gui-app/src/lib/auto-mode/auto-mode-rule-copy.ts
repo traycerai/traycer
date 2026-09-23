@@ -119,34 +119,53 @@ export function autoModeRuleDraftWorkspace(
 }
 
 /**
+ * The action a drafted rule is narrowed to: the approval's one-line input, or
+ * - when it has none that can be summarized - its tool name, which for an ACP
+ * request is the request's own title ("Run the migration") and so names the
+ * action too. `null` only when neither says anything, and then no rule is
+ * offered at all: a draft that named only the category would allow every
+ * action in it, which is the widening the draft exists to avoid.
+ */
+export function autoModeRuleDraftAction(input: {
+  readonly inputSummary: string | null;
+  readonly toolName: string;
+}): string | null {
+  const summary =
+    input.inputSummary === null ? "" : collapseWhitespace(input.inputSummary);
+  if (summary.length > 0) return summary;
+  const toolName = collapseWhitespace(input.toolName);
+  return toolName.length > 0 ? toolName : null;
+}
+
+/**
  * The prepared "Always allow" rule for an action the judge sent to a person:
- * "In {remote}: {rule name} for `{input}` on branch {branch}".
+ * "In {remote}: {rule name} for `{action}` on branch {branch}".
  *
  * NARROW BY CONSTRUCTION. The account policy is the one channel that widens
  * what the judge allows, and it applies on every machine and in every
  * repository, so the draft names every fact the judge can check in its own
- * workspace section - the remote, the branch, the exact input - and leaves out
- * only what the client does not know. The minimum is "{rule name} for
- * `{input}`". It is a draft: the Rules tab shows it for editing, and nothing
- * saves it by itself.
+ * workspace section - the remote, the branch, the exact action - and leaves
+ * out only what the client does not know. The minimum is "{rule name} for
+ * `{action}`": the action is REQUIRED ({@link autoModeRuleDraftAction}), so no
+ * draft is ever the bare category. It is a draft: the Rules tab shows it for
+ * editing, and nothing saves it by itself.
  */
 export function autoModeRuleDraftText(input: {
   readonly workspace: AutoModeRuleDraftWorkspace;
   /** The rule as displayed ({@link autoModeRuleDisplayName}). */
   readonly ruleName: string;
-  /** The action's one-line input, or `null` when there is none to quote. */
-  readonly inputSummary: string | null;
+  /** The action, from {@link autoModeRuleDraftAction}. */
+  readonly action: string;
 }): string {
   const { workspace, ruleName } = input;
-  const summary =
-    input.inputSummary === null
-      ? ""
-      : input.inputSummary.replace(/\s+/gu, " ").trim();
-  let text = ruleName;
-  if (summary.length > 0) text = `${text} for ${inlineCode(summary)}`;
+  let text = `${ruleName} for ${inlineCode(collapseWhitespace(input.action))}`;
   if (workspace.branch !== null) text = `${text} on branch ${workspace.branch}`;
   if (workspace.remote !== null) text = `In ${workspace.remote}: ${text}`;
   return text;
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
 }
 
 /**

@@ -286,3 +286,84 @@ describe("judgeUnavailableHumanLine", () => {
     });
   });
 });
+
+/**
+ * Finding: the host builds a stage-2 failure reason as
+ * `${machineReason} (${stageOneReason})` - e.g. `auto: judge unavailable (the
+ * judge provider is not signed in) (This rewrites remote history.)`. The
+ * cause must be the FIRST BALANCED parenthesised group after `auto: judge
+ * unavailable `, keeping parentheses INSIDE that group, and leaving the
+ * appended stage-one explanation out entirely.
+ */
+describe("judgeUnavailableCause with an appended stage-one explanation", () => {
+  it("extracts only the first balanced group, leaving the appended stage-one explanation out", () => {
+    expect(
+      judgeUnavailableCause(
+        "auto: judge unavailable (the judge provider is not signed in) (This rewrites remote history.)",
+      ),
+    ).toBe("the judge provider is not signed in");
+  });
+
+  it("keeps parentheses that are INSIDE the first balanced group (nested parens)", () => {
+    expect(
+      judgeUnavailableCause(
+        "auto: judge unavailable (rate limited (429)) (Stage one said so.)",
+      ),
+    ).toBe("rate limited (429)");
+    expect(
+      judgeUnavailableCause("auto: judge unavailable (rate limited (429))"),
+    ).toBe("rate limited (429)");
+  });
+
+  it("returns null for an unclosed group", () => {
+    expect(judgeUnavailableCause("auto: judge unavailable (oops")).toBeNull();
+  });
+});
+
+describe("judgeUnavailableHumanLine with an appended stage-one explanation", () => {
+  it("names only the first balanced group as the cause, not the appended stage-one explanation", () => {
+    expect(
+      judgeUnavailableHumanLine(
+        "auto: judge unavailable (the judge provider is not signed in) (This rewrites remote history.)",
+      ),
+    ).toEqual({
+      sentence: "The judge couldn't run: the judge provider is not signed in.",
+      fixInJudgeSettings: true,
+    });
+  });
+
+  it("still resolves the out-of-time family through an appended stage-one explanation", () => {
+    expect(judgeUnavailableHumanLine("auto: judge timed out (x)")).toEqual({
+      sentence: JUDGE_OUT_OF_TIME_HUMAN_LINE,
+      fixInJudgeSettings: false,
+    });
+  });
+
+  it("still resolves the no-verdict family through an appended stage-one explanation", () => {
+    expect(
+      judgeUnavailableHumanLine("auto: judge returned no verdict (x)"),
+    ).toEqual({
+      sentence: JUDGE_NO_VERDICT_HUMAN_LINE,
+      fixInJudgeSettings: false,
+    });
+  });
+});
+
+describe("judgeFailureFamily with an appended stage-one explanation", () => {
+  it("classifies 'ran out of time' with the stage-one explanation appended", () => {
+    expect(
+      judgeFailureFamily(
+        "auto: judge timed out (This rewrites remote history.)",
+      ),
+    ).toBe("out-of-time");
+  });
+
+  it("classifies 'ran without deciding' with the stage-one explanation appended", () => {
+    expect(judgeFailureFamily("auto: judge returned no verdict (x)")).toBe(
+      "no-verdict",
+    );
+    expect(judgeFailureFamily("auto: unparseable verdict (x)")).toBe(
+      "no-verdict",
+    );
+  });
+});

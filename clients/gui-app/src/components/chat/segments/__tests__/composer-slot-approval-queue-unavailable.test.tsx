@@ -195,4 +195,37 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
       within(row).queryByTestId("approval-fix-in-judge-settings"),
     ).toBeNull();
   });
+
+  it("keeps the machine string verbatim and names only the first balanced group when the host appends a stage-one explanation", () => {
+    render(
+      <ComposerSlotApprovalQueue
+        approvals={[
+          approval({
+            reason: {
+              rule: "Force push",
+              text: "auto: judge unavailable (the judge provider is not signed in) (This rewrites remote history.)",
+              tier: null,
+            },
+          }),
+        ]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("approval-row");
+    expect(
+      within(row).getByText(
+        "auto: judge unavailable (the judge provider is not signed in) (This rewrites remote history.)",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(row).getByTestId("approval-judge-unavailable-line").textContent,
+    ).toBe(
+      `The judge couldn't run: the judge provider is not signed in. ${JUDGE_FIX_IN_SETTINGS_LABEL}.`,
+    );
+  });
 });

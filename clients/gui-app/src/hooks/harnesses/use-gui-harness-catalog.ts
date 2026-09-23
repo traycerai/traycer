@@ -1,4 +1,9 @@
-import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -23,6 +28,7 @@ import {
 } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
 
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
@@ -257,6 +263,64 @@ interface CachedGuiHarnessesResponse extends ListGuiHarnessesResponse {
   >;
 }
 
+const LIST_HARNESSES = "agent.gui.listHarnesses";
+
+/**
+ * Refreshes this host's `autoJudge.get` when a harness response moves the
+ * facts Automatic's judge is decided on ({@link automaticJudgeInputs}).
+ *
+ * `autoJudge.get` is a FUNCTION of this catalog's Traycer row - the host reads
+ * the same settled row to choose between Traycer's default judge and the
+ * conversation's own provider - so it is invalidated from here, the one place
+ * every response for that row passes through, the way every provider mutation
+ * invalidates it (`PROVIDER_INVALIDATIONS`). A poll on `autoJudge.get` would
+ * duplicate this catalog's own cadence and still leave its answer stale
+ * between the two ticks; this reacts to the tick that saw the change.
+ *
+ * `previous === undefined` counts as a change: an `autoJudge.get` answered
+ * before this catalog's first response may predate the probe that response
+ * reports as settled, and nothing else would re-ask it. A host where nothing
+ * has read `autoJudge.get` is left alone.
+ *
+ * Every `autoJudge.get` slot on the host, whatever its extra cache identity:
+ * the composer keys its read by these inputs (`useAutoJudgeBilling`) and must
+ * re-ask when it returns to a value it held before, and Settings reads the
+ * plain slot.
+ */
+function invalidateAutoJudgeOnAutomaticInputs(
+  queryClient: QueryClient,
+  harnessesQueryKey: QueryKey,
+  previous: ListGuiHarnessesResponse | undefined,
+  next: ListGuiHarnessesResponse,
+): void {
+  const hostId = harnessesQueryKey[1];
+  // `["host", hostId, "agent.gui.listHarnesses", params]`; a query built with
+  // no host has no host-scoped verdict to refresh.
+  if (typeof hostId !== "string" || harnessesQueryKey[2] !== LIST_HARNESSES) {
+    return;
+  }
+  if (
+    previous !== undefined &&
+    automaticJudgeInputs(previous.harnesses) ===
+      automaticJudgeInputs(next.harnesses)
+  ) {
+    return;
+  }
+  const autoJudgeScope = hostQueryKeys.methodScope(hostId, "autoJudge.get");
+  // Nothing on this host has read the verdict, so there is nothing to refresh
+  // - and no invalidation to leave behind on a catalog refresh that has no
+  // business touching any other method.
+  // `findAll`, not `find`: `find` matches the key EXACTLY by default, and this
+  // is a method scope.
+  if (
+    queryClient.getQueryCache().findAll({ queryKey: autoJudgeScope }).length ===
+    0
+  ) {
+    return;
+  }
+  void queryClient.invalidateQueries({ queryKey: autoJudgeScope });
+}
+
 export function useGuiHarnessesQueryForClient(
   client: HostClient<HostRpcRegistry> | null,
   activity: QueryActivityOptions,
@@ -273,6 +337,12 @@ export function useGuiHarnessesQueryForClient(
     mapResponse: ({ response, queryClient, queryKey }) => {
       const previous =
         queryClient.getQueryData<CachedGuiHarnessesResponse>(queryKey);
+      invalidateAutoJudgeOnAutomaticInputs(
+        queryClient,
+        queryKey,
+        previous,
+        response,
+      );
       return {
         ...response,
         harnesses: response.harnesses.map((harness) => {

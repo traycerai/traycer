@@ -21,6 +21,7 @@ import {
   AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
   autoJudgeTierLine,
   autoModeRuleDisplayName,
+  autoModeRuleDraftAction,
   autoModeRuleDraftText,
   type AutoModeRuleDraftWorkspace,
 } from "@/lib/auto-mode/auto-mode-rule-copy";
@@ -273,7 +274,10 @@ function ApprovalRow(props: ApprovalRowProps) {
       {approval.reason !== null ? (
         <JudgeReason
           reason={approval.reason}
-          inputSummary={inputSummary}
+          ruleDraftAction={autoModeRuleDraftAction({
+            inputSummary,
+            toolName: approval.toolName,
+          })}
           ruleDraftWorkspace={props.ruleDraftWorkspace}
           onOpenSettings={props.onOpenSettings}
         />
@@ -456,11 +460,16 @@ function JudgeReviewingLine(props: {
  */
 function JudgeReason(props: {
   readonly reason: ChatApprovalReason;
-  readonly inputSummary: string | null;
+  /**
+   * What a drafted "allow" rule is narrowed to, or `null` when the approval
+   * names no action at all - and then no rule is offered, since one naming
+   * only the category would allow everything in it.
+   */
+  readonly ruleDraftAction: string | null;
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
   readonly onOpenSettings: (opts: OpenSettingsModalOpts) => void;
 }) {
-  const { reason, onOpenSettings } = props;
+  const { reason, onOpenSettings, ruleDraftAction } = props;
   const unavailable = isJudgeUnavailableReason(reason.text);
   const ruleName = autoModeRuleDisplayName(reason.rule);
   const tierLine = autoJudgeTierLine(reason.tier);
@@ -489,7 +498,7 @@ function JudgeReason(props: {
           data-testid="approval-judge-tier-line"
         >
           {tierLine}
-          {reason.tier === "soft" ? (
+          {reason.tier === "soft" && ruleDraftAction !== null ? (
             <>
               {" "}
               <Button
@@ -506,7 +515,7 @@ function JudgeReason(props: {
                       text: autoModeRuleDraftText({
                         workspace: props.ruleDraftWorkspace,
                         ruleName,
-                        inputSummary: props.inputSummary,
+                        action: ruleDraftAction,
                       }),
                     },
                     resetToGeneral: false,

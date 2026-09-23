@@ -49,18 +49,18 @@ const AUTO_JUDGE_GET_PARAMS = {};
  *
  * Extracted for the complexity ceiling, like its neighbour below, but the
  * grouping is real: these are exactly the reads whose PENDING state must
- * publish `null` rather than a guess, and keeping them in one predicate is what
- * stops a later edit from adding a fourth read to the hook and forgetting one
- * of the two places readiness is decided.
+ * publish `null` rather than a guess, and keeping them in one predicate (with
+ * the catalog half in {@link nativeJudgeQuestionDecided}) is what stops a later
+ * edit from adding a read to the hook and forgetting one of the places
+ * readiness is decided.
  *
  * `isProviderNative` is an OR rather than a requirement: a provider running its
  * own classifier needs no judge record, which is what lets a host without
  * `autoJudge.get` still publish "no extra cost".
  */
 function billingInputsSettled(input: {
-  readonly providersSettled: boolean;
-  readonly harnessesSettled: boolean;
-  readonly providerJudgeUnknown: boolean;
+  /** {@link nativeJudgeQuestionDecided}: the two catalogs, and their version. */
+  readonly nativeDecided: boolean;
   readonly isProviderNative: boolean;
   readonly judgeRecordAnswered: boolean;
   /**
@@ -68,7 +68,7 @@ function billingInputsSettled(input: {
    * there is no judge model for it to name.
    *
    * Paired with `judgeRecordAnswered` rather than folded into
-   * `catalogsSettled`, because it is only required on the arms that name a
+   * `nativeDecided`, because it is only required on the arms that name a
    * judge: the provider-native answer is resolved from `providers.list` and
    * the harness catalog alone, and making "no extra cost" wait on a model read
    * it never consults would withhold the one disclosure that is always safe to
@@ -76,14 +76,29 @@ function billingInputsSettled(input: {
    */
   readonly judgeModelsSettled: boolean;
 }): boolean {
-  const catalogsSettled =
-    input.providersSettled &&
-    input.harnessesSettled &&
-    !input.providerJudgeUnknown;
   return (
-    catalogsSettled &&
+    input.nativeDecided &&
     (input.isProviderNative ||
       (input.judgeRecordAnswered && input.judgeModelsSettled))
+  );
+}
+
+/**
+ * Whether the provider-native question - does this run's own provider review
+ * its commands - has a settled answer: both catalogs it is read from have
+ * succeeded, and the providers line is new enough to report the preference
+ * where it matters. Every billing answer waits on it, and so does the judge's
+ * model read, which a provider-native run never needs.
+ */
+function nativeJudgeQuestionDecided(input: {
+  readonly providersSettled: boolean;
+  readonly harnessesSettled: boolean;
+  readonly providerJudgeUnknown: boolean;
+}): boolean {
+  return (
+    input.providersSettled &&
+    input.harnessesSettled &&
+    !input.providerJudgeUnknown
   );
 }
 
@@ -205,6 +220,33 @@ function runJudgeTarget(
     runModelSlug,
     runJudgeDefaultModel: runJudgeDefaultModel(harnessId, harnesses),
   });
+}
+
+/**
+ * Whether the judge's model catalog is read at all, and it is an ACTIVE read
+ * when it is: the target now includes Automatic's default and fallback judges,
+ * whose catalogs nothing else on this host is guaranteed to have warmed (a
+ * composer pinned to a non-default host reads that host's slots, which the
+ * app-load prefetcher never fills), and a read that neither fetches nor
+ * observes the cache would leave the row waiting on it forever. Its own
+ * `staleTime: Infinity` keeps a warm slot from ever being re-pulled.
+ *
+ * Only once the provider-native question is DECIDED, and never for a
+ * provider-native run: that answer names no model, so reading one would only
+ * wake a provider for nothing.
+ */
+function judgeModelsActivity(input: {
+  readonly autoModeHost: boolean;
+  readonly applicable: boolean;
+  readonly nativeDecided: boolean;
+  readonly isProviderNative: boolean;
+}): { readonly enabled: boolean; readonly subscribed: boolean } {
+  const wanted =
+    input.autoModeHost &&
+    input.applicable &&
+    input.nativeDecided &&
+    !input.isProviderNative;
+  return { enabled: wanted, subscribed: wanted };
 }
 
 /** The target model's label from its harness's catalog, when there is one. */
@@ -334,12 +376,30 @@ export function useAutoJudgeBilling(
     "agent.gui.listHarnesses",
   );
   const autoModeHost = supported || catalogLineKnowsAutoMode(listHarnessesLine);
+  // The record is only as current as the facts the host computed it from.
+  // Under Automatic `effective` is derived per read from the Traycer harness
+  // row, and the harness catalog invalidates this read when that row moves
+  // (`useGuiHarnessesQueryForClient`). An invalidated record is the answer to a
+  // question the host would now answer differently, so it is withheld until
+  // the refetch lands (`record` below).
+  //
+  // `staleTime: Infinity` is what makes `isStale` mean exactly "no answer, or
+  // invalidated since" rather than "older than a minute"; `refetchOnMount:
+  // "always"` keeps the re-ask each composer mount used to get from the
+  // default window, the same pair Settings' reader sets
+  // (`useAutoJudgeQuery`) - a selection saved in another window reaches this
+  // one no other way.
   const query = useHostQuery<HostRpcRegistry, "autoJudge.get">({
     cacheKeyIdentity: undefined,
     client,
     method: "autoJudge.get",
     params: AUTO_JUDGE_GET_PARAMS,
-    options: { enabled: supported, refetchOnWindowFocus: false },
+    options: {
+      enabled: supported,
+      staleTime: Infinity,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: false,
+    },
   });
   const providersQuery = useProvidersListForClient(client, {
     enabled: autoModeHost,
@@ -408,7 +468,18 @@ export function useAutoJudgeBilling(
   const providerJudgeUnknown =
     harnessHasNativeAutoJudge(harnessId, harnesses) &&
     !providersListReportsAutoJudge(providersListVersion);
-  const record = query.data;
+  const nativeJudgeDecided = nativeJudgeQuestionDecided({
+    providersSettled,
+    harnessesSettled,
+    providerJudgeUnknown,
+  });
+  // The record, or `undefined` while there is no CURRENT one: none has
+  // answered yet, or the one held was invalidated because an input the host
+  // derives it from moved (see the query's note above). Treating the
+  // invalidated answer as unanswered keeps the row saying nothing, rather than
+  // the old pocket, until the host has answered again - and it keeps saying
+  // nothing if that refetch fails, since the answer is still unknown.
+  const record = query.isStale ? undefined : query.data;
   const selection = record?.selection ?? null;
   // WHICH judge the host would call for this run, from `effective`: the
   // stored pick, Traycer's default, or - under Automatic's fallback - this
@@ -436,12 +507,13 @@ export function useAutoJudgeBilling(
     providers,
   );
   // The judge harness's own model catalog: where the model LABEL comes from,
-  // and where a stored model is checked for having left. Cache-only by this
-  // query's own design, and gated on there being a judge to name at all, so a
-  // composer adds no fetch for a host that cannot run one. `undefined` until it
-  // answers, which `judgeModelUnavailable` reads as "cannot say" rather than
-  // "gone" - the same direction as the profile read beside it, and the one that
-  // keeps the disclosure steady on a cold load.
+  // and where a stored model is checked for having left. An active read on its
+  // own gate (`judgeModelsActivity`), and gated on there being a judge to name
+  // at all, so a composer adds no fetch for a host that cannot run one or a run
+  // its provider reviews itself. `undefined` until it answers, which
+  // `judgeModelUnavailable` reads as "cannot say" rather than "gone" - the same
+  // direction as the profile read beside it, and the one that keeps the
+  // disclosure steady on a cold load.
   //
   // Gated on the harness PARSING, not merely on a judge existing. A stored id
   // outside this build's union used to fall through to a `"traycer"` stand-in
@@ -457,10 +529,12 @@ export function useAutoJudgeBilling(
     client,
     judgeModelsTarget.harnessId,
     null,
-    {
-      enabled: autoModeHost && judgeModelsTarget.applicable,
-      subscribed: false,
-    },
+    judgeModelsActivity({
+      autoModeHost,
+      applicable: judgeModelsTarget.applicable,
+      nativeDecided: nativeJudgeDecided,
+      isProviderNative,
+    }),
   );
   // SUCCESS ONLY on the `settled` half, for the same reason `providersSettled`
   // and `harnessesSettled` above are: a read that has not answered is an
@@ -483,9 +557,7 @@ export function useAutoJudgeBilling(
   // (`providerRunsItsOwnJudge` returns `false` for a null one), so that arm is
   // guaranteed to be the one `autoJudgeBillingForRun` takes.
   const loaded = billingInputsSettled({
-    providersSettled,
-    harnessesSettled,
-    providerJudgeUnknown,
+    nativeDecided: nativeJudgeDecided,
     isProviderNative,
     judgeRecordAnswered: record !== undefined,
     judgeModelsSettled,

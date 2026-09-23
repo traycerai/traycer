@@ -493,19 +493,46 @@ describe("useAutoJudgeBilling", () => {
   });
 
   describe("waits for providers.list to settle before publishing billing copy", () => {
-    it("returns null while autoJudge.get has data but providers.list is still in flight", () => {
-      autoJudgeGetData = { selection: null };
+    // A CONCRETE effective default judge, so the readiness guard is the only
+    // thing standing between an unsettled read and a real billing verdict -
+    // the old fixture (`{ selection: null }` with no `effective`) resolves to
+    // an 'unknown' target regardless of these guards, so removing a guard
+    // could never have reddened it.
+    const EFFECTIVE_DEFAULT_JUDGE: AutoJudgeGetResponse = {
+      selection: null,
+      effective: {
+        source: "default",
+        harnessId: "traycer",
+        model: JUDGE_MODEL_SLUG,
+      },
+      blocked: null,
+    };
+
+    it("returns null while autoJudge.get has data but providers.list is still in flight, then publishes billing once providers.list settles", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
       useProvidersListForClientMock.mockImplementation(() => ({
         data: undefined,
         isSuccess: false,
         isError: false,
       }));
 
-      const { result } = renderHook(() =>
+      const { result, rerender } = renderHook(() =>
         useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: { providers: [providerState({})] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
 
     it("resolves to provider-native once the providers read succeeds with a provider-native row", () => {
@@ -527,28 +554,48 @@ describe("useAutoJudgeBilling", () => {
       });
     });
 
-    it("keeps the disclosure hidden when the providers read fails", () => {
-      autoJudgeGetData = { selection: null };
+    it("keeps the disclosure hidden when the providers read fails, then publishes billing once providers.list succeeds", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
       useProvidersListForClientMock.mockImplementation(() => ({
         data: undefined,
         isSuccess: false,
         isError: true,
       }));
 
-      const { result } = renderHook(() =>
+      const { result, rerender } = renderHook(() =>
         useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: { providers: [providerState({})] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
   });
 
   describe("waits for the harness catalog to settle before publishing billing copy", () => {
-    it("returns null while autoJudge.get has data but the harness catalog is still in flight", () => {
-      autoJudgeGetData = { selection: null };
-      providersListData = {
-        providers: [providerState({ autoJudge: "provider" })],
-      };
+    const EFFECTIVE_DEFAULT_JUDGE: AutoJudgeGetResponse = {
+      selection: null,
+      effective: {
+        source: "default",
+        harnessId: "traycer",
+        model: JUDGE_MODEL_SLUG,
+      },
+      blocked: null,
+    };
+
+    it("returns null while autoJudge.get has data but the harness catalog is still in flight, then publishes billing once the harness catalog settles", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
+      providersListData = { providers: [providerState({})] };
       harnessesData = undefined;
       harnessesSettled = false;
       useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
@@ -557,18 +604,28 @@ describe("useAutoJudgeBilling", () => {
         isError: false,
       }));
 
-      const { result } = renderHook(() =>
+      const { result, rerender } = renderHook(() =>
         useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+        data: { harnesses: [harnessRow(true, null)] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
 
-    it("keeps the disclosure hidden when the harness-catalog read fails, even though autoJudge.get and providers.list both succeeded", () => {
-      autoJudgeGetData = { selection: null };
-      providersListData = {
-        providers: [providerState({ autoJudge: "provider" })],
-      };
+    it("keeps the disclosure hidden when the harness-catalog read fails, even though autoJudge.get and providers.list both succeeded, then publishes billing once the harness catalog settles", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
+      providersListData = { providers: [providerState({})] };
       harnessesData = undefined;
       harnessesSettled = false;
       useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
@@ -577,12 +634,40 @@ describe("useAutoJudgeBilling", () => {
         isError: true,
       }));
 
-      const { result } = renderHook(() =>
+      const { result, rerender } = renderHook(() =>
         useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+        data: { harnesses: [harnessRow(true, null)] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
+  });
+
+  // Kept for compatibility: a pre-1.1 host answers with no `effective` key at
+  // all. `autoJudgeTarget` reads that as 'unknown' (there is no stored
+  // selection either), so this stays null however settled the other two
+  // reads are - unrelated to the readiness guards above, which is exactly why
+  // it must not be the ONLY case exercising them.
+  it("returns null for a pre-1.1 host answer with no effective key, even though providers.list and the harness catalog are both settled", () => {
+    autoJudgeGetData = { selection: null };
+    providersListData = { providers: [providerState({})] };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+    );
+
+    expect(result.current).toBeNull();
   });
 
   describe("the writable-but-unreadable provider judge (providers.list stuck at 9.0)", () => {

@@ -154,7 +154,10 @@ const NO_JUDGE_TARGET: AutoJudgeTarget = { kind: "none" };
  *   which a host-scoped read cannot name. The host judges on that harness's
  *   `judgeDefaultModel` when its catalog row names one, otherwise on the
  *   conversation's currently selected model - so that is what is named here,
- *   from the composer's own run settings.
+ *   from the composer's own run settings. A conversation that itself runs on
+ *   `traycer` has no fallback at all: its own provider IS the default that
+ *   just could not answer, billed the same way, so the host offers no second
+ *   Traycer candidate (`autoJudgeCandidates`) and asks the person instead.
  * - `undefined` is a host that predates `effective` (an unreleased `1.0`
  *   build). A stored selection still names the judge; an unset one names a
  *   server-flagged model this client cannot see, so it is `unknown`.
@@ -174,6 +177,7 @@ export function autoJudgeTarget(input: AutoJudgeTargetInput): AutoJudgeTarget {
   }
   if (effective.source === "fallback") {
     if (input.runHarnessId === null) return UNKNOWN_TARGET;
+    if (input.runHarnessId === TRAYCER_JUDGE_HARNESS_ID) return NO_JUDGE_TARGET;
     const modelSlug =
       input.runJudgeDefaultModel ??
       (input.runModelSlug.length > 0 ? input.runModelSlug : null);
@@ -185,6 +189,44 @@ export function autoJudgeTarget(input: AutoJudgeTargetInput): AutoJudgeTarget {
     harnessId: effective.harnessId,
     modelSlug: effective.model,
   };
+}
+
+/**
+ * What the harness catalog says about the facts Automatic's FIRST candidate is
+ * decided on, as one comparable value.
+ *
+ * `autoJudge.get`'s `effective` is not a stored fact: under Automatic the host
+ * computes it per read from the Traycer harness row (`readAutomaticJudge`:
+ * enabled, available, not signed out) and the Traycer catalog. The row half
+ * is exactly what `agent.gui.listHarnesses` carries, so a change in this value
+ * is the client-visible moment the host's answer can change - including the
+ * first probe settling on a cold host, which moves the row from
+ * pending-and-unavailable to available.
+ *
+ * - `traycer-ready` - the row the host would start Automatic's judge on.
+ * - `traycer-not-ready` - disabled, unavailable (settled or not yet probed),
+ *   or signed out: the host answers `fallback`.
+ * - `traycer-absent` - no Traycer row in this catalog at all.
+ *
+ * The same reading as the host's: `available` already carries the LAST SETTLED
+ * verdict while a probe re-runs, so a re-probe of a green row stays ready,
+ * and `unauthenticated` is the only definitive signed-out status.
+ */
+export type AutomaticJudgeInputs =
+  | "traycer-ready"
+  | "traycer-not-ready"
+  | "traycer-absent";
+
+export function automaticJudgeInputs(
+  harnesses: ReadonlyArray<GuiHarnessOption>,
+): AutomaticJudgeInputs {
+  const row = harnesses.find(
+    (candidate) => candidate.id === TRAYCER_JUDGE_HARNESS_ID,
+  );
+  if (row === undefined) return "traycer-absent";
+  return row.enabled && row.available && row.authStatus !== "unauthenticated"
+    ? "traycer-ready"
+    : "traycer-not-ready";
 }
 
 /**

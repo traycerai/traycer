@@ -391,6 +391,81 @@ describe("autoJudgeTarget", () => {
       }),
     ).toEqual({ kind: "unknown" });
   });
+
+  // Finding: under Automatic's fallback, a conversation that itself runs on
+  // the `traycer` harness has NO fallback judge - the host's
+  // `autoJudgeCandidates` excludes a second Traycer candidate, so the person
+  // is asked. `autoJudgeTarget` must recognise `runHarnessId === "traycer"`
+  // under `source: "fallback"` and answer 'none' rather than naming a
+  // traycer judge for a traycer-hosted run.
+  it("is 'none' under Automatic's fallback when the run itself is on the traycer harness - no second Traycer candidate exists", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        blocked: null,
+        runHarnessId: "traycer",
+        runModelSlug: "traycer:some-model",
+        runJudgeDefaultModel: null,
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("is 'none' under the same fallback even when the traycer harness's own catalog names a judgeDefaultModel", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        blocked: null,
+        runHarnessId: "traycer",
+        runModelSlug: "traycer:some-model",
+        runJudgeDefaultModel: "traycer:judge",
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("composes to 'blocked' billing and the no-judge meta line for a traycer-hosted run under fallback", () => {
+    const target = autoJudgeTarget({
+      ...BASE_INPUT,
+      effective: { source: "fallback" },
+      blocked: null,
+      runHarnessId: "traycer",
+      runModelSlug: "traycer:some-model",
+      runJudgeDefaultModel: null,
+    });
+    const billing = autoJudgeBillingForRun({
+      runHarnessId: "traycer",
+      isProviderNative: false,
+      target,
+      judgeModelLabel: null,
+      judgeRecordUnrunnable: false,
+    });
+    if (billing === null) {
+      throw new Error("expected a billing verdict, got null");
+    }
+    expect(billing).toEqual({ kind: "blocked" });
+    expect(autoJudgeMetaLine(billing)).toBe(
+      "No judge available on this machine · asks you instead",
+    );
+  });
+
+  // Provider-native precedence is unaffected by the fix above: a run whose
+  // OWN provider reviews its own commands never consults the traycer-hosted
+  // fallback question at all. Probably already green.
+  it("keeps provider-native precedence for a run on the file's own CLAUDE_HARNESS_ID constant, whatever the target names", () => {
+    const billing = autoJudgeBillingForRun({
+      runHarnessId: CLAUDE_HARNESS_ID,
+      isProviderNative: true,
+      target: { kind: "none" },
+      judgeModelLabel: null,
+      judgeRecordUnrunnable: false,
+    });
+    expect(billing).toEqual({
+      kind: "provider-native",
+      harnessId: CLAUDE_HARNESS_ID,
+      harnessLabel: "Claude Code",
+    });
+  });
 });
 
 describe("autoJudgeBillingForRun", () => {

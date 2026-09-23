@@ -7,6 +7,7 @@ import {
   AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
   autoJudgeTierLine,
   autoModeRuleDisplayName,
+  autoModeRuleDraftAction,
   autoModeRuleDraftText,
   autoModeRuleDraftWorkspace,
   type AutoModeRuleDraftWorkspace,
@@ -176,36 +177,40 @@ describe("autoModeRuleDraftText", () => {
     branch: null,
   };
 
-  it("builds the full narrowing template with remote, branch and input", () => {
+  it("builds the full narrowing template with remote, branch and action", () => {
     expect(
       autoModeRuleDraftText({
         workspace: FULL_WORKSPACE,
         ruleName: "Force push",
-        inputSummary: "git push --force",
+        action: "git push --force",
       }),
     ).toBe(
       "In traycerai/traycer: Force push for `git push --force` on branch feature/x",
     );
   });
 
-  it("drops the remote/branch clauses entirely when the workspace is unknown - minimum is 'rule for input'", () => {
+  it("drops the remote/branch clauses entirely when the workspace is unknown - minimum is 'rule for action'", () => {
     expect(
       autoModeRuleDraftText({
         workspace: UNKNOWN_WORKSPACE,
         ruleName: "Force push",
-        inputSummary: "git push --force",
+        action: "git push --force",
       }),
     ).toBe("Force push for `git push --force`");
   });
 
-  it("drops the input clause when there is no input summary, leaving just the rule name", () => {
+  // Replaces the old "bare rule name" case: `action` is now REQUIRED and
+  // non-empty (callers derive it with `autoModeRuleDraftAction` first), so a
+  // draft with no for-clause at all no longer exists - even when the action
+  // came from the tool name rather than an input summary.
+  it("always includes a for-clause, now that action is mandatory - there is no bare rule name draft", () => {
     expect(
       autoModeRuleDraftText({
         workspace: UNKNOWN_WORKSPACE,
         ruleName: "Force push",
-        inputSummary: null,
+        action: "Run the migration",
       }),
-    ).toBe("Force push");
+    ).toBe("Force push for `Run the migration`");
   });
 
   it("includes the remote clause alone when only the remote is known", () => {
@@ -213,7 +218,7 @@ describe("autoModeRuleDraftText", () => {
       autoModeRuleDraftText({
         workspace: { remote: "traycerai/traycer", branch: null },
         ruleName: "Force push",
-        inputSummary: "git push --force",
+        action: "git push --force",
       }),
     ).toBe("In traycerai/traycer: Force push for `git push --force`");
   });
@@ -223,27 +228,60 @@ describe("autoModeRuleDraftText", () => {
       autoModeRuleDraftText({
         workspace: { remote: null, branch: "feature/x" },
         ruleName: "Force push",
-        inputSummary: "git push --force",
+        action: "git push --force",
       }),
     ).toBe("Force push for `git push --force` on branch feature/x");
   });
 
-  it("collapses internal whitespace in the input summary", () => {
-    expect(
-      autoModeRuleDraftText({
-        workspace: UNKNOWN_WORKSPACE,
-        ruleName: "Force push",
-        inputSummary: "git   push\n--force",
-      }),
-    ).toBe("Force push for `git push --force`");
-  });
-
-  it("uses a longer backtick fence when the input summary itself contains backticks", () => {
+  it("uses a longer backtick fence when the action itself contains backticks", () => {
     const text = autoModeRuleDraftText({
       workspace: UNKNOWN_WORKSPACE,
       ruleName: "Run a script",
-      inputSummary: "echo `date`",
+      action: "echo `date`",
     });
     expect(text).toBe("Run a script for `` echo `date` ``");
+  });
+});
+
+/**
+ * Finding: when the approval has no input summary, the "Allow from now on…"
+ * draft must still name an action. The action is `inputSummary ?? toolName`;
+ * only when BOTH are missing (null or whitespace-only) does no action exist.
+ */
+describe("autoModeRuleDraftAction", () => {
+  it("returns the input summary, with whitespace collapsed, when one is present", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "git   push\n--force",
+        toolName: "bash",
+      }),
+    ).toBe("git push --force");
+  });
+
+  it("falls back to the tool name, trimmed, when there is no input summary", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: null,
+        toolName: "  Run the migration  ",
+      }),
+    ).toBe("Run the migration");
+  });
+
+  it("falls back to the tool name when the input summary is whitespace-only", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "   ",
+        toolName: "Run the migration",
+      }),
+    ).toBe("Run the migration");
+  });
+
+  it("returns null when both the input summary and the tool name are missing", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: null,
+        toolName: "  ",
+      }),
+    ).toBeNull();
   });
 });
