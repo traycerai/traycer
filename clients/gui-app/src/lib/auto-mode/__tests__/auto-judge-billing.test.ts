@@ -369,6 +369,34 @@ describe("autoJudgeTarget", () => {
     });
   });
 
+  // The wire accepts `judgeDefaultModel: ""`, and Settings' `defaultJudgeModelFor`
+  // reads it as "no default"; the composer must reach the same answer for the
+  // same row rather than naming a blank model.
+  it("under fallback, reads an empty judgeDefaultModel as no default and names the composer's model", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        runHarnessId: "claude",
+        runModelSlug: "sonnet-in-composer",
+        runJudgeDefaultModel: "",
+      }),
+    ).toEqual({
+      kind: "judge",
+      harnessId: "claude",
+      modelSlug: "sonnet-in-composer",
+    });
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        runHarnessId: "claude",
+        runModelSlug: "",
+        runJudgeDefaultModel: "",
+      }),
+    ).toEqual({ kind: "unknown" });
+  });
+
   it("under fallback, is 'unknown' when there is no run harness", () => {
     expect(
       autoJudgeTarget({

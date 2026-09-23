@@ -133,12 +133,36 @@ export interface AutoJudgeTargetInput {
   readonly runHarnessId: string | null;
   /** The composer's selected model; `""` while its catalog is loading. */
   readonly runModelSlug: string;
-  /** The run harness's catalog `judgeDefaultModel`, or `null` for none. */
+  /**
+   * The run harness's catalog `judgeDefaultModel`, or `null` for none. `""`
+   * reads as none too - the wire accepts it, and `defaultJudgeModelFor` in
+   * Settings already reads it that way.
+   */
   readonly runJudgeDefaultModel: string | null;
 }
 
 const UNKNOWN_TARGET: AutoJudgeTarget = { kind: "unknown" };
 const NO_JUDGE_TARGET: AutoJudgeTarget = { kind: "none" };
+
+/**
+ * The model Automatic's fallback judges on: the run harness's catalog
+ * `judgeDefaultModel` when the row names one, else the composer's own model,
+ * else `null` while neither is known.
+ *
+ * `""` is "no default" too, not a slug: the wire accepts it, and Settings'
+ * `defaultJudgeModelFor` already reads it that way, so the composer row and
+ * the Judge tab name the same judge for the same catalog row. Read as a slug
+ * it rendered "Reviewed by  on …" with a blank where the model goes.
+ */
+function fallbackJudgeModelSlug(
+  judgeDefaultModel: string | null,
+  runModelSlug: string,
+): string | null {
+  if (judgeDefaultModel !== null && judgeDefaultModel.length > 0) {
+    return judgeDefaultModel;
+  }
+  return runModelSlug.length > 0 ? runModelSlug : null;
+}
 
 /**
  * The judge `autoJudge.get` says a run on `runHarnessId` would get.
@@ -177,9 +201,10 @@ export function autoJudgeTarget(input: AutoJudgeTargetInput): AutoJudgeTarget {
   if (effective.source === "fallback") {
     if (input.runHarnessId === null) return UNKNOWN_TARGET;
     if (input.runHarnessId === TRAYCER_JUDGE_HARNESS_ID) return NO_JUDGE_TARGET;
-    const modelSlug =
-      input.runJudgeDefaultModel ??
-      (input.runModelSlug.length > 0 ? input.runModelSlug : null);
+    const modelSlug = fallbackJudgeModelSlug(
+      input.runJudgeDefaultModel,
+      input.runModelSlug,
+    );
     if (modelSlug === null) return UNKNOWN_TARGET;
     return { kind: "judge", harnessId: input.runHarnessId, modelSlug };
   }

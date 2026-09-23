@@ -255,8 +255,12 @@ export interface JudgeUnavailableHumanLine {
   readonly sentence: string;
   /**
    * Whether {@link JUDGE_FIX_IN_SETTINGS_LABEL} follows the sentence. Only
-   * for a judge that never ran: one that ran and could not decide, or ran out
-   * of time, is not a setting to fix.
+   * for the `did-not-run` family, whose every cause is a setting on the Judge
+   * tab. A judge that ran and could not decide, or ran out of time, is not a
+   * setting to fix - and neither is a stopped turn, an unreadable account
+   * policy (that is the Rules tab's), or a constant this build does not
+   * recognise. The link is a claim about WHERE the fix is, so the fallback
+   * sentence carries none: the sentence alone is the claim this build can back.
    */
   readonly fixInJudgeSettings: boolean;
 }
@@ -293,7 +297,9 @@ export function judgeUnavailableCause(text: string): string | null {
  *
  * Total on purpose: an unknown `auto: ` constant still gets the couldn't-run
  * sentence, so a host that grows a new failure mode degrades to a true line
- * rather than to a blank one.
+ * rather than to a blank one. The LINK is not total: it goes only with the
+ * `did-not-run` family, the one whose causes the Judge tab fixes (see
+ * {@link JudgeUnavailableHumanLine.fixInJudgeSettings}).
  */
 export function judgeUnavailableHumanLine(
   text: string,
@@ -310,7 +316,7 @@ export function judgeUnavailableHumanLine(
   }
   return {
     sentence: judgeCouldNotRunSentence(judgeUnavailableCause(text)),
-    fixInJudgeSettings: true,
+    fixInJudgeSettings: family === "did-not-run",
   };
 }
 

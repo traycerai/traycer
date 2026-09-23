@@ -151,7 +151,10 @@ export interface PermissionModeDetails {
  * The guarded-path exception sits on the Auto-accept edits entry because that
  * is where it applies: edits to a workspace's configuration, scripts and git
  * internals still ask even though edits otherwise go through (the host's
- * `judge-input-edit-paths.ts`).
+ * `judge-input-edit-paths.ts`). Auto's exception sits on the judge item for
+ * the same reason: the list is what runs WITHOUT asking, so "risky commands
+ * ask you" is not a member of it - it is the exception to the judge's
+ * approvals, set off from that item rather than listed as if it ran unasked.
  */
 export const PERMISSION_MODE_DETAILS: Readonly<
   Record<PermissionMode, PermissionModeDetails>
@@ -171,8 +174,10 @@ export const PERMISSION_MODE_DETAILS: Readonly<
   auto: {
     runsWithoutAsking: [
       { text: "Reads, searches, edits", exception: null },
-      { text: "Commands the judge approves", exception: null },
-      { text: "Risky commands ask you", exception: null },
+      {
+        text: "Commands the judge approves",
+        exception: "risky ones still ask you",
+      },
     ],
   },
   full_access: {

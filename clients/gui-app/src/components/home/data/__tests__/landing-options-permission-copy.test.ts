@@ -74,14 +74,27 @@ describe("PERMISSION_MODE_DETAILS", () => {
     });
   });
 
-  it("lists auto's three items verbatim", () => {
+  // "Risky commands ask you" is the EXCEPTION to the judge item, never a list
+  // member: the Modes tab renders every member under "runs without asking",
+  // and a member that says the opposite reads as a contradiction.
+  it("lists auto's two items, with the risky-command exception on the judge item", () => {
     expect(PERMISSION_MODE_DETAILS.auto).toEqual({
       runsWithoutAsking: [
         { text: "Reads, searches, edits", exception: null },
-        { text: "Commands the judge approves", exception: null },
-        { text: "Risky commands ask you", exception: null },
+        {
+          text: "Commands the judge approves",
+          exception: "risky ones still ask you",
+        },
       ],
     });
+  });
+
+  it("never lists an item that says it asks, under any mode", () => {
+    for (const details of Object.values(PERMISSION_MODE_DETAILS)) {
+      for (const item of details.runsWithoutAsking) {
+        expect(item.text).not.toMatch(/\bask/iu);
+      }
+    }
   });
 
   it("lists full_access's single item verbatim", () => {

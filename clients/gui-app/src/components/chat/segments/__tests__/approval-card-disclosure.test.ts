@@ -256,31 +256,43 @@ describe("judgeUnavailableHumanLine", () => {
     });
   });
 
-  it("falls back to the couldn't-run sentence with the settings link for an unrecognised 'auto: ' string", () => {
+  // The sentence is total; the link is not. An unrecognised constant and the
+  // four the host emits outside the three families all say "couldn't run",
+  // and none of them is fixed on the Judge tab - a stopped turn is the
+  // user's own act, an unreadable account policy belongs to the Rules tab -
+  // so the link, which claims WHERE the fix is, stays off.
+  it("falls back to the couldn't-run sentence, with no settings link, for an unrecognised 'auto: ' string", () => {
     expect(judgeUnavailableHumanLine("auto: judge went fishing")).toEqual({
       sentence: "The judge couldn't run.",
-      fixInJudgeSettings: true,
+      fixInJudgeSettings: false,
     });
   });
 
-  it("falls back to the couldn't-run sentence for each recognised-but-uncategorised constant", () => {
+  it("falls back to the couldn't-run sentence, with no settings link, for each recognised-but-uncategorised constant", () => {
     expect(judgeUnavailableHumanLine("auto: turn stopped")).toEqual({
       sentence: "The judge couldn't run.",
-      fixInJudgeSettings: true,
+      fixInJudgeSettings: false,
     });
     expect(
       judgeUnavailableHumanLine("auto: judge preflight timed out"),
     ).toEqual({
       sentence: "The judge couldn't run.",
-      fixInJudgeSettings: true,
+      fixInJudgeSettings: false,
     });
     expect(judgeUnavailableHumanLine("auto: judge tools unavailable")).toEqual({
       sentence: "The judge couldn't run.",
-      fixInJudgeSettings: true,
+      fixInJudgeSettings: false,
     });
     expect(
       judgeUnavailableHumanLine("auto: account policy could not be read"),
     ).toEqual({
+      sentence: "The judge couldn't run.",
+      fixInJudgeSettings: false,
+    });
+  });
+
+  it("keeps the settings link for the did-not-run constant that names no cause ('auto: judge failed')", () => {
+    expect(judgeUnavailableHumanLine("auto: judge failed")).toEqual({
       sentence: "The judge couldn't run.",
       fixInJudgeSettings: true,
     });
