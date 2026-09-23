@@ -227,6 +227,7 @@ const STALE_FALLBACK_SETTINGS: ChatRunSettings = {
   // exact shape composer-run-settings-store's epic/global last-run, or a
   // frozen landing-draft snapshot, can carry.
   profileId: "stale-codex-id",
+  identityId: null,
 };
 
 const AUTHORITATIVE_MISSING_SETTINGS: ChatRunSettings = {

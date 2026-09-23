@@ -229,6 +229,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 const SIDE_CHAT_CONTENT: JsonContent = {
   type: "doc",
@@ -381,6 +382,8 @@ function emitChatSnapshot(
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
         isTitleEditedByUser: false,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
         settings: QUEUED_SETTINGS,
         activeSessionChain: null,
         claudePendingWakes: [],

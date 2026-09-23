@@ -376,6 +376,84 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // ─── agentIdentity.* ─────────────────────────────────────────────────────────────
+  //
+  // NO GUI CALLER YET. The `agentIdentity.*` family landed as protocol plus
+  // shared-client lane adapters; T10/T11 own the real wiring, and these rows
+  // exist because this table is EXHAUSTIVE over the registry — a mapped type
+  // over `keyof HostRpcRegistry`, so registering a method and not naming it
+  // here is a gui-app compile error, not a missing optimisation.
+  //
+  // They are ordinary rows rather than placeholders, and the split below is the
+  // one every other family makes: a bounded READ coalesces (`latest`), and a
+  // MUTATION never does, because two writes the user made in order must land in
+  // that order. None polls: the index lane (`agentIdentity.state.subscribe`)
+  // pushes every change these reads would be asking about, so a cadence here
+  // would be a second, slower answer racing the first.
+  //
+  // The whole family is an optional capability (`degrade: { kind:
+  // "unsupported" }`), so against an older host these are never dispatched at
+  // all — the Identities surface is hidden rather than degraded.
+  "agentIdentity.list": { ...LATEST_SCHEDULING, poll: null },
+  "agentIdentity.history.list": { ...LATEST_SCHEDULING, poll: null },
+  // A dry run: it reads what a Hermes import WOULD bring in and writes nothing,
+  // so it coalesces like any other read.
+  "agentIdentity.import.hermes.scan": { ...LATEST_SCHEDULING, poll: null },
+  // Reads a candidate skill's manifest. Same reasoning as the scan.
+  "agentIdentity.skills.inspect": { ...LATEST_SCHEDULING, poll: null },
+  "agentIdentity.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.update": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.files.add": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.files.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.files.rename": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Chunked: one upload is a sequence of calls sharing a client-generated
+  // `uploadId`, and the host assembles them by `sequence`. Coalescing would drop
+  // a chunk, so `fifo` here is load-bearing rather than merely tidy.
+  "agentIdentity.files.uploadBlob": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.history.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.import.hermes.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agentIdentity.skills.import": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The host's own name: a bounded read that can coalesce. It has no poll —
   // the host watches `host-name.json`, so a rename made anywhere else lands on
   // the next read (or the next explicit invalidation) rather than needing one.

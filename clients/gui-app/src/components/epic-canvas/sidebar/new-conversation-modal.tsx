@@ -1986,6 +1986,9 @@ function useLatestConversationSettingsSeed(): {
         // carrying a legacy value off the source agent.
         agentMode: "regular",
         profileId: agent.profileId,
+        // A TUI agent carries no identity either - identities bind to GUI
+        // chats - so the seed is the stock identity rather than a guess.
+        identityId: null,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.
         accountContext: { type: "PERSONAL" },

@@ -83,6 +83,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 function inlineImageContent(text: string, bytes: Uint8Array): JsonContent {
@@ -161,6 +162,8 @@ function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   callbacks.onSnapshot({
     kind: "snapshot",

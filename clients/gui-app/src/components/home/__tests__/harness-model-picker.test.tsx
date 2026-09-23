@@ -1363,6 +1363,7 @@ describe("<HarnessModelPicker />", () => {
       serviceTier: input.serviceTier,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
   }
 
@@ -2764,6 +2765,7 @@ describe("<HarnessModelPicker />", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "work-profile",
+      identityId: null,
     });
     const { store, selections } = renderPicker(undefined);
 
@@ -2968,6 +2970,7 @@ describe("<HarnessModelPicker />", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "new-profile",
+      identityId: null,
     });
     const { store } = renderPicker(undefined);
 
@@ -3719,6 +3722,7 @@ describe("<HarnessModelPicker />", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "work-profile",
+      identityId: null,
     });
     const { store, selections, reasoningChanges } = renderPicker({
       selection: {

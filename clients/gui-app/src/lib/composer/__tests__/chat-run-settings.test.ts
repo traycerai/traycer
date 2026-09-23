@@ -96,6 +96,7 @@ describe("chat run settings", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+        identityId: null,
       }),
     ).toBe("supervised");
     expect(
@@ -107,6 +108,7 @@ describe("chat run settings", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+        identityId: null,
       }),
     ).toBe("auto_accept_edits");
     expect(
@@ -118,6 +120,7 @@ describe("chat run settings", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+        identityId: null,
       }),
     ).toBe("full_access");
   });

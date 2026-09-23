@@ -99,6 +99,8 @@ function legacyFrame(chatId: string): LegacyChatSnapshotFrame {
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: "owner-1", canAct: true },
       queue: { status: "idle", items: [] },

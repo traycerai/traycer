@@ -71,6 +71,7 @@ import {
 } from "@/lib/drafts/draft-local-edits";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+import { chatRunSettingsFromDraftPortable } from "@/lib/composer/chat-run-settings";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -1954,7 +1955,7 @@ export function applyLandingHostDocument(
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: document.portable.runSettings,
+    settings: chatRunSettingsFromDraftPortable(document.portable.runSettings),
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null

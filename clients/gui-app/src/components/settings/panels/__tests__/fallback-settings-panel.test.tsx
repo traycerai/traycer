@@ -4721,6 +4721,7 @@ describe("FallbackSettingsPanel - the equivalent-models step hint", () => {
     serviceTier: null,
     agentMode: "regular",
     profileId: null,
+    identityId: null,
   } as const;
 
   beforeEach(() => {

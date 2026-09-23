@@ -27,6 +27,7 @@ import {
   setLandingDraftWorkspacePrimary,
 } from "@/stores/home/landing-draft-store";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
+import { chatRunSettingsFromDraftPortable } from "@/lib/composer/chat-run-settings";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 export const createEmptyNewConversationContent = (): JsonContent => ({
@@ -598,7 +599,9 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
           ...current,
           content: document.portable.content,
           selection: document.portable.selection,
-          settings: document.portable.runSettings,
+          settings: chatRunSettingsFromDraftPortable(
+            document.portable.runSettings,
+          ),
           composerMode: document.portable.composerMode,
           workspace: document.workspace,
           draftId: document.draftId,
