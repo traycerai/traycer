@@ -4905,25 +4905,62 @@ function heldCopyIsBehindServed(held: Message, served: Message): boolean {
 }
 
 /**
- * Seat one `range` response.
+ * Whether one `range` response seats, is dropped, or voids the window.
  *
- * Discarded on a stale epoch or a row-id mismatch - but those are NOT the same
- * judgement, and treating them as one was a defect.
+ * Three ways an answer can fail to seat, and they are three different
+ * judgements - collapsing any two of them was a defect each time.
  *
- * A stale epoch is self-healing: a newer epoch is by definition already on its
- * way, and the frame that carries it re-seats the coordinate space. Dropping
- * the response and waiting is correct.
+ * An epoch BELOW this window's is a straggler from a space the client has
+ * already left. The frame that moved this window on has renumbered every
+ * ordinal the answer names, so nothing in it applies and nothing about it is
+ * news. Dropped, and the planner's next request is framed against the current
+ * space.
  *
- * A row-id mismatch under the CURRENT epoch is not self-healing. Nothing is en
- * route to repair it: the planner sees the same still-missing span, asks for
- * the same ordinals, and the host answers with the same contradicting ids -
- * an unbounded request/response loop that never converges. The disagreement is
- * about the coordinate space itself, which is exactly what `invalidated` means,
- * so it is raised here and only a `resnapshot` clears it.
+ * An epoch ABOVE this window's is a space the client has never reached, which
+ * is only possible if the frame that would have carried it here - the
+ * `reindexed` beside a history mutation - was lost. The pump keeps
+ * drop-and-continue for a flaky socket write, so that is an ordinary outcome.
+ * The host serves every range from its CURRENT index and stamps it with the
+ * current epoch, so once that frame is gone every answer this window asks for
+ * arrives from ahead of it. Dropping those and waiting was the original
+ * design, on the premise that the newer epoch was "already on its way" - and
+ * that premise is exactly what a lost frame falsifies. With the window left
+ * valid, the planner saw the same still-missing span, asked again, and the
+ * host answered from ahead again: a request/response loop at the round-trip
+ * rate, for as long as the turn ran or, on an idle chat, for the life of the
+ * connection. So a newer epoch is handled as {@link applyIndexChange} handles
+ * it: it IS a `reindexed` this client did not see, learned late, and the
+ * window is invalidated so that one `resnapshot` re-seats the space.
+ *
+ * A row-id mismatch under the CURRENT epoch is not self-healing either.
+ * Nothing is en route to repair it: the planner sees the same still-missing
+ * span, asks for the same ordinals, and the host answers with the same
+ * contradicting ids - the same loop by another route. The disagreement is
+ * about the coordinate space itself, which is exactly what `invalidated`
+ * means, so it is raised here and only a `resnapshot` clears it.
  *
  * `truncatedAtOrdinal` is not an error and is not handled here - the response
  * is seated for what it did serve, and asking for the remainder is the
  * caller's job (see {@link planTranscriptHydration}).
+ */
+function admitRangeResponse(
+  window: TranscriptWindow,
+  response: ChatRangeResponse,
+): "seat" | "drop" | "void" {
+  if (response.epoch < window.epoch) return "drop";
+  // Before the body is even looked at: the epoch alone is the evidence, and an
+  // empty answer from ahead is as much a missed reindex as a full one.
+  if (response.epoch > window.epoch) return "void";
+  if (response.rowIds.length === 0) return "drop";
+  return skeletonContradicts(window, response.fromOrdinal, response.rowIds)
+    ? "void"
+    : "seat";
+}
+
+/**
+ * Seat one `range` response {@link admitRangeResponse} let through - the
+ * three ways an answer can fail to seat, and why they differ, are documented
+ * there.
  */
 export function applyRangeResponse(
   window: TranscriptWindow,
@@ -4938,9 +4975,9 @@ export function applyRangeResponse(
    */
   witnesses: ImageWitnessStore | null,
 ): TranscriptWindow {
-  if (response.epoch !== window.epoch) return window;
-  if (response.rowIds.length === 0) return window;
-  if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
+  const admission = admitRangeResponse(window, response);
+  if (admission === "drop") return window;
+  if (admission === "void") {
     return window.invalidated ? window : { ...window, invalidated: true };
   }
   const conflictingRowIds = incompleteRowIdsToWithhold(
