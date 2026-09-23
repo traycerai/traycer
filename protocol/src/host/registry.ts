@@ -20,6 +20,8 @@ import {
   agentIdentityFilesUploadBlobV10,
   agentIdentityHistoryListV10,
   agentIdentityHistoryRestoreV10,
+  agentIdentityImportHermesRunV10,
+  agentIdentityImportHermesScanV10,
   agentIdentityListV10,
   agentIdentitySkillsImportV10,
   agentIdentitySkillsInspectV10,
@@ -5469,6 +5471,34 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentIdentitySkillsImportV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.import.hermes.scan": {
+    // A dry run over a Hermes profile directory on THIS host's disk; reads only.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityImportHermesScanV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agentIdentity.import.hermes.run": {
+    // Idempotent by path: re-running into the same identity replaces files and keeps the old versions.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentIdentityImportHermesRunV10,
           upgradeFromPreviousVersion: null,
         },
       },

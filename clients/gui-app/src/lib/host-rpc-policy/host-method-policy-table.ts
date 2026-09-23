@@ -456,6 +456,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A dry run over a Hermes profile directory: reads, writes nothing, coalesces.
+  "agentIdentity.import.hermes.scan": { ...LATEST_SCHEDULING, poll: null },
+  // Writes into (or creates) an identity; two runs must land in order.
+  "agentIdentity.import.hermes.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The host's own name: a bounded read that can coalesce. It has no poll —
   // the host watches `host-name.json`, so a rename made anywhere else lands on
   // the next read (or the next explicit invalidation) rather than needing one.
