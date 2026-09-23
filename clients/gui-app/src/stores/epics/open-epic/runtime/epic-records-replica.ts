@@ -24,7 +24,7 @@ import {
   applyAwarenessUpdate,
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -246,7 +246,7 @@ export interface EpicRecordsReplica extends Replica<
 
   // ── Record tables ───────────────────────────────────────────────────────
   applyChatRecords(
-    records: readonly ChatRecordSummaryV11[],
+    records: readonly ChatRecordSummaryV12[],
     issuedAtSeq: number | null,
   ): void;
   /**

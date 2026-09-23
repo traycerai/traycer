@@ -57,6 +57,7 @@ function mountSubmit(args: {
       },
       reasoning: "medium",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

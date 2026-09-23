@@ -689,6 +689,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
+      identityId: toolbar.identityId,
     });
     createChat.mutate(
       {

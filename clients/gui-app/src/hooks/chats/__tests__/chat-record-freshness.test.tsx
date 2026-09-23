@@ -32,7 +32,7 @@ import * as Y from "yjs";
 // makes the next field added to this response fail HERE, at compile time, instead
 // of silently leaving the mock a shape no host can produce - which is exactly how
 // `docResident` slipped past this file.
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -99,13 +99,13 @@ interface Fixture {
   readonly queryClient: QueryClient;
   readonly handle: OpenedStoreForTest;
   readonly listCalls: { value: number };
-  readonly records: ChatRecordSummaryV11[];
+  readonly records: ChatRecordSummaryV12[];
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -126,6 +126,7 @@ function record(
     // read out of the epic doc's `chats` subtree, which this fixture never
     // exercises.
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }
@@ -199,7 +200,7 @@ function newSession(): OpenedStoreForTest {
 }
 
 function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
-  const records: ChatRecordSummaryV11[] = [];
+  const records: ChatRecordSummaryV12[] = [];
   const listCalls = { value: 0 };
   const requestSeq = { value: 0 };
   const queryClient = new QueryClient({

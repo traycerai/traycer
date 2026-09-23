@@ -165,6 +165,9 @@ export function useComposerToolbarStore(
         selection: defaultSelection,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        // No setting holds a default identity: a composer with no seed runs
+        // as none, and the per-host last-run memory is what carries a pick.
+        identityId: null,
       }),
     [
       defaultPermission,
@@ -313,6 +316,7 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  readonly identityId: string | null;
 }
 
 function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
@@ -324,6 +328,9 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
     settingsSeed.profileId ?? "",
+    // An identity set from elsewhere (another device, or an agent calling
+    // `traycer_set_chat_identity`) must re-seed the picker like a model change.
+    settingsSeed.identityId ?? "",
   ].join("\u0000");
 }
 
@@ -337,5 +344,7 @@ function valuesFromSettingsSeed(
     selection: selectionFromChatRunSettings(settingsSeed),
     reasoning: reasoningFromChatRunSettings(settingsSeed),
     serviceTier: serviceTierFromChatRunSettings(settingsSeed),
+    // `??` guards a pre-identity persisted blob, where the key is MISSING.
+    identityId: settingsSeed.identityId ?? null,
   };
 }

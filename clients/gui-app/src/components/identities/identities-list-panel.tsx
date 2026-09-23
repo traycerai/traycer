@@ -9,7 +9,7 @@
  * from a row would have to guess the settings it is not allowed to change.
  * The name is edited in the identity's own Settings panel.
  */
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type Ref } from "react";
 import { IdCard, Plus, Trash2 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -35,13 +35,16 @@ export interface IdentitiesListPanelProps {
   readonly client: HostClient<HostRpcRegistry> | null;
   /** Whether the host serves the family; `false` renders the unsupported note. */
   readonly supported: boolean;
+  /** The create field, for a host that opens straight into creating (the
+   *  composer picker's "New identity"). */
+  readonly createInputRef: Ref<HTMLInputElement> | null;
   readonly onOpen: (identity: AgentIdentitySummary) => void;
 }
 
 export function IdentitiesListPanel(
   props: IdentitiesListPanelProps,
 ): ReactNode {
-  const { hostId, client, supported, onOpen } = props;
+  const { hostId, client, supported, createInputRef, onOpen } = props;
   const listQuery = useIdentityListForClient(
     client,
     supported && hostId !== null,
@@ -126,6 +129,7 @@ export function IdentitiesListPanel(
           value={newTitle}
           placeholder="New identity name"
           aria-label="New identity name"
+          ref={createInputRef}
           disabled={create.isPending}
           onChange={(event) => setNewTitle(event.target.value)}
           data-testid="identities-create-input"

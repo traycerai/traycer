@@ -14,7 +14,7 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
  */
 import type {
   ChatRecordRemovalReason,
-  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
@@ -87,7 +87,7 @@ export interface ChatRecordTable {
   /** The delta twin - see {@link RecordTable.deltaIncompleteSeq}. */
   deltaIncompleteSeq(): number;
   applyRecords(
-    records: readonly ChatRecordSummaryV11[],
+    records: readonly ChatRecordSummaryV12[],
     issuedAtSeq: number | null,
   ): ChatRecordPublication | null;
   /**
@@ -232,7 +232,9 @@ export function createChatRecordTable(
    * able to retire the viewer's own in-flight creation - the row that replaces
    * a stand-in has to be the SAME chat, not merely a chat with the same id.
    */
-  const expirePendingCreationForRecord = (record: HeldChatRecordRow): void => {
+  const expirePendingCreationForRecord = (
+    record: Pick<HeldChatRecordRow, "ownerUserId" | "chatId">,
+  ): void => {
     pendingCreations.delete(recordKey(record.ownerUserId, record.chatId));
   };
 
@@ -411,7 +413,17 @@ export function createChatRecordTable(
             return published(table.republish());
           }
         }
-        return published(table.applyPointRead(mutation.record));
+        // A mutation's answer is the `@1.1` row, which has no `kind`, and a
+        // rename or an archive never changes what a chat IS - so the held row
+        // keeps saying it. Only a chat this table has never held is a
+        // `conversation` by default, and it is: an evolution chat is created by
+        // its host, never through a GUI mutation.
+        return published(
+          table.applyPointRead({
+            ...mutation.record,
+            kind: held?.kind ?? "conversation",
+          }),
+        );
       }
       confirmedDeletions.add(identityKey(mutation));
       const key = recordKey(mutation.ownerUserId, mutation.chatId);
