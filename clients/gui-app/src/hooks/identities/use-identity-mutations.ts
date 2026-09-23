@@ -142,3 +142,38 @@ export function useIdentityHistoryRestoreForClient(
     invalidateMethods: HISTORY_INVALIDATIONS,
   });
 }
+
+/**
+ * The skill installer's two calls. Both are rendered inline by the skill
+ * composer (`provider-skill-composer-dialog.tsx`), which shows the host's own
+ * message for a failed clone or an invalid source, so an `RPC_ERROR` is not
+ * toasted a second time.
+ */
+export function useIdentitySkillsInspectForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): IdentityMutation<"agentIdentity.skills.inspect"> {
+  return useHostScopedMutationForClient(client, {
+    method: "agentIdentity.skills.inspect",
+    mutationKey: identityMutationKeys.inspectSkills(),
+    errorMessage: "Couldn't read that skill source.",
+    invalidateMethods: NO_INVALIDATIONS,
+    silentCodes: ["RPC_ERROR"],
+  });
+}
+
+/**
+ * Answers once the host's projection holds the installed files, so the new
+ * rows arrive on the index lane before the dialog closes; nothing to
+ * invalidate.
+ */
+export function useIdentitySkillsImportForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): IdentityMutation<"agentIdentity.skills.import"> {
+  return useHostScopedMutationForClient(client, {
+    method: "agentIdentity.skills.import",
+    mutationKey: identityMutationKeys.importSkills(),
+    errorMessage: "Couldn't install the skill.",
+    invalidateMethods: NO_INVALIDATIONS,
+    silentCodes: ["RPC_ERROR"],
+  });
+}

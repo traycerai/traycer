@@ -91,15 +91,18 @@ function renderDialog(
   const onClose = vi.fn<() => void>();
   render(
     <ProviderSkillComposerDialog
-      providerLabel="Codex"
-      authoring={overrides.authoring ?? BOTH}
-      listScope={overrides.listScope ?? "global"}
-      providerRoot={
-        overrides.providerRoot === undefined ? null : overrides.providerRoot
-      }
-      canProviderScope={overrides.canProviderScope ?? true}
+      provider={{
+        label: "Codex",
+        authoring: overrides.authoring ?? BOTH,
+        listScope: overrides.listScope ?? "global",
+        root:
+          overrides.providerRoot === undefined ? null : overrides.providerRoot,
+        canProviderScope: overrides.canProviderScope ?? true,
+        onMutate,
+      }}
+      identities={[]}
+      initialTarget={{ kind: "provider" }}
       pending={overrides.pending ?? false}
-      onMutate={onMutate}
       onClose={onClose}
     />,
   );

@@ -48,6 +48,7 @@ import { identityRefusalCopy } from "@/lib/identities/refusal-copy";
 import { uploadIdentityBlob } from "@/lib/identities/upload-blob";
 import { useIdentityFileIsDirty } from "@/lib/identity-selectors";
 import { cn } from "@/lib/utils";
+import { IdentitySkillInstallButton } from "./identity-skill-install";
 
 export interface IdentityFileTreeProps {
   readonly identityId: string;
@@ -276,6 +277,13 @@ export function IdentityFileTree(props: IdentityFileTreeProps): ReactNode {
                       <Upload className="size-3.5" />
                     </Button>
                   </TooltipWrapper>
+                  {group.id === "skills" ? (
+                    <IdentitySkillInstallButton
+                      identityId={identityId}
+                      disabled={busy}
+                      onInstalled={onSelect}
+                    />
+                  ) : null}
                 </>
               ) : null}
             </div>

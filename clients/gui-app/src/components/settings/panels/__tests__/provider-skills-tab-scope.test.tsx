@@ -52,6 +52,16 @@ const skillMocks = vi.hoisted(() => ({
   listScopes: [] as ProviderNativeScope[],
 }));
 
+// The composer's identity targets read the host's identity list; these
+// suites mount the tab without a QueryClient or host binding.
+vi.mock("@/hooks/identities/use-identity-skill-targets", () => ({
+  useActiveHostIdentitySkillTargets: () => ({
+    supported: false,
+    targets: [],
+    pending: false,
+  }),
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));

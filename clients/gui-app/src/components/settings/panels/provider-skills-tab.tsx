@@ -26,6 +26,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
+import { useActiveHostIdentitySkillTargets } from "@/hooks/identities/use-identity-skill-targets";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
@@ -133,6 +134,9 @@ function ProviderSkillsTabBody({
 
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
+  // The composer can also install into one of this host's identities; the
+  // list is read only while the composer is open.
+  const identitySkillTargets = useActiveHostIdentitySkillTargets(composerOpen);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
   // own (the list is keyed by `source:path`), and the dialog wants the same
@@ -384,13 +388,17 @@ function ProviderSkillsTabBody({
       <>
         {composerOpen ? (
           <ProviderSkillComposerDialog
-            providerLabel={providerLabel}
-            authoring={authoring}
-            listScope={effectiveScope}
-            providerRoot={providerRoot}
-            canProviderScope={canProviderScope}
-            pending={composerPending}
-            onMutate={onComposerMutate}
+            provider={{
+              label: providerLabel,
+              authoring,
+              listScope: effectiveScope,
+              root: providerRoot,
+              canProviderScope,
+              onMutate: onComposerMutate,
+            }}
+            identities={identitySkillTargets.targets}
+            initialTarget={{ kind: "provider" }}
+            pending={composerPending || identitySkillTargets.pending}
             onClose={() => {
               setComposerOpen(false);
             }}
