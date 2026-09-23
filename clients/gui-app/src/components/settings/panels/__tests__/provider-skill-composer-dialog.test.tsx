@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillComposerDialog } from "@/components/settings/panels/provider-skill-composer-dialog";
 import type { SkillAuthoring } from "@/components/settings/panels/provider-skill-composer-model";
+import type { IdentitySkillTarget } from "@/lib/identities/skill-install-target";
 import {
   ProviderNativeRpcError,
   type SkillsMutateData,
@@ -618,5 +619,229 @@ describe("<ProviderSkillComposerDialog />", () => {
       screen.getByRole("button", { name: "or write one from scratch" }),
     );
     expect(screen.getByText("Available to")).toBeDefined();
+  });
+});
+
+describe("install targets", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function providerTarget(
+    onMutate: (
+      mutation: ProvidersSkillsMutateAction,
+    ) => Promise<SkillsMutateData>,
+  ) {
+    return {
+      label: "Codex",
+      authoring: BOTH,
+      listScope: "global" as ProviderNativeScope,
+      root: "/Users/dev/.codex/skills",
+      canProviderScope: true,
+      onMutate,
+    };
+  }
+
+  function identityTarget(
+    identityId: string,
+    title: string,
+    onMutate: (
+      mutation: ProvidersSkillsMutateAction,
+    ) => Promise<SkillsMutateData>,
+  ): IdentitySkillTarget {
+    return { identityId, title, onMutate };
+  }
+
+  /** Radix's select: open with the keyboard, then commit the named option. */
+  function chooseInstallTarget(option: string): void {
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Install into" }), {
+      key: "ArrowDown",
+    });
+    const item = screen.getByRole("option", { name: option });
+    fireEvent.focus(item);
+    fireEvent.keyDown(item, { key: "Enter" });
+  }
+
+  it("shows no Install-into selector with a provider and no identities", () => {
+    const providerMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    providerMutate.mockResolvedValue({ kind: "skills", skills: [] });
+    render(
+      <ProviderSkillComposerDialog
+        provider={providerTarget(providerMutate)}
+        identities={[]}
+        initialTarget={{ kind: "provider" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("skill-install-target")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Install into" })).toBeNull();
+  });
+
+  it("shows the Install-into selector with a provider and one identity, and routes to the identity target on selection", async () => {
+    const providerMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    providerMutate.mockResolvedValue({ kind: "skills", skills: [] });
+    const identityMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    identityMutate.mockResolvedValue(
+      inspectData([SHOW_ME, DESIGN_LOOP], "tok-identity"),
+    );
+    render(
+      <ProviderSkillComposerDialog
+        provider={providerTarget(providerMutate)}
+        identities={[identityTarget("identity-1", "Research", identityMutate)]}
+        initialTarget={{ kind: "provider" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("skill-install-target")).toBeDefined();
+    expect(screen.getByText("Available to")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "or write one from scratch" }),
+    ).toBeDefined();
+
+    chooseInstallTarget("Identity: Research");
+
+    expect(screen.queryByText("Available to")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "or write one from scratch" }),
+    ).toBeNull();
+
+    fillSource("owner/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+
+    await waitFor(() => {
+      expect(identityMutate).toHaveBeenCalledTimes(1);
+    });
+    expect(providerMutate).not.toHaveBeenCalled();
+    expect(identityMutate.mock.calls[0]?.[0]).toEqual({
+      action: "inspect",
+      source: "owner/repo",
+      scope: "global",
+    });
+  });
+
+  it("opens on the import step for an identity initialTarget with provider=null, and names the identity in the destination line", () => {
+    const identityMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    identityMutate.mockResolvedValue({ kind: "skills", skills: [] });
+    render(
+      <ProviderSkillComposerDialog
+        provider={null}
+        identities={[identityTarget("identity-1", "Research", identityMutate)]}
+        initialTarget={{ kind: "identity", identityId: "identity-1" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Skill source")).toBeDefined();
+    expect(screen.queryByLabelText("Name")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "or write one from scratch" }),
+    ).toBeNull();
+    expect(screen.getByText("the Research identity's skills")).toBeDefined();
+    // A single target renders no selector.
+    expect(screen.queryByTestId("skill-install-target")).toBeNull();
+  });
+
+  it("disables and never preselects an already-installed candidate for an identity target, and shows the identity picker description", async () => {
+    const user = userEvent.setup();
+    const identityMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    identityMutate.mockImplementation((mutation) => {
+      if (mutation.action === "inspect") {
+        return Promise.resolve(
+          inspectData([SHOW_ME, DESIGN_LOOP], "tok-picker"),
+        );
+      }
+      return Promise.resolve({ kind: "skills", skills: [] });
+    });
+    render(
+      <ProviderSkillComposerDialog
+        provider={null}
+        identities={[identityTarget("identity-1", "Research", identityMutate)]}
+        initialTarget={{ kind: "identity", identityId: "identity-1" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+    fillSource("owner/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("2 skills found")).toBeDefined();
+    });
+    expect(
+      screen.getByText(
+        "A skill already in this identity can't be replaced from here. Remove it first to install it again.",
+      ),
+    ).toBeDefined();
+
+    const showMe = screen.getByRole("checkbox", { name: "show-me" });
+    const design = screen.getByRole("checkbox", {
+      name: "design-control-loop",
+    });
+    expect(showMe.getAttribute("data-state")).toBe("unchecked");
+    expect(showMe instanceof HTMLButtonElement && showMe.disabled).toBe(true);
+    expect(design.getAttribute("data-state")).toBe("unchecked");
+    expect(design instanceof HTMLButtonElement && design.disabled).toBe(false);
+
+    await user.click(design);
+    expect(design.getAttribute("data-state")).toBe("checked");
+    await user.click(showMe);
+    expect(showMe.getAttribute("data-state")).toBe("unchecked");
+  });
+
+  it("does not auto-install a single already-installed identity candidate, and blocks Install with nothing selected", async () => {
+    const identityMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    identityMutate.mockResolvedValue(inspectData([SHOW_ME], "tok-single"));
+    render(
+      <ProviderSkillComposerDialog
+        provider={null}
+        identities={[identityTarget("identity-1", "Research", identityMutate)]}
+        initialTarget={{ kind: "identity", identityId: "identity-1" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+    fillSource("owner/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("1 skill found")).toBeDefined();
+    });
+    expect(identityMutate).toHaveBeenCalledTimes(1);
+    expect(identityMutate.mock.calls[0]?.[0]).toEqual({
+      action: "inspect",
+      source: "owner/repo",
+      scope: "global",
+    });
+
+    const showMe = screen.getByRole("checkbox", { name: "show-me" });
+    expect(showMe.getAttribute("data-state")).toBe("unchecked");
+    expect(
+      screen.getByText("Select at least one skill to install."),
+    ).toBeDefined();
+    const install = screen.getByRole("button", { name: "Install 0 skills" });
+    expect(install instanceof HTMLButtonElement && install.disabled).toBe(true);
   });
 });
