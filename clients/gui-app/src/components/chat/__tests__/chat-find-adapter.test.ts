@@ -335,6 +335,57 @@ describe("chat find adapter", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
+  it("a passive repaint between a navigation and its reveal paint does not drop the reveal's scroll", () => {
+    installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "needle text";
+    row.append(unit);
+    // Held in an object: a `let` assigned only inside the callback stays
+    // narrowed to `null` for the type checker at the call site below.
+    const captured: { paint: (() => void) | null } = { paint: null };
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-reveal-passive-race",
+      // The real reveal controller invokes `paint` on a LATER animation frame,
+      // not synchronously on `revealMatch` itself - capture it instead of
+      // calling it right away, so a passive repaint can be driven to
+      // completion before the navigation's own paint ever runs.
+      revealMatch: (target) => {
+        captured.paint = target.paint;
+      },
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "needle text")]);
+
+    void adapter.search({ requestId: 21, query: "needle", matchCase: false });
+    const revealPaint = captured.paint;
+    if (revealPaint === null) throw new Error("reveal paint was not captured");
+
+    // A passive repaint - e.g. a virtual-row mount sync - races in before the
+    // reveal controller gets around to invoking the captured paint. It must
+    // repaint without scrolling, and without stealing the navigation's
+    // generation.
+    adapter.syncMountedHighlight();
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The reveal controller finally invokes the paint callback it was handed.
+    // It must still run (not be dropped as stale) and scroll the match into
+    // view - only the navigation paint may do that, and it must not have been
+    // skipped by the passive repaint in between.
+    revealPaint();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+  });
+
   it("keeps a missing exact DOM occurrence pending instead of clamping to another range", () => {
     const registry = installMockHighlights();
     const row = document.createElement("div");

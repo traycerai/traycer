@@ -13,7 +13,12 @@ import {
 import { useMermaidPngDownload } from "@/editor-core/nodes/mermaid/use-mermaid-png-download";
 import { useMermaidThemeKey } from "@/editor-core/nodes/mermaid/use-mermaid-theme-key";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import {
+  FIND_BLOCK_ATTR,
+  FIND_VISIBLE_ATTR,
+} from "@/lib/find-engine/find-blocks";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
+import { FindMirror } from "./find-mirror";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -157,7 +162,11 @@ function MermaidRenderSession(props: {
     // Excluded from quote selection: the toolbar and rendered SVG are
     // non-prose UI inside quotable markdown - a drag across the diagram would
     // otherwise leak SVG label/error text into the quoted blockquote.
-    <div className="tc-node-mermaid" data-quote-exclude="">
+    <div
+      className="tc-node-mermaid"
+      data-quote-exclude=""
+      {...{ [FIND_BLOCK_ATTR]: "mermaid" }}
+    >
       <MermaidBlockToolbar
         editing={false}
         editable={false}
@@ -167,11 +176,15 @@ function MermaidRenderSession(props: {
         onSharePng={shareMermaidPng}
         downloadDisabled={downloadDisabled}
       />
+      {/* Chat find counts the diagram on its source; the drawing's labels are
+          what the painter can colour for a hit in that source. */}
+      <FindMirror text={sourceCode} />
 
       <figure
         className="tc-node-mermaid__preview m-0"
         role={render.status === "pending" ? "img" : undefined}
         aria-label={render.status === "pending" ? ariaLabel : undefined}
+        {...{ [FIND_VISIBLE_ATTR]: "" }}
       >
         {render.status === "pending" ? (
           <div className="tc-node-block__skeleton" aria-hidden="true">

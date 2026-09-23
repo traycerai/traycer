@@ -32,6 +32,7 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
+import { wireframeVisibleText } from "@/lib/markdown/wireframe-visible-text";
 import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ActivityGroupModel,
@@ -800,6 +801,7 @@ function tokenToText(token: Token): string {
     case "br":
       return "";
     case "code":
+      return fenceSearchText(token);
     case "codespan":
     case "escape":
     case "text":
@@ -825,6 +827,18 @@ function tokenToText(token: Token): string {
     default:
       return "";
   }
+}
+
+// A fence is counted on what it renders as, so no invisible word can match. A
+// wireframe renders as a document, so its visible words are its text, and the
+// wireframe block mirrors the same words for the painter. A mermaid fence keeps
+// its source: the labels are in it and worth finding, and telling a label from
+// a keyword would take a diagram parser. A keyword hit is shown by the block's
+// find mark instead of a painted word (see `lib/find-engine/find-blocks.ts`).
+function fenceSearchText(token: Tokens.Code): string {
+  const lang = (token.lang ?? "").trim().toLowerCase();
+  if (lang.startsWith("wireframe")) return wireframeVisibleText(token.text);
+  return token.text;
 }
 
 function tableToText(token: Tokens.Table): string {

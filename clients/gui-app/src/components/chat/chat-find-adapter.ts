@@ -443,12 +443,17 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   private requestHighlightPaint(): void {
-    this.cancelScheduledPaint();
+    // A passive repaint replaces only the passive frame already queued. It
+    // must not advance the generation: a navigation paint scheduled by the
+    // reveal controller waits on the current generation, and it is the one
+    // that scrolls the match into view. Bumping here dropped that paint
+    // whenever a row re-measured between the reveal's two frames, which a
+    // text hit hid behind the unit's own centering and a block hit did not.
+    this.cancelPassivePaintFrame();
     const activeMatch = this.matches.at(this.activeMatchIndex);
     if (activeMatch === undefined) return;
     const matchKey = chatFindMatchKey(activeMatch);
-    const generation = this.paintGeneration + 1;
-    this.paintGeneration = generation;
+    const generation = this.paintGeneration;
     this.paintFrameId = window.requestAnimationFrame(() => {
       this.paintFrameId = null;
       this.paintMatch(generation, matchKey, "unit", false);
@@ -523,8 +528,13 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.notify();
   }
 
+  /** Invalidates every pending paint, navigation paints included. */
   private cancelScheduledPaint(): void {
     this.paintGeneration += 1;
+    this.cancelPassivePaintFrame();
+  }
+
+  private cancelPassivePaintFrame(): void {
     if (this.paintFrameId === null) return;
     window.cancelAnimationFrame(this.paintFrameId);
     this.paintFrameId = null;

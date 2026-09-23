@@ -5,8 +5,11 @@ import { WireframeFullscreenDialog } from "@/editor-core/nodes/wireframe/wirefra
 import { WireframeIframe } from "@/editor-core/nodes/wireframe/wireframe-iframe";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
-import { useCallback, useState } from "react";
+import { FIND_BLOCK_ATTR } from "@/lib/find-engine/find-blocks";
+import { wireframeVisibleText } from "@/lib/markdown/wireframe-visible-text";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { FindMirror } from "./find-mirror";
 
 // A streamed fence grows a few characters per delta; loading each partial
 // document into the iframe would flash a half-built page over and over. Wait
@@ -44,6 +47,9 @@ export function WireframeBlock(props: WireframeBlockProps) {
     onError: () => toast.error("Couldn't copy the HTML"),
   });
   const handleCopy = useCallback(() => copy(code), [copy, code]);
+  // The same words chat find counted this fence on; a hit in them is shown by
+  // marking the block, since nothing inside the frame can take a highlight.
+  const visibleText = useMemo(() => wireframeVisibleText(code), [code]);
 
   if (code.trim().length === 0) {
     return (
@@ -56,12 +62,17 @@ export function WireframeBlock(props: WireframeBlockProps) {
   return (
     // Excluded from quote selection like the mermaid block: the toolbar and
     // the iframe are non-prose UI inside quotable markdown.
-    <div className="tc-node-wireframe" data-quote-exclude="">
+    <div
+      className="tc-node-wireframe"
+      data-quote-exclude=""
+      {...{ [FIND_BLOCK_ATTR]: "wireframe" }}
+    >
       <BlockErrorBoundary title="Wireframe block crashed" onCopy={handleCopy}>
         <WireframeBlockToolbar
           onOpenFullscreen={() => setFullscreenOpen(true)}
           onCopyHtml={handleCopy}
         />
+        <FindMirror text={visibleText} />
         <div className="tc-node-wireframe__preview">
           {htmlContent.trim().length === 0 ? (
             <div className="tc-node-block__skeleton" aria-hidden="true">

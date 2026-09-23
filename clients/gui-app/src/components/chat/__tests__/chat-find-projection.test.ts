@@ -256,6 +256,39 @@ describe("chat find projection", () => {
     expect(text).not.toContain("[Traycer docs]");
   });
 
+  it("indexes a wireframe fence on its visible words only", () => {
+    const text = markdownToChatSearchText(
+      [
+        "```wireframe",
+        '<button class="primary">Save</button><script>track("Save")</script>',
+        "```",
+      ].join("\n"),
+    );
+
+    expect(text).toContain("Save");
+    expect(text.match(/Save/g)).toHaveLength(1);
+    expect(text).not.toContain("primary");
+    expect(text).not.toContain("track");
+  });
+
+  it("keeps a mermaid fence's full source, including labels", () => {
+    const text = markdownToChatSearchText(
+      ["```mermaid", "graph TD", "  A[Save] --> B[Done]", "```"].join("\n"),
+    );
+
+    expect(text).toContain("graph TD");
+    expect(text).toContain("Save");
+    expect(text).toContain("Done");
+  });
+
+  it("keeps a plain fence's body as-is", () => {
+    const text = markdownToChatSearchText(
+      ["```ts", 'const label = "Save";', "```"].join("\n"),
+    );
+
+    expect(text).toContain('const label = "Save";');
+  });
+
   it("indexes user structured text, assistant prose, and excludes next-step controls", () => {
     const structuredContent: JsonContent = {
       type: "doc",
