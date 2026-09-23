@@ -4015,3 +4015,218 @@ describe("accumulateEvent - provider_notice.upsert", () => {
     expect(after[0].type).toBe("tool_call");
   });
 });
+
+// A block id is unique per block TYPE, not per message: several harnesses emit
+// an approval whose `blockId` equals the tool call's/command's `blockId`
+// (confirmed from live data). `replaceBlock` replaces only the block of the
+// same type as `updated`, matching how every caller looks its `existing` block
+// up (`findBlockOfType`); when it matched the id alone, resolving one block
+// overwrote the other. A failure below is a regression of that scoping.
+describe("accumulateEvent - blocks of different types sharing one blockId", () => {
+  function approvalBlocksIn(blocks: ContentBlock[]): ApprovalBlock[] {
+    return blocks.filter(
+      (block): block is ApprovalBlock => block.type === "approval",
+    );
+  }
+
+  function toolCallBlocksIn(blocks: ContentBlock[]): ToolCallBlock[] {
+    return blocks.filter(
+      (block): block is ToolCallBlock => block.type === "tool_call",
+    );
+  }
+
+  function commandBlocksIn(blocks: ContentBlock[]): CommandBlock[] {
+    return blocks.filter(
+      (block): block is CommandBlock => block.type === "command",
+    );
+  }
+
+  it("ACP order (tool_call.started -> approval.requested -> approval.resolved -> tool_call.progress -> tool_call.completed) keeps one tool_call block and one approval block", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "X",
+      timestamp: 1,
+      toolName: "echo hi",
+      input: { command: "echo hi" },
+      agentMessageSend: null,
+    });
+    const startedInputSummary = (blocks[0] as ToolCallBlock).inputSummary;
+
+    blocks = accumulateEvent(blocks, {
+      type: "approval.requested",
+      blockId: "X",
+      timestamp: 2,
+      toolName: "echo hi",
+      description: "echo hi",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "approval.resolved",
+      blockId: "X",
+      timestamp: 3,
+      decision: { approved: true },
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.progress",
+      blockId: "X",
+      timestamp: 4,
+      update: "running",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "X",
+      timestamp: 5,
+      toolName: "tool",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    const approvalBlocks = approvalBlocksIn(blocks);
+    const toolCallBlocks = toolCallBlocksIn(blocks);
+
+    expect(approvalBlocks).toHaveLength(1);
+    expect(toolCallBlocks).toHaveLength(1);
+    expect(approvalBlocks[0].status).toBe("completed");
+    expect(approvalBlocks[0].decision).toEqual({
+      approved: true,
+      reason: null,
+    });
+    // The started name is kept: `tool_call.completed`'s existing-block branch
+    // never re-stamps `toolName`, so "tool" (a deliberate distractor) must
+    // lose to "echo hi" - but only if the real streaming tool_call block (not
+    // a clobbered stand-in) is what gets updated.
+    expect(toolCallBlocks[0].toolName).toBe("echo hi");
+    expect(toolCallBlocks[0].status).toBe("completed");
+    expect(toolCallBlocks[0].inputSummary).toBe(startedInputSummary);
+    expect(toolCallBlocks[0].progress).toBe("running");
+  });
+
+  it("Codex order (approval.requested -> approval.resolved -> command.started -> command.completed) keeps one approval block and one command block", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "approval.requested",
+      blockId: "Y",
+      timestamp: 1,
+      toolName: "command",
+      description: "Run a command",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "approval.resolved",
+      blockId: "Y",
+      timestamp: 2,
+      decision: { approved: true },
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "Y",
+      timestamp: 3,
+      command: "ls",
+      cwd: "/w",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.completed",
+      blockId: "Y",
+      timestamp: 4,
+      command: "ls",
+      exitCode: 0,
+    });
+
+    const approvalBlocks = approvalBlocksIn(blocks);
+    const commandBlocks = commandBlocksIn(blocks);
+
+    expect(approvalBlocks).toHaveLength(1);
+    expect(commandBlocks).toHaveLength(1);
+    expect(approvalBlocks[0].status).toBe("completed");
+    expect(approvalBlocks[0].decision).toEqual({
+      approved: true,
+      reason: null,
+    });
+    // The command completion must not overwrite the approval block sharing
+    // its blockId.
+    expect(commandBlocks[0].status).toBe("completed");
+    expect(commandBlocks[0].exitCode).toBe(0);
+  });
+
+  it("errored variant: tool_call.errored after approval.resolved keeps one tool_call block and one approval block", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "X",
+      timestamp: 1,
+      toolName: "echo hi",
+      input: { command: "echo hi" },
+      agentMessageSend: null,
+    });
+    const startedInputSummary = (blocks[0] as ToolCallBlock).inputSummary;
+
+    blocks = accumulateEvent(blocks, {
+      type: "approval.requested",
+      blockId: "X",
+      timestamp: 2,
+      toolName: "echo hi",
+      description: "echo hi",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "approval.resolved",
+      blockId: "X",
+      timestamp: 3,
+      decision: { approved: true },
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.progress",
+      blockId: "X",
+      timestamp: 4,
+      update: "running",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.errored",
+      blockId: "X",
+      timestamp: 5,
+      toolName: "tool",
+      error: "boom",
+      terminationReason: "error",
+      agentMessageSend: null,
+    });
+
+    const approvalBlocks = approvalBlocksIn(blocks);
+    const toolCallBlocks = toolCallBlocksIn(blocks);
+
+    expect(approvalBlocks).toHaveLength(1);
+    expect(toolCallBlocks).toHaveLength(1);
+    // The approval, resolved earlier in the sequence, must be untouched by
+    // the later tool_call error.
+    expect(approvalBlocks[0].status).toBe("completed");
+    expect(approvalBlocks[0].decision).toEqual({
+      approved: true,
+      reason: null,
+    });
+    expect(toolCallBlocks[0].status).toBe("errored");
+    expect(toolCallBlocks[0].toolName).toBe("echo hi");
+    expect(toolCallBlocks[0].error).toBe("boom");
+    expect(toolCallBlocks[0].inputSummary).toBe(startedInputSummary);
+  });
+
+  it("sanity: a single-type update (tool_call.started -> tool_call.completed) still replaces the block in place", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "X",
+      timestamp: 1,
+      toolName: "echo hi",
+      input: { command: "echo hi" },
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "X",
+      timestamp: 2,
+      toolName: "echo hi",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("tool_call");
+    expect(blocks[0].status).toBe("completed");
+  });
+});

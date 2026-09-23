@@ -50,6 +50,7 @@ import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
 import { TodoSegment } from "./segments/todo-segment";
 import { ToolSegment } from "./segments/tool-segment";
+import { distinctRenderKeys } from "./segment-render-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const COPIED_RESET_MS = 1600;
@@ -160,6 +161,16 @@ export function AssistantMessageBody({
       }),
     [activityTimelineTurnState, backgroundToolBlockIds, segments],
   );
+  const timelineKeys = useMemo(
+    () =>
+      distinctRenderKeys(
+        timeline.map((item) => ({
+          id: item.id,
+          kind: item.kind === "segment" ? item.segment.kind : item.kind,
+        })),
+      ),
+    [timeline],
+  );
   // A content-less boundary row's own segments never carry copyable text
   // (the reply lives on an earlier row in the same turn, before the trailing
   // steer bubble) - fall back to the turn-wide text `withTurnCompletion`
@@ -218,13 +229,14 @@ export function AssistantMessageBody({
       className="flex w-full max-w-none flex-col gap-2 py-1 @container"
       data-assistant-turn
     >
-      {timeline.map((item) => {
+      {timeline.map((item, index) => {
+        const key = timelineKeys[index];
         if (item.kind === "activity_group") {
-          return <ActivityGroupSegment key={item.id} group={item.group} />;
+          return <ActivityGroupSegment key={key} group={item.group} />;
         }
         if (item.kind === "promoted_subagent") {
           return (
-            <ChatBlockNavigationAnchor key={item.id} blockId={item.segment.id}>
+            <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
               <SubagentSegment
                 id={item.id}
                 name={item.segment.name}
@@ -245,7 +257,7 @@ export function AssistantMessageBody({
           );
         }
         return (
-          <ChatBlockNavigationAnchor key={item.id} blockId={item.id}>
+          <ChatBlockNavigationAnchor key={key} blockId={item.id}>
             <AssistantSegment
               id={item.id}
               segment={item.segment}

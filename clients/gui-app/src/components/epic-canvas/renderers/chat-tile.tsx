@@ -1509,6 +1509,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 preContent={view.preContent}
                 restoreContext={view.restoreContext}
                 node={view.node}
+                taskTitle={view.taskTitle}
                 epicId={view.currentEpicId}
                 viewTabId={view.viewTabId}
                 tabHostId={view.tabHostId}
@@ -3550,9 +3551,16 @@ function useChatTileSessionViewModel(
     [state.pendingFallback, state.pendingReturn],
   );
 
+  const chatStateTitle = state.chat?.title ?? "";
   return {
     handle,
     node,
+    // The title the tab strip shows. `node.name` is the tile's persisted
+    // opening-name snapshot, so a chat opened before its title was generated
+    // announced every finished turn as "Untitled agent" for the tile's life.
+    taskTitle:
+      projectedChatTitle ??
+      (chatStateTitle.length > 0 ? chatStateTitle : node.name),
     viewTabId,
     tileId,
     tabHostId: activeHostId,
@@ -3712,6 +3720,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly preContent: ChatTilePreContentFrame | null;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
+  /** The chat's live title, for the transcript's own announcements. */
+  readonly taskTitle: string;
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tabHostId: string | null;
@@ -3833,7 +3843,7 @@ function ChatSessionMessagesSurface(
             workspaceRoots={props.workspaceRoots}
           >
             <ChatMessages
-              taskTitle={props.node.name}
+              taskTitle={props.taskTitle}
               taskId={props.node.id}
               epicId={props.epicId}
               hostId={props.tabHostId}

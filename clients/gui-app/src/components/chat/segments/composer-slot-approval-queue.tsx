@@ -7,6 +7,7 @@ import {
   useRestartHighlightPulse,
 } from "@/components/chat/chat-navigation-highlight";
 import { deriveToolInputSummary } from "@/lib/segment-summary";
+import { approvalCardText } from "@/components/chat/segments/approval-text";
 import { humanActionableApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import {
   APPROVAL_PAUSED_LINE,
@@ -19,6 +20,7 @@ import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 
 interface ComposerSlotApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatApprovalState>;
@@ -186,12 +188,12 @@ function ApprovalRow(props: ApprovalRowProps) {
     props.highlightGeneration,
     rowRef,
   );
-  const inputSummary = deriveToolInputSummary(
+  const { inputSummary, headline } = approvalCardText(
     approval.toolName,
-    approval.input,
+    deriveToolInputSummary(approval.toolName, approval.input),
+    approval.description,
+    deriveToolInputDetail(approval.toolName, approval.input),
   );
-  const headline =
-    approval.description.length > 0 ? approval.description : approval.toolName;
   const reviewing = approval.reviewing;
   return (
     <div
@@ -227,7 +229,13 @@ function ApprovalRow(props: ApprovalRowProps) {
           </>
         ) : null}
       </div>
-      <p className="m-0 text-foreground/85">{headline}</p>
+      {headline === null ? null : (
+        // The headline can be the whole command in place of the cut summary,
+        // so it wraps a long unbroken token and keeps the command's lines.
+        <p className="m-0 min-w-0 whitespace-pre-wrap break-words text-foreground/85">
+          {headline}
+        </p>
+      )}
       {approval.reason !== null ? (
         <JudgeReason rule={approval.reason.rule} text={approval.reason.text} />
       ) : null}
