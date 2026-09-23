@@ -45,6 +45,7 @@ describe("chat run settings", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     expect(
@@ -62,6 +63,7 @@ describe("chat run settings", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     expect(
@@ -83,6 +85,7 @@ describe("chat run settings", () => {
       serviceTier: "fast",
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
   });
 
