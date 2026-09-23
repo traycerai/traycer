@@ -38,6 +38,7 @@ import { marked } from "marked";
 const BLOCK_SEPARATOR = " · ";
 
 const MERMAID_LABEL = "Diagram";
+const WIREFRAME_LABEL = "Wireframe";
 const CODE_LABEL = "Code";
 
 /**
@@ -194,13 +195,15 @@ function blockText(token: unknown): string {
 }
 
 /**
- * A fence is summarised, never previewed. `mermaid` earns its own word because
- * the panel renders it as a diagram when expanded, so "Code" would misdescribe
- * what is behind the fold.
+ * A fence is summarised, never previewed. `mermaid` and `wireframe` earn their
+ * own words because the panel renders them as a diagram and a live preview
+ * when expanded, so "Code" would misdescribe what is behind the fold.
  */
 function codeLabel(token: unknown): string {
   const lang = readString(token, "lang").trim().toLowerCase();
-  return lang.startsWith("mermaid") ? MERMAID_LABEL : CODE_LABEL;
+  if (lang.startsWith("mermaid")) return MERMAID_LABEL;
+  if (lang.startsWith("wireframe")) return WIREFRAME_LABEL;
+  return CODE_LABEL;
 }
 
 function listText(token: unknown): string {

@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
@@ -112,6 +113,14 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     props.highlightGeneration ?? 0,
     containerRef,
   );
+  // The scroll container below outlives the question inside it, so an offset
+  // left by a long question would open the next one below its header.
+  const questionScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (questionScrollRef.current !== null) {
+      questionScrollRef.current.scrollTop = 0;
+    }
+  }, [safeIndex]);
 
   return (
     <section
@@ -142,47 +151,58 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           modeHint={null}
         />
       ) : (
-        <AnimatePresence mode="wait" initial={false}>
-          <m.div
-            key={safeIndex}
-            initial={
-              shouldReduceMotion ? false : { opacity: 0, x: direction * 10 }
-            }
-            animate={{ opacity: 1, x: 0 }}
-            exit={
-              shouldReduceMotion
-                ? { opacity: 0 }
-                : { opacity: 0, x: direction * -10 }
-            }
-            transition={
-              shouldReduceMotion ? { duration: 0 } : QUESTION_TRANSITION
-            }
-            className="flex flex-col gap-3"
-          >
-            <InterviewQuestionHeader
-              header={question.header}
-              questionText={question.question}
-              headerFindUnitId={null}
-              questionFindUnitId={null}
-              modeHint={
-                question.options.length === 0
-                  ? null
-                  : interviewChoiceModeHint(question.multiSelect, isLast)
+        // The card is an overlay anchored to the bottom of the tile, so a tall
+        // question grows UPWARD and would clip its own first lines past the
+        // tile's top edge. Question text now renders markdown (code blocks,
+        // diagrams) and option previews open inline, so the body is bounded
+        // and scrolls while the pager and Skip/Submit row below stay put.
+        <div
+          ref={questionScrollRef}
+          data-native-scrollbar="true"
+          className="min-h-0 max-h-[min(55dvh,36rem)] overflow-y-auto overscroll-contain"
+        >
+          <AnimatePresence mode="wait" initial={false}>
+            <m.div
+              key={safeIndex}
+              initial={
+                shouldReduceMotion ? false : { opacity: 0, x: direction * 10 }
               }
-            />
-            <QuestionPage
-              question={question}
-              draft={draft}
-              focusActive={focusActive}
-              disabled={props.isBusy}
-              pendingOptionIndex={pendingOptionIndex}
-              onToggleOption={toggleOption}
-              onToggleOther={toggleOther}
-              onOtherTextChange={setOtherText}
-              onFreeTextChange={setFreeText}
-            />
-          </m.div>
-        </AnimatePresence>
+              animate={{ opacity: 1, x: 0 }}
+              exit={
+                shouldReduceMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, x: direction * -10 }
+              }
+              transition={
+                shouldReduceMotion ? { duration: 0 } : QUESTION_TRANSITION
+              }
+              className="flex flex-col gap-3"
+            >
+              <InterviewQuestionHeader
+                header={question.header}
+                questionText={question.question}
+                headerFindUnitId={null}
+                questionFindUnitId={null}
+                modeHint={
+                  question.options.length === 0
+                    ? null
+                    : interviewChoiceModeHint(question.multiSelect, isLast)
+                }
+              />
+              <QuestionPage
+                question={question}
+                draft={draft}
+                focusActive={focusActive}
+                disabled={props.isBusy}
+                pendingOptionIndex={pendingOptionIndex}
+                onToggleOption={toggleOption}
+                onToggleOther={toggleOther}
+                onOtherTextChange={setOtherText}
+                onFreeTextChange={setFreeText}
+              />
+            </m.div>
+          </AnimatePresence>
+        </div>
       )}
       {/* The left cluster keeps its NATURAL width: `min-w-0 flex-1` here let
           the cluster's box shrink while its shrink-0 children could not, so a
