@@ -267,20 +267,28 @@ describe("chat.subscribe@1.16 windowed snapshot: tier decode on pendingApprovals
     expect(approval?.reason?.tier).toBe("soft");
   });
 
-  it("strips tier on the 1.15 snapshot's pendingApprovals[0].reason", () => {
-    const result = chatSubscribeV115.serverFrameSchema.safeParse(
-      snapshotFrame(baseSnapshot(TIERED_REASON)),
-    );
-    expect(result.success).toBe(true);
-    if (!result.success) throw new Error("expected the frame to parse");
-    if (result.data.kind !== "snapshot") throw new Error("expected snapshot");
-    const [approval] = result.data.snapshot.pendingApprovals;
-    expect(approval?.reason).not.toBeNull();
-    const reason = approval?.reason;
-    if (reason === null || reason === undefined) {
-      throw new Error("expected a reason");
-    }
-    expect(reason.rule).toBe("Force Push");
-    expect(Object.hasOwn(reason, "tier")).toBe(false);
-  });
+  it.each([
+    ["1.15", chatSubscribeV115],
+    ["1.14", chatSubscribeV114],
+    ["1.13", chatSubscribeV113],
+  ] as const)(
+    "strips tier on the %s snapshot's pendingApprovals[0].reason",
+    (_label, contract) => {
+      const result = contract.serverFrameSchema.safeParse(
+        snapshotFrame(baseSnapshot(TIERED_REASON)),
+      );
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error("expected the frame to parse");
+      if (result.data.kind !== "snapshot") throw new Error("expected snapshot");
+      const [approval] = result.data.snapshot.pendingApprovals;
+      expect(approval?.reason).not.toBeNull();
+      const reason = approval?.reason;
+      if (reason === null || reason === undefined) {
+        throw new Error("expected a reason");
+      }
+      expect(reason.rule).toBe("Force Push");
+      expect(reason.text).toBe("This rewrites remote history.");
+      expect(Object.hasOwn(reason, "tier")).toBe(false);
+    },
+  );
 });

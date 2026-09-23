@@ -121,14 +121,14 @@ describe("agent.gui.listHarnesses@9.2 downgrade bridges strip judgeDefaultModel 
     }
   });
 
-  it("the 9->8 and 9->1 bridges drop rows' judgeDefaultModel on a live response", () => {
+  it("every 9->N bridge drops rows' judgeDefaultModel on a live response", () => {
     const row = liveRowWithJudgeDefaultModel();
     const v92 = agentGuiListHarnessesV92.responseSchema.parse({
       harnesses: [row],
     });
 
     const entry = hostRpcRegistry["agent.gui.listHarnesses"][9];
-    for (const targetMajor of [8, 1] as const) {
+    for (const targetMajor of [1, 2, 3, 4, 5, 6, 7, 8] as const) {
       const path = entry.downgradePathsFromLatest[targetMajor];
       expect(path).toBeDefined();
       if (path === undefined) throw new Error("unreachable");
