@@ -44,6 +44,8 @@ function ContextMenuContent({
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
+  // During the exit animation, hover must not let a closed menu item steal
+  // focus from the control its action just opened (for example, inline rename).
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -51,7 +53,7 @@ function ContextMenuContent({
         data-slot="context-menu-content"
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-w-safe-dvw min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 max-w-safe-dvw min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:pointer-events-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
@@ -187,7 +189,7 @@ function ContextMenuSubContent({
         data-layout={layout}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:pointer-events-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           layout === "panel" ? "p-3 text-ui-sm" : "p-1",
           className,
         )}
