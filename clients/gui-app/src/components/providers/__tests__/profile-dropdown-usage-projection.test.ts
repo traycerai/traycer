@@ -39,11 +39,18 @@ function entry(
 }
 
 describe("picker comparison projection adapter", () => {
-  it("only exposes queued state for a refresh initiated by this profile", () => {
-    expect(scopeProfileUsageRefreshStatus("queued", false)).toBe("idle");
-    expect(scopeProfileUsageRefreshStatus("idle", true)).toBe("queued");
-    expect(scopeProfileUsageRefreshStatus("queued", true)).toBe("queued");
+  it("reads refreshing when EITHER the observed query or this profile's own pending refresh says so", () => {
+    expect(scopeProfileUsageRefreshStatus("idle", false)).toBe("idle");
+    // This profile's own refresh() is pending, independent of what the
+    // underlying (now un-serialized) query observes.
+    expect(scopeProfileUsageRefreshStatus("idle", true)).toBe("refreshing");
+    // The underlying query is fetching even though no local refresh() call
+    // is pending here - e.g. a concurrent fetch from another observer of the
+    // same cache key.
     expect(scopeProfileUsageRefreshStatus("refreshing", false)).toBe(
+      "refreshing",
+    );
+    expect(scopeProfileUsageRefreshStatus("refreshing", true)).toBe(
       "refreshing",
     );
   });

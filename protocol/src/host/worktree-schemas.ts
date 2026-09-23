@@ -1422,13 +1422,19 @@ export type WorktreeHostEntryV16 = z.infer<typeof worktreeHostEntrySchemaV16>;
  * `activityPaths` selects between two response modes, so the GUI can render the
  * base list instantly and then lazily enrich only the rows scrolled into view
  * instead of paying the whole-list probe cost up front:
- *  - `activityPaths: null` (default): unchanged - return ALL worktrees, each
- *    enriched iff `includeActivity` is true, else base-only.
- *  - `activityPaths: [<worktreePath>, ...]`: per-viewport lazy-enrichment mode.
- *    Return ONLY the worktrees whose path matches one of these (host-normalized
- *    compare), each FULLY enriched - the activity probes run for them REGARDLESS
- *    of `includeActivity`. Paths not found on disk are omitted (no error). Pass
- *    `[]` to enrich nothing (returns no worktrees).
+ *  - `activityPaths: null` (default): return ALL worktrees. With
+ *    `includeActivity` true each row carries the activity facts the host's row
+ *    cache already holds - a paged read does not derive (spawn git) for a row
+ *    that has none, it answers that row unresolved; only `forceRefresh` makes
+ *    a paged read derive. With `includeActivity` false, base-only.
+ *  - `activityPaths: [<worktreePath>, ...]`: per-viewport lazy-enrichment mode,
+ *    the only mode that derives on an ordinary read. Return ONLY the worktrees
+ *    whose path matches one of these (host-normalized compare), each FULLY
+ *    enriched - the activity probes run for them REGARDLESS of
+ *    `includeActivity`. A returned row's `worktreePath` is the host-normalized
+ *    (`path.resolve`) spelling, which need not be byte-equal to the requested
+ *    string. Paths not found on disk are omitted (no error). Pass `[]` to
+ *    enrich nothing (returns no worktrees).
  */
 export const worktreeListAllForHostRequestSchemaV11 = lazySchema(() =>
   worktreeListAllForHostRequestSchema

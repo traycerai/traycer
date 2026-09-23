@@ -2,8 +2,8 @@
  * End-to-end proof of the load-bearing property `useStatusBarRateLimitSegments`
  * exists to guarantee: an `ephemeralProcess` provider (codex, claude-code)
  * NEVER gets read by this hook's own observer, no matter how the batches split.
- * A codex read spawns a real CLI subprocess, and the serial queue is the only
- * thing allowed to own that spawn - `use-status-bar-rate-limit-segments.ts`'s
+ * A codex read spawns a real CLI subprocess, and only `fetchProviderRateLimits`
+ * is allowed to own that spawn - `use-status-bar-rate-limit-segments.ts`'s
  * own doc comment names this exact failure mode (`options: null` defaulting
  * `enabled` to `true` and calling the host directly).
  *
@@ -180,7 +180,7 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
     // The regression this whole design exists to prevent: codex's batch is
     // ephemeralProcess, so its observer is `enabled: false` no matter how
     // fetch-eligible the target is - a codex read spawns a CLI subprocess, and
-    // only the serial queue (never this observer) may trigger one.
+    // only `fetchProviderRateLimits` (never this observer) may trigger one.
     expect(harness.calledProviderIds).not.toContain("codex");
   });
 
@@ -204,10 +204,11 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
 
     // Not merely "renders no refresh button": a passive reader is handed no
     // handle it could pull with. `refetch` on a disabled query still fetches,
-    // and a mount target is a queue enqueue waiting for a component to mount
+    // and a mount target is a pending fetch waiting for a component to mount
     // it.
     expect(passive.result.current.mountTargets).toEqual([]);
-    expect(passive.result.current.refresh.queueTargets).toEqual([]);
+    expect(passive.result.current.refresh.ephemeralTargets).toEqual([]);
+    expect(passive.result.current.refresh.ephemeralFetching).toBe(false);
     expect(passive.result.current.refresh.httpRefetches).toEqual([]);
     expect(passive.result.current.refresh.httpFetching).toBe(false);
 

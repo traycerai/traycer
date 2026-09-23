@@ -97,9 +97,9 @@ function ScopedAppStatusBar(props: {
   // It is also the one rate-limit hook mounted outside that gate, which is safe
   // for exactly one reason: it cannot fetch a reading. Its usage observers are
   // `enabled: false` and the `providers.list` read under them is the same one
-  // the app-shell queue already keeps subscribed. Everything that CAN pull -
-  // the usage batches, the queued mount refresh - lives inside the gate, where
-  // the binding is provably the watched host's.
+  // the app-shell poll already keeps subscribed. Everything that CAN pull -
+  // the usage batches, the mount refresh - lives inside the gate, where the
+  // binding is provably the watched host's.
   const windowedProviders = useStatusBarWindowedProviders();
   const [usageOpen, setUsageOpen] = useState(false);
   // One subscription bridge for the segments and the panel alike, resolved

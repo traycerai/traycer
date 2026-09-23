@@ -41,7 +41,7 @@ interface ProviderRateLimitCacheState {
 /**
  * Cache-only observation: never `enabled`, so mounting this options object
  * against a query never initiates its own provider read - it only reflects
- * whatever the shared serial queue or another lane's active query already
+ * whatever `fetchProviderRateLimits` or another lane's active query already
  * wrote into that exact cache key. Exported for other picker-only surfaces
  * (`use-profile-usage-comparison.ts`) that need the same "observe, never
  * fetch" contract this module's own `useVisibleRateLimitProviders` uses.
@@ -101,7 +101,7 @@ function rateLimitProviderCandidates(
  * each tagged with its fetch lane. Drives both the interval timer (walks the
  * `ephemeralProcess` entries) and, later, the popover rail.
  *
- * Mounted persistently at the app-shell level (via `RateLimitQueueProvider`),
+ * Mounted persistently at the app-shell level (via `RateLimitPollProvider`),
  * so `providers.list` is subscribed for the window's lifetime rather than
  * lazily on Settings open. `subscribed: true` keeps it refreshing so a
  * credential change (login/logout invalidates `providers.list`) re-gates the
@@ -126,13 +126,13 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
 /**
  * Rate-limit providers that should be displayed in user-facing surfaces
  * (header glyph / popover). This deliberately has a wider gate than
- * `useConfiguredRateLimitProviders()`: the queue polls only providers with at
+ * `useConfiguredRateLimitProviders()`: the poll reads only providers with at
  * least one target whose account probe says a usage pull is safe, while display also
  * includes a provider once the shared provider-usage query cache has data or an
  * error for it. Candidate construction deliberately includes signed-out
  * providers: auth still makes `configured` false (so the polling hook above
  * drops them), while this display hook keeps observing their existing cache
- * entry. Ambient sign-out stops only the ambient queue; an authenticated
+ * entry. Ambient sign-out stops only the ambient poll; an authenticated
  * managed profile remains a valid target and keeps the provider visible even
  * before a cache entry exists. This display hook still observes existing
  * profile cache entries for every signed-out target.
