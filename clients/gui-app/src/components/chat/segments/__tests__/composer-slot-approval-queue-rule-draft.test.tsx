@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatApprovalStateSchema } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
+import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
@@ -194,6 +195,53 @@ describe("<ComposerSlotApprovalQueue /> rule draft action (inputSummary ?? toolN
       draft: {
         section: "allow",
         text: "Force push for `git push --force`",
+      },
+    });
+  });
+
+  it("still drafts from the input when the card shows the whole long command as its headline instead of a cut summary", () => {
+    // `approvalCardText` drops the first line's cut summary when the
+    // description IS the whole command (a Codex or ACP shell approval names
+    // the request by its own input), so a long command is shown once, uncut.
+    // That is a DISPLAY choice: the draft still has a concrete action, the
+    // summary the input derives to, and must not fall back to the generic
+    // tool name and vanish.
+    const command = `echo ${"a".repeat(100)}; rm -rf /tmp/victim`;
+    const summary = deriveToolInputSummary("bash", { command });
+    if (summary === null) throw new Error("fixture derives no summary");
+    expect(summary.length).toBeLessThan(command.length);
+    const onOpenSettings = vi.fn<(opts: TabHostSettingsOpts) => void>();
+    render(
+      <ComposerSlotApprovalQueue
+        approvals={[
+          approval({
+            toolName: "bash",
+            description: command,
+            input: { command },
+            reason: SOFT_FORCE_PUSH_REASON,
+          }),
+        ]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+
+    // The display half of the contract: the whole command, once.
+    expect(screen.getByText(command)).toBeTruthy();
+    expect(screen.queryByText(summary)).toBeNull();
+
+    fireEvent.click(screen.getByTestId("approval-allow-from-now-on"));
+
+    expect(onOpenSettings).toHaveBeenCalledWith({
+      section: "permissions",
+      tab: "rules",
+      resetToGeneral: false,
+      draft: {
+        section: "allow",
+        text: `Force push for \`${summary}\``,
       },
     });
   });

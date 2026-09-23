@@ -220,9 +220,16 @@ function ApprovalRow(props: ApprovalRowProps) {
     props.highlightGeneration,
     rowRef,
   );
+  // The derived summary is the action a rule draft narrows to; what the card
+  // SHOWS is a display choice made below it (`approvalCardText` drops the cut
+  // summary when the headline is the whole command), so the two are kept apart.
+  const derivedSummary = deriveToolInputSummary(
+    approval.toolName,
+    approval.input,
+  );
   const { inputSummary, headline } = approvalCardText(
     approval.toolName,
-    deriveToolInputSummary(approval.toolName, approval.input),
+    derivedSummary,
     approval.description,
     deriveToolInputDetail(approval.toolName, approval.input),
   );
@@ -275,7 +282,7 @@ function ApprovalRow(props: ApprovalRowProps) {
         <JudgeReason
           reason={approval.reason}
           ruleDraftAction={autoModeRuleDraftAction({
-            inputSummary,
+            inputSummary: derivedSummary,
             toolName: approval.toolName,
           })}
           ruleDraftWorkspace={props.ruleDraftWorkspace}
