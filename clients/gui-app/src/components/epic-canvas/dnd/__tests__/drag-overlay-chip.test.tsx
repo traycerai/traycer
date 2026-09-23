@@ -840,6 +840,7 @@ describe("<EpicRootDragOverlayContent />", () => {
             updatedAt: 1,
             userId: null,
             hostId: "host-a",
+            chatKind: "conversation",
             isTitleEditedByUser: false,
             docResident: null,
             settings: null,

@@ -210,6 +210,7 @@ function chatRow(
     updatedAt: 0,
     userId: null,
     hostId,
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     docResident,
     settings: null,

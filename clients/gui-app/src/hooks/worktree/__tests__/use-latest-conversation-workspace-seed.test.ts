@@ -18,6 +18,7 @@ function chat(
     updatedAt,
     userId: null,
     hostId: "host-1",
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     // Ordinary registry-backed chat - this suite exercises workspace-seed
     // ordering, not doc residency.

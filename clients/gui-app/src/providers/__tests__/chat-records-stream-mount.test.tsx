@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type {
   ChatRecordSummary,
-  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
@@ -119,8 +119,12 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamHostId: () => streamState.hostId,
 }));
 
-function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+// A stream row states its kind; every fixture here is a conversation.
+type StreamRecord = ChatRecordSummary & Pick<ChatRecordSummaryV12, "kind">;
+
+function record(overrides: Partial<StreamRecord>): StreamRecord {
   return {
+    kind: "conversation",
     chatId: "chat-1",
     ownerUserId: "user-a",
     originHostId: "host-A",
@@ -140,13 +144,13 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
 }
 
 /**
- * The `epic.listChatRecords@1.1` poll's row - what `applyChatRecords` (as
+ * The `epic.listChatRecords@1.2` poll's row - what `applyChatRecords` (as
  * opposed to a stream delta, which carries the BASE `record()` shape above)
  * takes. `docResident: false` by default: a registry answer.
  */
 function pollRecord(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return { ...record(overrides), docResident: false, ...overrides };
 }
 

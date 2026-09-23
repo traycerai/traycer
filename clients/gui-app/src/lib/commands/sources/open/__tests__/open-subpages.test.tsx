@@ -189,6 +189,7 @@ function chat(
     updatedAt: 0,
     userId: null,
     hostId,
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     // Ordinary registry-backed chat - this suite exercises the open
     // command's subpages, not doc residency.

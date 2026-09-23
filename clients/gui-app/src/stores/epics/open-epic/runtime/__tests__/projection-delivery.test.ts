@@ -158,6 +158,7 @@ describe("projectedSlicesView", () => {
       updatedAt: 0,
       userId: null,
       hostId: null,
+      chatKind: "conversation",
       isTitleEditedByUser: false,
       // Neutral scaffolding: nothing in these tests reads this field.
       docResident: false,

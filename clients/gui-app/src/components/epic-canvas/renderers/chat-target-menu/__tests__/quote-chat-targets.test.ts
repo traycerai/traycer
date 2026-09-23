@@ -25,6 +25,7 @@ function chat(fields: {
     userId: null,
     hostId: fields.hostId ?? SOURCE_HOST,
     docResident: false,
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     archivedAt: fields.archivedAt,
     chatKind: "conversation",

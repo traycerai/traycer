@@ -309,6 +309,12 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
     // and the routing gate must see `true` rather than today's `false`, which
     // would send its rename to a writer that cannot address it.
     docResident: true,
+    // Closed on read, as the persisted schema is: an absent or unknown value is
+    // a `conversation`, which is what every chat written before the field was.
+    chatKind:
+      readMaybeString(entry, "kind") === "evolution"
+        ? "evolution"
+        : "conversation",
     settings: coerceChatRunSettings(entry.get("settings")),
     archivedAt: readMaybeNullableNumber(entry, "archivedAt"),
     chatKind: chatProjectionKindOf(entry.get("kind")),
@@ -472,6 +478,7 @@ export function chatProjectionsEq(
     // transition would leave every write affordance judging the row on the
     // value it had before the answer arrived.
     a.docResident === b.docResident &&
+    a.chatKind === b.chatKind &&
     chatRunSettingsEq(a.settings, b.settings)
   );
 }
@@ -725,6 +732,7 @@ export function chatProjectionFromRecord(
     // state the home, and collapsing it to `false` is exactly the write-routing
     // misroute the field exists to prevent.
     docResident: record.docResident,
+    chatKind: record.kind,
     settings: null,
     archivedAt: record.archived
       ? (record.archivedAt ?? record.updatedAt)

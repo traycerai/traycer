@@ -70,6 +70,7 @@ function makeChatProjection(
     updatedAt: 0,
     userId: null,
     hostId: null,
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     // Neutral scaffolding: these rows exercise the overlay applier's
     // rename/reparent mechanics, with no plane in mind.

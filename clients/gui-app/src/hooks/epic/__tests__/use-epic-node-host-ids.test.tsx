@@ -16,7 +16,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import * as Y from "yjs";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   TuiAgentRecordSummaryV11,
   TuiAgentRecordSummaryV13,
@@ -114,8 +114,8 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 }
 
 function chatRecord(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -132,6 +132,7 @@ function chatRecord(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }

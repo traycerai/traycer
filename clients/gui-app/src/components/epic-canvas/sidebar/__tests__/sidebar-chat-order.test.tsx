@@ -474,6 +474,7 @@ function publishHead(
       ownerUserId: "user-1",
       originHostId: PICKER_FOREIGN_HOST_ID,
       title: chatId,
+      kind: "conversation",
       isTitleEditedByUser: false,
       // The row's REAL parent. Passing `null` here would reparent the chat to
       // a root, and a clocked root sort would then float it for a reason that

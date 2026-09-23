@@ -24,6 +24,7 @@ function chat(fields: {
     updatedAt: 0,
     userId: null,
     hostId: TERMINAL_HOST,
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     // Neutral scaffolding: this suite exercises target resolution, not doc
     // residency.

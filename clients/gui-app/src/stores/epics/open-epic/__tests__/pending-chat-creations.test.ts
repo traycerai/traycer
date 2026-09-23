@@ -50,6 +50,7 @@ function chatProjection(overrides: Partial<ChatProjection>): ChatProjection {
     updatedAt: 1,
     userId: "user-a",
     hostId: "host-1",
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     // Neutral scaffolding for the "already served" side of the union - no
     // specific plane in mind, so the registry/neutral default applies.
@@ -94,6 +95,7 @@ describe("chatProjectionFromPendingCreation", () => {
       updatedAt: 5_000,
       userId: "user-a",
       hostId: "h",
+      chatKind: "conversation",
       isTitleEditedByUser: false,
       // A creation THIS client made through `epic.createChat`, which writes the
       // registry - so the stand-in is store-homed by construction and keeps its
