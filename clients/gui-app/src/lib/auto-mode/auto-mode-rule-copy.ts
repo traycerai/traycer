@@ -119,12 +119,38 @@ export function autoModeRuleDraftWorkspace(
 }
 
 /**
+ * Tool names that say which tool ran, not what it did, compared lower-cased.
+ * A draft narrowed to one of these ("Force push for `Bash`") would allow
+ * every action that tool can take - which, for a shell, is the whole category
+ * and more - so it is no narrowing at all.
+ */
+const GENERIC_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "bash",
+  "shell",
+  "command",
+  "cmd",
+  "exec",
+  "execute",
+  "run",
+  "run_command",
+  "tool",
+  "apply_patch",
+  "file_change",
+  "permissions",
+  "edit",
+  "write",
+  "read",
+  "task",
+]);
+
+/**
  * The action a drafted rule is narrowed to: the approval's one-line input, or
  * - when it has none that can be summarized - its tool name, which for an ACP
  * request is the request's own title ("Run the migration") and so names the
- * action too. `null` only when neither says anything, and then no rule is
- * offered at all: a draft that named only the category would allow every
- * action in it, which is the widening the draft exists to avoid.
+ * action too. A tool name that only names the tool ({@link GENERIC_TOOL_NAMES})
+ * does not. `null` when nothing names the action, and then no rule is offered
+ * at all: a draft that named only the category, or only the tool, would allow
+ * every action in it, which is the widening the draft exists to avoid.
  */
 export function autoModeRuleDraftAction(input: {
   readonly inputSummary: string | null;
@@ -134,7 +160,8 @@ export function autoModeRuleDraftAction(input: {
     input.inputSummary === null ? "" : collapseWhitespace(input.inputSummary);
   if (summary.length > 0) return summary;
   const toolName = collapseWhitespace(input.toolName);
-  return toolName.length > 0 ? toolName : null;
+  if (toolName.length === 0) return null;
+  return GENERIC_TOOL_NAMES.has(toolName.toLowerCase()) ? null : toolName;
 }
 
 /**

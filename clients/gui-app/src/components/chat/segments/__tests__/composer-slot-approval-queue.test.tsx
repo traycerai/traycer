@@ -417,6 +417,9 @@ describe("<ComposerSlotApprovalQueue /> tier line", () => {
       <ComposerSlotApprovalQueue
         approvals={[
           approval({
+            // An input that names the action: the fixture's bare `bash` tool
+            // name does not, so a soft row without it offers no draft link.
+            input: { command: "git push --force" },
             reason: {
               rule: "Force push",
               text: "This rewrites history.",

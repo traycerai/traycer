@@ -384,11 +384,16 @@ export function useAutoJudgeBilling(
   // the refetch lands (`record` below).
   //
   // `staleTime: Infinity` is what makes `isStale` mean exactly "no answer, or
-  // invalidated since" rather than "older than a minute"; `refetchOnMount:
-  // "always"` keeps the re-ask each composer mount used to get from the
-  // default window, the same pair Settings' reader sets
-  // (`useAutoJudgeQuery`) - a selection saved in another window reaches this
-  // one no other way.
+  // invalidated since" rather than "older than a minute" - and it would also
+  // stop a mount from ever re-asking, so `refetchOnMount: "always"` puts that
+  // back. It puts back MORE than there was: under the app's 60-second
+  // freshness window a composer mounted within a minute of the last answer
+  // reused it, and now every mount re-asks. That is deliberate - a selection
+  // saved in another window reaches this one no other way, and a mount is
+  // rare next to a render. It is the mount rule Settings' reader sets
+  // (`useAutoJudgeQuery`: `refetchOnMount: "always"` with
+  // `refetchOnWindowFocus: false`), which does NOT set `staleTime: Infinity`,
+  // because it shows every record it has rather than withholding a stale one.
   const query = useHostQuery<HostRpcRegistry, "autoJudge.get">({
     cacheKeyIdentity: undefined,
     client,

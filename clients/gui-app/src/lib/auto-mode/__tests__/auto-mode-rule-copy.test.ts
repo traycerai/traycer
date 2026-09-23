@@ -284,4 +284,52 @@ describe("autoModeRuleDraftAction", () => {
       }),
     ).toBeNull();
   });
+  // A name that says which tool ran, not what it did: "Force push for `Bash`"
+  // would allow the category through that tool everywhere.
+  it.each([
+    "bash",
+    "shell",
+    "command",
+    "cmd",
+    "exec",
+    "execute",
+    "run",
+    "run_command",
+    "tool",
+    "apply_patch",
+    "file_change",
+    "permissions",
+    "edit",
+    "write",
+    "read",
+    "task",
+  ])(
+    "returns null for the generic tool name %s when there is no input summary",
+    (toolName) => {
+      expect(
+        autoModeRuleDraftAction({ inputSummary: null, toolName }),
+      ).toBeNull();
+    },
+  );
+
+  it("recognises a generic tool name whatever its case and surrounding whitespace", () => {
+    expect(
+      autoModeRuleDraftAction({ inputSummary: null, toolName: "Bash" }),
+    ).toBeNull();
+    expect(
+      autoModeRuleDraftAction({ inputSummary: null, toolName: "  EXECUTE " }),
+    ).toBeNull();
+    expect(
+      autoModeRuleDraftAction({ inputSummary: null, toolName: "Apply_Patch" }),
+    ).toBeNull();
+  });
+
+  it("still returns the input summary when the tool name is generic", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "git push --force",
+        toolName: "Bash",
+      }),
+    ).toBe("git push --force");
+  });
 });

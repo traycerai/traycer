@@ -15,7 +15,7 @@
  * for real against the mock host.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -43,6 +43,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
+import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 
 const CLAUDE_HARNESS_ID = providerIdToGuiHarnessId("claude-code");
 const CLAUDE_MODEL_SLUG = "claude-sonnet";
@@ -158,6 +159,7 @@ function createFixture() {
   let claudeAutoJudge: "traycer" | "provider" | undefined = undefined;
   let hold: HoldGate | null = null;
   const listModelsHarnessIds: GuiHarnessId[] = [];
+  let autoJudgeGetCalls = 0;
 
   function armHold(): void {
     let release: () => void = () => undefined;
@@ -215,8 +217,11 @@ function createFixture() {
           models: [modelRow(params.harnessId, slug)],
         };
       },
+      // The verdict is decided when the request ARRIVES, the way the host's
+      // getter reads the Traycer row before it awaits its model read - so a
+      // held reply is an older verdict landing late, not a fresh one.
       "autoJudge.get": async () => {
-        if (hold !== null) await hold.promise;
+        autoJudgeGetCalls += 1;
         const response: AutoJudgeGetResponse = {
           selection: null,
           effective: traycerGreen
@@ -228,6 +233,7 @@ function createFixture() {
             : { source: "fallback" },
           blocked: null,
         };
+        if (hold !== null) await hold.promise;
         return response;
       },
     },
@@ -258,6 +264,15 @@ function createFixture() {
     hostId: mockRemoteHostEntry.hostId,
     listModelsRequestedFor: (harnessId: GuiHarnessId): boolean =>
       listModelsHarnessIds.includes(harnessId),
+    autoJudgeGetCalls: (): number => autoJudgeGetCalls,
+    harnessCatalogAnswered: (): boolean =>
+      queryClient.getQueryData(
+        hostQueryKeys.method(
+          mockRemoteHostEntry.hostId,
+          "agent.gui.listHarnesses",
+          {},
+        ),
+      ) !== undefined,
     setTraycerGreen: (value: boolean) => {
       traycerGreen = value;
     },
@@ -270,6 +285,36 @@ function createFixture() {
     armHold,
     releaseHold,
   };
+}
+
+/**
+ * Warms both model catalogs so a test about the VERDICT is not also waiting on
+ * a model read (E3 covers the cold model read on its own).
+ */
+function prewarmModelCatalogs(fixture: {
+  readonly queryClient: QueryClient;
+  readonly hostId: string;
+}): void {
+  fixture.queryClient.setQueryData(
+    hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
+      harnessId: CLAUDE_HARNESS_ID,
+      workingDirectory: null,
+    }),
+    {
+      harnessId: CLAUDE_HARNESS_ID,
+      models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
+    } satisfies ListGuiAgentModelsResponse,
+  );
+  fixture.queryClient.setQueryData(
+    hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
+      harnessId: "traycer",
+      workingDirectory: null,
+    }),
+    {
+      harnessId: "traycer",
+      models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
+    } satisfies ListGuiAgentModelsResponse,
+  );
 }
 
 afterEach(() => {
@@ -461,6 +506,140 @@ describe("useAutoJudgeBilling against the real query cache", () => {
     );
 
     expect(fixture.listModelsRequestedFor("traycer")).toBe(true);
+  });
+
+  it("E1b: a transition while the FIRST read is in flight re-asks the host and never renders the older fallback verdict", async () => {
+    const fixture = createFixture();
+    prewarmModelCatalogs(fixture);
+    // The first read is held from the start, so it is still in flight when
+    // the Traycer row changes: its captured `fallback` answer lands late.
+    fixture.armHold();
+    const seen: Array<AutoJudgeBilling | null> = [];
+    renderHook(
+      () => {
+        const billing = useAutoJudgeBilling(
+          fixture.hostId,
+          CLAUDE_HARNESS_ID,
+          CLAUDE_MODEL_SLUG,
+        );
+        seen.push(billing);
+        return billing;
+      },
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(
+      () => {
+        expect(fixture.harnessCatalogAnswered()).toBe(true);
+        expect(fixture.autoJudgeGetCalls()).toBeGreaterThan(0);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    const callsBeforeTransition = fixture.autoJudgeGetCalls();
+    fixture.setTraycerGreen(true);
+    await act(async () => {
+      await fixture.queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(
+          fixture.hostId,
+          "agent.gui.listHarnesses",
+        ),
+      });
+    });
+    // A NEW request, asked after the transition - not the held one reused.
+    await waitFor(
+      () => {
+        expect(fixture.autoJudgeGetCalls()).toBeGreaterThan(
+          callsBeforeTransition,
+        );
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    await act(async () => {
+      fixture.releaseHold();
+      await Promise.resolve();
+    });
+    await waitFor(
+      () => {
+        expect(seen.at(-1)).toEqual({
+          kind: "traycer",
+          modelLabel: TRAYCER_MODEL_SLUG,
+        });
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+    expect(seen).not.toContainEqual({
+      kind: "provider",
+      harnessId: CLAUDE_HARNESS_ID,
+      harnessLabel: "Claude Code",
+      modelLabel: CLAUDE_MODEL_SLUG,
+    });
+  });
+
+  it("E2b: the reverse transition while the FIRST read is in flight never renders the older Traycer verdict", async () => {
+    const fixture = createFixture();
+    fixture.setTraycerGreen(true);
+    prewarmModelCatalogs(fixture);
+    fixture.armHold();
+    const seen: Array<AutoJudgeBilling | null> = [];
+    renderHook(
+      () => {
+        const billing = useAutoJudgeBilling(
+          fixture.hostId,
+          CLAUDE_HARNESS_ID,
+          CLAUDE_MODEL_SLUG,
+        );
+        seen.push(billing);
+        return billing;
+      },
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(
+      () => {
+        expect(fixture.harnessCatalogAnswered()).toBe(true);
+        expect(fixture.autoJudgeGetCalls()).toBeGreaterThan(0);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    const callsBeforeTransition = fixture.autoJudgeGetCalls();
+    fixture.setTraycerGreen(false);
+    await act(async () => {
+      await fixture.queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(
+          fixture.hostId,
+          "agent.gui.listHarnesses",
+        ),
+      });
+    });
+    await waitFor(
+      () => {
+        expect(fixture.autoJudgeGetCalls()).toBeGreaterThan(
+          callsBeforeTransition,
+        );
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    await act(async () => {
+      fixture.releaseHold();
+      await Promise.resolve();
+    });
+    await waitFor(
+      () => {
+        expect(seen.at(-1)).toEqual({
+          kind: "provider",
+          harnessId: CLAUDE_HARNESS_ID,
+          harnessLabel: "Claude Code",
+          modelLabel: CLAUDE_MODEL_SLUG,
+        });
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+    expect(seen).not.toContainEqual({
+      kind: "traycer",
+      modelLabel: TRAYCER_MODEL_SLUG,
+    });
   });
 
   it("E4: a provider-native run never requests the traycer judge's model catalog", async () => {

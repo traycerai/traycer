@@ -142,6 +142,30 @@ describe("<ComposerSlotApprovalQueue /> rule draft action (inputSummary ?? toolN
     );
   });
 
+  it("offers no draft link for a generic tool name with no input summary, and still renders the tier line", () => {
+    render(
+      <ComposerSlotApprovalQueue
+        approvals={[
+          approval({
+            toolName: "Bash",
+            input: null,
+            reason: SOFT_FORCE_PUSH_REASON,
+          }),
+        ]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("approval-allow-from-now-on")).toBeNull();
+    expect(screen.getByTestId("approval-judge-tier-line").textContent).toBe(
+      "Sent to you because you didn't ask for this exact action.",
+    );
+  });
+
   it("still prefers the input summary over the tool name when both are present", () => {
     const onOpenSettings = vi.fn<(opts: OpenSettingsModalOpts) => void>();
     render(

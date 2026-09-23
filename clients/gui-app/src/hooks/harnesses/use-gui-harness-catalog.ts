@@ -282,10 +282,17 @@ const LIST_HARNESSES = "agent.gui.listHarnesses";
  * reports as settled, and nothing else would re-ask it. A host where nothing
  * has read `autoJudge.get` is left alone.
  *
- * Every `autoJudge.get` slot on the host, whatever its extra cache identity:
- * the composer keys its read by these inputs (`useAutoJudgeBilling`) and must
- * re-ask when it returns to a value it held before, and Settings reads the
- * plain slot.
+ * CANCEL, then invalidate - the same order `useAutoJudgeSetMutation` uses
+ * before it publishes a newer answer. A read already in flight was asked
+ * before this transition, and the host decided its verdict when the request
+ * arrived (`readAutomaticJudge` reads the Traycer row, then awaits its model
+ * read), so that answer is stale however late it lands. Invalidation alone
+ * does not replace it: for a query with no data yet, TanStack's `fetch`
+ * returns the pending promise rather than starting a new one, and that old
+ * read's success then clears the invalidated flag, so the composer would
+ * publish it as current. Cancelling reverts the query to idle (a first read
+ * back to "no answer") and the invalidation's refetch is then a NEW request,
+ * asked after the change.
  */
 function invalidateAutoJudgeOnAutomaticInputs(
   queryClient: QueryClient,
@@ -318,7 +325,9 @@ function invalidateAutoJudgeOnAutomaticInputs(
   ) {
     return;
   }
-  void queryClient.invalidateQueries({ queryKey: autoJudgeScope });
+  void queryClient
+    .cancelQueries({ queryKey: autoJudgeScope })
+    .then(() => queryClient.invalidateQueries({ queryKey: autoJudgeScope }));
 }
 
 export function useGuiHarnessesQueryForClient(
