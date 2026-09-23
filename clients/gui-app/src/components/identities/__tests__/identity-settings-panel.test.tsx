@@ -96,7 +96,7 @@ afterEach(() => {
 describe("IdentitySettingsPanel - draft vs. baseline", () => {
   it("a clean draft follows the host: saving after the record moved sends the record's own fields", () => {
     identityStore.setState({ identity: identityA() });
-    render(<IdentitySettingsPanel identityId="id-1" hostId="host-a" />);
+    render(<IdentitySettingsPanel identityId="id_1" hostId="host-a" />);
 
     // The host publishes a different record while the draft is still clean -
     // the draft silently follows it (no notice, no discarded typing yet).
@@ -116,7 +116,7 @@ describe("IdentitySettingsPanel - draft vs. baseline", () => {
 
   it("a dirty draft is kept when the record moves, and Discard reloads the record's own fields", () => {
     identityStore.setState({ identity: identityA() });
-    render(<IdentitySettingsPanel identityId="id-1" hostId="host-a" />);
+    render(<IdentitySettingsPanel identityId="id_1" hostId="host-a" />);
 
     fireEvent.change(titleInput(), { target: { value: "Renamed" } });
     expect(titleInput().value).toBe("Renamed");

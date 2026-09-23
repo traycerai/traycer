@@ -126,7 +126,7 @@ function renderTree(
   render(
     <TabHostProvider hostId="host-a">
       <IdentityFileTree
-        identityId="identity-1"
+        identityId="identity_1"
         groups={groupsFixture()}
         hydrated
         selectedPath={overrides.selectedPath ?? null}

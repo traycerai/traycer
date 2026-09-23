@@ -43,7 +43,7 @@ import type { IdentityTreeFile } from "@/lib/identities/file-tree";
 import type { IdentityBlobSource } from "@/lib/identities/blob-source";
 
 const HOST_ID = "host-a";
-const IDENTITY_ID = "identity-1";
+const IDENTITY_ID = "identity_1";
 const EPOCH = "epoch-1";
 
 // ─── Blob query fake (mutable across tests via vi.hoisted) ────────────────

@@ -87,7 +87,7 @@ describe("IdentityHistoryPanel - restore flow", () => {
   });
 
   it("clicking Restore on the older entry requests a preflight, then executes with the preflight's hash after confirming", () => {
-    render(<IdentityHistoryPanel identityId="identity-1" path="SOUL.md" />);
+    render(<IdentityHistoryPanel identityId="identity_1" path="SOUL.md" />);
 
     // Only the OLDER entry (not the newest/current one) offers a Restore button.
     const restoreButtons = screen.getAllByTestId("identity-history-restore");
@@ -98,7 +98,7 @@ describe("IdentityHistoryPanel - restore flow", () => {
     const [preflightVariables, preflightOptions] =
       mocks.restoreMutate.mock.calls[0];
     expect(preflightVariables).toEqual({
-      identityId: "identity-1",
+      identityId: "identity_1",
       path: "SOUL.md",
       targetObservationId: "obs-older",
       mode: "preflight",
@@ -122,7 +122,7 @@ describe("IdentityHistoryPanel - restore flow", () => {
     expect(mocks.restoreMutate).toHaveBeenCalledTimes(2);
     const [executeVariables] = mocks.restoreMutate.mock.calls[1];
     expect(executeVariables).toEqual({
-      identityId: "identity-1",
+      identityId: "identity_1",
       path: "SOUL.md",
       targetObservationId: "obs-older",
       mode: "execute",

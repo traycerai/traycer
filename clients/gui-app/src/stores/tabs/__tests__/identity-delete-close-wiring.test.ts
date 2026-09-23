@@ -16,16 +16,16 @@ import {
 } from "@/stores/identities/identity-tabs-store";
 import type { TabRef } from "@/stores/tabs/types";
 
-const REF_A: TabRef = { kind: "identity", id: "id-a" };
-const REF_B: TabRef = { kind: "identity", id: "id-b" };
+const REF_A: TabRef = { kind: "identity", id: "id_a" };
+const REF_B: TabRef = { kind: "identity", id: "id_b" };
 
 function seedTwoIdentityTabs(): void {
   useIdentityTabsStore
     .getState()
-    .openTab({ identityId: "id-a", hostId: "host-a", title: "A" });
+    .openTab({ identityId: "id_a", hostId: "host-a", title: "A" });
   useIdentityTabsStore
     .getState()
-    .openTab({ identityId: "id-b", hostId: "host-a", title: "B" });
+    .openTab({ identityId: "id_b", hostId: "host-a", title: "B" });
   useTabsStore.setState({
     version: 2,
     items: [
@@ -51,7 +51,7 @@ describe("T10: identity tab delete routes through the coordinator", () => {
 
     const closed = tabCommandCoordinator.closeRefAfterConfirmed({
       kind: "identity",
-      id: "id-a",
+      id: "id_a",
     });
 
     expect(closed).toBe(true);
@@ -59,19 +59,19 @@ describe("T10: identity tab delete routes through the coordinator", () => {
       { kind: "tab", id: tabItemId(REF_B), ref: REF_B },
     ]);
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(REF_B));
-    expect(useIdentityTabsStore.getState().tabsById["id-a"]).toBeUndefined();
+    expect(useIdentityTabsStore.getState().tabsById["id_a"]).toBeUndefined();
   });
 
   it("closing the identity tab directly through its own store reconciles the layout the same way", () => {
     tabCommandCoordinator.installSourceReconciliation();
     seedTwoIdentityTabs();
 
-    useIdentityTabsStore.getState().closeTab("id-a");
+    useIdentityTabsStore.getState().closeTab("id_a");
 
     expect(useTabsStore.getState().items).toEqual([
       { kind: "tab", id: tabItemId(REF_B), ref: REF_B },
     ]);
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(REF_B));
-    expect(useIdentityTabsStore.getState().tabsById["id-a"]).toBeUndefined();
+    expect(useIdentityTabsStore.getState().tabsById["id_a"]).toBeUndefined();
   });
 });

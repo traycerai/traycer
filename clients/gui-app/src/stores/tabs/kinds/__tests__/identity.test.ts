@@ -15,8 +15,8 @@ import type { IdentityTab } from "@/stores/identities/identity-tabs-store";
 
 function identityTabSource(overrides: Partial<IdentityTab>): IdentityTab {
   return {
-    id: "identity-1",
-    identityId: "identity-1",
+    id: "identity_1",
+    identityId: "identity_1",
     hostId: "host-a",
     title: "",
     ...overrides,
@@ -32,22 +32,22 @@ describe("identity tab kind - registry dispatch", () => {
 describe("identity tab kind - build()", () => {
   it("builds the /identities/<id> route from the source identity id", () => {
     const tab = identityTabModule.build(
-      identityTabSource({ identityId: "identity-42", title: "SOUL" }),
+      identityTabSource({ identityId: "identity_42", title: "SOUL" }),
     );
-    expect(tab.route).toBe(identityPathname("identity-42"));
-    expect(tab.identityId).toBe("identity-42");
+    expect(tab.route).toBe(identityPathname("identity_42"));
+    expect(tab.identityId).toBe("identity_42");
   });
 
   it("falls back to 'Identity' when the source title is empty", () => {
     const tab = identityTabModule.build(
-      identityTabSource({ identityId: "identity-1", title: "" }),
+      identityTabSource({ identityId: "identity_1", title: "" }),
     );
     expect(tab.name).toBe("Identity");
   });
 
   it("uses the source title verbatim when non-empty", () => {
     const tab = identityTabModule.build(
-      identityTabSource({ identityId: "identity-1", title: "My Identity" }),
+      identityTabSource({ identityId: "identity_1", title: "My Identity" }),
     );
     expect(tab.name).toBe("My Identity");
   });
@@ -69,26 +69,26 @@ describe("identity tab kind - build()", () => {
 describe("identity tab kind - descriptor", () => {
   it("resolveIntent returns the identity intent for the tab's identity id", () => {
     const tab = identityTabModule.build(
-      identityTabSource({ identityId: "identity-7" }),
+      identityTabSource({ identityId: "identity_7" }),
     );
     expect(identityTabModule.descriptor.resolveIntent(tab)).toEqual(
-      identityTabIntent("identity-7"),
+      identityTabIntent("identity_7"),
     );
   });
 
   it("routeOptions for the identity intent matches identityRoute", () => {
-    const intent = identityTabIntent("identity-7");
+    const intent = identityTabIntent("identity_7");
     expect(identityTabModule.descriptor.routeOptions(intent)).toEqual(
-      identityRoute("identity-7"),
+      identityRoute("identity_7"),
     );
   });
 
   it("matchesPath is true only for the tab's exact route", () => {
     const tab = identityTabModule.build(
-      identityTabSource({ identityId: "identity-7" }),
+      identityTabSource({ identityId: "identity_7" }),
     );
     expect(
-      identityTabModule.descriptor.matchesPath(tab, "/identities/identity-7"),
+      identityTabModule.descriptor.matchesPath(tab, "/identities/identity_7"),
     ).toBe(true);
     expect(
       identityTabModule.descriptor.matchesPath(tab, "/identities/other"),

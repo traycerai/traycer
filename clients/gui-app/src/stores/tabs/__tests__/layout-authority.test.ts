@@ -100,8 +100,8 @@ const DRAFT_SOURCE: LandingDraftTab = {
   ...freshLandingMirrorState(),
 };
 const IDENTITY_SOURCE: IdentityTab = {
-  id: "identity-1",
-  identityId: "identity-1",
+  id: "identity_1",
+  identityId: "identity_1",
   hostId: "host-a",
   title: "Reviewer",
 };

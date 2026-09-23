@@ -43,7 +43,7 @@ function buildClient(
 }
 
 const INPUT = {
-  identityId: "identity-1",
+  identityId: "identity_1",
   path: "logo.png",
   sha256: "a".repeat(64),
   mediaType: "application/octet-stream",

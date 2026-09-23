@@ -33,7 +33,7 @@ import {
 } from "@/stores/identities/open-identity/store";
 
 const HOST_ID = "host-a";
-const IDENTITY_ID = "identity-1";
+const IDENTITY_ID = "identity_1";
 const EPOCH = "epoch-1";
 
 // ─── Frame builders (parsed through the real schema) ───────────────────────
