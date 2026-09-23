@@ -221,10 +221,10 @@ async function runLifecycle(
 
 // Async-capable counterpart to the sync `withPlatform` helper further down
 // this file (scoped to the "swap-lock recovery wiring" describe block,
-// unchanged). The preserve-path tests below need `process.platform` pinned
-// across `await`s spanning `beforeSwap`/`afterSwap` - `it.runIf(process
-// .platform === "darwin")` would silently never run on Linux CI, which is
-// exactly the gap this stub closes.
+// unchanged). The tests below need `process.platform` pinned across
+// `await`s spanning `beforeSwap`/`afterSwap` - an `it.runIf`/`it.skipIf`
+// gate on `process.platform` would silently never run its darwin branch on
+// Linux CI, which is exactly the gap this stub closes.
 async function withPlatformAsync<T>(
   platform: string,
   run: () => Promise<T>,
@@ -463,107 +463,102 @@ describe("service install lifecycle re-registration", () => {
     expect(harness.restart).not.toHaveBeenCalled();
   });
 
-  it("leaves an externally-managed (SMAppService-owned) REGISTRATION untouched while cooperatively cycling the host on macOS", async () => {
-    // Desktop owns this label. Any manifest rewrite / bootstrap from the
-    // CLI would either corrupt the BTM registration or run into
-    // installService's SMAppService refusal - that half is unchanged. What
-    // changed: on macOS the host PROCESS is now stopped through its own
-    // lifecycle RPCs before the swap (an honest install, instead of
-    // printing "stopping service" and swapping under the live host) and
-    // kickstarted back on the new bytes after - via `relaunchAfterRestart`
-    // (kickstart -k semantics), since the pre-swap stop RESOLVED and proved
-    // the host child gone.
-    const { state, harness } = await runLifecycle(
-      "externally-managed",
+  it.each(["darwin", "linux", "win32"] as const)(
+    "leaves an externally-managed (SMAppService-owned) REGISTRATION untouched, cycling the host only on macOS (%s)",
+    async (platform) => {
+      // Desktop owns this label. Any manifest rewrite / bootstrap from the
+      // CLI would either corrupt the BTM registration or run into
+      // installService's SMAppService refusal - that half is unchanged. What
+      // changed: on macOS the host PROCESS is now stopped through its own
+      // lifecycle RPCs before the swap (an honest install, instead of
+      // printing "stopping service" and swapping under the live host) and
+      // kickstarted back on the new bytes after - via `relaunchAfterRestart`
+      // (kickstart -k semantics), since the pre-swap stop RESOLVED and proved
+      // the host child gone.
+      const { state, harness } = await withPlatformAsync(platform, () =>
+        runLifecycle("externally-managed", bootstrap, false),
+      );
+
+      expect(state.priorState).toBe("externally-managed");
+      expect(state.postSwapError).toBeNull();
+      expect(harness.install).not.toHaveBeenCalled();
+      expect(harness.restart).not.toHaveBeenCalled();
+      expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
+      if (platform === "darwin") {
+        expect(harness.stop).toHaveBeenCalledTimes(1);
+        // Not asserting `harness.start` counts here - `relaunchAfterRestart`'s
+        // mock internally calls `start()` too, so a count on `start` conflates
+        // the two routes. `relaunchAfterRestart` is the one that matters.
+        expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+        expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
+          forcedRecycle: true,
+        });
+        expect(state.postSwapAction).toBe("start");
+      } else {
+        expect(state.postSwapAction).toBe("none");
+        expect(harness.start).not.toHaveBeenCalled();
+        if (platform !== "win32") {
+          // win32 always stops in beforeSwap (stray-process cleanup before
+          // the dir swap); Linux has no Desktop-managed arm at all.
+          expect(harness.stop).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
+  it("a refused publication at the post-swap relaunch (resolved stop): postSwapError carries the wrapped stopped-for-install wording", async () => {
+    const harness = makeController("externally-managed");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
       bootstrap,
-      false,
-    );
-
-    expect(state.priorState).toBe("externally-managed");
-    expect(state.postSwapError).toBeNull();
-    expect(harness.install).not.toHaveBeenCalled();
-    expect(harness.restart).not.toHaveBeenCalled();
-    expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
-    if (process.platform === "darwin") {
-      expect(harness.stop).toHaveBeenCalledTimes(1);
-      // Not asserting `harness.start` counts here - `relaunchAfterRestart`'s
-      // mock internally calls `start()` too, so a count on `start` conflates
-      // the two routes. `relaunchAfterRestart` is the one that matters.
-      expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
-      expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
-        forcedRecycle: true,
-      });
-      expect(state.postSwapAction).toBe("start");
-    } else {
-      expect(state.postSwapAction).toBe("none");
-      expect(harness.start).not.toHaveBeenCalled();
-      if (process.platform !== "win32") {
-        // win32 always stops in beforeSwap (stray-process cleanup before
-        // the dir swap); Linux has no Desktop-managed arm at all.
-        expect(harness.stop).not.toHaveBeenCalled();
-      }
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
     }
-  });
+    const publishError = new Error("proof write failed");
+    setPublisher(async () => {
+      throw publishError;
+    });
 
-  it.runIf(process.platform === "darwin")(
-    "a refused publication at the post-swap relaunch (resolved stop): postSwapError carries the wrapped stopped-for-install wording",
-    async () => {
-      const harness = makeController("externally-managed");
-      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      const handle = createServiceInstallLifecycle({
-        environment: "production",
-        bootstrap,
-        force: false,
-        onWillStopHost: null,
-        hooks: NO_INSTALL_PHASE_HOOKS,
-      });
-      const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
-      if (setPublisher === undefined) {
-        throw new Error("install lifecycle exposes no adoption publisher seam");
-      }
-      const publishError = new Error("proof write failed");
-      setPublisher(async () => {
-        throw publishError;
-      });
-
+    await withPlatformAsync("darwin", async () => {
       await handle.lifecycle.beforeSwap();
       expect(handle.state.stoppedBeforeSwap).toBe(true);
       await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    });
 
-      // `postSwapAction` is only ever set to "start" once the post-swap
-      // relaunch RESOLVES; a refused publication throws before that
-      // assignment runs, so it stays at its "none" default.
-      expect(handle.state.postSwapAction).toBe("none");
-      expect(handle.state.postSwapError).not.toBeNull();
-      expect(handle.state.postSwapError).toContain("proof write failed");
-      expect(handle.state.postSwapError).toContain(
-        "stopped for the install and is still stopped",
-      );
-      expect(handle.state.postSwapError).toContain(
-        "Run 'traycer host service start'",
-      );
-    },
-  );
+    // `postSwapAction` is only ever set to "start" once the post-swap
+    // relaunch RESOLVES; a refused publication throws before that
+    // assignment runs, so it stays at its "none" default.
+    expect(handle.state.postSwapAction).toBe("none");
+    expect(handle.state.postSwapError).not.toBeNull();
+    expect(handle.state.postSwapError).toContain("proof write failed");
+    expect(handle.state.postSwapError).toContain(
+      "stopped for the install and is still stopped",
+    );
+    expect(handle.state.postSwapError).toContain(
+      "Run 'traycer host service start'",
+    );
+  });
 
-  it.runIf(process.platform === "darwin")(
-    "force-stops the Desktop-managed host when force is set",
-    async () => {
-      // `--force` threads into the pre-swap `controller.stop` on the
-      // externally-managed path exactly like every other stop route: the
-      // caller's stated consent to kill in-flight work, not an implicit
-      // side effect of installing.
-      const { harness } = await runLifecycle(
-        "externally-managed",
-        bootstrap,
-        true,
-      );
+  it("force-stops the Desktop-managed host when force is set", async () => {
+    // `--force` threads into the pre-swap `controller.stop` on the
+    // externally-managed path exactly like every other stop route: the
+    // caller's stated consent to kill in-flight work, not an implicit
+    // side effect of installing.
+    const { harness } = await withPlatformAsync("darwin", () =>
+      runLifecycle("externally-managed", bootstrap, true),
+    );
 
-      expect(harness.stop).toHaveBeenCalledWith(
-        label,
-        expect.objectContaining({ force: true }),
-      );
-    },
-  );
+    expect(harness.stop).toHaveBeenCalledWith(
+      label,
+      expect.objectContaining({ force: true }),
+    );
+  });
 
   it("force-stops a running CLI-owned host when force is set", async () => {
     // Not darwin-gated in source: the running/win32 branch of beforeSwap
@@ -576,185 +571,181 @@ describe("service install lifecycle re-registration", () => {
     );
   });
 
-  it.runIf(process.platform === "darwin")(
-    "aborts the swap when the Desktop-managed host denies the shutdown claim (busy)",
-    async () => {
-      // Never swap the install dir out from under live work: a busy denial
-      // from the cooperative stop is a user-visible refusal, not a
-      // degradation to swap-anyway.
-      const harness = makeController("externally-managed");
-      harness.stop.mockRejectedValue(
-        new CliError({
-          code: CLI_ERROR_CODES.HOST_BUSY,
-          message:
-            "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes, or re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).",
-          details: null,
-          exitCode: 1,
-        }),
-      );
-      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      const handle = createServiceInstallLifecycle({
-        environment: "production",
-        bootstrap,
-        force: false,
-        onWillStopHost: null,
-        hooks: NO_INSTALL_PHASE_HOOKS,
-      });
+  it("aborts the swap when the Desktop-managed host denies the shutdown claim (busy)", async () => {
+    // Never swap the install dir out from under live work: a busy denial
+    // from the cooperative stop is a user-visible refusal, not a
+    // degradation to swap-anyway.
+    const harness = makeController("externally-managed");
+    harness.stop.mockRejectedValue(
+      new CliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message:
+          "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes, or re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
 
+    await withPlatformAsync("darwin", async () => {
       await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_BUSY,
       });
-      expect(handle.state.stoppedBeforeSwap).toBe(false);
-    },
-  );
+    });
+    expect(handle.state.stoppedBeforeSwap).toBe(false);
+  });
 
-  it.runIf(process.platform === "darwin")(
-    "kickstarts the agent post-swap with a plain start (not relaunchAfterRestart) when the cooperative stop is unreachable",
-    async () => {
-      // A host too broken to answer its own RPC must not make the install
-      // refuse - that is the lockout shape this epic exists to end. The
-      // swap proceeds exactly as it did before the cooperative era and the
-      // degradation is logged. The machine is no longer left alone
-      // post-swap, though: a plain kickstart starts a genuinely stopped job
-      // and is a silent no-op at the launchd layer on one that is still
-      // live (never `relaunchAfterRestart`'s forced recycle - the stop
-      // never proved the host child dead, so recycling could kill live
-      // work).
-      const harness = makeController("externally-managed");
-      harness.stop.mockRejectedValue(
-        new CliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message: "host stop: RPC endpoint unreachable (dial timeout)",
-          details: null,
-          exitCode: 1,
-        }),
-      );
-      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      const handle = createServiceInstallLifecycle({
-        environment: "production",
-        bootstrap,
-        force: false,
-        onWillStopHost: null,
-        hooks: NO_INSTALL_PHASE_HOOKS,
-      });
+  it("kickstarts the agent post-swap with a plain start (not relaunchAfterRestart) when the cooperative stop is unreachable", async () => {
+    // A host too broken to answer its own RPC must not make the install
+    // refuse - that is the lockout shape this epic exists to end. The
+    // swap proceeds exactly as it did before the cooperative era and the
+    // degradation is logged. The machine is no longer left alone
+    // post-swap, though: a plain kickstart starts a genuinely stopped job
+    // and is a silent no-op at the launchd layer on one that is still
+    // live (never `relaunchAfterRestart`'s forced recycle - the stop
+    // never proved the host child dead, so recycling could kill live
+    // work).
+    const harness = makeController("externally-managed");
+    harness.stop.mockRejectedValue(
+      new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "host stop: RPC endpoint unreachable (dial timeout)",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
 
+    await withPlatformAsync("darwin", async () => {
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
       expect(handle.state.stoppedBeforeSwap).toBe(false);
       expect(mocks.cliLoggerWarnMock).toHaveBeenCalled();
 
       await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
-      expect(handle.state.postSwapAction).toBe("start");
-      expect(harness.start).toHaveBeenCalledTimes(1);
-      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
-    },
-  );
+    });
+    expect(handle.state.postSwapAction).toBe("start");
+    expect(harness.start).toHaveBeenCalledTimes(1);
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+  });
 
-  it.runIf(process.platform === "darwin")(
-    "a refused publication at the post-swap plain start (degraded stop): postSwapError equals the raw refusal message, unwrapped",
-    async () => {
-      const harness = makeController("externally-managed");
-      harness.stop.mockRejectedValue(
-        new CliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message: "host stop: RPC endpoint unreachable (dial timeout)",
-          details: null,
-          exitCode: 1,
-        }),
-      );
-      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      const handle = createServiceInstallLifecycle({
-        environment: "production",
-        bootstrap,
-        force: false,
-        onWillStopHost: null,
-        hooks: NO_INSTALL_PHASE_HOOKS,
-      });
-      const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
-      if (setPublisher === undefined) {
-        throw new Error("install lifecycle exposes no adoption publisher seam");
-      }
-      const publishError = new Error("proof write failed");
-      setPublisher(async () => {
-        throw publishError;
-      });
+  it("a refused publication at the post-swap plain start (degraded stop): postSwapError equals the raw refusal message, unwrapped", async () => {
+    const harness = makeController("externally-managed");
+    harness.stop.mockRejectedValue(
+      new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "host stop: RPC endpoint unreachable (dial timeout)",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    const publishError = new Error("proof write failed");
+    setPublisher(async () => {
+      throw publishError;
+    });
 
+    await withPlatformAsync("darwin", async () => {
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
       expect(handle.state.stoppedBeforeSwap).toBe(false);
 
       await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    });
 
-      // Same as the resolved-stop variant above: the assignment to "start"
-      // never runs when the relaunch throws.
-      expect(handle.state.postSwapAction).toBe("none");
-      expect(handle.state.postSwapError).toBe(publishError.message);
-    },
-  );
+    // Same as the resolved-stop variant above: the assignment to "start"
+    // never runs when the relaunch throws.
+    expect(handle.state.postSwapAction).toBe("none");
+    expect(handle.state.postSwapError).toBe(publishError.message);
+  });
 
-  it.runIf(process.platform === "darwin")(
-    "starts the agent post-swap even when the host was already stopped (stop --force then install must not leave the machine hostless)",
-    async () => {
-      // Field scenario: a prior `host stop --force` purges pid.json, so the
-      // pre-swap stop here throws no-endpoint rather than resolving - the
-      // same degraded path as an unreachable RPC, just a different cause.
-      // The OLD (gated) post-swap logic skipped the kickstart whenever
-      // `stoppedBeforeSwap` was false, which left a completed install, a
-      // printed "starting service", and no host running until someone ran
-      // `host restart` by hand. The unconditional post-swap kickstart
-      // exists to close exactly this gap.
-      const harness = makeController("externally-managed");
-      harness.stop.mockRejectedValue(
-        new CliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message:
-            "host stop: no host endpoint is published for 'ai.traycer.host' (pid metadata is missing or unreadable); the host may already be stopped",
-          details: null,
-          exitCode: 1,
-        }),
-      );
-      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      const handle = createServiceInstallLifecycle({
-        environment: "production",
-        bootstrap,
-        force: false,
-        onWillStopHost: null,
-        hooks: NO_INSTALL_PHASE_HOOKS,
-      });
+  it("starts the agent post-swap even when the host was already stopped (stop --force then install must not leave the machine hostless)", async () => {
+    // Field scenario: a prior `host stop --force` purges pid.json, so the
+    // pre-swap stop here throws no-endpoint rather than resolving - the
+    // same degraded path as an unreachable RPC, just a different cause.
+    // The OLD (gated) post-swap logic skipped the kickstart whenever
+    // `stoppedBeforeSwap` was false, which left a completed install, a
+    // printed "starting service", and no host running until someone ran
+    // `host restart` by hand. The unconditional post-swap kickstart
+    // exists to close exactly this gap.
+    const harness = makeController("externally-managed");
+    harness.stop.mockRejectedValue(
+      new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message:
+          "host stop: no host endpoint is published for 'ai.traycer.host' (pid metadata is missing or unreadable); the host may already be stopped",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
 
+    await withPlatformAsync("darwin", async () => {
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
       expect(handle.state.stoppedBeforeSwap).toBe(false);
 
       await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
-      expect(handle.state.postSwapAction).toBe("start");
-      expect(harness.start).toHaveBeenCalledTimes(1);
-      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
-    },
-  );
+    });
+    expect(handle.state.postSwapAction).toBe("start");
+    expect(harness.start).toHaveBeenCalledTimes(1);
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+  });
 
-  it.runIf(process.platform === "darwin")(
-    "records postSwapError without throwing when the post-swap kickstart itself fails",
-    async () => {
-      // The completed install must not be undone by a failing kickstart -
-      // the failure is recorded for the command to surface (and Doctor to
-      // flag), never thrown.
-      const harness = makeController("externally-managed");
-      harness.relaunchAfterRestart.mockRejectedValue(
-        new Error("launchctl kickstart -k failed: no such process"),
-      );
-      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      const handle = createServiceInstallLifecycle({
-        environment: "production",
-        bootstrap,
-        force: false,
-        onWillStopHost: null,
-        hooks: NO_INSTALL_PHASE_HOOKS,
-      });
+  it("records postSwapError without throwing when the post-swap kickstart itself fails", async () => {
+    // The completed install must not be undone by a failing kickstart -
+    // the failure is recorded for the command to surface (and Doctor to
+    // flag), never thrown.
+    const harness = makeController("externally-managed");
+    harness.relaunchAfterRestart.mockRejectedValue(
+      new Error("launchctl kickstart -k failed: no such process"),
+    );
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    await withPlatformAsync("darwin", async () => {
       await handle.lifecycle.beforeSwap();
 
       await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
-      expect(handle.state.postSwapAction).toBe("none");
-      expect(handle.state.postSwapError).not.toBeNull();
-    },
-  );
+    });
+    expect(handle.state.postSwapAction).toBe("none");
+    expect(handle.state.postSwapError).not.toBeNull();
+  });
 
   // The repair half: leaving Desktop's registration alone must NOT mean
   // leaving a competing CLI-label registration alone. This is the one
@@ -773,37 +764,43 @@ describe("service install lifecycle re-registration", () => {
   // The repair is contractually non-throwing, but the lifecycle must not rely
   // on that politely holding: an install whose bytes are already swapped in
   // must never be failed by its own opportunistic cleanup.
-  it("does not fail the install when the competing-registration repair throws", async () => {
-    const harness = makeController("externally-managed");
-    harness.retireCompetingRegistration.mockRejectedValue(
-      new Error("launchctl exploded"),
-    );
-    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-    const handle = createServiceInstallLifecycle({
-      environment: "production",
-      bootstrap,
-      force: false,
-      onWillStopHost: null,
-      hooks: NO_INSTALL_PHASE_HOOKS,
-    });
-    await handle.lifecycle.beforeSwap();
+  it.each(["darwin", "linux", "win32"] as const)(
+    "does not fail the install when the competing-registration repair throws (%s)",
+    async (platform) => {
+      const harness = makeController("externally-managed");
+      harness.retireCompetingRegistration.mockRejectedValue(
+        new Error("launchctl exploded"),
+      );
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
 
-    await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
-    // The repair throw never aborts the lifecycle; on macOS the
-    // cooperative stop still gets its kickstart-back (via
-    // `relaunchAfterRestart`, since the stop resolved), elsewhere the
-    // service is left alone.
-    expect(handle.state.postSwapAction).toBe(
-      process.platform === "darwin" ? "start" : "none",
-    );
-    if (process.platform === "darwin") {
-      expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
-    }
-    // Caught, but never silent. Every failure the repair anticipates is
-    // logged at its own seam, so the only way into that catch is an
-    // unforeseen throw - exactly the case that escaped the logging.
-    expect(mocks.cliLoggerWarnMock).toHaveBeenCalled();
-  });
+      await withPlatformAsync(platform, async () => {
+        await handle.lifecycle.beforeSwap();
+
+        await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+      });
+      // The repair throw never aborts the lifecycle; on macOS the
+      // cooperative stop still gets its kickstart-back (via
+      // `relaunchAfterRestart`, since the stop resolved), elsewhere the
+      // service is left alone.
+      expect(handle.state.postSwapAction).toBe(
+        platform === "darwin" ? "start" : "none",
+      );
+      if (platform === "darwin") {
+        expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+      }
+      // Caught, but never silent. Every failure the repair anticipates is
+      // logged at its own seam, so the only way into that catch is an
+      // unforeseen throw - exactly the case that escaped the logging.
+      expect(mocks.cliLoggerWarnMock).toHaveBeenCalled();
+    },
+  );
 
   // Every other prior state either registers the CLI label itself or
   // deliberately leaves the service alone; there is no Desktop-owned agent
@@ -817,32 +814,31 @@ describe("service install lifecycle re-registration", () => {
     },
   );
 
-  it.skipIf(process.platform !== "darwin")(
-    "host update preserves the registered plist's CLI invocation instead of repointing to freshly resolved binaries",
-    async () => {
-      // Brew/manual cohort: a stale staged ~/.traycer/cli binary would win
-      // normal resolution, silently repointing the plist away from the brew
-      // binary the registration actually invokes.
-      const registered = { command: "/opt/homebrew/bin/traycer", args: [] };
-      mocks.readRegisteredCliInvocationMock.mockResolvedValue(registered);
-      mocks.resolveServiceCliInvocationMock.mockResolvedValue({
-        command: "/Users/example/.traycer/cli/bin/traycer",
-        args: [],
-      });
+  it("host update preserves the registered plist's CLI invocation instead of repointing to freshly resolved binaries", async () => {
+    // Brew/manual cohort: a stale staged ~/.traycer/cli binary would win
+    // normal resolution, silently repointing the plist away from the brew
+    // binary the registration actually invokes.
+    const registered = { command: "/opt/homebrew/bin/traycer", args: [] };
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(registered);
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/Users/example/.traycer/cli/bin/traycer",
+      args: [],
+    });
 
-      const { state, harness } = await runLifecycle("running", null, false);
+    const { state, harness } = await withPlatformAsync("darwin", () =>
+      runLifecycle("running", null, false),
+    );
 
-      expect(state.postSwapAction).toBe("install");
-      expect(state.postSwapError).toBeNull();
-      expect(harness.install).toHaveBeenCalledWith({
-        label,
-        cli: registered,
-        enableLinger: false,
-      });
-      // Preservation bypasses resolution entirely - nothing to repoint to.
-      expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(state.postSwapAction).toBe("install");
+    expect(state.postSwapError).toBeNull();
+    expect(harness.install).toHaveBeenCalledWith({
+      label,
+      cli: registered,
+      enableLinger: false,
+    });
+    // Preservation bypasses resolution entirely - nothing to repoint to.
+    expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
+  });
 
   // Preserve-path coverage for the self-naming drop (isSelfNamingCliInvocation
   // is NOT mocked in this suite - see the module comment near the top of this
