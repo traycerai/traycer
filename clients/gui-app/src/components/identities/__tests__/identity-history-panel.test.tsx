@@ -48,7 +48,7 @@ function versionEntry(
     contentHash: "a".repeat(64),
     serializerVersion: 1,
     parentContentHash: null,
-    provenance: { kind: "agent" },
+    provenance: { kind: "remote_merge" },
     captureStreamId: "stream-1",
     localSeq: 1,
     capturedAt: 1000,
