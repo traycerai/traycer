@@ -9,6 +9,21 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
 /**
+ * What a chat IS, as opposed to what it runs on. `conversation` is every chat a
+ * user starts or an agent spawns; `evolution` is an identity's review pass, which
+ * the sidebar and every chat list filter out while it runs.
+ *
+ * Shared by the doc chat entry (`chatSchema.kind`) and the record-plane rows the
+ * GUI's lists are actually fed from (`host/epic/chat-records.ts`), so the two
+ * cannot grow different members. Always used with `.default("conversation")`:
+ * an absent key is a chat written before the field existed.
+ */
+export const chatKindSchema = lazySchema(() =>
+  z.enum(["conversation", "evolution"]),
+);
+export type ChatKind = z.infer<typeof chatKindSchema>;
+
+/**
  * The grammar of an agent identity's id - one ASCII alphanumeric, then up to 35
  * more alphanumerics or underscores (36 max, no dash, no dot, no slash). The
  * same rule `packages/common` enforces where identities are minted; the protocol

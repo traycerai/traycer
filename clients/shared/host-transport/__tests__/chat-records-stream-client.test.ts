@@ -133,7 +133,7 @@ function row(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
 function rowStreamV13(
   overrides: Partial<ChatRecordSummaryStreamV13>,
 ): ChatRecordSummaryStreamV13 {
-  return { ...row(overrides), ...overrides };
+  return { ...row(overrides), kind: "conversation", ...overrides };
 }
 
 function headStamp(
@@ -265,8 +265,13 @@ describe("ChatRecordsStreamClient", () => {
       reason: "revoked",
     });
 
+    // A pre-`kind` minor's row is stated as a `conversation` on the way in.
     expect(h.deltas).toEqual([
-      { kind: "upsert", epicId: "epic-1", record },
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: { ...record, kind: "conversation" },
+      },
       {
         kind: "remove",
         epicId: "epic-2",
@@ -454,7 +459,11 @@ describe("ChatRecordsStreamClient", () => {
     });
 
     expect(h.deltas).toEqual([
-      { kind: "upsert", epicId: "epic-1", record: foreign },
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: { ...foreign, kind: "conversation" },
+      },
     ]);
     h.client.close();
   });

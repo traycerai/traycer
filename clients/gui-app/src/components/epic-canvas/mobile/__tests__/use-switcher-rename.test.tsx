@@ -597,6 +597,7 @@ describe("useSwitcherRename", () => {
           ownerUserId: "user-a",
           originHostId: HOST_ID,
           title: "Local projection chat",
+          kind: "conversation",
           isTitleEditedByUser: false,
           parentChatId: null,
           createdAt: 1,
