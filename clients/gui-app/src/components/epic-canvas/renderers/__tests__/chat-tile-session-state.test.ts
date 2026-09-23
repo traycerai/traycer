@@ -109,6 +109,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 const MESSAGE: ChatMessage = {
@@ -1389,6 +1390,8 @@ function chatRecord(
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
 }
 

@@ -108,6 +108,7 @@ import {
   updateChatProfileResponseSchema,
   updateChatRunSettingsRequestSchema,
   updateChatRunSettingsRequestSchemaV11,
+  updateChatRunSettingsRequestSchemaV12,
   updateChatRunSettingsResponseSchema,
   updateEpicRequestSchema,
   updateEpicResponseSchema,
@@ -889,6 +890,34 @@ export const epicUpdateChatRunSettingsUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+// v1.2 carries the chat's agent identity on the strict tuple. See
+// `updateChatRunSettingsRequestSchemaV12`.
+export const epicUpdateChatRunSettingsV12 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV12,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+
+// A `@1.1` caller cannot state an identity, and the upgraded request has to
+// pass `@1.2`'s canonical validation, where the field is required - so the
+// upgrade fills `null`. That `null` is "not stated", NOT "the stock identity":
+// the resolver keeps the chat's stored identity for any caller below
+// `EPIC_UPDATE_CHAT_RUN_SETTINGS_IDENTITY_MINOR`, reading the caller's version
+// off `ctx.schemaVersion`. The response is unchanged.
+export const epicUpdateChatRunSettingsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV11,
+  typeof epicUpdateChatRunSettingsV12
+>({
+  from: epicUpdateChatRunSettingsV11.schemaVersion,
+  to: epicUpdateChatRunSettingsV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    settings: { ...request.settings, identityId: null },
+  }),
+  upgradeResponse: (response) => response,
+});
+
 // Optional (non-floor) capability: narrow profile-only settings update - the
 // host patches its own authoritative persisted tuple. See the schema doc in
 // `unary-schemas.ts` for why no sibling model/harness update exists.
@@ -1280,6 +1309,11 @@ export const epicListChatRecordsV12 = defineRpcContract({
  * Absent says the only true thing: that host was never asked. Consumers read
  * `head ?? null` and see no difference, which is why the distinction costs
  * them nothing.
+ *
+ * `kind` is the opposite case, and is stated: every row a `@1.1` host serves
+ * is a `conversation`, because evolution chats exist only on hosts that speak
+ * the minors carrying the field. That is a fact about the older host, not a
+ * guess put in its mouth.
  */
 export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
   typeof epicListChatRecordsV11,
@@ -1288,7 +1322,12 @@ export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
   from: epicListChatRecordsV11.schemaVersion,
   to: epicListChatRecordsV12.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    chats: response.chats.map((chat) => ({
+      ...chat,
+      kind: "conversation" as const,
+    })),
+  }),
 });
 
 // `@1.3` gates the whole answer on a list revision the caller sends back: the
@@ -1492,10 +1531,20 @@ export const epicGetChatRunSettingsUpgradeV20ToV30 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // Request shape is identical; a v2.0 settings tuple is a valid v3.0 one
-  // (only the `harnessId` enum grows), so both upgrades are identity.
+  // Request shape is identical, so that leg stays the identity.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  // The response leg is no longer the identity. v2.0's tuple was v3.0's minus
+  // the `harnessId` enum growth, which widens and needs no work; v3.0 then
+  // gained `identityId` from the live persisted tuple, and a v2.0 answer names
+  // no identity because the line it came from cannot express one. `null` is
+  // therefore the TRUE value here rather than a filler - it is what the field
+  // means everywhere else: this chat runs as the host-managed stock identity.
+  upgradeResponse: (response) => ({
+    settings:
+      response.settings === null
+        ? null
+        : { ...response.settings, identityId: null },
+  }),
 });
 
 export const epicGetChatRunSettingsDowngradeV30ToV20 = defineDowngradePath<

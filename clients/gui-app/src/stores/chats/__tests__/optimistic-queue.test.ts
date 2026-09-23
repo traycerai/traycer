@@ -27,6 +27,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 describe("optimistic-queue managed-command items", () => {

@@ -76,6 +76,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 // Chat-tile binding identity required by every `RenderedMessagesInput`. Stable

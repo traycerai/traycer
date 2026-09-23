@@ -73,6 +73,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
@@ -222,6 +223,8 @@ function emitSnapshot(harness: Harness): void {
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

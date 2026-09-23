@@ -18,6 +18,7 @@ import {
 // legacy record with it would fail the read outright.
 import {
   agentModeSchema,
+  chatKindSchema,
   chatRunSettingsSchema,
   guiHarnessIdSchema,
   permissionModeSchemaPreAuto,
@@ -438,6 +439,17 @@ export type ChatRecordHeadStamp = z.infer<typeof chatRecordHeadStampSchema>;
 export const chatRecordSummaryV12Schema = lazySchema(() =>
   chatRecordSummaryV11Schema.extend({
     head: chatRecordHeadStampSchema.nullable().optional(),
+    /**
+     * What the chat IS - `evolution` for an identity's review pass, which every
+     * chat list filters out while it runs. Defaulted, so a row from a host that
+     * predates the field reads `conversation`. Carried on the record row
+     * because the GUI's lists are fed from this plane, not the doc.
+     *
+     * Added IN PLACE: this row is bound only by unreleased lines
+     * (`epic.listChatRecords` 1.2 and 1.3; released is 1.1 at
+     * `host-v1.3.1`), and an added key is stripped by an older peer's schema.
+     */
+    kind: chatKindSchema.default("conversation"),
   }),
 );
 export type ChatRecordSummaryV12 = z.infer<typeof chatRecordSummaryV12Schema>;
@@ -562,6 +574,17 @@ export type ListChatRecordsRequestV13 = z.infer<
 export const chatRecordSummaryStreamV13Schema = lazySchema(() =>
   chatRecordSummarySchema.extend({
     head: chatRecordHeadStampSchema.nullable().optional(),
+    /**
+     * What the chat IS - `evolution` for an identity's review pass, which every
+     * chat list filters out while it runs. Defaulted, so a row from a host that
+     * predates the field reads `conversation`. Carried on the record row
+     * because the GUI's lists are fed from this plane, not the doc.
+     *
+     * Added IN PLACE: this row is bound only by unreleased lines
+     * (`host.chatRecords.subscribe` 1.3 and 1.4; released is 1.2 at
+     * `host-v1.3.1`), and an added key is stripped by an older peer's schema.
+     */
+    kind: chatKindSchema.default("conversation"),
   }),
 );
 export type ChatRecordSummaryStreamV13 = z.infer<

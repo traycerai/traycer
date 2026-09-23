@@ -30,6 +30,7 @@ function chat(id: string, docResident: boolean | null): ChatProjection {
     updatedAt: 0,
     userId: null,
     hostId: RECORD_PLANE_HOST,
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     docResident,
     settings: null,

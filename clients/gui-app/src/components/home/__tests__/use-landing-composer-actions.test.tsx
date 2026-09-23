@@ -974,6 +974,7 @@ describe("useLandingComposerActions", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
     expect(
       useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
@@ -1723,6 +1724,7 @@ describe("useLandingComposerActions", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     queryClient.clear();

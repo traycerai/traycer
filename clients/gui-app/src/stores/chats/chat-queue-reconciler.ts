@@ -778,6 +778,10 @@ const DRIFT_LABELS: Record<keyof ChatRunSettings | "accountContext", string> = {
   serviceTier: "service tier",
   agentMode: "agent mode",
   profileId: "profile",
+  // The agent's persona, not a model knob: a resend under a different identity
+  // runs with different instructions, memories and skills, which is the largest
+  // silent difference this clause can name.
+  identityId: "identity",
   accountContext: "billing",
 };
 
@@ -825,6 +829,7 @@ function runSettingsDrift(
     serviceTier: [sent.serviceTier, current.serviceTier],
     agentMode: [sent.agentMode, current.agentMode],
     profileId: [sent.profileId ?? null, current.profileId ?? null],
+    identityId: [sent.identityId, current.identityId],
   };
   // `null` is a VALUE - "use the default" - not an absence. Dropping a field
   // because its SENT value was null hid the drift that matters most.

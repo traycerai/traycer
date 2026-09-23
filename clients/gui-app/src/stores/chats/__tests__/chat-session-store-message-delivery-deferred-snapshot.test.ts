@@ -49,6 +49,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 function delivery(
@@ -170,6 +171,8 @@ function deferredWindowedSnapshot(
         activeSessionChain: null,
         claudePendingWakes: [],
         pinnedUserProviderHandle: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

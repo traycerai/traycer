@@ -41,6 +41,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const QUESTION_CONTENT: JsonContent = {

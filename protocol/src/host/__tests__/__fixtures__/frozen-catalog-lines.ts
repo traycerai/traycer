@@ -20748,6 +20748,18 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "type": "null"
                     }
                   ]
+                },
+                "identityId": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_]{0,35}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -20757,7 +20769,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                 "reasoningEffort",
                 "serviceTier",
                 "agentMode",
-                "profileId"
+                "profileId",
+                "identityId"
               ],
               "additionalProperties": false
             },

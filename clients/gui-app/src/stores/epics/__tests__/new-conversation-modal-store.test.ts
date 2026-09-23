@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useNewConversationModalStore } from "../new-conversation-modal-store";
 import { emptyLandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -112,5 +113,35 @@ describe("useNewConversationModalStore setPrimaryFolder", () => {
     // No entry (or workspace field) was written at all since the target
     // folder isn't a member.
     expect(patch?.workspace?.primaryPath ?? null).toBeNull();
+  });
+});
+
+describe("useNewConversationModalStore setSettings", () => {
+  const SETTINGS: ChatRunSettings = {
+    harnessId: "claude",
+    model: "sonnet",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+    identityId: null,
+  };
+
+  // The equality key once enumerated fields by hand and omitted these two, so
+  // a change to only one of them compared "unchanged" and was discarded.
+  it.each([
+    ["identityId", { identityId: "identity_1" }],
+    ["profileId", { profileId: "work" }],
+  ] as const)("keeps a change to only %s", (_field, change) => {
+    const epicId = "epic-1";
+    const store = useNewConversationModalStore.getState();
+    store.setSettings(epicId, SETTINGS);
+    store.setSettings(epicId, { ...SETTINGS, ...change });
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+        ?.settings,
+    ).toEqual({ ...SETTINGS, ...change });
   });
 });
