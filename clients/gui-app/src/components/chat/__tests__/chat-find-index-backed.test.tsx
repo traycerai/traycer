@@ -163,7 +163,7 @@ function assistantRow(input: {
     ...(input.turnMessageIds === null
       ? {}
       : { turnMessageIds: input.turnMessageIds }),
-    runState: input.streaming ? "streaming" : null,
+    runState: input.streaming ? "running" : null,
     segments: [
       {
         id: `${input.rowId}:text`,

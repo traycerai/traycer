@@ -663,6 +663,7 @@ describe("chat find adapter", () => {
     setRows([
       {
         messageId: "row-1",
+        recordIds: ["row-1"],
         units: [
           { unitId: "earlier-unit", text: "needle one", owningChain: [] },
           { unitId: "target-unit", text: "needle two", owningChain: [] },
@@ -713,6 +714,7 @@ describe("chat find adapter", () => {
     setRows([
       {
         messageId: "row-1",
+        recordIds: ["row-1"],
         units: [
           { unitId: "earlier-unit", text: "needle one", owningChain: [] },
           { unitId: "target-unit", text: "needle two", owningChain: [] },
