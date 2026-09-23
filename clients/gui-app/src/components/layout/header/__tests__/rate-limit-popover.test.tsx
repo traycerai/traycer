@@ -900,6 +900,7 @@ describe("<RateLimitPopover /> zero-provider state", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -2382,6 +2383,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
     expect(useProvidersFocusStore.getState()).toMatchObject({
       focusHarnessId: "opencode",
@@ -3110,6 +3112,7 @@ describe("<RateLimitPopover /> rail settings", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
     // The anchor cannot ride on `openSettings`, which carries a section and
     // nothing finer - it travels in the reveal store the Layout panel's
@@ -3180,6 +3183,7 @@ describe("<RateLimitPopover /> manage provider links", () => {
       resetToGeneral: false,
       tab: null,
       draft: null,
+      hostId: null,
     });
     expect(useProvidersFocusStore.getState()).toMatchObject({
       focusHarnessId: "codex",
