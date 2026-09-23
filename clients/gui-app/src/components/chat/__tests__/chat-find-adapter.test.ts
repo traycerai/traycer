@@ -682,6 +682,79 @@ describe("chat find adapter", () => {
     expect(activeHighlightParent(registry)).toBe(target);
   });
 
+  it("keeps a fallback match through message redraw and upgrades when its unit mounts", async () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    document.body.append(row);
+    const earlier = document.createElement("p");
+    earlier.textContent = "needle one";
+    const target = document.createElement("p");
+    target.textContent = "needle two";
+    row.append(earlier, target);
+    let mountedUnit: HTMLElement | null = null;
+    const revealMatch = vi.fn((revealTarget: ChatFindRevealTarget) => {
+      revealTarget.paintFallback();
+    });
+    const scroll = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-message-fallback-redraw",
+      revealMatch,
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => mountedUnit,
+    });
+    setRows([
+      {
+        messageId: "row-1",
+        units: [
+          { unitId: "earlier-unit", text: "needle one", owningChain: [] },
+          { unitId: "target-unit", text: "needle two", owningChain: [] },
+        ],
+      },
+    ]);
+    void adapter.search({ requestId: 40, query: "needle", matchCase: false });
+    void adapter.next();
+    expect(activeHighlightParent(registry)).toBe(target);
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 2,
+      total: 2,
+      activeUnitId: "target-unit",
+      exactHighlight: "painted",
+    });
+    const initialRowCalls = getRowsCalls();
+    const initialScrollCalls = scroll.mock.calls.length;
+
+    // The fallback watches the message root: a renderer redraw must retain
+    // the message-wide second occurrence while the unit anchor is absent.
+    const replacement = document.createElement("p");
+    replacement.textContent = "needle two";
+    target.replaceWith(replacement);
+    await Promise.resolve();
+    flushFrames();
+    expect(activeHighlightParent(registry)).toBe(replacement);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(getRowsCalls()).toBe(initialRowCalls);
+    expect(revealMatch).toHaveBeenCalledTimes(2);
+    expect(scroll).toHaveBeenCalledTimes(initialScrollCalls);
+
+    // Once the unit is mounted, passive paint uses its per-unit occurrence 0.
+    // Reusing the message ordinal 1 here would leave the highlight pending.
+    mountedUnit = replacement;
+    row.append(document.createElement("span"));
+    await Promise.resolve();
+    flushFrames();
+    expect(activeHighlightParent(registry)).toBe(replacement);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(getRowsCalls()).toBe(initialRowCalls);
+    expect(revealMatch).toHaveBeenCalledTimes(2);
+    expect(scroll).toHaveBeenCalledTimes(initialScrollCalls);
+    adapter.dispose();
+    row.remove();
+  });
+
   it("prevents stale highlight work from overwriting a newer query", () => {
     installMockHighlights();
     const row = document.createElement("div");

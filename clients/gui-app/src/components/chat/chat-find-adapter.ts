@@ -140,6 +140,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   private readonly highlighter: ChatFindHighlighter;
   private readonly mountedObserver: MutationObserver;
   private observedRoot: HTMLElement | null = null;
+  private paintScope: "unit" | "message" = "unit";
 
   private rows: ReadonlyArray<ChatFindRow> = [];
   // Refreshed with `rows`, never independently: the caveat has to describe the
@@ -429,6 +430,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   private requestReveal(activeMatch: ChatFindMatch): void {
+    this.paintScope = "unit";
     const matchKey = chatFindMatchKey(activeMatch);
     const generation = this.paintGeneration + 1;
     this.paintGeneration = generation;
@@ -466,7 +468,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     const generation = this.paintGeneration;
     this.paintFrameId = window.requestAnimationFrame(() => {
       this.paintFrameId = null;
-      this.paintMatch(generation, matchKey, "unit", false);
+      this.paintMatch(generation, matchKey, this.paintScope, false);
     });
   }
 
@@ -488,10 +490,17 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     ) {
       return;
     }
-    const root =
-      scope === "unit"
-        ? this.getMountedUnitRoot(currentMatch.messageId, currentMatch.unitId)
-        : this.getMountedMessageRoot(currentMatch.messageId);
+    const unitRoot = this.getMountedUnitRoot(
+      currentMatch.messageId,
+      currentMatch.unitId,
+    );
+    // A fallback remains message-scoped until the unit anchor exists. Its
+    // observer must repaint with the same scope/ordinal instead of clearing
+    // a valid fallback merely because the unit is still unavailable.
+    const messageScope = scope === "message" && unitRoot === null;
+    const root = messageScope
+      ? this.getMountedMessageRoot(currentMatch.messageId)
+      : unitRoot;
     if (root === null) {
       this.observeMountedRoot(null);
       if (this.getMountedMessageRoot(currentMatch.messageId) !== null) {
@@ -506,15 +515,15 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       }
       return;
     }
+    this.paintScope = messageScope ? "message" : "unit";
     this.observeMountedRoot(root);
     // The unit-scope root walks only the active unit, so the per-unit ordinal is
     // correct. The message-scope fallback root walks every unit in the message,
     // so it must use the message-wide ordinal - otherwise an earlier matching
     // unit steals the highlight.
-    const activeOccurrence =
-      scope === "message"
-        ? currentMatch.occurrenceInMessage
-        : currentMatch.occurrenceInUnit;
+    const activeOccurrence = messageScope
+      ? currentMatch.occurrenceInMessage
+      : currentMatch.occurrenceInUnit;
     const painted = this.highlighter.paint({
       root,
       query,
@@ -556,6 +565,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   private clearHighlight(): void {
+    this.paintScope = "unit";
     this.observeMountedRoot(null);
     this.highlighter.clear();
   }
