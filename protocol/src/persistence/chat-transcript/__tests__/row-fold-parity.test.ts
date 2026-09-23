@@ -11,7 +11,14 @@ import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/sende
 import {
   foldTranscriptRows,
   projectTranscriptRows,
+  turnKeysWithLaterOverlappingChanges,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import {
+  checkpointChangePaths,
+  overlappingCheckpointIds,
+  overlappingCheckpointKeys,
+  type TurnCheckpointManifest,
+} from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import {
   buildRowSkeleton,
   transcriptPreviewProjection,
@@ -30,6 +37,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-projection-fold-state";
 import {
   RowFoldStore,
+  type ApplyResult,
   type RowFoldChangeInput,
 } from "./support/row-fold-store";
 import { legacyProjectTranscriptRows } from "./support/legacy-row-projection-oracle";
@@ -538,6 +546,14 @@ interface Features {
   readonly historyEdits: boolean;
   readonly pauseEvents: boolean;
   readonly checkpoints: boolean;
+  /**
+   * Swaps the checkpoint branch's simple one-entry/one-path emitter for
+   * {@link checkpointHeavyOp}'s wider mix (P1): 1-4 entries over a 5-path
+   * pool, no-ops, non-undoable null/null entries, unparseable/null metadata,
+   * `turnId: null` checkpoints, and deliberate superseding-manifest overlap
+   * shapes. Requires `checkpoints: true`.
+   */
+  readonly checkpointHeavy: boolean;
   readonly setupCards: boolean;
   readonly legacyRecords: boolean;
   readonly activeTurnFlips: boolean;
@@ -549,6 +565,7 @@ const LIVE_CHAT_FEATURES: Features = {
   historyEdits: false,
   pauseEvents: false,
   checkpoints: false,
+  checkpointHeavy: false,
   setupCards: false,
   legacyRecords: false,
   activeTurnFlips: true,
@@ -579,15 +596,269 @@ const ACTIVE_FLIP_FEATURES: Features = {
 
 const BATCH_FEATURES: Features = { ...EVENTS_FEATURES, historyEdits: true };
 
+/** P1: the checkpoint-heavy fuzz feature mix. See {@link checkpointHeavyOp}. */
+const CHECKPOINT_HEAVY_FEATURES: Features = {
+  ...EVENTS_FEATURES,
+  checkpointHeavy: true,
+};
+
+/** P1: counters the checkpoint-heavy fuzz reports at the end of its run. */
+interface CheckpointFuzzStats {
+  ops: number;
+  supersedes: number;
+  subset: number;
+  superset: number;
+  disjoint: number;
+  empty: number;
+}
+
+function newCheckpointFuzzStats(): CheckpointFuzzStats {
+  return {
+    ops: 0,
+    supersedes: 0,
+    subset: 0,
+    superset: 0,
+    disjoint: 0,
+    empty: 0,
+  };
+}
+
 interface ChatModel {
   readonly users: string[];
   readonly turns: string[];
   readonly messages: string[];
   clock: number;
+  /**
+   * P1: each turn's last RETAINED checkpoint's changed paths, as this fuzz
+   * model constructed it - used only by {@link checkpointHeavyOp} to build
+   * deliberate subset/superset/disjoint/empty superseding relations. Other
+   * families never touch it.
+   */
+  readonly checkpointPaths: Map<string, readonly string[]>;
+  readonly checkpointStats: CheckpointFuzzStats;
 }
 
 function newModel(): ChatModel {
-  return { users: [], turns: [], messages: [], clock: 1000 };
+  return {
+    users: [],
+    turns: [],
+    messages: [],
+    clock: 1000,
+    checkpointPaths: new Map(),
+    checkpointStats: newCheckpointFuzzStats(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// P1: the checkpoint-heavy manifest mix
+// ---------------------------------------------------------------------------
+
+const CHECKPOINT_PATH_POOL: readonly string[] = [
+  "/w/a.ts",
+  "/w/b.ts",
+  "/w/c.ts",
+  "/w/d.ts",
+  "/w/e.ts",
+];
+
+function realCheckpointEntry(filePath: string): unknown {
+  return {
+    filePath,
+    operation: "edit",
+    beforeHash: "h0",
+    afterHash: freshId("h"),
+    undoable: true,
+    reason: null,
+    artifact: null,
+  };
+}
+
+/** `undoable: true`, `beforeHash === afterHash` - a genuine no-op entry. */
+function noOpCheckpointEntry(filePath: string): unknown {
+  return {
+    filePath,
+    operation: "edit",
+    beforeHash: "h-same",
+    afterHash: "h-same",
+    undoable: true,
+    reason: null,
+    artifact: null,
+  };
+}
+
+/**
+ * `undoable: false`, `beforeHash === afterHash === null` - a denied/binary
+ * edit attempt. Despite the equal (null) hashes this is NOT a no-op per
+ * `isNoOpCheckpointEntry`, because `undoable` is false: it counts as a real
+ * change.
+ */
+function nonUndoableNullCheckpointEntry(filePath: string): unknown {
+  return {
+    filePath,
+    operation: "edit",
+    beforeHash: null,
+    afterHash: null,
+    undoable: false,
+    reason: "denied",
+    artifact: null,
+  };
+}
+
+/**
+ * Builds manifest entries whose changed-path set (per `checkpointChangePaths`)
+ * is exactly `targetChangedPaths`. An empty target still produces content - a
+ * manifest with entries that all turn out to be no-ops - rather than an empty
+ * `entries` array, since that is the shape a real "touched nothing" turn
+ * produces.
+ */
+function checkpointManifestEntriesFor(
+  r: () => number,
+  targetChangedPaths: readonly string[],
+): unknown[] {
+  if (targetChangedPaths.length === 0) {
+    return [noOpCheckpointEntry(pick(r, CHECKPOINT_PATH_POOL))];
+  }
+  return targetChangedPaths.map((filePath) =>
+    r() < 0.3
+      ? nonUndoableNullCheckpointEntry(filePath)
+      : realCheckpointEntry(filePath),
+  );
+}
+
+function checkpointManifestMetadata(
+  ts: number,
+  checkpointId: string,
+  entries: readonly unknown[],
+): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: 1,
+    checkpointId,
+    capturingUserId: "u-1",
+    capturingHostId: "h-1",
+    allowedRoots: ["/w"],
+    workingDirectory: "/w",
+    capturedAt: ts,
+    entries,
+  };
+}
+
+/** A `checkpoint.captured` event with metadata supplied verbatim (may be unparseable or null). */
+function rawCheckpointEvent(fields: {
+  readonly ts: number;
+  readonly turnId: string | null;
+  readonly metadata: Readonly<Record<string, unknown>> | null;
+}): ChatEvent {
+  return ev({
+    ...EVENT_DEFAULTS,
+    type: "checkpoint.captured",
+    ts: fields.ts,
+    turnId: fields.turnId,
+    metadata: fields.metadata,
+  });
+}
+
+/**
+ * P1's op generator: 1-4 entries over the 5-path pool, no-ops, non-undoable
+ * null/null entries, unparseable metadata, `metadata: null`, `turnId: null`
+ * checkpoints, and - the case the simple one-entry emitter can never hit -
+ * a checkpoint SUPERSEDING an existing turn's retained one, with its changed
+ * paths deliberately a subset, a superset, disjoint from, or empty relative
+ * to the turn's prior retained paths.
+ */
+function checkpointHeavyOp(
+  r: () => number,
+  model: ChatModel,
+  events: ChatEvent[],
+): void {
+  model.checkpointStats.ops += 1;
+  const roll = r();
+
+  if (roll < 0.1 && model.turns.length > 0) {
+    events.push(
+      rawCheckpointEvent({
+        ts: model.clock,
+        turnId: pick(r, model.turns),
+        metadata: { schemaVersion: 99, checkpointId: freshId("cp") },
+      }),
+    );
+    return;
+  }
+  if (roll < 0.2 && model.turns.length > 0) {
+    events.push(
+      rawCheckpointEvent({
+        ts: model.clock,
+        turnId: pick(r, model.turns),
+        metadata: null,
+      }),
+    );
+    return;
+  }
+  if (roll < 0.3) {
+    const count = 1 + Math.floor(r() * 4);
+    const paths = [
+      ...new Set(
+        Array.from({ length: count }, () => pick(r, CHECKPOINT_PATH_POOL)),
+      ),
+    ];
+    events.push(
+      rawCheckpointEvent({
+        ts: model.clock,
+        turnId: null,
+        metadata: checkpointManifestMetadata(
+          model.clock,
+          freshId("cp"),
+          checkpointManifestEntriesFor(r, paths),
+        ),
+      }),
+    );
+    return;
+  }
+
+  if (model.turns.length === 0) return;
+  const turnId = pick(r, model.turns);
+  const prior = model.checkpointPaths.get(turnId);
+  let targetPaths: string[];
+  if (prior !== undefined && r() < 0.6) {
+    model.checkpointStats.supersedes += 1;
+    const relation = r();
+    if (relation < 0.25 && prior.length > 1) {
+      targetPaths = [...prior].slice(
+        0,
+        Math.max(1, Math.floor(prior.length / 2)),
+      );
+      model.checkpointStats.subset += 1;
+    } else if (relation < 0.5) {
+      const extra = CHECKPOINT_PATH_POOL.filter((p) => !prior.includes(p));
+      targetPaths = extra.length > 0 ? [...prior, pick(r, extra)] : [...prior];
+      model.checkpointStats.superset += 1;
+    } else if (relation < 0.75) {
+      const disjointPool = CHECKPOINT_PATH_POOL.filter(
+        (p) => !prior.includes(p),
+      );
+      targetPaths = disjointPool.length > 0 ? [pick(r, disjointPool)] : [];
+      model.checkpointStats.disjoint += 1;
+    } else {
+      targetPaths = [];
+      model.checkpointStats.empty += 1;
+    }
+  } else {
+    // At least 2 distinct paths so a later supersede has room to pick a
+    // genuine (non-trivial) subset.
+    const uniqueCount = 2 + Math.floor(r() * 3);
+    const shuffled = [...CHECKPOINT_PATH_POOL].sort(() => r() - 0.5);
+    targetPaths = shuffled.slice(0, Math.min(uniqueCount, shuffled.length));
+  }
+
+  const checkpointId = freshId("cp");
+  const entries = checkpointManifestEntriesFor(r, targetPaths);
+  events.push(
+    rawCheckpointEvent({
+      ts: model.clock,
+      turnId,
+      metadata: checkpointManifestMetadata(model.clock, checkpointId, entries),
+    }),
+  );
+  model.checkpointPaths.set(turnId, targetPaths);
 }
 
 function blocksFor(
@@ -617,7 +888,7 @@ function randomOp(
   r: () => number,
   features: Features,
   label: string,
-): void {
+): ApplyResult {
   model.clock += Math.floor(r() * 5);
   const x = r();
   const upserts: Message[] = [];
@@ -713,22 +984,30 @@ function randomOp(
         }),
       );
     }
-  } else if (features.checkpoints && x < 0.9 && model.turns.length > 0) {
-    const turnId = pick(r, model.turns);
-    events.push(
-      checkpointEvent({
-        ts: model.clock,
-        turnId,
-        checkpointId: freshId("cp"),
-        entries: [
-          {
-            filePath: pick(r, ["/w/a.ts", "/w/b.ts", "/w/c.ts"]),
-            beforeHash: "h0",
-            afterHash: "h1",
-          },
-        ],
-      }),
-    );
+  } else if (
+    features.checkpoints &&
+    x < 0.9 &&
+    (model.turns.length > 0 || features.checkpointHeavy)
+  ) {
+    if (features.checkpointHeavy) {
+      checkpointHeavyOp(r, model, events);
+    } else {
+      const turnId = pick(r, model.turns);
+      events.push(
+        checkpointEvent({
+          ts: model.clock,
+          turnId,
+          checkpointId: freshId("cp"),
+          entries: [
+            {
+              filePath: pick(r, ["/w/a.ts", "/w/b.ts", "/w/c.ts"]),
+              beforeHash: "h0",
+              afterHash: "h1",
+            },
+          ],
+        }),
+      );
+    }
   } else if (features.setupCards && x < 0.94) {
     const triggering =
       model.users.length > 0 && r() < 0.5 ? pick(r, model.users) : null;
@@ -766,7 +1045,7 @@ function randomOp(
       model.turns.length > 0 && r() < 0.5 ? pick(r, model.turns) : null;
   }
 
-  applyStep(
+  return applyStep(
     store,
     { upserts, removes, events, activeTurnId },
     { mayDecline: false },
@@ -806,6 +1085,286 @@ runFuzzedFamily("e-active-turn-flips", ACTIVE_FLIP_FEATURES, 6, 40);
 runFuzzedFamily("f-batches", BATCH_FEATURES, 6, 40);
 
 // ---------------------------------------------------------------------------
+// P1/P2: the checkpoint-heavy fuzz. `checkpointHeavyOp` supplies the ops;
+// these two checks run on top of every op alongside the usual row/skeleton
+// parity `applyStep` already asserts inside `randomOp`.
+// ---------------------------------------------------------------------------
+
+/**
+ * P1's independent check: straight off `store.rowsSorted()`, every
+ * re-described turn row's `context.hasLaterOverlappingChanges` must equal
+ * what the pure whole-history rule computes from the SAME event log. This is
+ * deliberately NOT the same comparison `assertRowParity` already makes
+ * (store vs. legacy oracle, which could share a bug) - it triangulates
+ * against `turnKeysWithLaterOverlappingChanges` itself.
+ */
+function assertOverlapMatchesWholeHistoryRule(
+  store: RowFoldStore,
+  label: string,
+): void {
+  const expected = turnKeysWithLaterOverlappingChanges(
+    store.projectionInput().events,
+  );
+  for (const row of store.rowsSorted()) {
+    const turnKey =
+      row.source.kind === "assistant-slice"
+        ? row.source.turnKey
+        : row.source.kind === "steer"
+          ? row.source.turnKey
+          : null;
+    if (turnKey === null) continue;
+    expect(
+      Boolean(row.context.hasLaterOverlappingChanges),
+      `${label}: row ${row.rowId} (turn ${turnKey}) hasLaterOverlappingChanges`,
+    ).toBe(expected.has(turnKey));
+  }
+}
+
+/**
+ * P2's mechanism checks over one op's loads: the fold never falls back to
+ * loading every `checkpoint.captured` event, and neither checkpoint load
+ * answers with more rows than the keys it was asked about.
+ */
+function assertCheckpointLoadMechanism(
+  result: ApplyResult,
+  label: string,
+): void {
+  for (const load of result.loads) {
+    if (load.kind === "events-by-type") {
+      expect(
+        load.types?.includes("checkpoint.captured") ?? false,
+        `${label}: an events-by-type load named checkpoint.captured`,
+      ).toBe(false);
+    }
+    if (
+      load.kind === "checkpoint-turns" ||
+      load.kind === "checkpoint-last-changes"
+    ) {
+      expect(
+        load.resultCount,
+        `${label}: ${load.kind} answered with more rows than requested`,
+      ).toBeLessThanOrEqual(load.requestedCount ?? Infinity);
+    }
+  }
+}
+
+describe("P1/P2: checkpoint-heavy fuzz", () => {
+  const SEEDS = 8;
+  const OPS = 500;
+  const totals = newCheckpointFuzzStats();
+
+  for (let seed = 1; seed <= SEEDS; seed += 1) {
+    it(`seed ${seed}`, () => {
+      const store = new RowFoldStore(`chat-checkpoint-heavy-${seed}`);
+      const model = newModel();
+      const r = rng(seed * 7919 + "checkpoint-heavy".length);
+      for (let op = 0; op < OPS; op += 1) {
+        const label = `checkpoint-heavy seed ${seed} op ${op}`;
+        const result = randomOp(
+          store,
+          model,
+          r,
+          CHECKPOINT_HEAVY_FEATURES,
+          label,
+        );
+        assertOverlapMatchesWholeHistoryRule(store, label);
+        assertCheckpointLoadMechanism(result, label);
+      }
+      expect(
+        store.declines,
+        `checkpoint-heavy seed ${seed}: unexpected declines`,
+      ).toEqual([]);
+      totals.ops += model.checkpointStats.ops;
+      totals.supersedes += model.checkpointStats.supersedes;
+      totals.subset += model.checkpointStats.subset;
+      totals.superset += model.checkpointStats.superset;
+      totals.disjoint += model.checkpointStats.disjoint;
+      totals.empty += model.checkpointStats.empty;
+    });
+  }
+
+  it("covered a real mix of checkpoint ops, supersedes and path-set relations", () => {
+    // Runs after the seeds above (vitest runs one describe's `it`s in
+    // declaration order), so `totals` is fully accumulated here.
+    expect(totals.ops, "checkpoint ops").toBeGreaterThan(50);
+    expect(totals.supersedes, "superseding manifests").toBeGreaterThan(3);
+    expect(totals.subset, "subset relations").toBeGreaterThan(0);
+    expect(totals.superset, "superset relations").toBeGreaterThan(0);
+    expect(totals.disjoint, "disjoint relations").toBeGreaterThan(0);
+    expect(totals.empty, "empty relations").toBeGreaterThan(0);
+    console.info(
+      `P1 checkpoint-heavy fuzz coverage: ops=${totals.ops} ` +
+        `supersedes=${totals.supersedes} subset=${totals.subset} ` +
+        `superset=${totals.superset} disjoint=${totals.disjoint} ` +
+        `empty=${totals.empty}`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// P3: overlappingCheckpointKeys — subset sufficiency (property test)
+// ---------------------------------------------------------------------------
+
+describe("P3: overlappingCheckpointKeys — subset sufficiency", () => {
+  it("the answer for S, computed from S plus the last changer of each of S's paths (in true order), equals the whole-list answer restricted to S", () => {
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const r = rng(seed * 104729 + 17);
+      const n = 3 + Math.floor(r() * 12); // 3-14 checkpoints
+      const checkpoints = Array.from({ length: n }, (_unused, index) => ({
+        key: `cp${index}`,
+        paths: Array.from({ length: 1 + Math.floor(r() * 3) }, () =>
+          pick(r, CHECKPOINT_PATH_POOL),
+        ),
+      }));
+      const whole = overlappingCheckpointKeys(checkpoints);
+
+      const sSize = 1 + Math.floor(r() * n);
+      const sIndices = new Set<number>();
+      while (sIndices.size < sSize) sIndices.add(Math.floor(r() * n));
+      const sKeys = new Set(
+        [...sIndices].map((index) => checkpoints[index].key),
+      );
+      const sPaths = new Set<string>();
+      for (const index of sIndices) {
+        for (const path of checkpoints[index].paths) sPaths.add(path);
+      }
+
+      // The last changer of each of S's paths, over the WHOLE list, in true
+      // (index) order - exactly what a store limited to S can afford to load.
+      const lastChangerIndexByPath = new Map<string, number>();
+      checkpoints.forEach((checkpoint, index) => {
+        for (const path of checkpoint.paths) {
+          if (sPaths.has(path)) lastChangerIndexByPath.set(path, index);
+        }
+      });
+      const subsetIndices = new Set<number>([
+        ...sIndices,
+        ...lastChangerIndexByPath.values(),
+      ]);
+      const orderedSubsetIndices = [...subsetIndices].sort((a, b) => a - b);
+      const subsetAnswer = overlappingCheckpointKeys(
+        orderedSubsetIndices.map((index) => checkpoints[index]),
+      );
+
+      const wholeRestrictedToS = new Set(
+        [...whole].filter((key) => sKeys.has(key)),
+      );
+      const subsetAnswerRestrictedToS = new Set(
+        [...subsetAnswer].filter((key) => sKeys.has(key)),
+      );
+      expect(
+        subsetAnswerRestrictedToS,
+        `seed ${seed}: |S|=${String(sSize)} of ${String(n)}`,
+      ).toEqual(wholeRestrictedToS);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4: the tightening — turn-keyed overlap distinguishes what a shared
+// checkpoint id could not.
+// ---------------------------------------------------------------------------
+
+function turnCheckpointManifest(
+  checkpointId: string,
+  paths: readonly string[],
+): TurnCheckpointManifest {
+  return {
+    schemaVersion: 1,
+    checkpointId,
+    capturingUserId: "u-1",
+    capturingHostId: "h-1",
+    allowedRoots: ["/w"],
+    workingDirectory: "/w",
+    capturedAt: 1000,
+    entries: paths.map((filePath) => ({
+      filePath,
+      operation: "edit" as const,
+      beforeHash: "h0",
+      afterHash: "h1",
+      undoable: true,
+      reason: null,
+      artifact: null,
+    })),
+  };
+}
+
+describe("P4: the tightening", () => {
+  it("two turns whose retained checkpoints share one checkpoint id, where only one overlaps: turnKeysWithLaterOverlappingChanges flags only that turn, but overlappingCheckpointIds still merges them under the shared id", () => {
+    // t1 and t2 each retain a checkpoint under the SAME checkpointId
+    // ("shared"), touching disjoint paths. A later checkpoint on t3 touches
+    // only t1's path.
+    const events: ChatEvent[] = [
+      checkpointEvent({
+        ts: 1000,
+        turnId: "t1",
+        checkpointId: "shared",
+        entries: [{ filePath: "/w/a.ts", beforeHash: "h0", afterHash: "h1" }],
+      }),
+      checkpointEvent({
+        ts: 1001,
+        turnId: "t2",
+        checkpointId: "shared",
+        entries: [{ filePath: "/w/b.ts", beforeHash: "h0", afterHash: "h1" }],
+      }),
+      checkpointEvent({
+        ts: 1002,
+        turnId: "t3",
+        checkpointId: "c3",
+        entries: [{ filePath: "/w/a.ts", beforeHash: "h1", afterHash: "h2" }],
+      }),
+    ];
+
+    // The NEW behaviour: keyed by turn, only t1 (whose path a.ts is touched
+    // by t3's later checkpoint) is flagged - t2's path b.ts is never touched
+    // again.
+    expect(turnKeysWithLaterOverlappingChanges(events)).toEqual(
+      new Set(["t1"]),
+    );
+
+    // The OLD behaviour, unchanged: keyed by checkpoint id, t1's and t2's
+    // manifests collapse under the one shared id, so the id is reported
+    // overlapping even though only t1's own retained checkpoint actually is.
+    const manifests: TurnCheckpointManifest[] = [
+      turnCheckpointManifest("shared", ["/w/a.ts"]),
+      turnCheckpointManifest("shared", ["/w/b.ts"]),
+      turnCheckpointManifest("c3", ["/w/a.ts"]),
+    ];
+    expect(overlappingCheckpointIds(manifests)).toEqual(new Set(["shared"]));
+    expect(checkpointChangePaths(manifests[0])).toEqual(["/w/a.ts"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P5: fold state version guard
+// ---------------------------------------------------------------------------
+
+describe("P5: fold state version guard", () => {
+  it("a fold state written by another version declines rather than crashing or misreading it", () => {
+    const staleState: TranscriptFoldState = {
+      ...EMPTY_TRANSCRIPT_FOLD_STATE,
+      version: EMPTY_TRANSCRIPT_FOLD_STATE.version + 1,
+    };
+    const steps = foldTranscriptRows(staleState, {
+      chatId: "chat-stale-version",
+      activeTurnId: null,
+      upsertedMessages: [],
+      removedMessages: [],
+      appendedEvents: [],
+    });
+    const step = steps.next();
+    expect(step.done, "declines immediately, before yielding any load").toBe(
+      true,
+    );
+    const result = step.value;
+    if (result.continued) {
+      throw new Error("expected the fold to decline on a version mismatch");
+    }
+    expect(result.reason).toBe("fold state written by another version");
+  });
+});
+
 // b. History edits: explicit scenarios the fuzzer cannot reliably hit
 // ---------------------------------------------------------------------------
 

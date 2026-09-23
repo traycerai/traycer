@@ -81,6 +81,15 @@ export interface LoadRecord {
   /** Only meaningful for `facts-from`: the requested position, `null` for a widen. */
   readonly position: number | null | undefined;
   readonly resultCount: number;
+  /** Only meaningful for `events-by-type`: the event types requested. */
+  readonly types?: readonly ChatEvent["type"][];
+  /**
+   * Only meaningful for `checkpoint-turns` / `checkpoint-last-changes`: how
+   * many keys (turn keys / file paths) were requested, after the store's own
+   * already-loaded-this-change dedupe. An answer can never carry more rows
+   * than this.
+   */
+  readonly requestedCount?: number;
 }
 
 export interface ApplyResult {
@@ -296,6 +305,7 @@ export class RowFoldStore {
             kind: load.kind,
             position: undefined,
             resultCount: events.length,
+            types: load.types,
           });
           return { kind: "events", events };
         }
@@ -332,6 +342,7 @@ export class RowFoldStore {
             kind: load.kind,
             position: undefined,
             resultCount: turns.length,
+            requestedCount: load.turnKeys.length,
           });
           return { kind: "checkpoint-turns", turns };
         }
@@ -354,6 +365,7 @@ export class RowFoldStore {
             kind: load.kind,
             position: undefined,
             resultCount: changes.length,
+            requestedCount: load.filePaths.length,
           });
           return { kind: "checkpoint-last-changes", changes };
         }
