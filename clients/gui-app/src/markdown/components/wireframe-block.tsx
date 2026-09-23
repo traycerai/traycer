@@ -67,12 +67,14 @@ export function WireframeBlock(props: WireframeBlockProps) {
       data-quote-exclude=""
       {...{ [FIND_BLOCK_ATTR]: "wireframe" }}
     >
+      {/* Outside the boundary: the mirror must outlive a crashed frame, since
+          the counter keeps counting the fence either way. */}
+      <FindMirror text={visibleText} />
       <BlockErrorBoundary title="Wireframe block crashed" onCopy={handleCopy}>
         <WireframeBlockToolbar
           onOpenFullscreen={() => setFullscreenOpen(true)}
           onCopyHtml={handleCopy}
         />
-        <FindMirror text={visibleText} />
         <div className="tc-node-wireframe__preview">
           {htmlContent.trim().length === 0 ? (
             <div className="tc-node-block__skeleton" aria-hidden="true">

@@ -38,24 +38,15 @@ const DEFAULT_BUTTON_CAPTIONS = new Map([
  * A form control shows its words through attributes rather than text nodes,
  * so it contributes what the browser would draw for it, at its place in the
  * document: a button's caption, a text field's value or, when empty, its
- * placeholder. Content hidden with an inline `display: none` or
- * `visibility: hidden` is left out; hiding through a stylesheet rule is not
- * seen, since the document is parsed and never laid out.
+ * placeholder, a closed dropdown's chosen option. Content hidden with an
+ * inline `display: none` or `visibility: hidden` is left out; hiding through
+ * a stylesheet rule is not seen, since the document is parsed and never laid
+ * out.
  */
 export function wireframeVisibleText(html: string): string {
   if (typeof DOMParser === "undefined") return "";
   const body = new DOMParser().parseFromString(html, "text/html").body;
-  for (const element of body.querySelectorAll(NEVER_RENDERED_SELECTOR)) {
-    element.remove();
-  }
-  for (const element of body.querySelectorAll<HTMLElement>("[style]")) {
-    if (
-      element.style.display === "none" ||
-      element.style.visibility === "hidden"
-    ) {
-      element.remove();
-    }
-  }
+  reduceToWhatIsDrawn(body);
   const words: string[] = [];
   const push = (text: string | null): void => {
     const collapsed = (text ?? "").replace(/\s+/g, " ").trim();
@@ -80,6 +71,35 @@ export function wireframeVisibleText(html: string): string {
     }
   }
   return words.join(" ");
+}
+
+/**
+ * Drops what the document never draws and collapses a closed dropdown to the
+ * one option it shows, so the walk that follows meets only drawn text.
+ */
+function reduceToWhatIsDrawn(body: HTMLElement): void {
+  for (const element of body.querySelectorAll(NEVER_RENDERED_SELECTOR)) {
+    element.remove();
+  }
+  for (const element of body.querySelectorAll<HTMLElement>("[style]")) {
+    if (
+      element.style.display === "none" ||
+      element.style.visibility === "hidden"
+    ) {
+      element.remove();
+    }
+  }
+  // A closed dropdown draws only its chosen option; a list box (multiple, or
+  // sized to several rows) draws every option and keeps its text nodes.
+  for (const select of body.querySelectorAll("select")) {
+    if (select.multiple || select.size > 1) continue;
+    const chosen =
+      select.querySelector("option[selected]") ??
+      select.querySelector("option");
+    select.replaceWith(
+      body.ownerDocument.createTextNode(chosen?.textContent ?? ""),
+    );
+  }
 }
 
 /** The words an input draws: its caption, its value, or its placeholder. */

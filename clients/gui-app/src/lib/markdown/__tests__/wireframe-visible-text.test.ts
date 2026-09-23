@@ -145,4 +145,47 @@ describe("wireframeVisibleText", () => {
 
     expect(wireframeVisibleText(html)).toBe("Before After");
   });
+
+  it("contributes only a closed dropdown's chosen option, at its place in the document", () => {
+    const html = [
+      "<label>Plan</label>",
+      "<select>",
+      "  <option>Free</option>",
+      "  <option selected>Team</option>",
+      "  <option>Enterprise</option>",
+      "</select>",
+      "<button>Save</button>",
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Plan Team Save");
+  });
+
+  it("contributes a closed dropdown's first option when none is selected", () => {
+    const html = [
+      "<select>",
+      "  <option>Monthly</option>",
+      "  <option>Yearly</option>",
+      "</select>",
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Monthly");
+  });
+
+  it("leaves a list box alone, counting every option's text instead of only one", () => {
+    const multipleHtml = [
+      "<select multiple>",
+      "  <option>Red</option>",
+      "  <option>Blue</option>",
+      "</select>",
+    ].join("\n");
+    const sizedHtml = [
+      '<select size="3">',
+      "  <option>One</option>",
+      "  <option>Two</option>",
+      "</select>",
+    ].join("\n");
+
+    expect(wireframeVisibleText(multipleHtml)).toBe("Red Blue");
+    expect(wireframeVisibleText(sizedHtml)).toBe("One Two");
+  });
 });
