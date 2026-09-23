@@ -119,12 +119,42 @@ export function autoModeRuleDraftWorkspace(
 }
 
 /**
+ * ACP's complete `ToolKind` vocabulary.
+ *
+ * An ACP permission request reaches the card named `title ?? kind ?? "tool"`
+ * (`readPermissionDetails` in the host's
+ * `traycer-host/src/harnesses/acp/acp-turn.ts`), whatever its input says, so
+ * an untitled request's tool name is its bare kind. The ten are the host's
+ * own list: `ACP_NON_EDIT_KINDS` in that module (`read`, `search`,
+ * `execute`, `think`, `fetch`, `switch_mode`, `move`) and the three its
+ * `toolEditClassifier` defers to the verbs (`edit`, `delete`, `other`).
+ */
+export const ACP_TOOL_KINDS = [
+  "read",
+  "edit",
+  "delete",
+  "move",
+  "search",
+  "execute",
+  "think",
+  "fetch",
+  "switch_mode",
+  "other",
+] as const;
+
+/**
  * Tool names that say which tool ran, not what it did, compared lower-cased.
  * A draft narrowed to one of these ("Force push for `Bash`") would allow
  * every action that tool can take - which, for a shell, is the whole category
  * and more - so it is no narrowing at all.
+ *
+ * Every ACP kind ({@link ACP_TOOL_KINDS}), then the harnesses' own tool names;
+ * `tool` is also the host's last fallback for an ACP request with neither a
+ * title nor a kind. Exact names only: a title that starts with one ("Fetch
+ * https://example.com/data") names its target and still drafts.
  */
-const GENERIC_TOOL_NAMES: ReadonlySet<string> = new Set([
+export const GENERIC_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...ACP_TOOL_KINDS,
   "bash",
   "shell",
   "command",

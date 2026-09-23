@@ -8,9 +8,11 @@
  * actually fetches the judge harness's own model catalog.
  *
  * Mocks only `@/hooks/host/use-host-client-for-host-id` (returns the fixture's
- * requester) and `@/hooks/host/use-host-supports-method` (negotiation reads
- * the hook needs to enable its queries at all). Every other hook the SUT calls
- * - `useHostQuery`, `useProvidersListForClient`,
+ * requester), `@/hooks/host/use-host-supports-method` (negotiation reads
+ * the hook needs to enable its queries at all) and `@/lib/host`'s
+ * `useHostClient` (the app-wide client `useAutoJudgeSetMutation` saves through,
+ * bound to the same requester). Every other hook the SUT calls
+ * - `useHostQuery`, `useHostMutation`, `useProvidersListForClient`,
  * `useGuiHarnessesQueryForClient`, `useGuiHarnessModelsQueryForClient` - runs
  * for real against the mock host.
  */
@@ -36,13 +38,18 @@ import type {
   GuiHarnessOption,
   ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
-import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  AutoJudgeEffective,
+  AutoJudgeGetResponse,
+  AutoJudgeSetResponse,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
+import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 
 const CLAUDE_HARNESS_ID = providerIdToGuiHarnessId("claude-code");
@@ -74,6 +81,22 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     return null;
   },
 }));
+
+// `useAutoJudgeSetMutation` saves through the app-wide client, which would
+// otherwise need a whole `<HostRuntimeProvider>`. It is the fixture's own
+// requester here, so the save and the composer's read address one host and
+// fold into one cache - the pair whose ordering E5 is about.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: (): HostClient<HostRpcRegistry> => {
+      const client = useHostClientForHostIdMock(null);
+      if (client === null) throw new Error("no fixture host client yet");
+      return client;
+    },
+  };
+});
 
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   return {
@@ -143,13 +166,34 @@ interface HoldGate {
   readonly release: () => void;
 }
 
+function holdGate(): HoldGate {
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+const TRAYCER_BILLING: AutoJudgeBilling = {
+  kind: "traycer",
+  modelLabel: TRAYCER_MODEL_SLUG,
+};
+
+const PROVIDER_BILLING: AutoJudgeBilling = {
+  kind: "provider",
+  harnessId: CLAUDE_HARNESS_ID,
+  harnessLabel: "Claude Code",
+  modelLabel: CLAUDE_MODEL_SLUG,
+};
+
 /**
  * A fresh fixture per test: a real `QueryClient`, a real `HostClient`
  * requester pinned to a NON-local host entry (`mockRemoteHostEntry` - nothing
  * prefetched this host's cache, unlike the app-wide default host), and a
- * `MockHostMessenger` whose four handlers read mutable test state. The
+ * `MockHostMessenger` whose handlers read mutable test state. The
  * `autoJudge.get` handler can HOLD: while `armHold()` is active, every call
  * awaits a test-controlled promise, so a test can observe billing mid-refetch.
+ * `autoJudge.set` holds the same way under `armSetHold()`.
  */
 function createFixture() {
   const queryClient = createAppQueryClient();
@@ -158,19 +202,30 @@ function createFixture() {
   let claudeNativeAutoJudge = false;
   let claudeAutoJudge: "traycer" | "provider" | undefined = undefined;
   let hold: HoldGate | null = null;
+  let setHold: HoldGate | null = null;
   const listModelsHarnessIds: GuiHarnessId[] = [];
   let autoJudgeGetCalls = 0;
+  let autoJudgeSetCalls = 0;
 
   function armHold(): void {
-    let release: () => void = () => undefined;
-    const promise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    hold = { promise, release };
+    hold = holdGate();
   }
   function releaseHold(): void {
     hold?.release();
     hold = null;
+  }
+  function armSetHold(): void {
+    setHold = holdGate();
+  }
+  function releaseSetHold(): void {
+    setHold?.release();
+    setHold = null;
+  }
+  // Automatic's verdict from the Traycer row as it stands NOW.
+  function automaticEffective(): AutoJudgeEffective {
+    return traycerGreen
+      ? { source: "default", harnessId: "traycer", model: TRAYCER_MODEL_SLUG }
+      : { source: "fallback" };
   }
 
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -224,16 +279,25 @@ function createFixture() {
         autoJudgeGetCalls += 1;
         const response: AutoJudgeGetResponse = {
           selection: null,
-          effective: traycerGreen
-            ? {
-                source: "default",
-                harnessId: "traycer",
-                model: TRAYCER_MODEL_SLUG,
-              }
-            : { source: "fallback" },
+          effective: automaticEffective(),
           blocked: null,
         };
         if (hold !== null) await hold.promise;
+        return response;
+      },
+      // The save echoes what it persisted plus a verdict derived the same way
+      // and at the same moment as the host's (`autoJudge.set` persists, then
+      // reads the Traycer row before awaiting its model read) - so a held
+      // reply is a verdict from before anything that happens while it is
+      // held.
+      "autoJudge.set": async (params) => {
+        autoJudgeSetCalls += 1;
+        const response: AutoJudgeSetResponse = {
+          selection: params.selection,
+          effective: automaticEffective(),
+          blocked: null,
+        };
+        if (setHold !== null) await setHold.promise;
         return response;
       },
     },
@@ -265,6 +329,7 @@ function createFixture() {
     listModelsRequestedFor: (harnessId: GuiHarnessId): boolean =>
       listModelsHarnessIds.includes(harnessId),
     autoJudgeGetCalls: (): number => autoJudgeGetCalls,
+    autoJudgeSetCalls: (): number => autoJudgeSetCalls,
     harnessCatalogAnswered: (): boolean =>
       queryClient.getQueryData(
         hostQueryKeys.method(
@@ -284,6 +349,8 @@ function createFixture() {
     },
     armHold,
     releaseHold,
+    armSetHold,
+    releaseSetHold,
   };
 }
 
@@ -640,6 +707,94 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       kind: "traycer",
       modelLabel: TRAYCER_MODEL_SLUG,
     });
+  });
+
+  it("E5: a save reply held across a Traycer outage does not overwrite the refreshed fallback verdict, and the verdict is re-asked", async () => {
+    const fixture = createFixture();
+    fixture.setTraycerGreen(true);
+    prewarmModelCatalogs(fixture);
+    const seen: Array<AutoJudgeBilling | null> = [];
+    const { result } = renderHook(
+      () => {
+        const billing = useAutoJudgeBilling(
+          fixture.hostId,
+          CLAUDE_HARNESS_ID,
+          CLAUDE_MODEL_SLUG,
+        );
+        seen.push(billing);
+        return { billing, save: useAutoJudgeSetMutation() };
+      },
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(
+      () => {
+        expect(result.current.billing).toEqual(TRAYCER_BILLING);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    // Save Automatic while Traycer is green: the host derives `default` when
+    // the save arrives, and that reply is held.
+    fixture.armSetHold();
+    act(() => {
+      result.current.save.mutate({ selection: null });
+    });
+    await waitFor(
+      () => {
+        expect(fixture.autoJudgeSetCalls()).toBe(1);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    // Traycer goes red while the save is in flight, and the catalog's own
+    // refresh settles the verdict on the fallback.
+    fixture.setTraycerGreen(false);
+    await act(async () => {
+      await fixture.queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(
+          fixture.hostId,
+          "agent.gui.listHarnesses",
+        ),
+      });
+    });
+    await waitFor(
+      () => {
+        expect(result.current.billing).toEqual(PROVIDER_BILLING);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+
+    // Now the older `default` echo lands.
+    const getCallsBeforeRelease = fixture.autoJudgeGetCalls();
+    const rendersBeforeRelease = seen.length;
+    await act(async () => {
+      fixture.releaseSetHold();
+      await Promise.resolve();
+    });
+    await waitFor(
+      () => {
+        expect(result.current.save.isSuccess).toBe(true);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+    // The verdict is re-asked after the save, rather than taken from its echo.
+    await waitFor(
+      () => {
+        expect(fixture.autoJudgeGetCalls()).toBeGreaterThan(
+          getCallsBeforeRelease,
+        );
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+    await waitFor(
+      () => {
+        expect(result.current.billing).toEqual(PROVIDER_BILLING);
+      },
+      { timeout: WAIT_TIMEOUT_MS },
+    );
+    expect(seen.slice(rendersBeforeRelease)).not.toContainEqual(
+      TRAYCER_BILLING,
+    );
   });
 
   it("E4: a provider-native run never requests the traycer judge's model catalog", async () => {

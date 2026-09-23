@@ -4,7 +4,9 @@ import type {
   WorktreeBindingEntry,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  ACP_TOOL_KINDS,
   AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
+  GENERIC_TOOL_NAMES,
   autoJudgeTierLine,
   autoModeRuleDisplayName,
   autoModeRuleDraftAction,
@@ -285,25 +287,9 @@ describe("autoModeRuleDraftAction", () => {
     ).toBeNull();
   });
   // A name that says which tool ran, not what it did: "Force push for `Bash`"
-  // would allow the category through that tool everywhere.
-  it.each([
-    "bash",
-    "shell",
-    "command",
-    "cmd",
-    "exec",
-    "execute",
-    "run",
-    "run_command",
-    "tool",
-    "apply_patch",
-    "file_change",
-    "permissions",
-    "edit",
-    "write",
-    "read",
-    "task",
-  ])(
+  // would allow the category through that tool everywhere. Driven from the
+  // exported set, so a name added there is covered here without a second list.
+  it.each([...GENERIC_TOOL_NAMES])(
     "returns null for the generic tool name %s when there is no input summary",
     (toolName) => {
       expect(
@@ -311,6 +297,42 @@ describe("autoModeRuleDraftAction", () => {
       ).toBeNull();
     },
   );
+
+  // An untitled ACP request is named by its bare kind (`title ?? kind`), and a
+  // kind is a class of operation even where its word is a verb: "Force push
+  // for `other`" names no command and no target. Driven from the exported
+  // vocabulary, which the describe below pins, so a kind missing from the
+  // generic set fails here by name.
+  it.each([...ACP_TOOL_KINDS])(
+    "returns null for the bare ACP kind %s when there is no input summary",
+    (kind) => {
+      expect(
+        autoModeRuleDraftAction({ inputSummary: null, toolName: kind }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    "Fetch https://example.com/data",
+    "Move report.csv to archive/",
+    "Search the repo for TODO",
+  ])(
+    "still drafts from a descriptive ACP title that starts with a kind's word: %s",
+    (title) => {
+      expect(
+        autoModeRuleDraftAction({ inputSummary: null, toolName: title }),
+      ).toBe(title);
+    },
+  );
+
+  it("still returns the input summary when the tool name is a bare ACP kind", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "curl https://example.com/data",
+        toolName: "fetch",
+      }),
+    ).toBe("curl https://example.com/data");
+  });
 
   it("recognises a generic tool name whatever its case and surrounding whitespace", () => {
     expect(
@@ -331,5 +353,34 @@ describe("autoModeRuleDraftAction", () => {
         toolName: "Bash",
       }),
     ).toBe("git push --force");
+  });
+});
+
+describe("ACP_TOOL_KINDS", () => {
+  // The one place the vocabulary is spelled independently of the constant:
+  // every other test here is driven FROM the constant, so a kind dropped from
+  // it could only be caught by a list that does not come from it. These are
+  // ACP's ten `ToolKind`s, as the host's `acp-turn.ts` classifies them.
+  it("is ACP's complete ToolKind vocabulary", () => {
+    expect([...ACP_TOOL_KINDS].sort()).toEqual(
+      [
+        "delete",
+        "edit",
+        "execute",
+        "fetch",
+        "move",
+        "other",
+        "read",
+        "search",
+        "switch_mode",
+        "think",
+      ].sort(),
+    );
+  });
+
+  it("is wholly inside the generic tool names", () => {
+    expect(
+      ACP_TOOL_KINDS.filter((kind) => !GENERIC_TOOL_NAMES.has(kind)),
+    ).toEqual([]);
   });
 });
