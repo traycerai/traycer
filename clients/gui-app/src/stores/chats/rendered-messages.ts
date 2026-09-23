@@ -1289,14 +1289,18 @@ export function useRenderedMessages(
     () => userMessagesByIdFromMessages(input.messages),
     [input.messages],
   );
-  const retainedUserMessageIds = useMemo(
-    (): ReadonlySet<string> =>
-      new Set([
-        ...userMessagesById.keys(),
-        ...input.pendingUserMessages.map((message) => message.messageId),
-      ]),
-    [userMessagesById, input.pendingUserMessages],
-  );
+  // A withdrawn opening anchors nothing: its row is hidden below, and a
+  // record-less `turn.stopped` naming it (a legacy chat's stop during the old
+  // setup window, migrated on upgrade) would otherwise draw an orphan stopped
+  // boundary until the host's own removal of the row lands.
+  const retainedUserMessageIds = useMemo((): ReadonlySet<string> => {
+    const ids = new Set([
+      ...userMessagesById.keys(),
+      ...input.pendingUserMessages.map((message) => message.messageId),
+    ]);
+    if (withdrawnMessageId !== null) ids.delete(withdrawnMessageId);
+    return ids;
+  }, [userMessagesById, input.pendingUserMessages, withdrawnMessageId]);
 
   const activeTurnSteeredIdsKey = liveMergesIntoPersisted
     ? activeTurnSteeredIdsContentKey(partition.activeTurn, liveAssistant)

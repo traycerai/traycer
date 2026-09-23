@@ -3906,6 +3906,42 @@ describe("useRenderedMessages: withdrawn opening", () => {
     expect(withdrawnIds).toEqual(controlIds.filter((id) => id !== "message-1"));
   });
 
+  it("draws no record-less stopped boundary for a withdrawn message: the event that names it anchors nothing", () => {
+    // A legacy chat can carry a `turn.stopped` naming the opening from a stop
+    // in the old setup window; on upgrade the opening is withdrawn. Without
+    // the withdrawn id, the event synthesizes a stopped assistant row anchored
+    // to the (hidden) user row - an orphan boundary under an empty transcript.
+    const stopped: ChatEvent = {
+      eventId: "event:turn.stopped:turn-pre-setup:11000",
+      type: "turn.stopped",
+      timestamp: 11_000,
+      clientActionId: null,
+      actor: null,
+      message: "Stop requested by owner.",
+      turnId: "turn-pre-setup",
+      messageId: "message-1",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: { reason: "Stop requested by owner." },
+    };
+    const control = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+      events: [stopped],
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "assistant:turn-pre-setup",
+    ]);
+    const withdrawn = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+      events: [stopped],
+      withdrawnMessageId: "message-1",
+    });
+    expect(withdrawn.result.current).toEqual([]);
+  });
+
   it("a withdrawn id naming no row in this chat changes nothing", () => {
     const messages = [userMessage("message-1"), userMessage("message-2")];
     const control = renderRenderedMessages({ messages });
