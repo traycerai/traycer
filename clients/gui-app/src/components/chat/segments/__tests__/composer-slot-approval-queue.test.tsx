@@ -344,6 +344,8 @@ describe("<ComposerSlotApprovalQueue /> approval text", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
     return screen.getByTestId("approval-row");
