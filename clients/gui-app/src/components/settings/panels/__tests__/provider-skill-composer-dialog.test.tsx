@@ -844,4 +844,72 @@ describe("install targets", () => {
     const install = screen.getByRole("button", { name: "Install 0 skills" });
     expect(install instanceof HTMLButtonElement && install.disabled).toBe(true);
   });
+
+  it("F6: drops the picker and blocks submit when the selected identity target vanishes, and starts clean on the provider target", async () => {
+    const identityMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    identityMutate.mockResolvedValue(
+      inspectData([SHOW_ME, DESIGN_LOOP], "tok-vanish"),
+    );
+    const providerMutate =
+      vi.fn<
+        (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+      >();
+    providerMutate.mockResolvedValue({ kind: "skills", skills: [] });
+
+    const { rerender } = render(
+      <ProviderSkillComposerDialog
+        provider={providerTarget(providerMutate)}
+        identities={[identityTarget("identity-1", "Research", identityMutate)]}
+        initialTarget={{ kind: "identity", identityId: "identity-1" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fillSource("owner/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+    await waitFor(() => {
+      expect(screen.getByText("2 skills found")).toBeDefined();
+    });
+    expect(identityMutate).toHaveBeenCalledTimes(1);
+
+    // The identity that was selected and inspected disappears from the list -
+    // an identity deleted while the dialog stayed open.
+    rerender(
+      <ProviderSkillComposerDialog
+        provider={providerTarget(providerMutate)}
+        identities={[]}
+        initialTarget={{ kind: "identity", identityId: "identity-1" }}
+        pending={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("skill-install-target")).toBeDefined();
+    // The vanished target never silently inherits another target's scope
+    // fieldset - it is shown as unavailable, not swapped for one still listed.
+    expect(screen.queryByText("Available to")).toBeNull();
+    // The dropped inspection means the picker is gone too - the form falls
+    // back to the import step, and submit is blocked regardless.
+    expect(screen.queryByText("2 skills found")).toBeNull();
+    const install = screen.getByRole("button", { name: "Add skill" });
+    expect(install instanceof HTMLButtonElement && install.disabled).toBe(
+      true,
+    );
+
+    fireEvent.click(install);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(providerMutate).not.toHaveBeenCalled();
+    expect(identityMutate).toHaveBeenCalledTimes(1);
+
+    // Picking the provider target starts the form over on the import step -
+    // no picker, since the dropped inspection belonged to the old target.
+    chooseInstallTarget("Codex");
+    expect(screen.getByLabelText("Skill source")).toBeDefined();
+    expect(screen.queryByText(/skills? found/)).toBeNull();
+    expect(providerMutate).not.toHaveBeenCalled();
+  });
 });

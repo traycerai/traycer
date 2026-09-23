@@ -146,7 +146,9 @@ describe("seeded protocol registries", () => {
       Object.keys(persistenceRecordRegistry["identity-document"]).sort(),
     ).toEqual(["1"]);
     expect(
-      Object.keys(persistenceRecordRegistry["identity-skill-reservation"]).sort(),
+      Object.keys(
+        persistenceRecordRegistry["identity-skill-reservation"],
+      ).sort(),
     ).toEqual(["1"]);
   });
 
