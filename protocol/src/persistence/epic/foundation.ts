@@ -372,26 +372,11 @@ export type ChatRunSettingsPreReasonix = z.infer<
 // update - changing the model invalidates the reasoning/thinking/tier
 // selection, so it is only expressible as a full tuple.
 //
-// IT DOES NOT CARRY `identityId`, AND THAT IS DELIBERATE - do not "fix" it.
-// The doc below used to be able to say "identical output type"; it no longer
-// can, and the reason is a released line rather than an oversight.
-// `epic.updateChatRunSettings@1.1` binds this schema and SHIPPED in
-// `host-v1.3.x`. Every field here is required, so adding one narrows that
-// released request: a client on `@1.1` sends the tuple it has always sent, the
-// new host finds a required key missing, and the write is refused. Giving the
-// field a `.default(null)` instead would buy compatibility by destroying the
-// one property the schema exists for.
-//
-// So identity writes ride the path the runtime spec names and only that one:
-// `chat.subscribe`'s `queueSettingsUpdate` client frame, which binds the LIVE
-// tuple from `1.13`. Two consequences are known and accepted for v1, each of
-// which needs its own new line to close rather than an edit here:
-// `draft-head.runSettings` (`persistence/draft/schemas.ts`) does not remember a
-// landing-page draft's identity, and `hostAgentRemoteSenderFactsSchema`
-// (`host/host-agent-capabilities.ts`) does not carry it, so a child created by a
-// CROSS-HOST sender does not inherit the identity the way a same-host child
-// does. Closing either means a new versioned line that binds a
-// strict-with-identity tuple, leaving `@1.1` on a frozen copy of this one.
+// `identityId` is REQUIRED here like every other field, which is the point:
+// a writer on a line that binds this tuple must say which identity the chat
+// runs as, and `null` is a statement ("the stock identity"), not an omission.
+// The released line that predates the field binds the frozen copy below
+// instead - see `chatRunSettingsStrictSchemaPreIdentity`.
 /**
  * Wire-freeze copy of the LIVE settings tuple with `permissionMode` pinned
  * pre-`auto`, and ONLY `permissionMode`.
@@ -458,12 +443,37 @@ export const chatRunSettingsStrictSchema = lazySchema(() =>
     serviceTier: z.string().nullable(),
     agentMode: agentModeSchema,
     profileId: z.string().nullable(),
+    identityId: z.string().nullable(),
   }),
 );
-/**
- * Named because this tuple is no longer a spelling of {@link ChatRunSettings}:
- * it is that type minus `identityId`, for the released-line reason recorded
- * above the schema. A consumer that holds one and needs the live tuple must
- * decide what identity it is claiming rather than spreading and hoping.
- */
 export type ChatRunSettingsStrict = z.infer<typeof chatRunSettingsStrictSchema>;
+
+/**
+ * Wire-freeze copy of the strict tuple as it stood before `identityId`.
+ *
+ * Bound by `epic.updateChatRunSettings@1.1`, which SHIPPED in `host-v1.3.x`
+ * and must stay byte-identical: every field here is required, so adding one
+ * would refuse the write every shipped `@1.1` client sends, and defaulting it
+ * instead would clear a chat's identity on each of those writes. Identity
+ * writes ride `@1.2`, which binds the live strict tuple above.
+ *
+ * Hand-frozen field-for-field rather than `.omit()`-derived, on the discipline
+ * every frozen copy of this tuple follows: a later field on the live tuple
+ * must not leak onto the released line. The enums stay LIVE, as they do on
+ * `updateChatRunSettingsTupleSchemaV10`: this is a client->host request, and
+ * pinning a roster would make a harness unsettable rather than version-gated.
+ */
+export const chatRunSettingsStrictSchemaPreIdentity = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+  }),
+);
+export type ChatRunSettingsStrictPreIdentity = z.infer<
+  typeof chatRunSettingsStrictSchemaPreIdentity
+>;

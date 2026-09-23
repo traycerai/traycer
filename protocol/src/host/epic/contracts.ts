@@ -108,6 +108,7 @@ import {
   updateChatProfileResponseSchema,
   updateChatRunSettingsRequestSchema,
   updateChatRunSettingsRequestSchemaV11,
+  updateChatRunSettingsRequestSchemaV12,
   updateChatRunSettingsResponseSchema,
   updateEpicRequestSchema,
   updateEpicResponseSchema,
@@ -886,6 +887,34 @@ export const epicUpdateChatRunSettingsUpgradeV10ToV11 = defineUpgradePath<
   from: epicUpdateChatRunSettingsV10.schemaVersion,
   to: epicUpdateChatRunSettingsV11.schemaVersion,
   upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// v1.2 carries the chat's agent identity on the strict tuple. See
+// `updateChatRunSettingsRequestSchemaV12`.
+export const epicUpdateChatRunSettingsV12 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV12,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+
+// A `@1.1` caller cannot state an identity, and the upgraded request has to
+// pass `@1.2`'s canonical validation, where the field is required - so the
+// upgrade fills `null`. That `null` is "not stated", NOT "the stock identity":
+// the resolver keeps the chat's stored identity for any caller below
+// `EPIC_UPDATE_CHAT_RUN_SETTINGS_IDENTITY_MINOR`, reading the caller's version
+// off `ctx.schemaVersion`. The response is unchanged.
+export const epicUpdateChatRunSettingsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV11,
+  typeof epicUpdateChatRunSettingsV12
+>({
+  from: epicUpdateChatRunSettingsV11.schemaVersion,
+  to: epicUpdateChatRunSettingsV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    settings: { ...request.settings, identityId: null },
+  }),
   upgradeResponse: (response) => response,
 });
 

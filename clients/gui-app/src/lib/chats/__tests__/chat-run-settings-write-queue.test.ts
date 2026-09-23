@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  UpdateChatRunSettingsRequest,
+  UpdateChatRunSettingsRequestV12,
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { appLogger } from "@/lib/logger";
@@ -12,8 +12,8 @@ import {
 
 function makeRequest(
   chatId: string,
-  overrides: Partial<UpdateChatRunSettingsRequest>,
-): UpdateChatRunSettingsRequest {
+  overrides: Partial<UpdateChatRunSettingsRequestV12>,
+): UpdateChatRunSettingsRequestV12 {
   return {
     epicId: "epic-1",
     chatId,
@@ -25,6 +25,7 @@ function makeRequest(
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     },
     ...overrides,
   };
@@ -47,7 +48,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockImplementationOnce(async () => {
@@ -78,6 +79,7 @@ describe("enqueuePersistChatRunSettings", () => {
           serviceTier: null,
           agentMode: "regular",
           profileId: "profile-b",
+          identityId: null,
         },
       }),
     );
@@ -98,7 +100,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockResolvedValue({ updated: true });
@@ -114,6 +116,7 @@ describe("enqueuePersistChatRunSettings", () => {
           serviceTier: null,
           agentMode: "regular",
           profileId: "p1",
+          identityId: null,
         },
       }),
     );
@@ -128,6 +131,7 @@ describe("enqueuePersistChatRunSettings", () => {
           serviceTier: null,
           agentMode: "regular",
           profileId: "p2",
+          identityId: null,
         },
       }),
     );
@@ -142,6 +146,7 @@ describe("enqueuePersistChatRunSettings", () => {
           serviceTier: null,
           agentMode: "regular",
           profileId: "p3",
+          identityId: null,
         },
       }),
     );
@@ -155,7 +160,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockImplementation((params) => {
@@ -175,7 +180,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockRejectedValue(unsupportedError());
@@ -202,7 +207,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockRejectedValue(failure);
@@ -221,7 +226,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockImplementationOnce(() => {
@@ -260,7 +265,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockRejectedValueOnce(failure)
@@ -284,7 +289,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockResolvedValue({ updated: true });
@@ -302,7 +307,7 @@ describe("enqueuePersistChatRunSettings", () => {
     const mutateAsync = vi
       .fn<
         (
-          params: UpdateChatRunSettingsRequest,
+          params: UpdateChatRunSettingsRequestV12,
         ) => Promise<UpdateChatRunSettingsResponse>
       >()
       .mockImplementationOnce(async () => {

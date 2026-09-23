@@ -61,10 +61,6 @@ function encodeJsonContent(content: JsonContent): JsonValue {
   return content;
 }
 
-// The STRICT tuple, which is the live one minus `identityId` (see the schema's
-// own note). A draft therefore does not remember which agent identity its
-// composer had selected; closing that needs a new `epic.updateChatRunSettings`
-// line that binds a strict-with-identity tuple, not a widening here.
 function encodeRunSettings(settings: ChatRunSettingsStrict): JsonObject {
   return {
     harnessId: settings.harnessId,
@@ -74,6 +70,7 @@ function encodeRunSettings(settings: ChatRunSettingsStrict): JsonObject {
     serviceTier: settings.serviceTier,
     agentMode: settings.agentMode,
     profileId: settings.profileId,
+    identityId: settings.identityId,
   };
 }
 

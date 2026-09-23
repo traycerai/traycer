@@ -1,5 +1,4 @@
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatRunSettingsStrict } from "@traycer/protocol/persistence/epic/foundation";
 
 import {
   DEFAULT_PERMISSION,
@@ -86,31 +85,6 @@ export function importedChatSettingsSeed(
     model: "",
     profileId: null,
   };
-}
-
-/**
- * A draft head's persisted run settings, as the composer's own tuple.
- *
- * The draft head persists the STRICT tuple (`chatRunSettingsStrictSchema`),
- * which is the live one MINUS `identityId` - so a draft does not remember which
- * agent identity its composer had selected, and reopening one runs with the
- * stock identity. That is an accepted v1 gap, not an oversight: the strict tuple
- * is the request shape of the RELEASED `epic.updateChatRunSettings@1.1`, where
- * every field is required precisely so a partial write cannot silently clobber a
- * setting the caller never looked at - and a defaulted `identityId` there would
- * do exactly that, clearing a chat's identity every time a shipped client wrote
- * its settings. Closing the gap needs a new strict-with-identity line, not a
- * widening of that one.
- *
- * So the widening happens HERE, once, where it is visible - rather than at each
- * of the two draft-apply sites, where the missing field would read as an
- * oversight rather than as a decision.
- */
-export function chatRunSettingsFromDraftPortable(
-  settings: ChatRunSettingsStrict | null,
-): ChatRunSettings | null {
-  if (settings === null) return null;
-  return { ...settings, identityId: null };
 }
 
 export function selectionFromChatRunSettings(

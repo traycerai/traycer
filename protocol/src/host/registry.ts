@@ -592,8 +592,10 @@ import {
   epicRenameChatV10,
   epicUpdateChatProfileV10,
   epicUpdateChatRunSettingsUpgradeV10ToV11,
+  epicUpdateChatRunSettingsUpgradeV11ToV12,
   epicUpdateChatRunSettingsV10,
   epicUpdateChatRunSettingsV11,
+  epicUpdateChatRunSettingsV12,
   epicRenameTuiAgentV10,
   epicReparentArtifactV10,
   epicReparentChatV10,
@@ -7651,7 +7653,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
@@ -7664,6 +7666,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: epicUpdateChatRunSettingsV11,
           upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV10ToV11,
+        },
+        // v1.2: the strict tuple carries `identityId`, required. A caller below
+        // this minor cannot state one, so the host keeps the stored identity
+        // for it - see `EPIC_UPDATE_CHAT_RUN_SETTINGS_IDENTITY_MINOR`.
+        2: {
+          contract: epicUpdateChatRunSettingsV12,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
