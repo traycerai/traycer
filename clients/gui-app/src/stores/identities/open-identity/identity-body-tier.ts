@@ -379,6 +379,16 @@ export function createIdentityBodyTier(
    * A body nobody leases any more whose retained edits have all gone out has
    * nothing left to protect: drop it, and say so, so the store can give up the
    * lane it kept open for the flush.
+   *
+   * Two callers, and which one fires depends on what the disconnect did to
+   * the body lane. In production one transport carries both lanes, so a drop
+   * closes the body lane too; on reconnect the lane re-dials, the host
+   * reseeds, and the retained bytes ride the reconcile in `applySnapshot` -
+   * that is the call below it. `flushPending`'s call is the other branch: the
+   * index lane reported open while the body lane's client was still up, so
+   * the queue ships as-is. The store's fake-transport tests exercise THAT
+   * branch (their file clients outlive an index-lane close); the reseed
+   * branch is covered only by reading.
    */
   function dropIfUnleasedAndFlushed(path: string): void {
     const entry = entries.get(path);
