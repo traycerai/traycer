@@ -169,6 +169,15 @@ describe("wireframeVisibleText", () => {
     expect(wireframeVisibleText(html)).toBe("Plan Team Save");
   });
 
+  it("draws an option's label attribute over its text, in a dropdown and a list box alike", () => {
+    const html = [
+      '<select><option label="Team" selected>team-plan</option></select>',
+      '<select multiple><option label="Red">red-500</option></select>',
+    ].join("\n");
+
+    expect(wireframeVisibleText(html)).toBe("Team Red");
+  });
+
   it("contributes a closed dropdown's first option when none is selected", () => {
     const html = [
       "<select>",

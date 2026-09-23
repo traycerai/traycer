@@ -82,6 +82,13 @@ export function wireframeVisibleText(html: string): string {
  */
 function reduceToWhatIsDrawn(body: HTMLElement): void {
   const doc = body.ownerDocument;
+  // An option draws its `label` attribute over its text, in a closed dropdown
+  // and a list box alike.
+  for (const option of body.querySelectorAll<HTMLOptionElement>(
+    "option[label]",
+  )) {
+    option.textContent = option.label;
+  }
   // Read each closed dropdown's caption BEFORE hidden nodes go: the common
   // `<option hidden selected>Choose…</option>` placeholder is hidden from the
   // popup yet drawn on the closed control.
