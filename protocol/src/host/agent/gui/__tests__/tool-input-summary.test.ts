@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveToolInputSummary } from "../tool-input-summary";
+import { deriveToolInputSummary, toSummaryLine } from "../tool-input-summary";
 
 describe("deriveToolInputSummary", () => {
   it("summarizes OpenCode shell approvals from nested metadata command", () => {
@@ -235,5 +235,54 @@ describe("deriveToolInputSummary: the generic ranking", () => {
         sessionId: "session-1",
       }),
     ).toBeNull();
+  });
+});
+
+describe("the 80-unit cap never cuts through a surrogate pair", () => {
+  // `SUMMARY_MAX` is 80 UTF-16 units, so the cut keeps units 0-78 and then
+  // appends the ellipsis as unit 79.
+  const CUT_ACROSS_PAIR = `${"a".repeat(78)}\u{1F600}${"b".repeat(25)}`;
+
+  function expectWellFormedCap(summary: string | null): string {
+    if (summary === null) throw new Error("expected a summary");
+    expect(summary.length).toBeLessThanOrEqual(80);
+    expect(summary.endsWith("\u2026")).toBe(true);
+    expect(summary.isWellFormed()).toBe(true);
+    const beforeEllipsis = summary.charCodeAt(summary.length - 2);
+    expect(beforeEllipsis >= 0xd800 && beforeEllipsis <= 0xdbff).toBe(false);
+    return summary;
+  }
+
+  it("drops a pair the cut would split, for the reviewer's Bash repro", () => {
+    const summary = expectWellFormedCap(
+      deriveToolInputSummary("Bash", { command: CUT_ACROSS_PAIR }),
+    );
+    expect(summary).toBe(`${"a".repeat(78)}\u2026`);
+  });
+
+  it("keeps a pair that sits wholly inside the cut, at units 76-77", () => {
+    const summary = expectWellFormedCap(
+      deriveToolInputSummary("Bash", {
+        command: `${"a".repeat(76)}\u{1F600}${"b".repeat(30)}`,
+      }),
+    );
+    expect(summary).toBe(`${"a".repeat(76)}\u{1F600}b\u2026`);
+    expect(summary.length).toBe(80);
+  });
+
+  it("applies the same cut through toSummaryLine", () => {
+    const summary = expectWellFormedCap(toSummaryLine(CUT_ACROSS_PAIR));
+    expect(summary).toBe(`${"a".repeat(78)}\u2026`);
+  });
+
+  it("applies the same cut to a path through the generic pass", () => {
+    const summary = expectWellFormedCap(
+      deriveToolInputSummary("Edit", {
+        old_string: "a",
+        new_string: "b",
+        file_path: `/repo/${"d".repeat(72)}\u{1F600}/file.ts`,
+      }),
+    );
+    expect(summary).toBe(`/repo/${"d".repeat(72)}\u2026`);
   });
 });

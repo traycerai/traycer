@@ -30,12 +30,17 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-// Collapse to a single line and cap the length.
+// Collapse to a single line and cap the length. The cap counts UTF-16 units, so
+// a cut landing just after a high surrogate moves one unit earlier: otherwise
+// the summary would end in half a pair, which is not well-formed text for
+// the card, the headers or the recent-decisions log that persist it.
 function trim(value: string): string {
   const singleLine = value.trim().replace(/\s+/g, " ");
   if (singleLine.length === 0) return "";
   if (singleLine.length <= SUMMARY_MAX) return singleLine;
-  const cutoff = Math.max(0, SUMMARY_MAX - ELLIPSIS.length);
+  let cutoff = Math.max(0, SUMMARY_MAX - ELLIPSIS.length);
+  const lastKept = singleLine.charCodeAt(cutoff - 1);
+  if (lastKept >= 0xd800 && lastKept <= 0xdbff) cutoff -= 1;
   return `${singleLine.slice(0, cutoff)}${ELLIPSIS}`;
 }
 
