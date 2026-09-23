@@ -12,7 +12,7 @@ import {
   chatHeadAddressPartSchema,
   type ChatHeadAddressPart,
 } from "@traycer/protocol/persistence/chat-sync/head";
-import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatRunSettingsStrict } from "@traycer/protocol/persistence/epic/foundation";
 import {
   draftHeadReaderSchema,
   type DraftComposerPortable,
@@ -61,7 +61,11 @@ function encodeJsonContent(content: JsonContent): JsonValue {
   return content;
 }
 
-function encodeRunSettings(settings: ChatRunSettings): JsonObject {
+// The STRICT tuple, which is the live one minus `identityId` (see the schema's
+// own note). A draft therefore does not remember which agent identity its
+// composer had selected; closing that needs a new `epic.updateChatRunSettings`
+// line that binds a strict-with-identity tuple, not a widening here.
+function encodeRunSettings(settings: ChatRunSettingsStrict): JsonObject {
   return {
     harnessId: settings.harnessId,
     model: settings.model,

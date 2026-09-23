@@ -34,6 +34,8 @@ import {
 import {
   chatRunSettingsSchema,
   chatRunSettingsStrictSchema,
+  guiHarnessIdSchema,
+  permissionModeSchema,
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
@@ -2091,11 +2093,51 @@ export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
 // Optional (non-floor) capability: old hosts fail only this call with
 // E_HOST_UNSUPPORTED and the renderer degrades to the legacy
 // persist-on-next-send behavior.
+/**
+ * Frozen `epic.updateChatRunSettings@1.0` settings tuple: the LIVE tuple as it
+ * stood before `identityId`, backstops and live enums intact.
+ *
+ * `@1.0` bound the live tuple by reference, which was fine while every later
+ * addition was one both released minors of this method would take. `identityId`
+ * is not: `@1.1` binds `chatRunSettingsStrictSchema`, which is deliberately
+ * short of the field because adding a REQUIRED key to a released request line
+ * refuses every write a shipped client sends (see that schema's own note). A
+ * live `@1.0` beside a frozen `@1.1` is a minor that DROPS a field, which
+ * `validateVersionedRpcRegistry` rejects outright - and rightly, since the drop
+ * would be real: a client on `@1.0` could state an identity that a host
+ * canonical on `@1.1` would then be unable to accept.
+ *
+ * So the field is absent from BOTH lines of this method, which is the intended
+ * end state: identity writes ride `chat.subscribe`'s `queueSettingsUpdate`
+ * frame, never this unary. Hand-frozen field-for-field rather than derived, on
+ * the discipline every other frozen copy of this tuple follows - a later
+ * addition to the live tuple must not leak onto a released line.
+ *
+ * The enums stay LIVE, unlike the `chat.subscribe` freezes. This is a
+ * client->host request: the host must keep accepting whatever a newer client
+ * can spell, and pinning a roster here would make a harness or mode unsettable
+ * rather than version-gated.
+ */
+export const updateChatRunSettingsTupleSchemaV10 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
+export type UpdateChatRunSettingsTupleV10 = z.infer<
+  typeof updateChatRunSettingsTupleSchemaV10
+>;
+
 export const updateChatRunSettingsRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
     chatId: z.string(),
-    settings: chatRunSettingsSchema,
+    settings: updateChatRunSettingsTupleSchemaV10,
   }),
 );
 export type UpdateChatRunSettingsRequest = z.infer<

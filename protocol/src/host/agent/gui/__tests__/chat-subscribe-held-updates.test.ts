@@ -41,6 +41,8 @@ const chat: Chat = {
   settings: null,
   activeSessionChain: null,
   claudePendingWakes: [],
+  kind: "conversation",
+  evolutionTurnsSinceReview: null,
   messages: [
     {
       role: "user",

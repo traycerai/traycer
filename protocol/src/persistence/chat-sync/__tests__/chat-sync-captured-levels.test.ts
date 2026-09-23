@@ -64,6 +64,11 @@ const FROZEN_LEVEL_KEYS: Readonly<Record<string, readonly string[]>> = {
     "serviceTier",
     "agentMode",
     "profileId",
+    // Arrived by derivation: `snapshotChatRunSettingsSchema` is built from the
+    // live persisted tuple's shape, so the identity field lands here with the
+    // rest. Moving this table is the ritual COMPATIBILITY.md §3 asks for - the
+    // level's id is unchanged because its MEANING is unchanged.
+    "identityId",
   ],
   hostPrivate: ["revision", "data"],
 };

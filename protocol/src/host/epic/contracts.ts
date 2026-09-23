@@ -1492,10 +1492,20 @@ export const epicGetChatRunSettingsUpgradeV20ToV30 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // Request shape is identical; a v2.0 settings tuple is a valid v3.0 one
-  // (only the `harnessId` enum grows), so both upgrades are identity.
+  // Request shape is identical, so that leg stays the identity.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  // The response leg is no longer the identity. v2.0's tuple was v3.0's minus
+  // the `harnessId` enum growth, which widens and needs no work; v3.0 then
+  // gained `identityId` from the live persisted tuple, and a v2.0 answer names
+  // no identity because the line it came from cannot express one. `null` is
+  // therefore the TRUE value here rather than a filler - it is what the field
+  // means everywhere else: this chat runs as the host-managed stock identity.
+  upgradeResponse: (response) => ({
+    settings:
+      response.settings === null
+        ? null
+        : { ...response.settings, identityId: null },
+  }),
 });
 
 export const epicGetChatRunSettingsDowngradeV30ToV20 = defineDowngradePath<
