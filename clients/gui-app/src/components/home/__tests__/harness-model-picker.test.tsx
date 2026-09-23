@@ -4024,6 +4024,9 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
   });
 
@@ -4071,6 +4074,9 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
   });
 
@@ -4106,6 +4112,9 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
   });
 

@@ -583,6 +583,70 @@ describe("row projection / renderer equivalence", () => {
     expect(rendered).toEqual(["u-1"]);
   });
 
+  it("agrees on the three auto-mode judge notices, which each draw a row, in a turn or outside one", () => {
+    const input = {
+      messages: [userMessage("u-1", 1000), userMessage("u-2", 5000)],
+      events: [
+        event({
+          eventId: "e-fallback",
+          type: "permission.blocked",
+          timestamp: 2000,
+          turnId: "turn-1",
+          messageId: "u-1",
+          message:
+            "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.",
+          metadata: { autoJudge: "fallback" },
+        }),
+        event({
+          eventId: "e-unavailable",
+          type: "permission.blocked",
+          timestamp: 3000,
+          message:
+            "Traycer could not resolve an auto-mode judge, so commands are being sent to you for approval. Pick a judge in Settings → Permissions.",
+          metadata: { autoJudge: "unavailable" },
+        }),
+        event({
+          eventId: "e-policy",
+          type: "permission.blocked",
+          timestamp: 4000,
+          turnId: "turn-1",
+          message:
+            "This repository's Auto mode rules can add restrictions but not permissions; only its Ask first and Never allow sections were applied.",
+          metadata: { autoJudge: "policy-not-applied" },
+        }),
+      ],
+    };
+    const { rendered, projected } = bothEnumerations(input);
+    expect(projected).toEqual(rendered);
+    expect(rendered).toEqual([
+      "u-1",
+      "auto-judge-notice:e-fallback",
+      "auto-judge-notice:e-unavailable",
+      "auto-judge-notice:e-policy",
+      "u-2",
+    ]);
+  });
+
+  // The older `permission.blocked` emitters carry no marker, and a transcript
+  // holding one must keep the ordinals it has.
+  it("agrees that a permission.blocked with no judge marker draws NO row", () => {
+    const { rendered, projected } = bothEnumerations({
+      messages: [userMessage("u-1", 1000)],
+      events: [
+        event({
+          eventId: "e-blocked",
+          type: "permission.blocked",
+          timestamp: 2000,
+          turnId: "turn-1",
+          message: "Blocked by the sandbox.",
+          metadata: null,
+        }),
+      ],
+    });
+    expect(projected).toEqual(rendered);
+    expect(rendered).toEqual(["u-1"]);
+  });
+
   it("agrees on an event whose metadata is present but EMPTY, which draws no row", () => {
     expectSameRows({
       messages: [userMessage("u-1", 1000)],
@@ -662,6 +726,17 @@ describe("row projection / renderer equivalence", () => {
               attendanceReason: "agent-created",
             },
           },
+        }),
+        // Same timestamp as the anchor and the refusal: the tie resolves by
+        // pass order, which both sides must share.
+        event({
+          eventId: "e-notice",
+          type: "permission.blocked",
+          timestamp: 4500,
+          turnId: "turn-2",
+          message:
+            "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.",
+          metadata: { autoJudge: "fallback" },
         }),
         event({
           eventId: "e-import",

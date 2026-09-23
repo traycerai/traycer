@@ -36,6 +36,7 @@ import {
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
+  listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
@@ -96,9 +97,12 @@ const FIXTURES = {
   // and the `nativeAutoJudge` row field. Neither dump changed by its freeze.
   "agent.gui.listHarnesses@8.0": dump(listGuiHarnessesResponseSchemaV80),
   "agent.gui.listHarnesses@9.0": dump(listGuiHarnessesResponseSchemaV90),
-  // The head line, pinned for the same reason `providers.list@9.1` is: growth
+  // 9.1 froze when 9.2 opened for the row's `judgeDefaultModel`; its dump did
+  // not change by the freeze.
+  "agent.gui.listHarnesses@9.1": dump(listGuiHarnessesResponseSchemaV91),
+  // The head line, pinned for the same reason `providers.list@9.2` is: growth
   // of the live row now has nothing else to fail against.
-  "agent.gui.listHarnesses@9.1": dump(listGuiHarnessesResponseSchema),
+  "agent.gui.listHarnesses@9.2": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),

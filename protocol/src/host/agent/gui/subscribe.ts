@@ -137,6 +137,7 @@ import {
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -994,12 +995,33 @@ export type ChatActiveTurn = z.infer<typeof chatActiveTurnSchema>;
  * because the user cannot tell WHY they are being asked. So the verdict travels
  * with the request.
  */
-export const chatApprovalReasonSchema = lazySchema(() =>
+export const chatApprovalReasonSchemaPreTier = lazySchema(() =>
   z.object({
     /** The rule the judge matched, as a short label ("Force push"). */
     rule: z.string(),
     /** One or two sentences of the judge's own reasoning. */
     text: z.string(),
+  }),
+);
+export type ChatApprovalReasonPreTier = z.infer<
+  typeof chatApprovalReasonSchemaPreTier
+>;
+
+/**
+ * The live reason (`chat.subscribe@1.16`): the frozen pair plus the TIER the
+ * matched rule belongs to, which is what lets the card say WHY the call came to
+ * a person ("Always sent to you", "Sent to you by one of your rules", ...)
+ * without keeping its own copy of `defaults.md`. See `autoJudgeTierSchema` for
+ * the members.
+ *
+ * `.nullable().default(null)`, like the card's other judge fields: a host that
+ * predates the tier sends none, and "no tier" is exactly what the card renders
+ * for it (no extra line). A `<=1.15` peer's non-strict decoder drops the key,
+ * so the host writes it at every minor and withholds nothing.
+ */
+export const chatApprovalReasonSchema = lazySchema(() =>
+  chatApprovalReasonSchemaPreTier.extend({
+    tier: autoJudgeTierSchema.nullable().default(null),
   }),
 );
 export type ChatApprovalReason = z.infer<typeof chatApprovalReasonSchema>;
@@ -1033,7 +1055,20 @@ export type ChatApprovalStatePreAuto = z.infer<
   typeof chatApprovalStateSchemaPreAuto
 >;
 
-export const chatApprovalStateSchema = lazySchema(() =>
+/**
+ * Frozen approval card as `chat.subscribe@1.13`-`1.15` ship it: the judge
+ * fields, with the reason still the `{ rule, text }` pair. `1.16` adds the
+ * reason's `tier` on the live schema below.
+ *
+ * `1.15` is unreleased and could have taken `tier` in place. It does not, so
+ * that a `1.16` client's minor is ahead of a `1.15` host's: that is what puts
+ * the older host's frame through this schema and the `null` default, rather
+ * than handing the client a frame whose declared type promises a key the wire
+ * never carried.
+ *
+ * Do NOT add fields here. Add them to `chatApprovalStateSchema` below.
+ */
+export const chatApprovalStateSchemaPreTier = lazySchema(() =>
   chatApprovalStateSchemaPreAuto.extend({
     /**
      * Why this call reached a human, when a judge decided it should. `null` for
@@ -1043,7 +1078,7 @@ export const chatApprovalStateSchema = lazySchema(() =>
      * Defaulted rather than optional: absent and "not judged" are the same fact
      * for every consumer, and a host too old to send it ran no judge at all.
      */
-    reason: chatApprovalReasonSchema.nullable().default(null),
+    reason: chatApprovalReasonSchemaPreTier.nullable().default(null),
     /**
      * The judge stage currently running, for the transient "Reviewing…" state on
      * the tool card (plan decision 7/19). `"checking"` is the fast one-shot pass,
@@ -1058,6 +1093,20 @@ export const chatApprovalStateSchema = lazySchema(() =>
      * cap is what bounds the wait instead.
      */
     reviewing: z.enum(["checking", "reviewing"]).nullable().default(null),
+  }),
+);
+export type ChatApprovalStatePreTier = z.infer<
+  typeof chatApprovalStateSchemaPreTier
+>;
+
+/**
+ * The live approval card (`chat.subscribe@1.16`): the reason carries its
+ * `tier`. `.extend` over an existing key keeps that key's position, so the
+ * shape differs from `1.15`'s by the one nested key.
+ */
+export const chatApprovalStateSchema = lazySchema(() =>
+  chatApprovalStateSchemaPreTier.extend({
+    reason: chatApprovalReasonSchema.nullable().default(null),
   }),
 );
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
@@ -2504,14 +2553,15 @@ const chatSubscribeCommonServerFrameSchemasV112 =
 
 // `chat.subscribe@1.13`'s common frames: `auto` on the queue and the approval
 // card, over main's draft-image ack cause - and the queue as it was BEFORE the
-// port-forward item, which is the one axis `1.14` adds here.
+// port-forward item, which is the one axis `1.14` adds here. The card is the
+// pre-tier one, which `1.16` re-widens.
 const chatSubscribeCommonServerFrameSchemasV113 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPrePortForward,
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
-    approval: chatApprovalStateSchema,
+    approval: chatApprovalStateSchemaPreTier,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2520,15 +2570,15 @@ const chatSubscribeCommonServerFrameSchemasV113 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.14`): the port-forward item on the
-// queue, over `1.13`'s `auto`.
+// `chat.subscribe@1.14`'s common frames: the port-forward item on the queue,
+// over `1.13`'s `auto`, with the pre-tier approval card.
 const chatSubscribeCommonServerFrameSchemasV114 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
-    approval: chatApprovalStateSchema,
+    approval: chatApprovalStateSchemaPreTier,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2537,6 +2587,25 @@ const chatSubscribeCommonServerFrameSchemasV114 =
     },
   });
 
+// `chat.subscribe@1.15`'s common frames: the live set with the pre-tier
+// approval card, the one axis `1.16` adds here.
+const chatSubscribeCommonServerFrameSchemasV115 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchemaPreTier,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.16`): the approval card's reason
+// carries its tier.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2637,6 +2706,12 @@ const messageDeliveryChangedServerFrameSchema = lazySchema(() =>
     delivery: chatMessageDeliverySchema.nullable(),
   }),
 );
+// `chat.subscribe@1.15`'s shared frames: the live list with the pre-tier card.
+const chatSubscribeSharedServerFrameSchemasV115 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV115,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
+];
 const chatSubscribeSharedServerFrameSchemas = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemas,
@@ -4601,15 +4676,18 @@ const chatWindowedSnapshotSchemaV111 = lazySchema(() =>
 // on the `1.12` tier, not on `1.10`: basing it on `1.10` would silently inherit
 // that line's pre-shell-host `tail` and strip the shell host from the peer.
 //
-// Its queue is the pre-port-forward one. Everything else it re-widens is still
-// the live schema BY REFERENCE, which is sound only while `1.14` leaves those
-// untouched: whoever next changes `chatRecordSchema`, the approval card or the
-// tail freezes that axis here, the way the queue is frozen now.
+// Its queue is the pre-port-forward one and its approval card the pre-tier one.
+// Everything else it re-widens is still the live schema BY REFERENCE, which is
+// sound only while later lines leave those untouched: whoever next changes
+// `chatRecordSchema` or the tail freezes that axis here, the way the queue and
+// the card are frozen now.
 const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
   chatWindowedSnapshotSchemaV111.extend({
     chat: chatRecordSchema,
     queue: chatQueueStateSchemaPrePortForward,
-    pendingApprovals: z.array(chatApprovalStateSchema),
+    // Pre-tier: `1.16` is where the card's reason gains its tier, and every
+    // line from here to `1.15` inherits this binding.
+    pendingApprovals: z.array(chatApprovalStateSchemaPreTier),
     tail: chatTranscriptWindowSchemaPreMessageDelivery,
     derived: chatTranscriptDerivedSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
@@ -4632,10 +4710,20 @@ const chatWindowedSnapshotSchemaV114 = lazySchema(() =>
     portForwards: z.array(chatPortForwardSchema).default([]),
   }),
 );
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.15` ships it: `1.14` plus the
+// message delivery state and the delivery-aware tail, with the pre-tier card.
+const chatWindowedSnapshotSchemaV115 = lazySchema(() =>
   chatWindowedSnapshotSchemaV114.extend({
     messageDelivery: chatMessageDeliverySchema.nullable().optional(),
     tail: chatTranscriptWindowSchema,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.16`): `1.15` with the approval
+// card re-widened to carry its reason's tier. `.extend` over the existing key
+// keeps its position, so the shape moves by that nested key alone.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV115.extend({
+    pendingApprovals: z.array(chatApprovalStateSchema),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -4792,6 +4880,25 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV114,
+  ]),
+);
+
+// `chat.subscribe@1.15`'s server frames: the live union with the pre-tier
+// approval card, on the snapshot and on the approval frames alike.
+const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV115,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV115,
   ]),
 );
 
@@ -5365,10 +5472,43 @@ export const chatSubscribeV114 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV113ToV114,
 });
 
-/** Accepted conversation messages retain explicit execution state on the host. */
+/**
+ * Accepted conversation messages retain explicit execution state on the host.
+ *
+ * Frozen at the pre-tier approval card since `1.16` opened above it
+ * (`chatSubscribeServerFrameSchemaV115`). Its client frames are `1.16`'s,
+ * unchanged.
+ */
 export const chatSubscribeV115 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 15 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV115,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The approval-tier line.
+ *
+ * `1.16` adds one optional key: `tier` on the approval card's judge reason
+ * (`chatApprovalReasonSchema`), on the snapshot's `pendingApprovals` and on
+ * the approval frames. It says which tier of the judge's policy sent the call
+ * to a person, so the card can say why without a client-side copy of the host's
+ * rules.
+ *
+ * TOLERANCE, not projection. The key is `.nullable().default(null)` inside a
+ * non-strict object, so the host writes it at every minor: a `<=1.15` peer's
+ * decoder drops it as an unknown member, and a `1.16` client reading a
+ * `<=1.15` host's frame fills `null`, which renders no tier line. Nothing is
+ * withheld and nothing is refused.
+ *
+ * A new minor although `1.15` is unreleased, because the minor is what tells
+ * a client whether the key can be present. The client frames are `1.15`'s,
+ * unchanged: the tier is host-authored.
+ */
+export const chatSubscribeV116 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 16 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
