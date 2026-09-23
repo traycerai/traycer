@@ -1,0 +1,20 @@
+[Unit]
+Description=Traycer Host
+After=default.target
+ConditionFileIsExecutable=/home/golden-user/.traycer/cli/bin/traycer
+
+[Service]
+Type=simple
+SyslogIdentifier=ai.traycer.host
+ExecStart="/bin/sh" "-c" "\"$0\" \"$@\" host capabilities --has service-label >/dev/null 2>&1 && \"$0\" \"$@\" host capabilities --has host-start-adoption-v2 >/dev/null 2>&1 && nonce=\"$(\"$0\" \"$@\" host adoption-nonce --service-label 'ai.traycer.host' 2>/dev/null)\" && [ -n \"$nonce\" ] && exec \"$0\" \"$@\" host start --service-label 'ai.traycer.host' --adoption-nonce \"$nonce\" || \"$0\" \"$@\" host capabilities --has service-label >/dev/null 2>&1 && exec \"$0\" \"$@\" host start --service-label 'ai.traycer.host' || exec \"$0\" \"$@\" host start" "/home/golden-user/.traycer/cli/bin/traycer"
+# Keep an OOM-killed agent/tool process from causing systemd to stop the
+# entire host unit and every sibling workload in its cgroup.
+OOMPolicy=continue
+Restart=on-failure
+RestartSec=5
+# Bound a stop at the host's own shutdown watchdog plus the supervisor's
+# wind-down, instead of systemd's 90s default.
+TimeoutStopSec=37
+
+[Install]
+WantedBy=default.target

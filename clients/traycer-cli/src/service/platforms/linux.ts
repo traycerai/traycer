@@ -37,8 +37,8 @@ import { atServiceInstallEdge, atServiceSpawnEdge } from "../spawn-edge";
 import {
   SYSTEMCTL_CALL_TIMEOUT_MS,
   SYSTEMCTL_JOB_TIMEOUT_MS,
-  SYSTEMD_TIMEOUT_STOP_SECONDS,
 } from "../spawn-edge-bounds";
+import { SYSTEMD_UNIT_SERVICE_DIRECTIVES } from "../systemd-unit-directives";
 
 // Linux service controller - systemd-user. The unit's ExecStart points
 // at the per-user CLI binary with `host start` (the slot is baked into
@@ -155,11 +155,23 @@ async function installService(
   run: ProcessRunner,
 ): Promise<void> {
   await assertSystemdUserReachable(options.label, run);
+  // Linger BEFORE the install edge, not after the start it outlives. It is
+  // the one step here that neither the unit nor its launch depends on, and it
+  // can run for its whole 30s: issued after `enable --now`, it held the
+  // controller call open past the launch, and the host-start lease - whose ack
+  // wait only begins when this call returns - out past the bound
+  // `HOST_START_ADOPTION_MAX_AGE_MS` documents (62s + 30s + 50s = 142s against
+  // 140s). Here it runs off the grant's clock entirely. Best-effort and
+  // idempotent either way, so a publication or install that then fails leaves
+  // behind only what the doctor would have asked for.
+  if (options.enableLinger) {
+    await tryEnableLinger(run);
+  }
   // The install edge: the grant is published here, in front of the unit
   // write, so a publication that cannot be made leaves the unit file, its
   // enablement and a running host exactly as they were. The reachability
-  // probe above only reads. The `enable --now` edge below returns this same
-  // publication.
+  // probe and linger above write no part of the service. The `enable --now`
+  // edge below returns this same publication.
   await atServiceInstallEdge();
   const manifestPath = serviceManifestPath(options.label);
   await verifyServiceMutationAuthority();
@@ -244,9 +256,6 @@ async function installService(
       tolerateNonZeroExit: false,
     },
   ).catch(registrationFailed);
-  if (options.enableLinger) {
-    await tryEnableLinger(run);
-  }
 }
 
 async function tryEnableLinger(run: ProcessRunner): Promise<void> {
@@ -955,30 +964,6 @@ function describeCause(cause: unknown): string {
   }
   return cause instanceof Error ? cause.message : String(cause);
 }
-
-/**
- * Every `[Service]` directive `buildUnit` writes, in emission order, with the
- * fixed value it writes - `null` where the value is per-install
- * (`SyslogIdentifier` is the label id, `ExecStart` the CLI invocation).
- *
- * ONE list on purpose, because the host mirrors it: its unit reader
- * (`recoverFromSystemdUnit`, `traycer-host/src/domain/update/cli-invocation/
- * legacy-linux.ts`) admits only the keys in `EMITTED_SERVICE_KEYS` and the
- * values in `EMITTED_SERVICE_VALUES`, and returns null for any unit carrying
- * anything else - so `TimeoutStopSec=37` must be admitted there, or the host
- * cannot recover the CLI invocation from units this CLI writes. A change here
- * therefore needs the same change on the host side; the test that pins this
- * list is where it will show.
- */
-export const SYSTEMD_UNIT_SERVICE_DIRECTIVES = {
-  Type: "simple",
-  SyslogIdentifier: null,
-  ExecStart: null,
-  OOMPolicy: "continue",
-  Restart: "on-failure",
-  RestartSec: "5",
-  TimeoutStopSec: `${SYSTEMD_TIMEOUT_STOP_SECONDS}`,
-} as const satisfies Readonly<Record<string, string | null>>;
 
 interface BuildUnitOptions {
   readonly label: ServiceLabel;

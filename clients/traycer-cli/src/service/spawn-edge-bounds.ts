@@ -210,8 +210,9 @@ export const STDERR_END_WAIT_TIMEOUT_MS = 2_000;
  * registration that `host update` / `host install` / ensure / apply run - and
  * keep systemd's default until then.
  *
- * The emitted value is part of `SYSTEMD_UNIT_SERVICE_DIRECTIVES`, and so part
- * of what the host's unit reader must admit (see there).
+ * The emitted value is part of `SYSTEMD_UNIT_SERVICE_DIRECTIVES`
+ * (`systemd-unit-directives.ts`), and so part of what the host's unit reader
+ * must admit (see there).
  */
 export const SYSTEMD_TIMEOUT_STOP_SECONDS = Math.ceil(
   (SHUTDOWN_FORCE_EXIT_MS +
@@ -226,6 +227,13 @@ export const SYSTEMD_TIMEOUT_STOP_SECONDS = Math.ceil(
  * The runner timeout for a `systemctl` verb that queues no job - `daemon-reload`,
  * `show-environment`, `is-active`, `disable`: long enough for `systemctl` to
  * reach the user manager over D-Bus and return.
+ *
+ * One caller spends it on a verb that DOES queue a job: the failed install's
+ * rollback runs `disable --now`, whose stop can take the unit's whole
+ * `TimeoutStopSec`. Deliberately - that call tolerates any exit, so a stop
+ * outliving it only means the rollback removes the unit file while systemd is
+ * still stopping the host; nothing is reported from it, and the error the
+ * operator sees is the install's own.
  */
 export const SYSTEMCTL_CALL_TIMEOUT_MS = 10_000;
 
@@ -343,8 +351,9 @@ export const SUPERVISOR_SPAWN_ACK_MARGIN_MS = 10_000;
  *   macOS plain kickstart                               10s
  *
  * Everything a call does BEFORE its first edge - ownership probes, a Desktop
- * host's cooperative stand-down, the Windows stop ladder - is off the grant's
- * clock, which is what makes this bound finite at all.
+ * host's cooperative stand-down, the Windows stop ladder, the Linux install's
+ * `loginctl enable-linger` - is off the grant's clock, which is what makes
+ * this bound finite at all.
  */
 export const HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS = Math.max(
   LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
@@ -387,10 +396,52 @@ export function finiteDurationMs(name: string, value: number): number {
  * A lease can outlive the window, by at most `SUPERVISOR_SPAWN_ACK_MARGIN_MS`.
  * The ack wait starts when the controller call returns - no earlier than the
  * launch it requested, and at most the bound above after the edge - so it
- * ends by bound + launch margin + ack margin = this window + the ack margin:
- * the macOS install whose kickstart times out ends at 140s, a Windows install
- * whose verify fails at 135s. That is the safe direction. Every supervisor the
- * window admits consumes inside it and acknowledges inside the lease; a claim
+ * ends by bound + launch margin + ack margin = this window + the ack margin.
+ * That holds only while no call keeps working past its last launch for longer
+ * than the bound leaves room for, so every published call's end is named here
+ * (edge to return, then the 50s ack wait; `host-start-adoption-window.test.ts`
+ * pins each row):
+ *
+ *   macOS install, kickstart times out              90s     -> 140s     the cap
+ *   Windows install, verify fails, then `/Query`    85.25s  -> 135.25s
+ *   Windows restart, same, then the stop-intent     64.75s  -> 114.75s
+ *     retirement probe (`withStopIntent`: 1.5s
+ *     activity probe + 8s process identity)
+ *   Linux install, `enable --now` times out         62s     -> 112s
+ *   Windows start / relaunch, verify fails          55.25s  -> 105.25s
+ *   Linux start / restart / relaunch job            52s     -> 102s
+ *   macOS restart / relaunch (`kickstart -k`)       40s     ->  90s
+ *   macOS start (plain kickstart)                   10s     ->  60s
+ *
+ * The quarter seconds are the Windows verify loop's last poll
+ * (`WINDOWS_START_SPAWN_POLL_MS`): the launch bound is exact, because evidence
+ * is only ever collected inside the window, but a verify that FAILS returns
+ * one poll late. A throw the service manager may still act on is marked
+ * registration-committed and waited on like a return (every Windows throw
+ * after `/Run`, the macOS install's kickstart); the others cancel the lease
+ * at the throw, so their tails end no lease late.
+ *
+ * The Linux install once ran `loginctl enable-linger` AFTER its launch and
+ * returned 30s later, ending its lease at 142s; the linger call now runs in
+ * front of the install edge.
+ *
+ * These are TIMER-MODEL bounds - every awaited timeout at its ceiling - for a
+ * call holding its own capability. Two things sit outside them, and both can
+ * only make a call end LATER - the safe direction the next paragraph
+ * describes:
+ *   - Untimed local work: file writes, authority re-checks against a held
+ *     lock, each child's exit after its timeout fires. So the macOS install
+ *     ends at <= 140s plus that fs/exit latency, and a supervisor its
+ *     timed-out kickstart launched at the very edge can miss the window by it.
+ *   - An ADOPTED capability (a child run with `--attempt-adoption`). Its
+ *     authority re-check re-probes the parent's process identity on every
+ *     call, uncached by design, so each post-edge check adds one probe:
+ *     macOS 13 checks x 3s (`ps`), Windows 7 x 8s (`tasklist` + `powershell`)
+ *     at their timeouts. Realistic cost is milliseconds; the timer model
+ *     deliberately does not widen the window for every caller to cover it.
+ *
+ * Outliving the window is the safe direction. Every supervisor the window
+ * admits consumes inside it and acknowledges inside the lease; a claim
  * arriving after the window reads as expired and takes ordinary admission,
  * exactly as a launch with no proof does, and the parent waits at most the ack
  * margin longer for an ack that cannot come, then cancels. The unsafe

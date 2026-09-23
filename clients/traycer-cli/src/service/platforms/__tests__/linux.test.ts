@@ -1,9 +1,18 @@
 import { execFile } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { extractExecStartTokens } from "@traycer-clients/shared/host-lifecycle";
 const pidMetadata = vi.hoisted(() => ({
   metadata: null as { pid: number } | null,
@@ -39,13 +48,36 @@ vi.mock("../../../host/pid-metadata", () => ({
   },
 }));
 
+// Isolation for the linger-ordering `install()` calls this file adds below
+// (the "systemd unit install — linger ordering" describe): `installService`
+// resolves `serviceManifestPath` through the real `os.homedir()`
+// (`~/.config/systemd/user/<label>.service`), exactly like
+// `linux-install-flow.test.ts` documents for its own isolation. Every other
+// test in this file only reads the STRING `buildSystemdUnit` returns or
+// exercises `start`/`restart`/`relaunchAfterRestart` (none of which touch the
+// manifest path), so this mock is scoped to not disturb them - only the
+// install-flow describe below calls `controller.install`.
+const TEST_UNIT_DIR = mkdtempSync(join(tmpdir(), "traycer-linux-unit-test-"));
+vi.mock("../../label", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../label")>();
+  return {
+    ...actual,
+    serviceManifestPath: (label: { readonly id: string }) =>
+      join(TEST_UNIT_DIR, `${label.id}.service`),
+  };
+});
+
+afterAll(async () => {
+  await rm(TEST_UNIT_DIR, { recursive: true, force: true });
+});
+
 import {
   buildSystemdUnit,
   createLinuxController,
   setRestartStopGracesForTests,
-  SYSTEMD_UNIT_SERVICE_DIRECTIVES,
   type ProcessRunner,
 } from "../linux";
+import { SYSTEMD_UNIT_SERVICE_DIRECTIVES } from "../../systemd-unit-directives";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import {
   ProcessRunError,
@@ -995,6 +1027,49 @@ describe("systemd unit — [Service] directive pin", () => {
       "TimeoutStopSec",
     ]);
   });
+
+  // The two tests above pin two DIFFERENT things - the emitted text, and the
+  // constant object - and neither one alone proves the emitter actually
+  // reads the constant rather than carrying its own parallel copy that
+  // happens to agree today. This one parses the REAL `buildSystemdUnit`
+  // output's `[Service]` section (skipping blanks and `#` comments) and
+  // pins it directly against `SYSTEMD_UNIT_SERVICE_DIRECTIVES`: same keys,
+  // same order, and - for every directive whose pinned value is not `null`
+  // (the two per-install directives, `SyslogIdentifier`/`ExecStart`) - the
+  // exact emitted value. A drift between the emitter and the constant, in
+  // either the key order or a fixed value, reddens here even if both of the
+  // narrower pins above were each individually kept in sync by hand.
+  it("the emitted [Service] section parses back to exactly SYSTEMD_UNIT_SERVICE_DIRECTIVES, keys in order and every fixed value", () => {
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+
+    const serviceSection = unit
+      .split(/\n\[Service\]\n/)[1]
+      ?.split(/\n\[Install\]/)[0];
+    expect(serviceSection).toBeDefined();
+    const entries = (serviceSection ?? "")
+      .split("\n")
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => {
+        const eq = line.indexOf("=");
+        return [line.slice(0, eq), line.slice(eq + 1)] as const;
+      });
+
+    expect(entries.map(([key]) => key)).toEqual(
+      Object.keys(SYSTEMD_UNIT_SERVICE_DIRECTIVES),
+    );
+    const pinned = new Map<string, string | null>(
+      Object.entries(SYSTEMD_UNIT_SERVICE_DIRECTIVES),
+    );
+    for (const [key, value] of entries) {
+      const fixed = pinned.get(key);
+      if (fixed !== null) {
+        expect(value).toBe(fixed);
+      }
+    }
+  });
 });
 
 describe("Linux controller — spawn-edge placement", () => {
@@ -1103,5 +1178,99 @@ describe("Linux controller — spawn-edge placement", () => {
     ).catch((cause: unknown) => cause);
 
     expect(rejection).toBe(publishError);
+  });
+});
+
+// The mechanism, not just the diff: `loginctl enable-linger` runs BEFORE the
+// install edge now, not after `enable --now` - see linux.ts `installService`'s
+// doc comment (linger held the controller call open past the launch, pushing
+// the host-start lease end past HOST_START_ADOPTION_MAX_AGE_MS's 140s cap:
+// 62s + 30s + 50s = 142s). One shared ordered log, exactly like the
+// spawn-edge-placement describe above, so the assertion is about the actual
+// sequence of runner calls plus the publish - not two separately-kept
+// counters that could each look right while disagreeing about order.
+describe("systemd unit install — linger ordering (the mechanism)", () => {
+  const label = labelFor("ai.traycer.host.dev");
+
+  // Local copy of the "Linux controller — spawn-edge placement" describe's
+  // helper (function-scoped to that block, not reachable from here): the
+  // publish spy and the runner push into ONE shared log, in the order they
+  // actually happen.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function loggingRunner(log: string[]): ProcessRunner {
+    return async (command, args) => {
+      log.push(`${command} ${args.join(" ")}`);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+  }
+
+  function installWith(
+    runner: ProcessRunner,
+    publish: () => Promise<null>,
+    enableLinger: boolean,
+  ): Promise<void> {
+    const controller = createLinuxController(runner);
+    return runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger,
+      }),
+    );
+  }
+
+  afterEach(async () => {
+    await rm(join(TEST_UNIT_DIR, `${label.id}.service`), { force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("enableLinger: true - loginctl enable-linger runs after show-environment and BEFORE the install-edge publish, and enable --now is the LAST runner call", async () => {
+    // Best-effort linger only fires when a USER identity is available
+    // (`tryEnableLinger` no-ops on an empty string); stub it so the
+    // assertion doesn't depend on the ambient environment this suite
+    // happens to run in.
+    vi.stubEnv("USER", "golden-user");
+    const { log, publish } = makeSharedLog();
+    const runner = loggingRunner(log);
+
+    await installWith(runner, publish, true);
+
+    const showEnvIndex = log.findIndex((entry) =>
+      entry.startsWith("systemctl --user show-environment"),
+    );
+    const lingerIndex = log.findIndex((entry) =>
+      entry.startsWith("loginctl enable-linger"),
+    );
+    const publishIndex = log.indexOf("publish");
+
+    expect(showEnvIndex).toBeGreaterThanOrEqual(0);
+    expect(lingerIndex).toBeGreaterThan(showEnvIndex);
+    expect(publishIndex).toBeGreaterThan(lingerIndex);
+    // `enable --now` is the last runner call the successful install issues -
+    // linger already ran, off the grant's clock, before the edge.
+    expect(log[log.length - 1]).toBe(
+      `systemctl --user enable --now ${label.id}.service`,
+    );
+  });
+
+  it("enableLinger: false - loginctl is never called", async () => {
+    vi.stubEnv("USER", "golden-user");
+    const { log, publish } = makeSharedLog();
+    const runner = loggingRunner(log);
+
+    await installWith(runner, publish, false);
+
+    expect(log.some((entry) => entry.startsWith("loginctl"))).toBe(false);
   });
 });

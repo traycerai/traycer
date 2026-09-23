@@ -50,6 +50,15 @@ describe("spawn-edge-bounds.ts is a pinned leaf", () => {
     ]);
   });
 
+  it("systemd-unit-directives.ts's only import is spawn-edge-bounds.ts - the same leaf lockstep", () => {
+    const source = readFileSync(
+      join(HERE, "..", "systemd-unit-directives.ts"),
+      "utf8",
+    );
+
+    expect(extractModuleSpecifiers(source)).toEqual(["./spawn-edge-bounds"]);
+  });
+
   it("protocol's host/lifecycle-constants.ts exists and itself imports nothing", () => {
     const lifecycleConstantsPath = join(
       HERE,
