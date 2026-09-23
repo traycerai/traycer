@@ -17,6 +17,7 @@ import {
   useEpicEvolutionChatIds,
   useEpicTreeIndex,
   type AgentActivityTier,
+  type EpicTreeIndex,
 } from "@/lib/epic-selectors";
 import {
   APPROVAL_TONE,
@@ -117,8 +118,10 @@ export function useChatArchiveHiddenIds(args: {
       if (openTileContentIds.has(chatId)) return true;
       // An identity's review pass works and finishes in the background by
       // design; its activity is not a request for the user's attention, so it
-      // stays under Archived unless the user opened it from there.
-      if (evolution.has(chatId)) return false;
+      // stays under Archived unless the user opened it from there. That holds
+      // for anything UNDER a pass too: the reveal walks a candidate's ancestors,
+      // so an active child would otherwise pull the pass itself back into view.
+      if (underEvolutionChat(chatId, evolution, tree)) return false;
       const indicatorState = selectNotificationIndicatorState(
         { byId: appLocalNotificationRows },
         { epicId, chatId },
@@ -138,9 +141,28 @@ export function useChatArchiveHiddenIds(args: {
     evolutionChatIds,
     notificationIndicators,
     openTileContentIds,
+    tree,
   ]);
   return useMemo(
     () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
     [baseArchiveHiddenIds, alwaysVisibleIds, tree],
   );
+}
+
+/** Whether `id` is an evolution chat or sits anywhere beneath one. */
+function underEvolutionChat(
+  id: string,
+  evolutionChatIds: ReadonlySet<string>,
+  tree: EpicTreeIndex,
+): boolean {
+  if (evolutionChatIds.size === 0) return false;
+  const visited = new Set<string>();
+  let currentId: string | null = id;
+  while (currentId !== null && !visited.has(currentId)) {
+    if (evolutionChatIds.has(currentId)) return true;
+    visited.add(currentId);
+    if (!Object.hasOwn(tree.nodeById, currentId)) return false;
+    currentId = tree.nodeById[currentId].parentId;
+  }
+  return false;
 }

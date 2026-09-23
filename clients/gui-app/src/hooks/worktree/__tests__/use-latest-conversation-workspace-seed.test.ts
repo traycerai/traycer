@@ -62,7 +62,55 @@ function terminalAgent(
   };
 }
 
+function evolutionChat(id: string, createdAt: number): ChatProjection {
+  return { ...chat(id, createdAt, createdAt), chatKind: "evolution" };
+}
+
 describe("latestCreatedConversationOwner", () => {
+  it("skips a newer identity evolution chat, so the older conversation seeds the workspace", () => {
+    const projectChat = chat("project-chat", 1, 1);
+    const evolutionPass = evolutionChat("evolution-pass", 2);
+
+    expect(
+      latestCreatedConversationOwner({
+        chats: {
+          allIds: [projectChat.id, evolutionPass.id],
+          byId: {
+            [projectChat.id]: projectChat,
+            [evolutionPass.id]: evolutionPass,
+          },
+        },
+        tuiAgents: { allIds: [], byId: {} },
+      }),
+    ).toEqual({
+      id: projectChat.id,
+      ownerKind: "chat",
+      createdAt: projectChat.createdAt,
+      hostId: projectChat.hostId,
+    });
+  });
+
+  it("keeps an older terminal agent as the owner (and so the terminal composer mode) over a newer evolution chat", () => {
+    const olderTerminalAgent = terminalAgent("older-terminal-agent", 1, 1);
+    const evolutionPass = evolutionChat("evolution-pass", 2);
+
+    expect(
+      latestCreatedConversationOwner({
+        chats: {
+          allIds: [evolutionPass.id],
+          byId: { [evolutionPass.id]: evolutionPass },
+        },
+        tuiAgents: {
+          allIds: [olderTerminalAgent.id],
+          byId: { [olderTerminalAgent.id]: olderTerminalAgent },
+        },
+      }),
+    ).toMatchObject({
+      id: olderTerminalAgent.id,
+      ownerKind: "terminal-agent",
+    });
+  });
+
   it("returns null when the epic has no chats or terminal agents", () => {
     expect(
       latestCreatedConversationOwner({

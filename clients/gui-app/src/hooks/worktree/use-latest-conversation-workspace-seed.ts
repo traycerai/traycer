@@ -105,14 +105,20 @@ export function latestCreatedConversationOwner(
   projection: Pick<OpenEpicState, "chats" | "tuiAgents"> | null,
 ): ConversationWorkspaceOwner | null {
   if (projection === null) return null;
-  const chatOwners = projection.chats.allIds.map((id) => {
+  const chatOwners = projection.chats.allIds.flatMap((id) => {
     const chat = projection.chats.byId[id];
-    return {
-      id: chat.id,
-      ownerKind: "chat" as const,
-      createdAt: chat.createdAt,
-      hostId: chat.hostId,
-    };
+    // An identity's evolution chat is the host's background review pass, bound
+    // to the identity directory alone. It is never a conversation the user
+    // started, so it must not seed the next one's workspace or composer mode.
+    if (chat.chatKind === "evolution") return [];
+    return [
+      {
+        id: chat.id,
+        ownerKind: "chat" as const,
+        createdAt: chat.createdAt,
+        hostId: chat.hostId,
+      },
+    ];
   });
   const terminalAgentOwners = projection.tuiAgents.allIds.map((id) => {
     const agent = projection.tuiAgents.byId[id];
