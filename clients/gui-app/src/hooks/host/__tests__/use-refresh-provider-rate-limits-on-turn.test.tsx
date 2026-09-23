@@ -25,17 +25,17 @@ vi.mock("@/lib/chats/chat-turn-completions", () => ({
     };
   },
 }));
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
-  useRateLimitQueueScope: () => mocks.scope,
+vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
+  useProviderRateLimitFetchScope: () => mocks.scope,
 }));
-vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
-  enqueueRateLimitFetchForScope: vi.fn(() => Promise.resolve()),
+vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
+  fetchProviderRateLimits: vi.fn(() => Promise.resolve()),
 }));
 
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
-import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 
-const enqueueSpy = vi.mocked(enqueueRateLimitFetchForScope);
+const fetchSpy = vi.mocked(fetchProviderRateLimits);
 
 function fireTurn(harnessId: GuiHarnessId): void {
   act(() => {
@@ -71,25 +71,25 @@ function defineVisibility(state: "visible" | "hidden"): void {
 describe("useRefreshProviderRateLimitsOnTurn", () => {
   beforeEach(() => {
     sub.handler = null;
-    enqueueSpy.mockClear();
+    fetchSpy.mockClear();
     defineVisibility("visible");
   });
   afterEach(() => {
     cleanup();
   });
 
-  it("routes an ephemeralProcess provider's turn completion through the serial queue, not a direct invalidate", () => {
+  it("routes an ephemeralProcess provider's turn completion through fetchProviderRateLimits, not a direct invalidate", () => {
     const { invalidateSpy } = setup("codex", "work-profile");
     fireTurn("codex");
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(
       mocks.scope,
-      "codex",
-      DEFAULT_ACCOUNT_CONTEXT,
       {
-        force: false,
+        providerId: "codex",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
         profileId: "work-profile",
       },
+      { force: false },
     );
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
@@ -97,19 +97,19 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
   it("routes a Claude turn through the selected host scope too", () => {
     const { invalidateSpy } = setup("claude-code", "selected-profile");
     fireTurn("claude");
-    expect(enqueueSpy).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenCalledWith(
       mocks.scope,
-      "claude-code",
-      DEFAULT_ACCOUNT_CONTEXT,
       {
-        force: false,
+        providerId: "claude-code",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
         profileId: "selected-profile",
       },
+      { force: false },
     );
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates an httpFetch provider's query directly and never touches the queue", () => {
+  it("invalidates an httpFetch provider's query directly and never touches fetchProviderRateLimits", () => {
     const { invalidateSpy } = setup("openrouter", null);
     fireTurn("openrouter");
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
@@ -124,31 +124,31 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
         },
       ),
     });
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("still enqueues an ephemeralProcess turn completion while the window is hidden (guardrail 3)", () => {
+  it("still fetches an ephemeralProcess turn completion while the window is hidden (guardrail 3)", () => {
     defineVisibility("hidden");
     setup("codex", null);
     fireTurn("codex");
     // The visibility pause applies ONLY to the interval timer - a background
     // turn finishing while the user is away must still refresh that provider.
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(
       mocks.scope,
-      "codex",
-      DEFAULT_ACCOUNT_CONTEXT,
       {
-        force: false,
+        providerId: "codex",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
         profileId: null,
       },
+      { force: false },
     );
   });
 
   it("ignores completions from a different provider's harness", () => {
     const { invalidateSpy } = setup("codex", null);
     fireTurn("claude");
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
@@ -157,8 +157,8 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
     fireTurn("codex");
     fireTurn("codex");
     fireTurn("codex");
-    // The outer cooldown ref bounds the queue path to at most once per window.
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    // The outer cooldown ref bounds the ephemeral path to at most once per window.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("no-ops while providerId is null", () => {
@@ -166,7 +166,7 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
     // No subscription is created, so there is nothing to fire; assert the
     // effect took the null branch and wired nothing up.
     expect(sub.handler).toBeNull();
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
@@ -184,7 +184,7 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
 
     expect(sub.handler).toBeNull();
     fireTurn("codex");
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 });

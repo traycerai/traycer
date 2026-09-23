@@ -229,8 +229,9 @@ export function ProfileRateLimitSwitchBanner(
   // One automatic, NON-forced usage check per mounted warning episode, and
   // only for the single probeTarget the hook nominated (no known
   // strictly-better destination exists, this one is unknown). `ensureFresh`
-  // skips still-fresh cache and honors the usage-fetch cool-down, so this
-  // can never burst-probe or re-trip a 429. A successful reading lands in
+  // skips still-fresh cache and lets the host answer inside its floors -
+  // including the long one after a usage-fetch failure - so this can never
+  // burst-probe or re-trip a 429. A successful reading lands in
   // the gauge and the next providers.list snapshot promotes the profile to
   // a real primary target; a failure leaves it unknown - no retry, no next
   // candidate. The keyed composer boundary remounts this banner when the

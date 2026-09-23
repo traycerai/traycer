@@ -21,7 +21,7 @@ import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
  * `providers.list` is a cheap cache-only host read (no subprocess spawn, no
  * `host.getRateLimitUsage` account probe), so unlike
  * `useRefreshProviderRateLimitsOnTurn` this always invalidates directly -
- * there is no ephemeral-process serial queue to route through. The outer
+ * there is no probe to ask the host to skip. The outer
  * cooldown ref still bounds a burst of turn completions on the same harness to
  * at most one invalidation per `PROVIDER_RATE_LIMITS_STALE_TIME_MS`.
  *

@@ -55,7 +55,7 @@ import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { LandingDraftMirrorMount } from "@/hooks/drafts/use-landing-draft-mirror";
 import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
-import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
+import { RateLimitPollProvider } from "@/providers/rate-limit-poll-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -335,7 +335,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <WorktreeDeleteProgressToastBridge />
       <SessionImportProgressToastBridge />
       <HarnessCatalogPrefetcher />
-      <RateLimitQueueProvider />
+      <RateLimitPollProvider />
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       {/*

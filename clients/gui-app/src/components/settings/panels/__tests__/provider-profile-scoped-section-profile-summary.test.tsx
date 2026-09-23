@@ -16,7 +16,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 // the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
 // which that stub does not intercept - so the real hook throws its "must be
 // used inside a <HostRuntimeProvider>" error. The refresh button reaches that
-// chain via `useProviderRateLimitRefresh` -> `useRateLimitQueueScope`. Stub the
+// chain via `useProviderRateLimitRefresh` -> `useProviderRateLimitFetchScope`. Stub the
 // one resolution they share, the way the host-less panel suites already do.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
