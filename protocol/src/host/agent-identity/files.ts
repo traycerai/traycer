@@ -80,9 +80,17 @@ export type IdentityFileObject = z.infer<typeof identityFileObjectSchema>;
 
 /**
  * Newest first, and bounded so a `path@sha` link keeps meaning. The plane's
- * cap; the WRITER enforces it and the wire schema deliberately does not
- * re-check the length (a `.max()` would fail the whole ENTRY, `current`
- * included, over a bookkeeping overflow).
+ * cap.
+ *
+ * The WRITER enforces it. The wire schema below deliberately does NOT re-check
+ * the length, for two reasons that point the same way: this is a host-produced
+ * frame, so an over-long array is a host bug rather than a peer's input; and a
+ * `.max()` here would fail the whole ENTRY over a bookkeeping overflow, taking
+ * `current` - the object's actual address - down with it. The plane makes the
+ * same call one layer down, where it expresses "trim, never reject" as a
+ * reader-side transform; a transform is unrepresentable in JSON Schema and this
+ * schema is frozen through `z.toJSONSchema`, so the same intent is stated here
+ * as a writer obligation instead (the host trims when it projects the entry).
  */
 export const IDENTITY_FILE_VERSIONS_CAP = FILE_PLANE_VERSIONS_CAP;
 
@@ -91,18 +99,16 @@ export const IDENTITY_FILE_VERSIONS_CAP = FILE_PLANE_VERSIONS_CAP;
  * path: the plane's entry minus `recordingId`, plus the identity-only
  * `executable` bit.
  *
- * `versions` is TRIMMED rather than rejected past the cap, exactly as the plane
- * does it: an entry that failed to parse would lose its `current` too.
+ * `versions` is re-declared rather than inherited because the plane's carries
+ * the reader-side transform this schema cannot (see the cap above); the
+ * objects are the identity projection's, which drop the per-object mode bit.
  */
 export const identityFileEntrySchema = lazySchema(() =>
   filePlaneEntrySchema
     .omit({ recordingId: true, current: true, versions: true })
     .extend({
       current: identityFileObjectSchema,
-      versions: z
-        .array(identityFileObjectSchema)
-        .default([])
-        .transform((versions) => versions.slice(0, IDENTITY_FILE_VERSIONS_CAP)),
+      versions: z.array(identityFileObjectSchema).default([]),
       /**
        * IDENTITY-ONLY on the wire. The plane records the mode per OBJECT
        * (optional, absent on objects written before it existed); the host
