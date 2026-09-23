@@ -853,8 +853,10 @@ describe("runHostStart - installed-record launch path", () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const previousUnsetValue = process.env.TRAYCER_TEST_UNSET;
     const previousStagingToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
+    const previousMallocLargeCache = process.env.MallocLargeCache;
     process.env.TRAYCER_TEST_UNSET = "inherited";
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "parent-secret";
+    delete process.env.MallocLargeCache;
 
     const invoke = () =>
       runHostStart(
@@ -876,6 +878,11 @@ describe("runHostStart - installed-record launch path", () => {
         delete process.env.TRAYCER_STAGING_RELEASE_TOKEN;
       } else {
         process.env.TRAYCER_STAGING_RELEASE_TOKEN = previousStagingToken;
+      }
+      if (previousMallocLargeCache === undefined) {
+        delete process.env.MallocLargeCache;
+      } else {
+        process.env.MallocLargeCache = previousMallocLargeCache;
       }
     }
 
@@ -908,6 +915,9 @@ describe("runHostStart - installed-record launch path", () => {
     expect(call?.env.EXTRA_FROM_OVERRIDE).toBe("1");
     expect(call?.env.TRAYCER_TEST_UNSET).toBeUndefined();
     expect(call?.env.TERM_PROGRAM).toBe("traycer");
+    expect(call?.env.MallocLargeCache).toBe(
+      process.platform === "darwin" ? "0" : undefined,
+    );
     expect(call?.windowsHide).toBe(process.platform === "win32");
     // Production launch must NOT route through a shell - the spawn
     // command must be the executable itself.

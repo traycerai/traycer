@@ -26,6 +26,7 @@ import {
 } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
+import { applyHostAllocatorEnv } from "../service/host-allocator-env";
 import { withHostNodeOptions } from "../service/host-node-options";
 import {
   RESTART_EXIT_CODE,
@@ -1316,6 +1317,10 @@ export async function runHostStart(
       // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
       // dedups when the inherited env already carries it (the macOS plist case).
       env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
+      // macOS only: switch off libmalloc's cache of freed large blocks for the
+      // host process. Like the V8 cap above it is read at creation; see the
+      // module for the measurement and why the host drops it from its own env.
+      applyHostAllocatorEnv(env, process.platform);
       // The host resolves its slot from its own `config.environment` (baked
       // per build) - the supervisor passes no environment arg or env. It also
       // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
