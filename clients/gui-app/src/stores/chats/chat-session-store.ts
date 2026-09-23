@@ -5473,8 +5473,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         imageWitnesses,
       );
       if (seated === before) {
-        // The fold returns its input by identity on an epoch mismatch or an
-        // empty answer - neither seats a row.
+        // The fold returns its input by identity on a straggler from a
+        // superseded epoch or an empty answer - neither seats a row.
         appLogger.warn("[transcript] discarded a range answer unseated", {
           ...rangeAnswerLogFields(response),
           windowEpoch: before.epoch,
@@ -5483,8 +5483,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       }
       if (!before.invalidated && seated.invalidated) {
         appLogger.warn(
-          "[transcript] discarded a range answer that contradicted the skeleton; index voided",
-          rangeAnswerLogFields(response),
+          response.epoch > before.epoch
+            ? "[transcript] discarded a range answer from ahead of the window; a reindex was missed, index voided"
+            : "[transcript] discarded a range answer that contradicted the skeleton; index voided",
+          { ...rangeAnswerLogFields(response), windowEpoch: before.epoch },
         );
         return seated;
       }

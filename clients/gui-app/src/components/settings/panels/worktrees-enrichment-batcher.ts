@@ -5,13 +5,13 @@ import {
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  WorktreeHostEntryV14,
-  WorktreeListAllForHostResponseV14,
-} from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 
 /**
@@ -120,6 +120,47 @@ export function keepResolvedEnrichmentRows(
 }
 
 /**
+ * The ONE observer-side definition of a per-path enrichment query, shared by
+ * every surface that reads activity-enriched worktree rows: this panel's
+ * viewport leg below, and the task / owner / PR-search hooks through
+ * `useWorktreeEnrichmentForClient`. Sharing it is what keeps the query-level
+ * options (`gcTime`, `structuralSharing`) identical on a key two surfaces
+ * observe at once - TanStack holds ONE option set per query, so a second
+ * definition would silently swap the resolved-row guard in and out depending
+ * on which observer rendered last.
+ *
+ * `staleTime` is the only observer-level knob, because the surfaces genuinely
+ * differ there: this panel is manual-refresh (`Infinity`), while the History
+ * and hover surfaces keep the app default (`null`) so a remount after it can
+ * still pick up a PR fact the host warmed in the background. `null` omits the
+ * field rather than passing `undefined`, which would OVERRIDE the app default
+ * with "always stale" instead of inheriting it.
+ */
+export function perPathEnrichmentQueryOptions(args: {
+  readonly hostId: string | null;
+  readonly path: string;
+  readonly batcher: WorktreeEnrichmentBatcher | null;
+  readonly enabled: boolean;
+  readonly staleTime: number | null;
+}) {
+  const { hostId, path, batcher, enabled, staleTime } = args;
+  // The batcher is transport, not cache identity - it stays out of the
+  // query key, exactly as the client did under `useHostQueries`.
+  const fetcher = (): Promise<WorktreeListAllForHostResponseV14> =>
+    batcher === null
+      ? Promise.reject(hostClientUnavailableError("worktree.listAllForHost"))
+      : batcher.fetchPath(path);
+  return queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
+    queryKey: perPathEnrichmentQueryKey(hostId, path),
+    queryFn: fetcher,
+    enabled,
+    ...(staleTime === null ? {} : { staleTime }),
+    gcTime: WORKTREE_ENRICHMENT_GC_MS,
+    structuralSharing: keepResolvedEnrichmentRows,
+  });
+}
+
+/**
  * Observer-leg fetch driver over the batched transport. Split out here (not
  * `useHostQueries`, the usual wrapper) because that wrapper hard-wires one
  * `client.request` per request spec - the whole point of this module is the
@@ -135,27 +176,18 @@ export function useBatchedEnrichmentQueries(args: {
 }): Array<UseQueryResult<WorktreeListAllForHostResponseV14, HostRpcError>> {
   const { hostId, paths, batcher, enabled } = args;
   return useQueries({
-    queries: paths.map((path) => {
-      // The batcher is transport, not cache identity - it stays out of the
-      // query key, exactly as the client did under `useHostQueries`.
-      const fetcher = (): Promise<WorktreeListAllForHostResponseV14> =>
-        batcher === null
-          ? Promise.reject(
-              hostClientUnavailableError("worktree.listAllForHost"),
-            )
-          : batcher.fetchPath(path);
-      return queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
-        queryKey: perPathEnrichmentQueryKey(hostId, path),
-        queryFn: fetcher,
+    queries: paths.map((path) =>
+      perPathEnrichmentQueryOptions({
+        hostId,
+        path,
+        batcher,
         enabled,
         // Probe-once for real (manual-refresh model): an enriched row never
         // refetches on remount or scroll-back. Refresh invalidation and the
         // cold-PR retry ledgers are the only re-probe paths.
         staleTime: Infinity,
-        gcTime: WORKTREE_ENRICHMENT_GC_MS,
-        structuralSharing: keepResolvedEnrichmentRows,
-      });
-    }),
+      }),
+    ),
   });
 }
 // Coalescing window: how long the first enqueued path waits for company
@@ -188,13 +220,16 @@ export interface WorktreeEnrichmentBatcher {
  * resolves with a response shaped like the old single-path RPC - while the
  * wire carries up to {@link WORKTREE_ENRICH_BATCH_LIMIT} paths per call.
  *
- * Row fan-out matches by EXACT `worktreePath` string equality, the same
- * contract the host's per-path change emits rely on (raw paths, never
- * normalized). A requested path with no row in the batch response resolves to
- * an empty listing - identical to what its single-path RPC would have
- * returned for a path absent from the disk walk. A failed batch rejects every
- * waiter in the chunk with the same error; retry bookkeeping stays per-path
- * in the callers, so one poisoned path never spends its neighbours' budgets.
+ * Row fan-out is {@link rowsByRequestedPath}: exact `worktreePath` string
+ * equality first, which is every listing-sourced path (the host answers under
+ * `path.resolve` of the requested spelling, and a listing row's path already
+ * is one), then the host's lexical key for a binding-sourced spelling it
+ * rewrote (a trailing slash an explicit import kept). A requested path with no
+ * row in the batch response resolves to an empty listing - identical to what
+ * its single-path RPC would have returned for a path absent from the disk
+ * walk. A failed batch rejects every waiter in the chunk with the same error;
+ * retry bookkeeping stays per-path in the callers, so one poisoned path never
+ * spends its neighbours' budgets.
  *
  * No dedupe on purpose: TanStack already single-flights per query key, and
  * the sweep skips paths that are fetching or viewport-owned, so a path never
@@ -218,15 +253,13 @@ export function createWorktreeEnrichmentBatcher(
       pending = pending.slice(WORKTREE_ENRICH_BATCH_LIMIT);
       void requestBatch(chunk.map((entry) => entry.path)).then(
         (response) => {
-          const rowsByPath = new Map<string, WorktreeHostEntryV14[]>();
-          for (const row of response.worktrees) {
-            const rows = rowsByPath.get(row.worktreePath) ?? [];
-            rows.push(row);
-            rowsByPath.set(row.worktreePath, rows);
-          }
+          const rowsByPath = rowsByRequestedPath(
+            chunk.map((entry) => entry.path),
+            response.worktrees,
+          );
           for (const entry of chunk) {
             entry.resolve({
-              worktrees: rowsByPath.get(entry.path) ?? [],
+              worktrees: [...(rowsByPath.get(entry.path) ?? [])],
               nextCursor: null,
             });
           }
@@ -254,4 +287,36 @@ export function createWorktreeEnrichmentBatcher(
         }
       }),
   };
+}
+
+/**
+ * The batcher over one host client's selection-mode read - the ONLY place a
+ * background (`forceRefresh: false`) multi-path `worktree.listAllForHost`
+ * request is written. It is a WIRE shape, never a cache key: every row it
+ * returns lands under its own {@link perPathEnrichmentQueryKey}, which is what
+ * lets a per-path `worktree.changed` frame re-probe exactly the rows it names
+ * (`invalidate-worktree-changed-caches.ts`) instead of a whole batch.
+ *
+ * No abort signal is threaded through, on purpose: nothing on the host would
+ * receive it. traycer-host's `listAllForHost` resolver calls
+ * `WorktreeSetupOrchestrator.listAllForHost` without the request context's
+ * signal, and that method takes none, so a derive the host has started runs
+ * to completion and lands in its row cache whether or not the client is still
+ * listening - the next read, on any mount, is served from there. Aborting a
+ * chunk would only drop the answer the host already paid for.
+ */
+export function createWorktreeEnrichmentBatcherForClient(
+  client: HostClient<HostRpcRegistry>,
+): WorktreeEnrichmentBatcher {
+  return createWorktreeEnrichmentBatcher((paths) =>
+    withHostQueryErrorBoundary("worktree.listAllForHost", () =>
+      client.request("worktree.listAllForHost", {
+        includeActivity: true,
+        activityPaths: [...paths],
+        cursor: null,
+        limit: null,
+        forceRefresh: false,
+      }),
+    ),
+  );
 }

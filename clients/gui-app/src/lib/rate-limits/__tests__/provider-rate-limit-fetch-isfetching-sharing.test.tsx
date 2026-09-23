@@ -1,36 +1,39 @@
 /**
- * End-to-end proof that an `enqueueRateLimitFetch` call actually flips
+ * End-to-end proof that a `fetchProviderRateLimits` call actually flips
  * `isFetching` on an already-mounted `useHostProviderRateLimitsQuery`
  * observer for the same provider - the mechanism `RateLimitProviderBlock`'s
  * per-provider refresh icon and `RateLimitRefreshAllButton` both depend on to
  * stay in sync. Uses the shared harness's real `HostClient` +
  * `MockHostMessenger` and PRODUCTION QueryClient configuration: this exact
- * flow - disabled observer mounted, first snapshot loaded by the queue, then
- * a force:true enqueue - is where the inherited global staleTime silently
- * no-oped the real app's refresh while a bare staleTime-0 test client passed.
+ * flow - disabled observer mounted, first snapshot loaded by the fetch
+ * function, then a force:true call - is where the inherited global staleTime
+ * silently no-oped the real app's refresh while a bare staleTime-0 test
+ * client passed.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
-  __resetRateLimitQueueForTests,
-  configureRateLimitQueue,
-  enqueueRateLimitFetch,
-} from "@/lib/rate-limits/ephemeral-fetch-queue";
+  __resetProviderRateLimitFetchesForTests,
+  fetchProviderRateLimits,
+  type ProviderRateLimitRequestFn,
+} from "@/lib/rate-limits/provider-rate-limit-fetch";
 import {
   createQueryClientWrapper,
   createRateLimitSharingHarness,
 } from "@/lib/rate-limits/__tests__/provider-rate-limit-sharing-harness";
 
-// The queue's queryFn now wraps the mock messenger's raw response (always
-// `providerRateLimits: null` here - see the harness's own `response()` doc
-// comment: only fetch timing matters to these tests) into the provider-pull
-// envelope before TanStack caches it - a disabled passive `useHostQuery`
-// observer of this key family sees whatever's actually in the cache, so its
-// `.data` reflects the envelope shape too.
+// The fetch function's queryFn now wraps the mock messenger's raw response
+// (always `providerRateLimits: null` here - see the harness's own
+// `response()` doc comment: only fetch timing matters to these tests) into
+// the provider-pull envelope before TanStack caches it - a disabled passive
+// `useHostQuery` observer of this key family sees whatever's actually in the
+// cache, so its `.data` reflects the envelope shape too.
 const EXPECTED_RATE_LIMIT_ENVELOPE = {
   latest: null,
   lastGood: null,
@@ -38,13 +41,20 @@ const EXPECTED_RATE_LIMIT_ENVELOPE = {
   lastFailureAt: null,
 };
 
-describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery observer's isFetching in sync", () => {
+function requestVia(
+  client: HostClient<HostRpcRegistry>,
+): ProviderRateLimitRequestFn {
+  return (method, params, responseTimeoutMs) =>
+    client.requestWithResponseTimeout(method, params, responseTimeoutMs);
+}
+
+describe("fetchProviderRateLimits keeps a mounted useHostProviderRateLimitsQuery observer's isFetching in sync", () => {
   afterEach(() => {
     cleanup();
-    __resetRateLimitQueueForTests();
+    __resetProviderRateLimitFetchesForTests();
   });
 
-  it("populates a disabled Codex observer from the queue and reflects a later force:true enqueue's fetch state", async () => {
+  it("populates a disabled Codex observer from the fetch function and reflects a later force:true call's fetch state", async () => {
     const harness = createRateLimitSharingHarness();
     const { method, params, options } = providerRateLimitQueryOptions(
       "codex",
@@ -69,17 +79,21 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     expect(rendered.result.current.isFetching).toBe(false);
     expect(rendered.result.current.data).toBeUndefined();
 
-    configureRateLimitQueue({
+    const scope = {
       hostId: mockLocalHostEntry.hostId,
       queryClient: harness.queryClient,
-      request: (_hostId, rpcMethod, rpcParams) =>
-        harness.client.request(rpcMethod, rpcParams),
-    });
+      request: requestVia(harness.client),
+    };
 
-    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
-      force: false,
-      profileId: null,
-    });
+    void fetchProviderRateLimits(
+      scope,
+      {
+        providerId: "codex",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId: null,
+      },
+      { force: false },
+    );
 
     await waitFor(() =>
       expect(rendered.result.current.data).toEqual(
@@ -89,13 +103,19 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     expect(rendered.result.current.isPending).toBe(false);
     expect(rendered.result.current.isFetching).toBe(false);
 
-    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
-      profileId: null,
-    });
+    void fetchProviderRateLimits(
+      scope,
+      {
+        providerId: "codex",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId: null,
+      },
+      { force: true },
+    );
 
     // The second call is the one the harness blocks. The disabled observer,
-    // mounted independently of the queue, must still see it as in flight.
+    // mounted independently of the fetch function, must still see it as in
+    // flight.
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(true));
 
     harness.resolvePendingResponse();

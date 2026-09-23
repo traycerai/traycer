@@ -138,7 +138,7 @@ describe("useRunTargetHost", () => {
 
     expect(result.current.hostId).toBe("default-host");
     expect(result.current.isReady).toBe(true);
-    expect(result.current.queueScope?.hostId).toBe("default-host");
+    expect(result.current.fetchScope?.hostId).toBe("default-host");
   });
 
   it("resolves an explicit tab host's own transient client, never the default host", async () => {
@@ -160,14 +160,13 @@ describe("useRunTargetHost", () => {
 
     expect(result.current.hostId).toBe("tab-host");
     expect(result.current.isReady).toBe(true);
-    expect(result.current.queueScope?.hostId).toBe("tab-host");
+    expect(result.current.fetchScope?.hostId).toBe("tab-host");
     // Bound to the tab host's own directory entry, not the default host's.
     expect(result.current.client?.getActiveHost()?.websocketUrl).toBe(
       TAB_HOST.websocketUrl,
     );
 
-    await result.current.queueScope?.request(
-      "tab-host",
+    await result.current.fetchScope?.request(
       "host.getRateLimitUsage",
       {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
@@ -209,6 +208,6 @@ describe("useRunTargetHost", () => {
     expect(result.current.hostId).not.toBe("default-host");
     expect(result.current.hostId).toBeNull();
     expect(result.current.isReady).toBe(false);
-    expect(result.current.queueScope).toBeNull();
+    expect(result.current.fetchScope).toBeNull();
   });
 });

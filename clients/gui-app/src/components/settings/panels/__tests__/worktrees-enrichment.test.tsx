@@ -19,6 +19,7 @@ import {
   useRevalidateStaleWorktreeActivity,
   useWorktreeActivityEnrichment,
 } from "@/components/settings/panels/worktrees-enrichment";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import {
   persistWorktreeActivitySnapshot,
   readWorktreeActivitySnapshot,
@@ -80,18 +81,7 @@ const METHOD_SCOPE = hostQueryKeys.methodScope(
 );
 
 function perPathKey(path: string): readonly unknown[] {
-  return [
-    ...METHOD_SCOPE,
-    {
-      includeActivity: true,
-      activityPaths: [path],
-      cursor: null,
-      limit: null,
-      // The directive is pinned to `false` in the cache identity and never
-      // varies - a forced refetch lands in this same entry.
-      forceRefresh: false,
-    },
-  ];
+  return perPathEnrichmentQueryKey(HOST_ID, path);
 }
 
 function baseKey(): readonly unknown[] {

@@ -217,10 +217,11 @@ function selectGlyphBars(
  * else the provider's first profile, else ambient. The checks stay in the
  * store and take over again when the strip returns.
  *
- * Mounting `useHostQueriesWithResponseMap` here drives the initial
- * fetch-on-mount for the two glyph providers (both `ephemeralProcess`); the
- * serial queue only bounds their *subsequent* background/turn/manual
- * triggers. Because this hook no longer queries the `httpFetch` lane,
+ * Mounting `useHostQueriesWithResponseMap` here only observes the two glyph
+ * providers (both `ephemeralProcess`, so their observers stay disabled): their
+ * readings come from `fetchProviderRateLimits` - the app-shell poll, a
+ * surface's mount fetch, a turn completion, a click. Because this hook no
+ * longer queries the `httpFetch` lane,
  * OpenRouter/Kilo Code/Hugging Face/OpenCode are fetched lazily on popover / Settings
  * open rather
  * than pre-fetched at app-shell mount - which is fine, since nothing at the
@@ -228,7 +229,7 @@ function selectGlyphBars(
  *
  * Uses the envelope-aware `useHostQueriesWithResponseMap` (not the plain
  * `useHostQueries`) so this passive observer's declared cache shape agrees
- * with what `ephemeral-fetch-queue.ts` actually writes for these keys
+ * with what `provider-rate-limit-fetch.ts` actually writes for these keys
  * (`ProviderRateLimitEnvelope`) - both providers here are always
  * `ephemeralProcess`, so this observer stays disabled and never issues its
  * own fetch, but the TData type still has to match reality.

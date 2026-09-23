@@ -10,13 +10,18 @@ import {
   readHostPidMetadataEvidence,
   type HostPidMetadataEvidence,
 } from "../../host/pid-metadata";
-import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError, type CliError } from "../../runner/errors";
 import { forceStopHostProcessReporting } from "./desktop-agent-shutdown";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
 import { serviceManifestPath, type ServiceLabel } from "../label";
-import { ProcessRunError, runCommand, type RunResult } from "../process-runner";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  runCommand,
+  type RunResult,
+} from "../process-runner";
 import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
@@ -28,6 +33,12 @@ import type {
   ServiceStatus,
   UninstallServiceOptions,
 } from "../index";
+import { atServiceInstallEdge, atServiceSpawnEdge } from "../spawn-edge";
+import {
+  SYSTEMCTL_CALL_TIMEOUT_MS,
+  SYSTEMCTL_JOB_TIMEOUT_MS,
+} from "../spawn-edge-bounds";
+import { SYSTEMD_UNIT_SERVICE_DIRECTIVES } from "../systemd-unit-directives";
 
 // Linux service controller - systemd-user. The unit's ExecStart points
 // at the per-user CLI binary with `host start` (the slot is baked into
@@ -122,7 +133,7 @@ async function assertSystemdUserReachable(
     await run("systemctl", ["--user", "show-environment"], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -144,6 +155,24 @@ async function installService(
   run: ProcessRunner,
 ): Promise<void> {
   await assertSystemdUserReachable(options.label, run);
+  // Linger BEFORE the install edge, not after the start it outlives. It is
+  // the one step here that neither the unit nor its launch depends on, and it
+  // can run for its whole 30s: issued after `enable --now`, it held the
+  // controller call open past the launch, and the host-start lease - whose ack
+  // wait only begins when this call returns - out past the bound
+  // `HOST_START_ADOPTION_MAX_AGE_MS` documents (62s + 30s + 50s = 142s against
+  // 140s). Here it runs off the grant's clock entirely. Best-effort and
+  // idempotent either way, so a publication or install that then fails leaves
+  // behind only what the doctor would have asked for.
+  if (options.enableLinger) {
+    await tryEnableLinger(run);
+  }
+  // The install edge: the grant is published here, in front of the unit
+  // write, so a publication that cannot be made leaves the unit file, its
+  // enablement and a running host exactly as they were. The reachability
+  // probe and linger above write no part of the service. The `enable --now`
+  // edge below returns this same publication.
+  await atServiceInstallEdge();
   const manifestPath = serviceManifestPath(options.label);
   await verifyServiceMutationAuthority();
   await mkdir(dirname(manifestPath), { recursive: true });
@@ -153,70 +182,80 @@ async function installService(
     buildUnit({ label: options.label, cli: options.cli }),
     "utf8",
   );
-  // daemon-reload picks up the new unit; enable --now both registers
-  // the auto-start and starts the unit immediately.
-  try {
-    await run("systemctl", ["--user", "daemon-reload"], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: 10_000,
-      tolerateNonZeroExit: false,
-    });
-    await run(
-      "systemctl",
-      ["--user", "enable", "--now", unitName(options.label)],
-      {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: 15_000,
-        tolerateNonZeroExit: false,
-      },
-    );
-  } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-    // Roll the write back: a unit file systemd was never told about (or
-    // refused to enable) must not outlive the failed install - it would sit
-    // in ~/.config/systemd/user as an orphan that a later daemon-reload
-    // silently registers. All cleanup steps are best-effort; the error the
-    // operator sees is the install failure, not the rollback's.
-    //
-    // `enable --now` is enable-then-start as two separate steps: a start
-    // failure after a successful enable leaves the enablement symlinks in
-    // place (systemd does not roll them back), so `disable` must run BEFORE
-    // the manifest is removed - otherwise the surviving symlinks point at a
-    // unit file that no longer exists.
+  // Roll the write back: a unit file systemd was never told about (or
+  // refused to enable) must not outlive the failed install - it would sit
+  // in ~/.config/systemd/user as an orphan that a later daemon-reload
+  // silently registers. The systemctl cleanup steps are best-effort; the
+  // removal is not, because whether the file is gone is what the operator is
+  // told. Either way the error they see is the install failure, not the
+  // rollback's.
+  //
+  // `enable --now` is enable-then-start as two separate steps: a start
+  // failure after a successful enable leaves the enablement symlinks in
+  // place (systemd does not roll them back), so `disable` must run BEFORE
+  // the manifest is removed - otherwise the surviving symlinks point at a
+  // unit file that no longer exists.
+  const rollBackUnit = async (): Promise<void> => {
     await run(
       "systemctl",
       ["--user", "disable", "--now", unitName(options.label)],
       {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 10_000,
+        timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
         tolerateNonZeroExit: true,
       },
     ).catch((cause) => {
       if (isServiceMutationAuthorityError(cause)) throw cause;
     });
     await verifyServiceMutationAuthority();
-    await rm(manifestPath, { force: true }).catch(() => undefined);
+    await rm(manifestPath, { force: true });
     await run("systemctl", ["--user", "daemon-reload"], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     }).catch((cleanupCause) => {
       if (isServiceMutationAuthorityError(cleanupCause)) throw cleanupCause;
     });
+  };
+  const registrationFailed = async (cause: unknown): Promise<never> => {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    let rolledBack = "the partially-written unit file was removed";
+    try {
+      await rollBackUnit();
+    } catch (rollBackCause) {
+      if (isServiceMutationAuthorityError(rollBackCause)) throw rollBackCause;
+      rolledBack = `removing the partially-written unit file failed too: ${describeCause(rollBackCause)}`;
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `systemd registration failed for ${unitName(options.label)}: ${describeCause(cause)} (the partially-written unit file was removed)`,
+      message: `systemd registration failed for ${unitName(options.label)}: ${describeCause(cause)} (${rolledBack})`,
       details: { unit: unitName(options.label), cause: describeCause(cause) },
       exitCode: 1,
     });
-  }
-  if (options.enableLinger) {
-    await tryEnableLinger(run);
-  }
+  };
+  // daemon-reload picks up the new unit; enable --now both registers
+  // the auto-start and starts the unit immediately.
+  await run("systemctl", ["--user", "daemon-reload"], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
+    tolerateNonZeroExit: false,
+  }).catch(registrationFailed);
+  // A spawn edge: `enable --now` starts the unit. Already published at the
+  // install edge above; this returns the same publication.
+  await atServiceSpawnEdge();
+  await run(
+    "systemctl",
+    ["--user", "enable", "--now", unitName(options.label)],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: SYSTEMCTL_JOB_TIMEOUT_MS,
+      tolerateNonZeroExit: false,
+    },
+  ).catch(registrationFailed);
 }
 
 async function tryEnableLinger(run: ProcessRunner): Promise<void> {
@@ -251,7 +290,7 @@ async function uninstallService(
   await run("systemctl", ["--user", "daemon-reload"], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   // A unit that ended up `failed` (e.g. it restart-looped before this
@@ -261,7 +300,7 @@ async function uninstallService(
   await run("systemctl", ["--user", "reset-failed", unitName(options.label)], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   }).catch((cause) => {
     if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -316,8 +355,10 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
  *
  * That also REMOVES a mismatch rather than adding one. The old non-force stop
  * could not promise the host was down: its runner caps the subprocess at 15s
- * while the unit inherits systemd's 90s default, which is why `--force` needs
- * a confirm-and-escalate dance to promise anything. Owning the whole ladder
+ * while the unit's stop job may run for its whole `TimeoutStopSec`
+ * (`SYSTEMD_TIMEOUT_STOP_SECONDS`, or systemd's 90s default on a unit not yet
+ * re-registered), which is why `--force` needs a confirm-and-escalate dance
+ * to promise anything. Owning the whole ladder
  * lets this path promise what the old one could not.
  *
  * ## Confirmation is INSTANCE-BOUND, and must be
@@ -450,7 +491,7 @@ async function killUnit(
     {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     },
   );
@@ -535,7 +576,8 @@ async function stopService(
   if (!force) return;
   // `--force` promises the host is DOWN when this returns, and the plain
   // stop above cannot promise that: the runner caps the subprocess at 15s
-  // while the unit (no TimeoutStopSec) inherits systemd's 90s default, so a
+  // while the stop job may run for the unit's whole `TimeoutStopSec` (37s,
+  // or systemd's 90s default on a unit not yet re-registered), so a
   // host that survives SIGTERM outlives the subprocess and a bare return
   // would report a stop that has not happened. Confirm through systemd's own
   // unit state - never a pid, so a recycled pid.json entry cannot misdirect
@@ -565,7 +607,7 @@ async function stopService(
     {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     },
   );
@@ -768,7 +810,7 @@ async function probeUnitSettled(
     result = await run("systemctl", ["--user", "is-active", unitName(label)], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     });
   } catch (cause) {
@@ -835,25 +877,53 @@ export async function linuxServiceMayRespawn(
   return !(state === "inactive" || state === "failed" || state === "unknown");
 }
 
+// The error for a `start` / `restart` that did not complete. Only a runner
+// TIMEOUT is special: systemd may already have queued the job, and killing
+// `systemctl` does not cancel it, so it can still finish. Past
+// `SYSTEMCTL_JOB_TIMEOUT_MS` that is an anomaly worth failing on, but the CLI
+// cannot claim the operation FAILED; it can only say it is unconfirmed.
+// Anything else is systemctl's own answer and still reads as a failure.
+function systemctlJobFailure(
+  verb: "start" | "restart",
+  label: ServiceLabel,
+  cause: unknown,
+): CliError {
+  if (cause instanceof ProcessTimeoutError) {
+    return cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `systemctl ${verb} for ${unitName(label)} did not return within ${cause.timeoutMs}ms; the ${verb} is unconfirmed and systemd may still complete it. Check 'traycer host status' before retrying.`,
+      details: {
+        unit: unitName(label),
+        timedOut: true,
+        timeoutMs: cause.timeoutMs,
+        cause: describeCause(cause),
+      },
+      exitCode: 1,
+    });
+  }
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message: `systemctl ${verb} failed for ${unitName(label)}: ${describeCause(cause)}`,
+    details: { unit: unitName(label), cause: describeCause(cause) },
+    exitCode: 1,
+  });
+}
+
 async function startService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  await atServiceSpawnEdge();
   try {
     await run("systemctl", ["--user", "start", unitName(label)], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 15_000,
+      timeoutMs: SYSTEMCTL_JOB_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `systemctl start failed for ${unitName(label)}: ${describeCause(cause)}`,
-      details: { unit: unitName(label), cause: describeCause(cause) },
-      exitCode: 1,
-    });
+    throw systemctlJobFailure("start", label, cause);
   }
 }
 
@@ -861,21 +931,20 @@ async function restartService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  // A spawn edge. The restart job's stop half runs AFTER it, so it is inside
+  // `SYSTEMCTL_JOB_TIMEOUT_MS` - which is why that, and not the start alone,
+  // is this path's spawn-edge bound.
+  await atServiceSpawnEdge();
   try {
     await run("systemctl", ["--user", "restart", unitName(label)], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 15_000,
+      timeoutMs: SYSTEMCTL_JOB_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `systemctl restart failed for ${unitName(label)}: ${describeCause(cause)}`,
-      details: { unit: unitName(label), cause: describeCause(cause) },
-      exitCode: 1,
-    });
+    throw systemctlJobFailure("restart", label, cause);
   }
 }
 
@@ -948,19 +1017,23 @@ function buildUnit(options: BuildUnitOptions): string {
   // exec's the CLI, so without this every supervisor line lands in the
   // journal as `sh[pid]`. The label id keys the lines to the exact
   // service instance (`journalctl --user -t ai.traycer.host`).
+  const directives = SYSTEMD_UNIT_SERVICE_DIRECTIVES;
   return `[Unit]
 Description=${options.label.displayName}
 After=default.target
 ${condition}
 [Service]
-Type=simple
+Type=${directives.Type}
 SyslogIdentifier=${options.label.id}
 ExecStart=${execStart}
 # Keep an OOM-killed agent/tool process from causing systemd to stop the
 # entire host unit and every sibling workload in its cgroup.
-OOMPolicy=continue
-Restart=on-failure
-RestartSec=5
+OOMPolicy=${directives.OOMPolicy}
+Restart=${directives.Restart}
+RestartSec=${directives.RestartSec}
+# Bound a stop at the host's own shutdown watchdog plus the supervisor's
+# wind-down, instead of systemd's 90s default.
+TimeoutStopSec=${directives.TimeoutStopSec}
 
 [Install]
 WantedBy=default.target

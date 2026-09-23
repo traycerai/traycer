@@ -66,19 +66,13 @@ import {
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
-import {
-  useAnyRateLimitQueueTargetFetching,
-  useIsRateLimitReadFollowUpExhausted,
-  useRateLimitQueueTargetPhase,
-} from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
   resolveStatusBarProfileIds,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
-import { isRateLimitQueryFailure } from "@/lib/rate-limits/rate-limit-read-status";
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
@@ -1392,22 +1386,20 @@ function useTraycerRateLimitUsageState(
 
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh as one queued batch whose profile pulls run concurrently
- * (`force: true`), while httpFetch providers refresh concurrently alongside via
- * a direct query invalidation - a plain GET has no subprocess cost to serialize.
+ * refresh with one forced fetch per profile, all sent at once - how many of
+ * those probes run together is the host's call - while httpFetch providers
+ * refresh alongside via a direct query invalidation.
  * The synthetic Traycer entry refreshes here too: it refetches the AuthService
  * subscription query, and rate-limit based plans additionally invalidate the
  * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
  * bar.
- * `refreshing` combines all lanes' real query state - this button's OWN
- * ephemeral targets (which stay pending until every profile in the batch has
- * settled, even after one provider's own `isFetching` clears), each configured
- * httpFetch provider's own
- * `isFetching` (read via `useHostQueries` against the exact same query keys the
- * invalidation below targets), plus Traycer's auth/aperture fetch state - so
- * the icon spins for the whole round regardless of which lane(s) are actually
- * configured, not just when an ephemeralProcess provider happens to be in the
- * mix.
+ * `refreshing` combines all lanes' real query state - each of this button's
+ * OWN ephemeral targets' `isFetching` (observed passively on the same keys the
+ * fetches write), each configured httpFetch provider's own `isFetching` (read
+ * via `useHostQueries` against the exact same query keys the invalidation
+ * below targets), plus Traycer's auth/aperture fetch state - so the icon spins
+ * until the slowest target settles, regardless of which lane(s) are actually
+ * configured.
  */
 function RateLimitRefreshAllButton({
   providers,
@@ -1419,11 +1411,10 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useAddressableHostId();
   const client = useHostClient();
-  // The ephemeral lane's app-shell default is configured to the app-wide host,
-  // so the unscoped `enqueueRateLimitFetchBatch` would refresh a machine this
-  // popover may not be showing. This scope is derived from the same context
-  // binding as `hostId` and `client` above, so all three name one host.
-  const queueScope = useRateLimitQueueScope();
+  // This popover may be showing a host other than the app-wide one. The fetch
+  // scope is derived from the same context binding as `hostId` and `client`
+  // above, so all three name one host.
+  const fetchScope = useProviderRateLimitFetchScope();
   const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
     traycerRefreshTarget.rateLimitAccountContexts,
   );
@@ -1481,11 +1472,39 @@ function RateLimitRefreshAllButton({
     options: httpFetchOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
-  // The ephemeral half of "Refresh all" is scoped to the targets this button
-  // actually enqueues, not the whole lane, so a background sweep of a provider
-  // this popover isn't showing can no longer disable it.
-  const ephemeralProcessFetching = useAnyRateLimitQueueTargetFetching(
-    ephemeralProcessRequests,
+  // The ephemeral half of "Refresh all" watches the targets this button
+  // actually fetches, not the whole lane, so a background read of a provider
+  // this popover isn't showing cannot disable it. Passive observers: the lane's
+  // options never let an observer fetch (`providerRateLimitQueryOptions`), and
+  // they still see a fetch the fetch function runs on their key.
+  const ephemeralProcessOptions =
+    ephemeralProcessRequests.length === 0
+      ? null
+      : providerRateLimitQueryOptions(
+          ephemeralProcessRequests[0].providerId,
+          null,
+          true,
+        ).options;
+  const ephemeralProcessQueries = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
+    client,
+    cacheKeyIdentity: undefined,
+    requests: ephemeralProcessRequests.map((target) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        target.providerId,
+        target.profileId,
+        true,
+      );
+      return { method, params };
+    }),
+    options: ephemeralProcessOptions,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const ephemeralProcessFetching = ephemeralProcessQueries.some(
+    (query) => query.isFetching,
   );
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
@@ -1499,9 +1518,9 @@ function RateLimitRefreshAllButton({
     ephemeralProcessRequests.length > 0 ||
     traycerRefreshTarget.enabled;
 
-  // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess profiles fan out inside one queued
-  // batch, and Traycer refetches its subscription/usage queries. Returns
+  // Fire-and-forget, not awaited: httpFetch providers refresh via a direct
+  // invalidation, each ephemeralProcess profile gets its own forced fetch, and
+  // Traycer refetches its subscription/usage queries. Returns
   // an already-resolved promise so `RefreshIconButton` gets its
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
@@ -1518,13 +1537,9 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    void enqueueRateLimitFetchBatchForScope(
-      queueScope,
-      ephemeralProcessRequests,
-      {
-        force: true,
-      },
-    );
+    ephemeralProcessRequests.forEach((target) => {
+      void fetchProviderRateLimits(fetchScope, target, { force: true });
+    });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -1643,23 +1658,9 @@ function SingleProfileRateLimitProviderBlock({
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
   const cardRef = useRevealedProfileCard(providerId, null);
-  const targetPhase = useRateLimitQueueTargetPhase(providerId, null);
-  // Only this lane's reads are owned by the serial queue, so only they have a
-  // follow-up standing behind a read we stopped waiting for.
-  const queueOwned = rateLimitFetchLane(providerId) === "ephemeralProcess";
-  // ...and that follow-up is a single delayed attempt, so once it is spent this
-  // read has nothing left coming for it and must report rather than keep
-  // vouching for the cached reading.
-  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
-    providerId,
-    null,
-  );
-  const targetFetching = queueOwned
-    ? targetPhase === "fetching"
-    : query.isFetching;
   // Single source of truth for this provider's refresh action + spinner state
-  // (fresh-on-open, queue routing, and this target's own queue-phase fold-in),
-  // shared verbatim with the Settings card so they can't drift apart.
+  // (fresh-on-open, and a forced fetch for the ephemeral lane), shared verbatim
+  // with the Settings card so they can't drift apart.
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId: null,
@@ -1671,13 +1672,8 @@ function SingleProfileRateLimitProviderBlock({
   });
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
-    isFetching: targetFetching,
-    isError: isRateLimitQueryFailure({
-      isError: query.isError,
-      error: query.error,
-      queueOwned,
-      followUpExhausted,
-    }),
+    isFetching: query.isFetching,
+    isError: query.isError,
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
@@ -1691,9 +1687,9 @@ function SingleProfileRateLimitProviderBlock({
       : query.dataUpdatedAt;
   useEffect(() => {
     // A disabled query with no cache stays pending forever by design: it is a
-    // passive observer for a signed-out provider, not a queue-owned cold
-    // read. Reveal that provider in Overview so its unavailable state cannot
-    // remain hidden behind the global loading indicator.
+    // passive observer for a signed-out provider, not a cold read a mount
+    // fetch will fill. Reveal that provider in Overview so its unavailable
+    // state cannot remain hidden behind the global loading indicator.
     if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
       onReady();
     }
@@ -1740,8 +1736,7 @@ function SingleProfileRateLimitProviderBlock({
           <UsageLimitUpdatedLabel
             ready={state.kind === "ready"}
             updatedAt={updatedAt}
-            refreshing={targetFetching}
-            queued={targetPhase === "queued"}
+            refreshing={query.isFetching}
             degraded={state.kind === "ready" && state.degraded}
             degradedReason={
               state.kind === "ready" ? state.degradedReason : null
@@ -1754,10 +1749,9 @@ function SingleProfileRateLimitProviderBlock({
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
-              // `isRefreshing` (from useProviderRateLimitRefresh) already folds
-              // in THIS target's own queue phase, so the button reflects its own
-              // pull from the moment it is enqueued - and stays live while an
-              // unrelated provider's sweep runs.
+              // `isRefreshing` (from useProviderRateLimitRefresh) is THIS
+              // target's own `isFetching`, so the button stays live while an
+              // unrelated provider's read runs.
               refreshing={isRefreshing}
             />
           ) : null}
@@ -1802,7 +1796,7 @@ function ProfileRateLimitProviderBlock({
   const queryClient = useQueryClient();
   // Same reason as `RateLimitRefreshAllButton`'s: this provider's own refresh
   // must reach the host whose numbers it is redrawing, not the app-wide one.
-  const queueScope = useRateLimitQueueScope();
+  const fetchScope = useProviderRateLimitFetchScope();
   const hostId = useAddressableHostId();
   const client = useHostClient();
   const setProfileEnabled = useProvidersSetProfileEnabledForClient(
@@ -1897,32 +1891,23 @@ function ProfileRateLimitProviderBlock({
       : passiveQueries[index];
   });
   const lane = rateLimitFetchLane(providerId);
-  // This provider's OWN queue entries, never the lane-wide draining flag: the
-  // button both disables and no-ops on this value, so a lane-wide gate made an
-  // unrelated provider's background sweep turn this control off.
-  const anyOwnTargetFetching = useAnyRateLimitQueueTargetFetching(
-    refreshEligibleTargets.map((target) => ({
-      providerId,
-      profileId: target.profileId,
-    })),
-  );
-  const isRefreshing =
-    lane === "ephemeralProcess"
-      ? anyOwnTargetFetching ||
-        fetchEligibleQueries.some((query) => query.isFetching)
-      : fetchEligibleQueries.some((query) => query.isFetching);
+  // This provider's OWN keys: the button both disables and no-ops on this
+  // value, so it must never read another provider's work.
+  const isRefreshing = fetchEligibleQueries.some((query) => query.isFetching);
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      void enqueueRateLimitFetchBatchForScope(
-        queueScope,
-        refreshEligibleTargets.map((target) => ({
-          providerId,
-          accountContext: DEFAULT_ACCOUNT_CONTEXT,
-          profileId: target.profileId,
-        })),
-        { force: true },
-      );
+      refreshEligibleTargets.forEach((target) => {
+        void fetchProviderRateLimits(
+          fetchScope,
+          {
+            providerId,
+            accountContext: DEFAULT_ACCOUNT_CONTEXT,
+            profileId: target.profileId,
+          },
+          { force: true },
+        );
+      });
       return Promise.resolve();
     }
     refreshEligibleTargets.forEach((target) => {
@@ -2316,9 +2301,6 @@ function RateLimitProviderProfileRow({
     readonly isPending: boolean;
     readonly isFetching: boolean;
     readonly isError: boolean;
-    // Carried so this row can tell a real failure from a read we merely
-    // stopped waiting for (`isRateLimitQueryFailure`).
-    readonly error: unknown;
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
@@ -2326,11 +2308,6 @@ function RateLimitProviderProfileRow({
   const refreshProfileStatus =
     useProvidersRefreshProfileStatusForClient(client);
   const cardRef = useRevealedProfileCard(providerId, profileId);
-  const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
-  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
-    providerId,
-    profileId,
-  );
   useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
@@ -2342,12 +2319,7 @@ function RateLimitProviderProfileRow({
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,
-    isError: isRateLimitQueryFailure({
-      isError: query.isError,
-      error: query.error,
-      queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
-      followUpExhausted,
-    }),
+    isError: query.isError,
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
@@ -2384,12 +2356,7 @@ function RateLimitProviderProfileRow({
           />
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={
-              query.isFetching ||
-              targetPhase === "fetching" ||
-              refreshProfileStatus.isPending
-            }
-            queued={targetPhase === "queued"}
+            refreshing={query.isFetching || refreshProfileStatus.isPending}
             signedOut={signedOutWithoutUsage}
             notChecked={disabledWithoutUsage}
           />
@@ -2517,21 +2484,16 @@ function RateLimitProviderProfileStatusBadges({
 function ProfileUsageUpdatedLabel({
   updatedAt,
   refreshing,
-  queued,
   signedOut,
   notChecked,
 }: {
   readonly updatedAt: number | null;
   readonly refreshing: boolean;
-  readonly queued: boolean;
   readonly signedOut: boolean;
   readonly notChecked: boolean;
 }): ReactNode {
   const now = useSampledNow();
   const ago = useRelativeTimestamp(updatedAt ?? 0);
-  if (queued) {
-    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
-  }
   if (refreshing) return <RefreshingText />;
   if (signedOut) {
     return <span className="text-ui-xs text-muted-foreground">signed out</span>;
@@ -2563,20 +2525,15 @@ function UsageLimitUpdatedLabel({
   ready,
   updatedAt,
   refreshing,
-  queued,
   degraded,
   degradedReason,
 }: {
   readonly ready: boolean;
   readonly updatedAt: number;
   readonly refreshing: boolean;
-  readonly queued: boolean;
   readonly degraded: boolean;
   readonly degradedReason: RateLimitUnavailableReason | null;
 }): ReactNode {
-  if (queued) {
-    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
-  }
   if (!ready) return null;
   if (refreshing) return <RefreshingText />;
   if (updatedAt === 0) return null;
@@ -2939,7 +2896,6 @@ function TraycerAccountCards({
                   rateLimitUpdatedAtByAccount.get(account.key) ?? updatedAt
                 }
                 refreshing={refreshing}
-                queued={false}
                 signedOut={false}
                 notChecked={false}
               />

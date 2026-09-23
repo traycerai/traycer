@@ -15,7 +15,7 @@ import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
 } from "../service/mutation-authority";
-import { didServiceRegistrationCommit } from "../service/cli-invocation-record";
+import { runWithLeaseAtServiceSpawnEdge } from "../service/spawn-edge";
 import { publishHostStartAdoption } from "./host-start-adoption";
 import type {
   DesktopRegistrationTakeover,
@@ -246,36 +246,19 @@ async function runWithHostStartAdoption(
 ): Promise<void> {
   // Resolving the effective service label and publishing the one-shot
   // adoption proof can both take long enough for a released or forged
-  // capability to surface. Revalidate again at the exact service start edge;
-  // otherwise the service manager could launch bytes selected by a stale
-  // caller after its outer authority scope was established.
+  // capability to surface. This check covers the label read; the spawn edge
+  // revalidates before and after publishing, so the service manager never
+  // launches bytes selected by a stale caller after its outer authority scope
+  // was established.
   await verifyServiceMutationAuthority();
   const serviceLabel = await controller.hostStartAdoptionLabel(label);
-  const adoption = await publishHostStartAdoption(
-    capability,
-    contenderOptions,
-    serviceLabel,
+  // Published at the controller's first spawn edge, not here: see
+  // `runWithLeaseAtServiceSpawnEdge`. A call that never reaches an edge
+  // publishes no grant and waits for no child.
+  await runWithLeaseAtServiceSpawnEdge(
+    () => publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+    start,
   );
-  try {
-    await verifyServiceMutationAuthority();
-    await start();
-    await adoption.waitForSpawn();
-  } catch (error) {
-    // A record-step failure after the service manager accepted the
-    // registration means the supervisor is already launching and will present
-    // this lease; cancelling first would refuse an admitted child. Honour the
-    // lease, then surface the record error unchanged (a failed wait must not
-    // replace it - see the cleanup rule below).
-    if (didServiceRegistrationCommit(error)) {
-      await adoption.waitForSpawn().catch(() => undefined);
-    }
-    throw error;
-  } finally {
-    // Cleanup must never replace the actuator error: callers classify it to
-    // choose between park/abort and an ordinary busy refusal, and a rejected
-    // cancel() propagating out of this `finally` would swap in its own error.
-    await adoption.cancel().catch(() => undefined);
-  }
 }
 
 /** Final-actuator facade for the Desktop-to-CLI service takeover. */

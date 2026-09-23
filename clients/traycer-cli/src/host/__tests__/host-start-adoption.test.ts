@@ -16,6 +16,10 @@ import {
   updateAttemptLockPath,
   withUpdateContender,
 } from "@traycer-clients/shared/host-update";
+import {
+  readLockHolder,
+  type LockHolderProbe,
+} from "@traycer-clients/shared/host-lock/cross-process-lock";
 
 const homeRef = vi.hoisted(() => ({ current: "" }));
 vi.mock("../../store/paths", () => ({
@@ -29,7 +33,9 @@ import {
   consumeHostStartAdoption,
   publishHostStartAdoption,
   readHostStartAdoptionNonce,
+  type HostStartAdoptionConsumeResult,
 } from "../host-start-adoption";
+import { HOST_START_ADOPTION_MAX_AGE_MS } from "../../service/spawn-edge-bounds";
 
 const roots: string[] = [];
 
@@ -167,11 +173,16 @@ describe("host-start parent adoption", () => {
     });
     await rm(adoptionPath, { recursive: true, force: true });
 
+    // `version: 1` (not 2) makes `parseAdoption` reject this outright before
+    // any age check runs - so the exact age here is immaterial to which
+    // predicate this hits (parsing fails first, every time); the age is
+    // still moved off the raw `120_000` for consistency, in case a future
+    // reader assumes it is load-bearing.
     await writeFile(
       adoptionPath,
       JSON.stringify({
         version: 1,
-        issuedAtMs: Date.now() - 120_000,
+        issuedAtMs: Date.now() - (HOST_START_ADOPTION_MAX_AGE_MS + 1_000),
         adoption: { hostHomeDir, holder: {} },
       }),
       "utf8",
@@ -382,6 +393,98 @@ describe("host-start parent adoption", () => {
     );
   });
 
+  // The window is pinned only by arithmetic elsewhere
+  // (`host-start-adoption-window.test.ts`); nothing on the consumer side
+  // exercised the actual boundary until now.
+  it("a LIVE parent's grant aged just past the OLD 60s window is still ADOPTED - the window widened to 120s", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-window-widened-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+        );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        const proof = JSON.parse(await readFile(path, "utf8")) as {
+          issuedAtMs: number;
+          nonce: string;
+        };
+        // Just past the OLD 60s window, well inside the current one.
+        await writeFile(
+          path,
+          JSON.stringify({ ...proof, issuedAtMs: Date.now() - 61_000 }),
+          "utf8",
+        );
+
+        const result = await consumeHostStartAdoption(
+          "production",
+          serviceLabel,
+          proof.nonce,
+        );
+        expect(result.kind).toBe("grant");
+        if (result.kind === "grant") {
+          await expect(result.grant.acknowledgeSpawn()).resolves.toBe(true);
+          await result.grant.abandon();
+        }
+      },
+    );
+  });
+
+  it("the same shape aged past the ACTUAL window is not adopted", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-window-expired-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+        );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        const proof = JSON.parse(await readFile(path, "utf8")) as {
+          issuedAtMs: number;
+          nonce: string;
+        };
+        await writeFile(
+          path,
+          JSON.stringify({
+            ...proof,
+            issuedAtMs: Date.now() - (HOST_START_ADOPTION_MAX_AGE_MS + 1_000),
+          }),
+          "utf8",
+        );
+
+        // The expiry check runs ahead of the nonce check on this path too
+        // (see `consumeHostStartAdoption`), so a nonce-bearing consume of an
+        // expired proof is `absent`, not a nonce-mismatch refusal.
+        const result = await consumeHostStartAdoption(
+          "production",
+          serviceLabel,
+          proof.nonce,
+        );
+        expect(result).toEqual({ kind: "absent" });
+      },
+    );
+  });
+
   it("reports a lost same-home concurrent claim after both readers observe the proof", async () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;
@@ -547,6 +650,7 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
     const hostHomeDir = await freshHome();
     const serviceLabel = "ai.traycer.host.agent";
     homeRef.current = hostHomeDir;
+    let result: HostStartAdoptionConsumeResult | null = null;
     await withUpdateContender(
       {
         hostHomeDir,
@@ -561,30 +665,44 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           options(hostHomeDir),
           serviceLabel,
         );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        // Age the REAL proof rather than hand-rolling one, so every other
+        // field stays exactly what the publisher wrote.
+        const proof = JSON.parse(await readFile(path, "utf8")) as {
+          issuedAtMs: number;
+        };
+        await writeFile(
+          path,
+          JSON.stringify({
+            ...proof,
+            issuedAtMs: Date.now() - (HOST_START_ADOPTION_MAX_AGE_MS + 1_000),
+          }),
+          "utf8",
+        );
+        // Consumed INSIDE the contender's callback, with the parent
+        // capability still LIVE, so expiry - not `readOrphanedProof`'s
+        // dead-parent path - is the only thing that can make this read as
+        // absent. Ablation: with `readOrphanedProof` removed entirely, this
+        // still goes red (proving it, not the orphan path, is what admits
+        // here) - a consume made after the contender returns would not.
+        result = await consumeHostStartAdoption("production", null, null);
       },
     );
-    const path = join(hostHomeDir, ".host-start-adoption.json");
-    // Age the REAL proof rather than hand-rolling one, so every other field
-    // stays exactly what the publisher wrote.
-    const proof = JSON.parse(await readFile(path, "utf8")) as {
-      issuedAtMs: number;
-    };
-    await writeFile(
-      path,
-      JSON.stringify({ ...proof, issuedAtMs: Date.now() - 120_000 }),
-      "utf8",
-    );
-
-    expect(await consumeHostStartAdoption("production", null, null)).toEqual({
-      kind: "absent",
-    });
+    if (result === null) throw new Error("consume never ran");
+    expect(result).toEqual({ kind: "absent" });
   });
 
-  it("a FRESH proof still refuses a standalone start — the fail-closed arm is intact", async () => {
+  it("a FRESH proof with a LIVE parent still refuses a standalone start — the fail-closed arm is intact", async () => {
     // The paired direction. The age bound must not become a way to bypass the
     // grant: an outstanding, still-valid proof is reserved for the
     // service-labelled child, and letting a bare start through would recreate
     // the parent-lock/child-lock cycle the proof exists to avoid.
+    //
+    // Consumed INSIDE the contender's callback, on purpose: `readOrphanedProof`
+    // now reads a dead-parent proof as absent on this exact path (nonce-less,
+    // standalone), so this negative only stays a negative while the parent
+    // capability is still live. The dead-parent counterpart is covered
+    // separately below ("a dead-parent proof ... admits instead of refusing").
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;
     await withUpdateContender(
@@ -601,13 +719,79 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           options(hostHomeDir),
           "ai.traycer.host.agent",
         );
+
+        expect(
+          await consumeHostStartAdoption("production", null, null),
+        ).toEqual({
+          kind: "refused",
+          reason:
+            "host-start adoption is reserved for a service-labelled launch",
+        });
+      },
+    );
+  });
+
+  it("a dead-parent proof with no nonce admits instead of refusing — option 2, the orphan path", async () => {
+    // The publisher can die between publishing and its child's consume; this
+    // models that by consuming AFTER the contender's callback returns, so the
+    // lock the proof's parent held is already released. Before `readOrphanedProof`
+    // this refused every retry until the proof aged out; now it reads as an
+    // ordinary absence and falls through to admission, exactly like a launch
+    // with no proof at all - see `consumeHostStartAdoption`.
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-dead-parent-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          "ai.traycer.host.agent",
+        );
       },
     );
 
-    expect(await consumeHostStartAdoption("production", null, null)).toEqual({
-      kind: "refused",
-      reason: "host-start adoption is reserved for a service-labelled launch",
-    });
+    const result = await consumeHostStartAdoption("production", null, null);
+    expect(result).toEqual({ kind: "absent" });
+    // The proof is left in place: removal belongs to its publisher's
+    // `cancel`, never to a consumer that read it as absent.
+    const proofStillThere = await readFile(
+      join(hostHomeDir, ".host-start-adoption.json"),
+      "utf8",
+    );
+    expect(proofStillThere.length).toBeGreaterThan(0);
+
+    let callbackCalls = 0;
+    const observed: { lock: LockHolderProbe | null } = { lock: null };
+    const admission = await defaultRunHostStartDeps.admitHostStartSpawn(
+      { environment: "production", cwd: null },
+      async () => {
+        callbackCalls += 1;
+        // Ordinary admission contends the update-attempt lock for the
+        // duration of `run`; a grant would not, which is the proof that
+        // this took the admission path rather than being handed a grant.
+        observed.lock = await readLockHolder(
+          updateAttemptLockPath(hostHomeDir),
+        );
+        const child = spawn(process.execPath, ["-e", ""]);
+        child.unref();
+        return child;
+      },
+      () => undefined,
+    );
+    expect(admission.kind).toBe("ran");
+    expect(callbackCalls).toBe(1);
+    expect(observed.lock?.kind).toBe("held");
+    expect(
+      observed.lock?.kind === "held" &&
+        observed.lock.holder.pid === process.pid,
+    ).toBe(true);
   });
 
   // Production change B: `adoptionGrantExpired` became SYMMETRIC
@@ -618,9 +802,19 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
   // must read as expired too, exactly like a stale one, rather than reading
   // as an outstanding grant forever.
   it("a FUTURE-dated proof is ALSO treated as expired on the standalone path — the symmetric bound", async () => {
+    // Same isolation as the past-dated expiry test above: consumed INSIDE
+    // the contender's callback, parent LIVE throughout, so the symmetric
+    // `Math.abs` check - not `readOrphanedProof`'s dead-parent path - is the
+    // only thing that can make this read as absent. Consuming after the
+    // contender returns (the shape this test used to have) would pass even
+    // if `Math.abs` were dropped: a future timestamp reads as NOT expired by
+    // the asymmetric check, falls through to `readOrphanedProof`, and still
+    // comes back absent because the parent is dead - proving nothing about
+    // the symmetric bound this test is named for.
     const hostHomeDir = await freshHome();
     const serviceLabel = "ai.traycer.host.agent";
     homeRef.current = hostHomeDir;
+    let result: HostStartAdoptionConsumeResult | null = null;
     await withUpdateContender(
       {
         hostHomeDir,
@@ -635,23 +829,28 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
           options(hostHomeDir),
           serviceLabel,
         );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        // Age the REAL proof INTO THE FUTURE rather than hand-rolling one, so
+        // every other field stays exactly what the publisher wrote. Derived
+        // rather than a bare 10 minutes, for the same reason the past-dated
+        // fixtures moved off `120_000`: a magic offset that happens to clear
+        // the window proves less than one pinned to the actual bound.
+        const proof = JSON.parse(await readFile(path, "utf8")) as {
+          issuedAtMs: number;
+        };
+        await writeFile(
+          path,
+          JSON.stringify({
+            ...proof,
+            issuedAtMs: Date.now() + HOST_START_ADOPTION_MAX_AGE_MS + 1_000,
+          }),
+          "utf8",
+        );
+        result = await consumeHostStartAdoption("production", null, null);
       },
     );
-    const path = join(hostHomeDir, ".host-start-adoption.json");
-    // Age the REAL proof INTO THE FUTURE rather than hand-rolling one, so
-    // every other field stays exactly what the publisher wrote.
-    const proof = JSON.parse(await readFile(path, "utf8")) as {
-      issuedAtMs: number;
-    };
-    await writeFile(
-      path,
-      JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
-      "utf8",
-    );
-
-    expect(await consumeHostStartAdoption("production", null, null)).toEqual({
-      kind: "absent",
-    });
+    if (result === null) throw new Error("consume never ran");
+    expect(result).toEqual({ kind: "absent" });
   });
 });
 
@@ -696,7 +895,10 @@ describe("readHostStartAdoptionNonce — production change B: the symmetric age 
         };
         await writeFile(
           path,
-          JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
+          JSON.stringify({
+            ...proof,
+            issuedAtMs: Date.now() + HOST_START_ADOPTION_MAX_AGE_MS + 1_000,
+          }),
           "utf8",
         );
         // Expiry short-circuits before the parent-capability re-check, so
@@ -759,12 +961,66 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
     return hostHomeDir;
   }
 
-  it("an EXPIRED proof no longer refuses a labelled, nonce-less start", async () => {
-    await publishThenAge(120_000, LABEL);
+  // `publishThenAge` (below) returns AFTER its contender's callback has
+  // resolved, so a proof aged by it is also orphaned by the time the caller
+  // consumes - `readOrphanedProof` would admit it even if expiry did not.
+  // These two EXPIRED tests need the age bound to be the ONLY thing that can
+  // yield `absent`, so they age and consume from INSIDE the callback
+  // instead, with the parent capability still LIVE throughout.
+  async function publishAgeAndConsumeWithLiveParent(
+    ageMs: number,
+    publishLabel: string,
+    consumeLabel: string,
+  ): Promise<HostStartAdoptionConsumeResult> {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    let result: HostStartAdoptionConsumeResult | null = null;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-labelled-expiry-live-parent-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          publishLabel,
+        );
+        const path = join(hostHomeDir, ".host-start-adoption.json");
+        const proof = JSON.parse(await readFile(path, "utf8")) as {
+          issuedAtMs: number;
+        };
+        await writeFile(
+          path,
+          JSON.stringify({ ...proof, issuedAtMs: Date.now() - ageMs }),
+          "utf8",
+        );
+        result = await consumeHostStartAdoption(
+          "production",
+          consumeLabel,
+          null,
+        );
+      },
+    );
+    if (result === null) throw new Error("consume never ran");
+    return result;
+  }
 
-    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
-      kind: "absent",
-    });
+  it("an EXPIRED proof no longer refuses a labelled, nonce-less start", async () => {
+    // Ablation: with both `readOrphanedProof` call sites removed, this goes
+    // red ("refused: reserved for a service-labelled launch" /
+    // "did not match") - proving the expiry check above them, not the
+    // orphan path, is what admits here while the parent is still live.
+    const result = await publishAgeAndConsumeWithLiveParent(
+      HOST_START_ADOPTION_MAX_AGE_MS + 1_000,
+      LABEL,
+      LABEL,
+    );
+
+    expect(result).toEqual({ kind: "absent" });
   });
 
   it("an EXPIRED proof bound to a DIFFERENT label also admits, not refuses", async () => {
@@ -772,61 +1028,158 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
     // proof left by some other label would otherwise wedge THIS launcher with
     // "bound to a different service label" on every retry, which is the same
     // indefinite refusal wearing a different reason string.
-    await publishThenAge(120_000, "ai.traycer.host.other");
+    const result = await publishAgeAndConsumeWithLiveParent(
+      HOST_START_ADOPTION_MAX_AGE_MS + 1_000,
+      "ai.traycer.host.other",
+      LABEL,
+    );
 
-    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
-      kind: "absent",
-    });
+    expect(result).toEqual({ kind: "absent" });
   });
 
-  it("a FRESH proof still refuses a labelled start with NO nonce — the capability discipline is intact", async () => {
+  // `publishThenAge` returns after its contender's callback has resolved, so
+  // by the time the caller consumes, the parent capability is already dead
+  // and `readOrphanedProof` intercepts before either check below ever runs.
+  // These two negatives are only still negatives while the parent is LIVE, so
+  // the consume has to happen INSIDE the contender's callback - the paired
+  // dead-parent behavior for each is covered by the two "admits instead of
+  // refusing" tests that follow.
+  async function publishAndConsumeWithLiveParent(
+    publishLabel: string,
+    consumeLabel: string,
+  ): Promise<HostStartAdoptionConsumeResult> {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    let result: HostStartAdoptionConsumeResult | null = null;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-labelled-live-parent-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          publishLabel,
+        );
+        result = await consumeHostStartAdoption(
+          "production",
+          consumeLabel,
+          null,
+        );
+      },
+    );
+    if (result === null) throw new Error("consume never ran");
+    return result;
+  }
+
+  it("a FRESH proof with a LIVE parent still refuses a labelled start with NO nonce — the capability discipline is intact", async () => {
     // The load-bearing negative. The age bound must not become a way to launch
     // without presenting the nonce: while the grant is still live, a labelled
     // start that cannot produce the nonce is exactly the case the proof exists
-    // to refuse. If this ever goes green alongside the first test, the fix has
-    // turned into a nonce bypass.
-    await publishThenAge(0, LABEL);
-
-    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+    // to refuse. If this ever goes green alongside the dead-parent admission
+    // test below, the fix has turned into a nonce bypass.
+    expect(await publishAndConsumeWithLiveParent(LABEL, LABEL)).toEqual({
       kind: "refused",
       reason:
         "host-start adoption nonce did not match the pending service launch",
     });
   });
 
-  it("a FRESH proof bound to a different label still refuses — the label check is not skipped", async () => {
+  // Drives `admitHostStartSpawn` the way the emitted launcher actually calls
+  // it once its proof reads as absent: labelled, with no nonce. `run` being
+  // called once, holding the update-attempt lock for its own duration, is
+  // the proof this took the CONTENDED admission path rather than being
+  // handed a grant (a grant never touches that lock).
+  async function assertAdmitsOrdinarily(
+    hostHomeDir: string,
+    label: string,
+  ): Promise<void> {
+    let callbackCalls = 0;
+    const observed: { lock: LockHolderProbe | null } = { lock: null };
+    const admission = await defaultRunHostStartDeps.admitHostStartSpawn(
+      {
+        environment: "production",
+        cwd: null,
+        serviceLabel: label,
+        adoptionNonce: null,
+      },
+      async () => {
+        callbackCalls += 1;
+        observed.lock = await readLockHolder(
+          updateAttemptLockPath(hostHomeDir),
+        );
+        const child = spawn(process.execPath, ["-e", ""]);
+        child.unref();
+        return child;
+      },
+      () => undefined,
+    );
+    expect(admission.kind).toBe("ran");
+    expect(callbackCalls).toBe(1);
+    expect(observed.lock?.kind).toBe("held");
+    expect(
+      observed.lock?.kind === "held" &&
+        observed.lock.holder.pid === process.pid,
+    ).toBe(true);
+  }
+
+  it("a dead-parent proof with no nonce admits instead of refusing — the labelled orphan path", async () => {
+    // The paired dead-parent direction for the negative above: once the
+    // publisher is gone, the same (labelled, nonce=null) shape reads as
+    // absent and falls through to ordinary admission rather than wedging on
+    // the nonce mismatch on every service-manager retry.
+    const hostHomeDir = await publishThenAge(0, LABEL);
+
+    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+      kind: "absent",
+    });
+    await assertAdmitsOrdinarily(hostHomeDir, LABEL);
+  });
+
+  it("a FRESH proof with a LIVE parent bound to a different label still refuses — the label check is not skipped", async () => {
     // The other negative direction: moving the age bound ahead of the
     // label-binding check must not stop that check from firing for proofs that
     // are still live.
-    await publishThenAge(0, "ai.traycer.host.other");
-
-    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+    expect(
+      await publishAndConsumeWithLiveParent("ai.traycer.host.other", LABEL),
+    ).toEqual({
       kind: "refused",
       reason: "host-start adoption is bound to a different service label",
     });
   });
 
-  // Production change B: the symmetric bound. `publishThenAge` computes
-  // `issuedAtMs: Date.now() - ageMs`, so a NEGATIVE `ageMs` lands the proof
-  // in the future - reused rather than duplicated, so a future-dated fixture
-  // is guaranteed to differ from the past-dated ones above only in sign.
-  it("a FUTURE-dated proof also admits on the labelled, nonce-less path — not just a past-dated one", async () => {
-    // `publishThenAge` only rewrites `issuedAtMs` for `ageMs > 0` (it is a
-    // past-dating helper), so a future date needs its own write rather than
-    // a negative `ageMs` reuse.
-    const hostHomeDir = await publishThenAge(0, LABEL);
-    const path = join(hostHomeDir, ".host-start-adoption.json");
-    const proof = JSON.parse(await readFile(path, "utf8")) as {
-      issuedAtMs: number;
-    };
-    await writeFile(
-      path,
-      JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
-      "utf8",
-    );
+  it("a dead-parent proof bound to a different label also admits, not refuses", async () => {
+    // Ahead of the label-binding check is deliberate: whose grant a dead
+    // parent's proof was is not a routing question for a launcher that never
+    // held it - see `readOrphanedProof`.
+    const hostHomeDir = await publishThenAge(0, "ai.traycer.host.other");
 
     expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
       kind: "absent",
     });
+    await assertAdmitsOrdinarily(hostHomeDir, LABEL);
+  });
+
+  // Production change B: the symmetric bound. `publishAgeAndConsumeWithLiveParent`
+  // computes `issuedAtMs: Date.now() - ageMs`, so a NEGATIVE `ageMs` lands the
+  // proof in the future - reused rather than duplicated, so a future-dated
+  // fixture is guaranteed to differ from the past-dated ones above only in
+  // sign. Same isolation as those: consumed INSIDE the contender's callback,
+  // parent LIVE, so `Math.abs` - not `readOrphanedProof` - is what admits
+  // here. `publishThenAge` (dead-parent by the time its caller consumes)
+  // would let this pass even if `Math.abs` were dropped, for the same
+  // reason the standalone future-dated test above did.
+  it("a FUTURE-dated proof also admits on the labelled, nonce-less path — not just a past-dated one", async () => {
+    const result = await publishAgeAndConsumeWithLiveParent(
+      -(HOST_START_ADOPTION_MAX_AGE_MS + 1_000),
+      LABEL,
+      LABEL,
+    );
+
+    expect(result).toEqual({ kind: "absent" });
   });
 });
