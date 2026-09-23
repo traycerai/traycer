@@ -20,6 +20,7 @@ import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 
 interface ComposerSlotApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatApprovalState>;
@@ -191,6 +192,7 @@ function ApprovalRow(props: ApprovalRowProps) {
     approval.toolName,
     deriveToolInputSummary(approval.toolName, approval.input),
     approval.description,
+    deriveToolInputDetail(approval.toolName, approval.input),
   );
   const reviewing = approval.reviewing;
   return (
@@ -228,7 +230,11 @@ function ApprovalRow(props: ApprovalRowProps) {
         ) : null}
       </div>
       {headline === null ? null : (
-        <p className="m-0 text-foreground/85">{headline}</p>
+        // The headline can be the whole command in place of the cut summary,
+        // so it wraps a long unbroken token and keeps the command's lines.
+        <p className="m-0 min-w-0 whitespace-pre-wrap break-words text-foreground/85">
+          {headline}
+        </p>
       )}
       {approval.reason !== null ? (
         <JudgeReason rule={approval.reason.rule} text={approval.reason.text} />

@@ -331,4 +331,15 @@ describe("<ComposerSlotApprovalQueue /> approval text", () => {
     expect(within(row).getAllByText(command)).toHaveLength(1);
     expect(row.textContent).not.toContain("…");
   });
+
+  it("keeps the cut summary when the description only shares the command's prefix", () => {
+    const shared = `echo ${"a".repeat(90)}`;
+    const row = renderOne({
+      toolName: "run_command",
+      input: { command: `${shared}; rm -rf ~` },
+      description: `${shared} # tidy`,
+    });
+    expect(within(row).getAllByText(`${shared} # tidy`)).toHaveLength(1);
+    expect(row.textContent).toContain("…");
+  });
 });

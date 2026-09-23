@@ -41,10 +41,14 @@ function isTruncationOf(summary: string, full: string): boolean {
 export interface ApprovalCardText {
   /**
    * The first line's `· summary`: `null` when there is none, and when the
-   * headline carries the same input in full - a long command is shown once,
-   * uncut, rather than cut on one line and whole on the next. The complete
-   * text is the one kept because it is what the user is approving: the tail
-   * a cut hides is exactly where `; rm -rf …` would sit.
+   * headline IS the input, in full - a long command is shown once, uncut,
+   * rather than cut on one line and whole on the next. The complete text is
+   * the one kept because it is what the user is approving: the tail a cut
+   * hides is exactly where `; rm -rf …` would sit. That is also why the
+   * headline must equal the whole input and not merely begin like it: the
+   * description comes from the harness or the model, not from the input, and
+   * one that shares the input's first 79 characters can still end
+   * differently - dropping the summary for it would hide the real tail.
    */
   readonly inputSummary: string | null;
   /** The line under it: `null` when it would only repeat the first line. */
@@ -55,6 +59,7 @@ export function approvalCardText(
   toolName: string,
   inputSummary: string | null,
   description: string,
+  inputDetail: ToolInputDetail | null,
 ): ApprovalCardText {
   const headline = collapse(description);
   if (headline.length === 0 || headline === collapse(toolName)) {
@@ -64,7 +69,12 @@ export function approvalCardText(
   if (headline === collapse(inputSummary)) {
     return { inputSummary, headline: null };
   }
-  if (isTruncationOf(inputSummary, description)) {
+  const fullInput = singleDetailText(inputDetail);
+  if (
+    fullInput !== null &&
+    headline === collapse(fullInput) &&
+    isTruncationOf(inputSummary, fullInput)
+  ) {
     return { inputSummary: null, headline: description };
   }
   return { inputSummary, headline: description };

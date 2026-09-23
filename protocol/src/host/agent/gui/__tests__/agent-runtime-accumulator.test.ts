@@ -4016,15 +4016,12 @@ describe("accumulateEvent - provider_notice.upsert", () => {
   });
 });
 
-// `replaceBlock(blocks, blockId, updated)` in agent-runtime-accumulator.ts
-// replaces EVERY block whose `blockId` matches, regardless of block `type`,
-// even though every caller looks its `existing` block up by (id AND type) via
-// `findBlockOfType`. Several harnesses emit an approval whose `blockId`
-// equals the tool call's/command's `blockId` (confirmed from live data), so
-// resolving one clobbers the other. The cases below encode the INTENDED
-// behavior - as if `replaceBlock` were also type-scoped - and are expected to
-// fail against the current implementation; that failure is the regression
-// proof, not a bug in the test.
+// A block id is unique per block TYPE, not per message: several harnesses emit
+// an approval whose `blockId` equals the tool call's/command's `blockId`
+// (confirmed from live data). `replaceBlock` replaces only the block of the
+// same type as `updated`, matching how every caller looks its `existing` block
+// up (`findBlockOfType`); when it matched the id alone, resolving one block
+// overwrote the other. A failure below is a regression of that scoping.
 describe("accumulateEvent - blocks of different types sharing one blockId", () => {
   function approvalBlocksIn(blocks: ContentBlock[]): ApprovalBlock[] {
     return blocks.filter(
