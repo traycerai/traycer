@@ -127,6 +127,12 @@ export interface IdentityBodyTier {
   availability(path: string): IdentityFileBodyAvailability;
   /** Whether local bytes exist the host has not acknowledged. */
   isDirty(path: string): boolean;
+  /**
+   * Whether local edits are RETAINED for `path` because no lane could carry
+   * them yet. Distinct from {@link isDirty}: sent-but-unacked bytes are dirty
+   * and safe; these have never left the process.
+   */
+  hasPendingBytes(path: string): boolean;
   /** What this client holds for `path`, for the lane's seed offer. */
   seedOffer(path: string): AgentIdentityFileSeedOffer | null;
   applySnapshot(input: {
@@ -369,6 +375,20 @@ export function createIdentityBodyTier(
     }
   }
 
+  /**
+   * A body nobody leases any more whose retained edits have all gone out has
+   * nothing left to protect: drop it, and say so, so the store can give up the
+   * lane it kept open for the flush.
+   */
+  function dropIfUnleasedAndFlushed(path: string): void {
+    const entry = entries.get(path);
+    if (entry === undefined) return;
+    if (leases.has(path)) return;
+    if (entry.pendingUpdates.length > 0) return;
+    destroyEntry(path);
+    onChanged(path);
+  }
+
   function recomputeDirty(entry: IdentityBodyEntry): void {
     if (
       latestHostCoversDirtyWatermark(
@@ -430,6 +450,11 @@ export function createIdentityBodyTier(
       );
     },
 
+    hasPendingBytes(path): boolean {
+      const entry = entries.get(path);
+      return entry !== undefined && entry.pendingUpdates.length > 0;
+    },
+
     seedOffer(path): AgentIdentityFileSeedOffer | null {
       const entry = entries.get(path);
       if (entry === undefined || entry.docGuid === null) return null;
@@ -466,6 +491,9 @@ export function createIdentityBodyTier(
       entry.availability = READY_AVAILABILITY;
       settleHot(input.path, entry);
       onChanged(input.path);
+      // The reconcile above may have been the flush a released body was
+      // waiting for (see `release`).
+      dropIfUnleasedAndFlushed(input.path);
     },
 
     applyUpdate(path, docGuid, update): void {
@@ -538,10 +566,7 @@ export function createIdentityBodyTier(
         entry.pendingUpdates.length = 0;
         entry.pendingBytesSinceCollapse = 0;
         // The lease may already be gone - see `release`.
-        if (!leases.has(path)) {
-          destroyEntry(path);
-          onChanged(path);
-        }
+        dropIfUnleasedAndFlushed(path);
       }
     },
 

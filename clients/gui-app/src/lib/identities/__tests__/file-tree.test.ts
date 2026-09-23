@@ -24,6 +24,7 @@ function documentsSlice(paths: readonly string[]): IdentityDocumentsSlice {
   for (const path of paths) {
     byPath[path] = {
       path,
+      incarnation: "inc-1",
       shardRoomId: "shard-a",
       fragmentName: "doc",
       updatedAt: 1000,

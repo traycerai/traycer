@@ -150,6 +150,7 @@ function documentsEq(
     const right = b.byPath[path];
     if (left === undefined || right === undefined) return left === right;
     return (
+      left.incarnation === right.incarnation &&
       left.shardRoomId === right.shardRoomId &&
       left.fragmentName === right.fragmentName &&
       left.updatedAt === right.updatedAt &&
@@ -205,6 +206,7 @@ function buildSlices(rows: readonly HeldIdentityRow[]): IdentityStateSlices {
       case "document":
         documentsByPath[row.row.path] = {
           path: row.row.path,
+          incarnation: row.row.incarnation,
           shardRoomId: row.row.shardRoomId,
           fragmentName: row.row.fragmentName,
           updatedAt: row.row.updatedAt,

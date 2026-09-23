@@ -177,6 +177,29 @@ export function createOpenIdentityStore(
     onChanged: () => publishSlices(),
   });
 
+  /**
+   * The incarnation last seen per document path, so a recreated file at a
+   * path a body lane is serving is noticed here (finding 2): the epoch does
+   * not move for path reuse, so nothing else would reopen the lane.
+   */
+  const incarnationByPath = new Map<string, string>();
+
+  function noteIncarnations(documents: IdentityDocumentsSlice): void {
+    const changed: string[] = [];
+    for (const path of documents.allPaths) {
+      const incarnation = documents.byPath[path]?.incarnation;
+      if (incarnation === undefined) continue;
+      const previous = incarnationByPath.get(path);
+      incarnationByPath.set(path, incarnation);
+      if (previous !== undefined && previous !== incarnation)
+        changed.push(path);
+    }
+    for (const path of Array.from(incarnationByPath.keys())) {
+      if (documents.byPath[path] === undefined) incarnationByPath.delete(path);
+    }
+    for (const path of changed) lanes.reopen(path);
+  }
+
   function publishSlices(): void {
     if (disposed) return;
     const slices = replica.slices();
@@ -191,6 +214,7 @@ export function createOpenIdentityStore(
     // Bodies leased before the epoch was known open here; bodies built under
     // a superseded epoch are rebuilt here. Cheap when nothing moved.
     lanes.syncToAuthorityEpoch();
+    noteIncarnations(slices.documents);
   }
 
   const stateAdapter = createIdentityStateLaneAdapter({
@@ -304,8 +328,24 @@ export function createOpenIdentityStore(
     });
   }
 
+  /**
+   * Paths whose last VIEW is gone but whose lane is kept open because the
+   * tier still retains edits no lane could carry (finding 1). The lane is the
+   * only way those bytes reach the host; demand is released the moment the
+   * tier reports them flushed.
+   */
+  const retainedForFlush = new Set<string>();
+
+  function releaseLaneIfFlushed(path: string): void {
+    if (!retainedForFlush.has(path)) return;
+    if (tier.hasPendingBytes(path)) return;
+    retainedForFlush.delete(path);
+    lanes.release(path, "disposed");
+  }
+
   function publishBody(path: string): void {
     if (disposed) return;
+    releaseLaneIfFlushed(path);
     const state = store.getState();
     const availability = tier.availability(path);
     const dirty = tier.isDirty(path);
@@ -423,8 +463,15 @@ export function createOpenIdentityStore(
       return () => {
         if (released) return;
         released = true;
-        lanes.release(path, "disposed");
         tier.release(path);
+        if (tier.hasPendingBytes(path) && !retainedForFlush.has(path)) {
+          // Keep write ownership: the retained edits need this lane. A later
+          // re-lease of the path simply adds demand on top; the flush-side
+          // release below pairs with THIS demand.
+          retainedForFlush.add(path);
+          return;
+        }
+        lanes.release(path, "disposed");
       };
     },
 
@@ -461,6 +508,7 @@ export function createOpenIdentityStore(
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      retainedForFlush.clear();
       lanes.detachAll("disposed");
       stateAdapter.detach("disposed");
       tier.dispose();

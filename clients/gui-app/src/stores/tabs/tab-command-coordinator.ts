@@ -613,6 +613,15 @@ export class TabCommandCoordinator {
       if (next.drafts === previous.drafts) return;
       this.onSourceStoreChange();
     });
+    useIdentityTabsStore.subscribe((next, previous) => {
+      if (
+        next.openTabOrder === previous.openTabOrder &&
+        next.tabsById === previous.tabsById
+      ) {
+        return;
+      }
+      this.onSourceStoreChange();
+    });
   }
 
   fillSplitSide(command: FillSplitSideCommand): boolean {

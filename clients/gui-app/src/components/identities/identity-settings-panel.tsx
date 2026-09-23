@@ -21,6 +21,7 @@ import {
 import { useStore } from "zustand";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { AgentIdentityEvolutionSettings } from "@traycer/protocol/host/agent-identity/schemas";
+import type { IdentityRecordFields } from "@traycer-clients/shared/identity-lanes";
 import {
   guiHarnessIdSchema,
   type GuiHarnessId,
@@ -185,6 +186,51 @@ function useReviewToolbarStore(input: {
   return store;
 }
 
+/**
+ * The whole editable tuple, as the form holds it. ONE draft serves both what
+ * the controls display and what Save sends (finding 3): the picker is seeded
+ * from `draft.review`, and a pick writes back into `draft.review`, so the
+ * model on screen is the model that goes out.
+ */
+interface SettingsDraft {
+  readonly title: string;
+  readonly description: string;
+  readonly intervalTurns: string;
+  readonly review: ReviewSelection;
+}
+
+function draftOf(record: IdentityRecordFields): SettingsDraft {
+  return {
+    title: record.title,
+    description: record.description ?? "",
+    intervalTurns: String(record.evolution.intervalTurns),
+    review: reviewSelectionOf(record.evolution),
+  };
+}
+
+function draftsEqual(a: SettingsDraft, b: SettingsDraft): boolean {
+  return (
+    a.title === b.title &&
+    a.description === b.description &&
+    a.intervalTurns === b.intervalTurns &&
+    a.review.harnessId === b.review.harnessId &&
+    a.review.model === b.review.model &&
+    a.review.reasoningEffort === b.review.reasoningEffort
+  );
+}
+
+/** The record as a value, so a re-published identical record is no change. */
+function recordKeyOf(record: IdentityRecordFields): string {
+  return JSON.stringify([
+    record.title,
+    record.description,
+    record.evolution.intervalTurns,
+    record.evolution.reviewHarnessId,
+    record.evolution.reviewModel,
+    record.evolution.reviewReasoningEffort,
+  ]);
+}
+
 export function IdentitySettingsPanel(
   props: IdentitySettingsPanelProps,
 ): ReactNode {
@@ -204,9 +250,7 @@ export function IdentitySettingsPanel(
       key={props.identityId}
       identityId={props.identityId}
       hostId={props.hostId}
-      title={identity.title}
-      description={identity.description}
-      evolution={identity.evolution}
+      record={identity}
     />
   );
 }
@@ -214,37 +258,64 @@ export function IdentitySettingsPanel(
 function IdentitySettingsForm(props: {
   readonly identityId: string;
   readonly hostId: string;
-  readonly title: string;
-  readonly description: string | null;
-  readonly evolution: AgentIdentityEvolutionSettings;
+  readonly record: IdentityRecordFields;
 }): ReactNode {
-  const { identityId, hostId, evolution } = props;
+  const { identityId, hostId, record } = props;
   const client = useTabHostClient();
   const update = useIdentityUpdateForClient(client);
-  const [title, setTitle] = useState(props.title);
-  const [description, setDescription] = useState(props.description ?? "");
-  const [intervalTurns, setIntervalTurns] = useState(
-    String(evolution.intervalTurns),
-  );
-  const stored = useMemo(() => reviewSelectionOf(evolution), [evolution]);
-  const [review, setReview] = useState<ReviewSelection>(stored);
+  const recordKey = recordKeyOf(record);
+  // `baseline` is the record the draft was last seeded from. When the host
+  // publishes a different record: a clean draft follows it silently; a dirty
+  // one is kept - the user's unsaved edits are not the host's to discard -
+  // and the notice below says the record moved. Adjusted during render, the
+  // documented shape for state derived from a prop change.
+  const [baseline, setBaseline] = useState<{
+    readonly key: string;
+    readonly draft: SettingsDraft;
+  }>(() => ({ key: recordKey, draft: draftOf(record) }));
+  const [draft, setDraft] = useState<SettingsDraft>(baseline.draft);
+  const [remoteChanged, setRemoteChanged] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const store = useReviewToolbarStore({ hostId, stored, onCommit: setReview });
+  if (recordKey !== baseline.key) {
+    const fresh = draftOf(record);
+    const dirty = !draftsEqual(draft, baseline.draft);
+    setBaseline({ key: recordKey, draft: fresh });
+    if (!dirty || draftsEqual(draft, fresh)) {
+      // A clean draft follows the host; a draft the host just caught up with
+      // (our own save landing) is clean again.
+      setDraft(fresh);
+      setRemoteChanged(false);
+    } else {
+      setRemoteChanged(true);
+    }
+  }
+  const setReview = useCallback(
+    (review: ReviewSelection) => setDraft((held) => ({ ...held, review })),
+    [],
+  );
+  const store = useReviewToolbarStore({
+    hostId,
+    stored: draft.review,
+    onCommit: setReview,
+  });
 
-  const parsedInterval = Number.parseInt(intervalTurns, 10);
+  const parsedInterval = Number.parseInt(draft.intervalTurns, 10);
   const intervalValid = Number.isInteger(parsedInterval) && parsedInterval >= 0;
-  const trimmedTitle = title.trim();
+  const trimmedTitle = draft.title.trim();
   const canSave = intervalValid && trimmedTitle.length > 0 && !update.isPending;
 
   const save = () => {
     if (!canSave) return;
     setNotice(null);
+    const review = draft.review;
     update.mutate(
       {
         identityId,
         title: trimmedTitle,
         description:
-          description.trim().length === 0 ? null : description.trim(),
+          draft.description.trim().length === 0
+            ? null
+            : draft.description.trim(),
         evolution: {
           intervalTurns: parsedInterval,
           reviewHarnessId: review.harnessId,
@@ -257,7 +328,9 @@ function IdentitySettingsForm(props: {
         onSuccess: (response) => {
           if (response.kind === "refused") {
             setNotice(identityRefusalCopy(response.reason));
+            return;
           }
+          setRemoteChanged(false);
         },
       },
     );
@@ -272,12 +345,39 @@ function IdentitySettingsForm(props: {
         save();
       }}
     >
+      {remoteChanged ? (
+        <p
+          role="status"
+          data-testid="identity-settings-remote-changed"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-info/30 bg-info/10 px-2 py-1 text-ui-xs text-info-foreground"
+        >
+          <span className="flex-1">
+            These settings changed on the host while you were editing. Saving
+            overwrites that change.
+          </span>
+          <Button
+            type="button"
+            variant="muted"
+            size="xs"
+            data-testid="identity-settings-reload"
+            onClick={() => {
+              setDraft(baseline.draft);
+              setRemoteChanged(false);
+            }}
+          >
+            Discard my edits
+          </Button>
+        </p>
+      ) : null}
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="identity-title">Name</Label>
         <Input
           id="identity-title"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
+          value={draft.title}
+          onChange={(event) => {
+            const title = event.target.value;
+            setDraft((held) => ({ ...held, title }));
+          }}
           data-testid="identity-settings-title"
         />
       </div>
@@ -285,9 +385,12 @@ function IdentitySettingsForm(props: {
         <Label htmlFor="identity-description">Description</Label>
         <Textarea
           id="identity-description"
-          value={description}
+          value={draft.description}
           rows={3}
-          onChange={(event) => setDescription(event.target.value)}
+          onChange={(event) => {
+            const description = event.target.value;
+            setDraft((held) => ({ ...held, description }));
+          }}
           data-testid="identity-settings-description"
         />
       </div>
@@ -300,8 +403,11 @@ function IdentitySettingsForm(props: {
             inputMode="numeric"
             min={0}
             step={1}
-            value={intervalTurns}
-            onChange={(event) => setIntervalTurns(event.target.value)}
+            value={draft.intervalTurns}
+            onChange={(event) => {
+              const intervalTurns = event.target.value;
+              setDraft((held) => ({ ...held, intervalTurns }));
+            }}
             aria-invalid={!intervalValid}
             data-testid="identity-settings-interval"
           />
@@ -329,7 +435,7 @@ function IdentitySettingsForm(props: {
           labelDisplay="responsive"
           profileAdmission={null}
         />
-        {review.harnessId === null ? (
+        {draft.review.harnessId === null ? (
           <p className="text-ui-xs text-muted-foreground">
             Using the host&apos;s default review model.
           </p>

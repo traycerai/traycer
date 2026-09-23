@@ -28,6 +28,7 @@ import { useIdentityListForClient } from "@/hooks/identities/use-identity-querie
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 export interface IdentitiesListPanelProps {
   readonly hostId: string | null;
@@ -92,8 +93,13 @@ export function IdentitiesListPanel(
         onSuccess: () => {
           setDeleteTarget(null);
           // The tab, if any, is bound to this identity; a deleted identity has
-          // nothing left to show, so the tab goes with it.
-          useIdentityTabsStore.getState().closeTab(target.identityId);
+          // nothing left to show, so the tab goes with it - through the
+          // coordinator, which moves the active selection off it, and only
+          // directly when no tab is in the layout (a stale record).
+          const ref = { kind: "identity", id: target.identityId } as const;
+          if (!tabCommandCoordinator.closeRefAfterConfirmed(ref)) {
+            useIdentityTabsStore.getState().closeTab(target.identityId);
+          }
         },
         onError: () => {
           setDeleteTarget(null);

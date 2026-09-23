@@ -51,6 +51,13 @@ export interface IdentityBodyLanesSources {
 export interface IdentityBodyLanes {
   ensureAttached(path: string): void;
   release(path: string, reason: AdapterDetachReason): void;
+  /**
+   * The row at `path` is a NEW incarnation (deleted and recreated under one
+   * epoch). A terminal refusal issued for the old life no longer applies, and
+   * an open lane is serving a document that no longer exists: forget both and
+   * dial again if the path is still demanded.
+   */
+  reopen(path: string): void;
   syncToAuthorityEpoch(): void;
   noteTransportStatus(status: StreamConnectionStatus): void;
   attachedPaths(): readonly string[];
@@ -173,6 +180,16 @@ export function createIdentityBodyLanes(
       }
       demand.delete(path);
       closeLane(path, reason);
+    },
+
+    reopen(path): void {
+      if (isDisposed()) return;
+      refused.delete(path);
+      closeLane(path, "superseded");
+      if (!demand.has(path)) return;
+      const authorityEpoch = readAuthorityEpoch();
+      if (authorityEpoch === null) return;
+      openLane(path, authorityEpoch);
     },
 
     syncToAuthorityEpoch(): void {

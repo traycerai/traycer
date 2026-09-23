@@ -8,7 +8,7 @@
  * `files.readBlob` loop and previewed inline when it is an image or text;
  * anything else offers a download of the bytes.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EditorContent } from "@tiptap/react";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
@@ -201,34 +201,25 @@ function IdentityBlobBody(props: {
     sha256 !== null && wantBytes,
   );
   const source = query.data;
-  const objectUrl = useMemo(
-    () =>
-      source?.kind === "bytes" && isPreviewableImage(source.mediaType)
-        ? URL.createObjectURL(
-            new Blob([source.bytes], { type: source.mediaType }),
-          )
-        : null,
-    [source],
-  );
-  useEffect(() => {
-    if (objectUrl === null) return;
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [objectUrl]);
-
+  // A Download click on a file whose bytes are not fetched yet is an INTENT
+  // that outlives the click: the fetch it starts completes in an effect, and
+  // that effect performs the download the click asked for (finding 6). A ref,
+  // not state - nothing renders differently while the intent is pending.
+  const downloadRequested = useRef(false);
   const download = () => {
-    if (source?.kind !== "bytes") {
-      setWantBytes(true);
+    if (source?.kind === "bytes") {
+      saveBlobBytes(source.bytes, source.mediaType, file.name);
       return;
     }
-    const url = URL.createObjectURL(
-      new Blob([source.bytes], { type: source.mediaType }),
-    );
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = file.name;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadRequested.current = true;
+    setWantBytes(true);
   };
+  useEffect(() => {
+    if (!downloadRequested.current) return;
+    if (source?.kind !== "bytes") return;
+    downloadRequested.current = false;
+    saveBlobBytes(source.bytes, source.mediaType, file.name);
+  }, [source, file.name]);
 
   return (
     <div
@@ -268,7 +259,6 @@ function IdentityBlobBody(props: {
         source={source ?? null}
         fetching={query.isFetching}
         failed={query.isError}
-        objectUrl={objectUrl}
         onRetry={() => {
           setWantBytes(true);
           void query.refetch();
@@ -293,10 +283,9 @@ function IdentityBlobPreview(props: {
     | null;
   readonly fetching: boolean;
   readonly failed: boolean;
-  readonly objectUrl: string | null;
   readonly onRetry: () => void;
 }): ReactNode {
-  const { file, source, fetching, failed, objectUrl, onRetry } = props;
+  const { file, source, fetching, failed, onRetry } = props;
   if (fetching) {
     return (
       <BodyNotice testId="identity-blob-loading">
@@ -340,13 +329,12 @@ function IdentityBlobPreview(props: {
       </BodyNotice>
     );
   }
-  if (objectUrl !== null) {
+  if (isPreviewableImage(source.mediaType)) {
     return (
-      <img
-        src={objectUrl}
+      <BlobImage
+        bytes={source.bytes}
+        mediaType={source.mediaType}
         alt={file.name}
-        className="max-h-full max-w-full self-start rounded-md object-contain"
-        data-testid="identity-blob-image"
       />
     );
   }
@@ -367,5 +355,53 @@ function IdentityBlobPreview(props: {
     <BodyNotice testId="identity-blob-no-preview">
       No preview for this kind of file. Download it to open it elsewhere.
     </BodyNotice>
+  );
+}
+
+/** Hand the bytes to the browser as a file save. */
+function saveBlobBytes(
+  bytes: Uint8Array<ArrayBuffer>,
+  mediaType: string,
+  name: string,
+): void {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * An image whose object URL is OWNED by one effect: created and revoked in
+ * the same setup/cleanup pair, written straight onto the element rather than
+ * held in render state. Under StrictMode the effect replays, and a replay
+ * that recreates what its cleanup revoked is the only lifetime that survives
+ * it (finding 7); a URL minted in render is owned by nothing.
+ */
+function BlobImage(props: {
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly mediaType: string;
+  readonly alt: string;
+}): ReactNode {
+  const { bytes, mediaType, alt } = props;
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  useEffect(() => {
+    const image = imageRef.current;
+    if (image === null) return;
+    const url = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+    image.src = url;
+    return () => {
+      image.removeAttribute("src");
+      URL.revokeObjectURL(url);
+    };
+  }, [bytes, mediaType]);
+  return (
+    <img
+      ref={imageRef}
+      alt={alt}
+      className="max-h-full max-w-full self-start rounded-md object-contain"
+      data-testid="identity-blob-image"
+    />
   );
 }

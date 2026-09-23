@@ -27,6 +27,12 @@ import type { IdentityRecordFields } from "@traycer-clients/shared/identity-lane
 /** One markdown file the identity holds. `row` is the lane row verbatim. */
 export interface IdentityDocumentProjection {
   readonly path: string;
+  /**
+   * Which life of this path the row describes. A file deleted and recreated
+   * at one path is a new incarnation under the SAME authority epoch, so a
+   * body lane keyed by path has to notice this change itself.
+   */
+  readonly incarnation: string;
   readonly shardRoomId: string;
   readonly fragmentName: string;
   readonly updatedAt: number;
