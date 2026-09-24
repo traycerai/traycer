@@ -1,5 +1,6 @@
 import type { ReactNode, RefObject } from "react";
 import {
+  ArrowRightLeft,
   Check,
   Copy,
   Info,
@@ -329,6 +330,113 @@ function HostOverviewMenuAction(props: {
 }
 
 /**
+ * The window binding beside the `⋯` trigger: `Activate` until this window
+ * starts new work here, then the `Active` state in the same slot.
+ */
+function HostOverviewInlineActivate(props: {
+  readonly isActive: boolean;
+  readonly connectable: boolean;
+  readonly activateBusy: boolean;
+  readonly reason: string;
+  readonly onMakeActive: () => void;
+}): ReactNode {
+  if (props.isActive) {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 font-medium text-ui-xs text-primary"
+        data-testid="host-active-in-window"
+      >
+        <Check className="size-3.5" aria-hidden />
+        Active
+      </span>
+    );
+  }
+  // The asymmetry has to be said out loud somewhere, and the row that used to
+  // say it is gone. A person who expects this to move their work would
+  // otherwise watch nothing happen and conclude it is broken — so the sentence
+  // rides the control it describes, where it is read at the moment of deciding
+  // rather than skimmed past on load.
+  return (
+    <TooltipWrapper
+      // The reason rides the disabled state, same as every other unavailable
+      // control on this card: a greyed Activate with the switching-scope
+      // sentence explains a DIFFERENT decision than the one the user is
+      // blocked on.
+      label={props.reason}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!props.connectable || props.activateBusy}
+          onClick={props.onMakeActive}
+          data-testid="host-make-active"
+        >
+          Activate
+        </Button>
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * The window binding as the menu's first item, for a phone's name row.
+ *
+ * Same two states as the inline control, in the same slot: `Activate` until
+ * this window starts new work here, then `Active`. The sentence the inline
+ * control carries as its tooltip is written under the item instead - a menu
+ * item has no hover to hang it on, and a second line is where every other
+ * item here puts its reason. An item that cannot activate stays focusable and
+ * inert, as the degraded maintenance verbs do, so its reason can be read.
+ */
+function HostOverviewMenuActivate(props: {
+  readonly isActive: boolean;
+  readonly connectable: boolean;
+  readonly activateBusy: boolean;
+  readonly reason: string;
+  readonly onMakeActive: () => void;
+}): ReactNode {
+  if (props.isActive) {
+    return (
+      <DropdownMenuItem disabled data-testid="host-active-in-window">
+        <Check className="size-3.5" aria-hidden />
+        Active
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <DropdownMenuItem
+      disabled={props.activateBusy}
+      aria-disabled={
+        !props.connectable || props.activateBusy ? true : undefined
+      }
+      onSelect={(event) => {
+        if (!props.connectable) {
+          event.preventDefault();
+          return;
+        }
+        props.onMakeActive();
+      }}
+      data-testid="host-make-active"
+      className="flex-col items-start gap-0.5"
+      variant={props.connectable ? "default" : "muted"}
+    >
+      <span className="flex items-center gap-2">
+        <ArrowRightLeft className="size-3.5" aria-hidden />
+        Activate
+      </span>
+      <span className="max-w-[36ch] pl-5.5 text-ui-xs text-muted-foreground">
+        {props.reason}
+      </span>
+    </DropdownMenuItem>
+  );
+}
+
+/**
  * The card header's right-hand cluster: the window binding, and everything
  * else behind a `⋯`.
  *
@@ -385,55 +493,31 @@ export function HostOverviewHeaderActions(props: {
   /** An Activate is already in flight - see `HostScope.isActivating`. */
   readonly activateBusy: boolean;
   readonly onCopyHostId: () => void;
+  /**
+   * The window binding goes INTO the menu, as its first item, rather than
+   * beside it. A phone's name row has room for the name, its tag and one icon
+   * trigger; a worded button beside them wraps the row.
+   */
+  readonly activateInMenu: boolean;
 }): ReactNode {
   const { hostName } = props;
+  const activateReason = props.connectable
+    ? // Not "tabs stay on the host they started on" - the active-host switch
+      // still reloads open tabs today (F2/F3/F7), so that promise would be
+      // false. This only says what IS true.
+      "Switching changes where new work starts."
+    : `${hostName} has no dialable route from this window, so it can't become this window's host.`;
   return (
     <div className="flex shrink-0 items-center gap-1.5">
       {props.primaryAction}
-      {props.isActive ? (
-        <span
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 font-medium text-ui-xs text-primary"
-          data-testid="host-active-in-window"
-        >
-          <Check className="size-3.5" aria-hidden />
-          Active
-        </span>
-      ) : (
-        // The asymmetry has to be said out loud somewhere, and the row that
-        // used to say it is gone. A person who expects this to move their work
-        // would otherwise watch nothing happen and conclude it is broken — so
-        // the sentence rides the control it describes, where it is read at the
-        // moment of deciding rather than skimmed past on load.
-        <TooltipWrapper
-          // The reason rides the disabled state, same as every other
-          // unavailable control on this card: a greyed Activate with the
-          // switching-scope sentence explains a DIFFERENT decision than the
-          // one the user is blocked on.
-          label={
-            props.connectable
-              ? // Not "tabs stay on the host they started on" - the active-host
-                // switch still reloads open tabs today (F2/F3/F7), so that
-                // promise would be false. This only says what IS true.
-                "Switching changes where new work starts."
-              : `${hostName} has no dialable route from this window, so it can't become this window's host.`
-          }
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!props.connectable || props.activateBusy}
-              onClick={props.onMakeActive}
-              data-testid="host-make-active"
-            >
-              Activate
-            </Button>
-          </span>
-        </TooltipWrapper>
+      {props.activateInMenu ? null : (
+        <HostOverviewInlineActivate
+          isActive={props.isActive}
+          connectable={props.connectable}
+          activateBusy={props.activateBusy}
+          reason={activateReason}
+          onMakeActive={props.onMakeActive}
+        />
       )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -449,6 +533,18 @@ export function HostOverviewHeaderActions(props: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-56">
+          {props.activateInMenu ? (
+            <>
+              <HostOverviewMenuActivate
+                isActive={props.isActive}
+                connectable={props.connectable}
+                activateBusy={props.activateBusy}
+                reason={activateReason}
+                onMakeActive={props.onMakeActive}
+              />
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           <HostOverviewMenuAction
             label="Restart"
             hostName={hostName}

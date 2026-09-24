@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { useMutation } from "@tanstack/react-query";
+import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
   HostClient,
   type IHostQueryInvalidator,
@@ -107,30 +108,31 @@ export function ExternalHostRestartTrigger(props: {
 }
 
 /**
- * Open the Updates card's **Advanced** disclosure and wait for its body.
+ * Select one of the Overview's tabs and wait for its pane to become active.
  *
- * The auto-update switch, the OS service controls and the whole version picker
- * live behind it, and Radix does not MOUNT `CollapsibleContent` while closed —
- * so before this runs, none of them is in the DOM at all. The failure mode is
- * the same trap as the `⋯` menu above: `queryByRole("switch")` returns null and
- * reads as "the control was deleted" rather than "the drawer is shut".
+ * The auto-update switch, the version picker and the OS service controls now
+ * live directly on the Updates and Installation tabs, shown open, rather than
+ * behind a collapsed "Advanced" disclosure. Radix's `TabsTrigger` activates on
+ * MOUSEDOWN, not click — `fireEvent.click` alone does nothing — so this fires
+ * a `mousedown` the way the `⋯` menu trigger above needs a `pointerdown`.
  *
- * Awaited on the heading rather than a control, because which controls are
- * present is exactly what the callers vary — a host with no registry row has no
- * policy switch, and one that cannot answer `host.service.status` has no service
- * buttons. The heading is the one thing every open Advanced section has.
+ * Settled on the pane's own `data-state`, not on its presence: Radix wraps
+ * `TabsContent` in a `Presence`, so the pane's element (and its `data-testid`)
+ * exists for every tab as soon as the bar renders, active or not — only an
+ * INACTIVE, never-visited pane's own children are unmounted. A caller that
+ * waited on `findByTestId` alone would resolve before the switch actually
+ * happened, the same "looks settled, isn't" trap the `⋯` menu helper's own
+ * comment warns about for a menu item.
  */
-export async function openHostOverviewAdvanced(): Promise<void> {
-  const trigger = await screen.findByRole("button", { name: "Advanced" });
-  fireEvent.click(trigger);
-  // Settled on the TRIGGER's own `data-state`, not on any control inside.
-  // Which controls the drawer holds is exactly what callers vary — an
-  // unreachable host has no version picker, a host with no registry row has no
-  // policy switch, an old host has no service buttons — so waiting on one of
-  // them would make this helper quietly wrong for the cases that matter most.
+export async function selectHostOverviewTab(
+  tab: HostOverviewTab,
+): Promise<void> {
+  const trigger = await screen.findByTestId(`host-overview-tab-${tab}`);
+  fireEvent.mouseDown(trigger, { button: 0 });
   await waitFor(() => {
-    if (trigger.getAttribute("data-state") !== "open") {
-      throw new Error("Advanced disclosure did not open");
+    const pane = screen.getByTestId(`host-overview-tab-panel-${tab}`);
+    if (pane.getAttribute("data-state") !== "active") {
+      throw new Error(`tab "${tab}" did not become active`);
     }
   });
 }
@@ -232,9 +234,9 @@ export function buildOverviewHostFixture(options: {
       outcome: "accepted" as const,
       attemptId: null,
     }),
-    // Answered by default so the Advanced disclosure's OS service section
+    // Answered by default so the Installation tab's OS service section
     // renders its normal shape. Left unanswered, the query rejects and every
-    // suite that opens Advanced would read the "couldn't be read" copy — a
+    // suite that opens Installation would read the "couldn't be read" copy — a
     // fixture gap that would look like a product state.
     "host.service.status": () => ({
       outcome: "ok" as const,
