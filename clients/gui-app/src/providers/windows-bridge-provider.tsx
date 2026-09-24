@@ -35,6 +35,7 @@ import {
   commitAppliedDesktopTabsSnapshot,
   configureBrowserTabsPersistence,
   configureDesktopTabsAuthority,
+  desktopSnapshotReferencesIdentityTabs,
   drainDesktopTabsPersistence,
   hydrateDesktopTabs,
   installDesktopTabsPersistence,
@@ -42,6 +43,10 @@ import {
   shouldApplyDesktopTabsSnapshot,
 } from "@/stores/tabs/desktop-tabs-persistence";
 import { readPersistedCurrentRoute } from "@/lib/persistent-history";
+import {
+  identityTabsHydration,
+  isIdentityTabsHydrated,
+} from "@/stores/identities/identity-tabs-hydration";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
   DesktopPerWindowSnapshot,
@@ -263,6 +268,33 @@ function installDesktopWindowsBridge(
   }
 
   const snapshotObservation: DesktopSnapshotObservation = { latest: null };
+  const isCancelled = (): boolean => lifecycle.cancelled;
+
+  /**
+   * A later snapshot from main is applied at once unless it holds an
+   * identity tab the account's source records have not loaded yet (see
+   * `identity-tabs-hydration.ts`) - sanitizing it against the anonymous
+   * bucket would drop the tab. Deferred until they load, and skipped if a
+   * newer snapshot has superseded it meanwhile.
+   */
+  const applyDesktopTabsSnapshot = (
+    snapshot: DesktopPerWindowSnapshot,
+  ): void => {
+    if (
+      !isIdentityTabsHydrated() &&
+      desktopSnapshotReferencesIdentityTabs(snapshot, true, null)
+    ) {
+      void identityTabsHydration().then(() => {
+        if (isCancelled() || snapshotObservation.latest !== snapshot) return;
+        if (!shouldApplyDesktopTabsSnapshot(snapshot)) return;
+        hydrateDesktopTabs(snapshot, true, null);
+        commitAppliedDesktopTabsSnapshot(snapshot);
+      });
+      return;
+    }
+    hydrateDesktopTabs(snapshot, true, null);
+    commitAppliedDesktopTabsSnapshot(snapshot);
+  };
 
   const applyNewestSnapshot = (snapshot: DesktopPerWindowSnapshot): void => {
     if (
@@ -274,15 +306,12 @@ function installDesktopWindowsBridge(
     snapshotObservation.latest = snapshot;
     applyPerWindowSnapshot(snapshot);
     if (tabsCompatible && shouldApplyDesktopTabsSnapshot(snapshot)) {
-      hydrateDesktopTabs(snapshot, true, null);
-      commitAppliedDesktopTabsSnapshot(snapshot);
+      applyDesktopTabsSnapshot(snapshot);
     }
   };
 
   const perWindowSubscription =
     bridge.perWindowState.onChange(applyNewestSnapshot);
-
-  const isCancelled = (): boolean => lifecycle.cancelled;
 
   void (async () => {
     if (isCancelled()) return;
@@ -297,11 +326,28 @@ function installDesktopWindowsBridge(
       if (isCancelled()) return;
       tabsCompatible = verification.supported;
       configureDesktopTabsAuthority(tabsCompatible);
+      const legacyHistoryRoute = readPersistedCurrentRoute(bridge.windowId);
+      // The identity SOURCE records live in an account-bucketed store that
+      // the lifecycle bridge retargets only once auth settles, beneath this
+      // provider. A restore that holds an identity tab waits for that; one
+      // that does not proceeds as before, so a strip without identity tabs
+      // never waits on auth (the browser path always does, for its canvas).
+      if (
+        !isIdentityTabsHydrated() &&
+        desktopSnapshotReferencesIdentityTabs(
+          snapshotObservation.latest ?? snapshot,
+          tabsCompatible,
+          legacyHistoryRoute,
+        )
+      ) {
+        await identityTabsHydration();
+        if (isCancelled()) return;
+      }
       const hydrationSnapshot = snapshotObservation.latest ?? snapshot;
       const hydratedTabs = hydrateDesktopTabs(
         hydrationSnapshot,
         tabsCompatible,
-        readPersistedCurrentRoute(bridge.windowId),
+        legacyHistoryRoute,
       );
       if (tabsCompatible && verification.acknowledgedRevision !== null) {
         installDesktopTabsPersistence(

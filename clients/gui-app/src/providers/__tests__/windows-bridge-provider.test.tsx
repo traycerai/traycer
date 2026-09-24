@@ -6,6 +6,14 @@ import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { IdentityTabsPersistLifecycleBridge } from "@/providers/identity-tabs-persist-lifecycle-bridge";
+import {
+  resetIdentityTabsStoreForTests,
+  useIdentityTabsStore,
+} from "@/stores/identities/identity-tabs-store";
+import { __resetIdentityTabsHydrationForTests } from "@/stores/identities/identity-tabs-hydration";
+import { identityTabsKey } from "@/lib/persist";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { epicCanvasKey } from "@/lib/persist";
@@ -468,6 +476,115 @@ describe("<WindowsBridgeProvider />", () => {
         "hydrated",
       );
     });
+  });
+
+  it("waits for the account's identity tabs before restoring a desktop layout that holds one", async () => {
+    // Saved layout [identity A | History], active on /identities/A; the
+    // account's identity bucket holds A but loads only once auth settles
+    // beneath the lifecycle bridge. Restoring earlier sanitizes the layout
+    // against the anonymous bucket, drops A, and the later account hydration
+    // re-adds it as a plain tab with History selected.
+    const accountId = "user:alice@example.com";
+    const identityRef = { kind: "identity", id: "identity_a" } as const;
+    window.localStorage.setItem(
+      identityTabsKey(accountId),
+      JSON.stringify({
+        state: {
+          tabsById: {
+            identity_a: {
+              id: "identity_a",
+              identityId: "identity_a",
+              hostId: "host-a",
+              title: "Soul",
+            },
+          },
+          openTabOrder: ["identity_a"],
+        },
+        version: 1,
+      }),
+    );
+    useAuthStore.setState({
+      status: "signing-in",
+      profile: null,
+      contextMetadata: null,
+    });
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const fake = createDesktopWindowsBridge();
+    const restoredSnapshot = {
+      ...emptyPerWindowSnapshot(),
+      revision: 5,
+      tabStripLayout: {
+        version: 2,
+        items: [{ kind: "tab", id: tabItemId(identityRef), ref: identityRef }],
+        activeItemId: tabItemId(identityRef),
+        systemTabs: {
+          history: {
+            id: "history",
+            kind: "history",
+            name: "History",
+            lastPath: "/epics",
+          },
+          settings: null,
+        },
+      },
+      activeRoute: "/identities/identity_a",
+    } satisfies DesktopPerWindowSnapshot;
+    const restoringBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () => Promise.resolve(restoredSnapshot),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 6 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(restoringBridge)}
+      >
+        <WindowsBridgeProvider>
+          <IdentityTabsPersistLifecycleBridge>
+            <HydrationProbe />
+          </IdentityTabsPersistLifecycleBridge>
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+    // Held: the strip is neither hydrated nor sanitized down to [History].
+    expect(screen.getByTestId("hydration-state").textContent).toBe("pending");
+    expect(useTabsStore.getState().items).toEqual([]);
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: accountId,
+          userName: "alice@example.com",
+          email: "alice@example.com",
+        },
+        contextMetadata: { userId: accountId, username: "alice@example.com" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    const strip = useTabsStore.getState();
+    expect(
+      strip.items.map((item) => (item.kind === "tab" ? item.ref : item.kind)),
+    ).toEqual([identityRef]);
+    expect(strip.activeItemId).toBe(tabItemId(identityRef));
+    expect(strip.systemTabs.history?.lastPath).toBe("/epics");
+    expect(getTabSplitCompatibility().supported).toBe(true);
   });
 
   it("fails closed when the capability handshake acknowledges an older revision", async () => {
@@ -1653,6 +1770,9 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+  useIdentityTabsStore.persist.setOptions({ name: identityTabsKey(null) });
+  resetIdentityTabsStoreForTests();
+  __resetIdentityTabsHydrationForTests();
   useAuthStore.setState({
     status: "signed-out",
     profile: null,

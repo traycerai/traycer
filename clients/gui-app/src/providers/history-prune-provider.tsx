@@ -9,6 +9,10 @@ import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
+import {
+  isIdentityTabsHydrated,
+  subscribeIdentityTabsHydration,
+} from "@/stores/identities/identity-tabs-hydration";
 
 export interface HistoryPruneProviderProps {
   /**
@@ -134,10 +138,12 @@ function subscribeStoreHydration(callback: () => void): () => void {
     useLandingDraftStore.persist.onFinishHydration(callback);
   const unsubscribeIdentities =
     useIdentityTabsStore.persist.onFinishHydration(callback);
+  const unsubscribeIdentityAccount = subscribeIdentityTabsHydration(callback);
   return () => {
     unsubscribeCanvas();
     unsubscribeDrafts();
     unsubscribeIdentities();
+    unsubscribeIdentityAccount();
   };
 }
 
@@ -145,6 +151,10 @@ function getStoreHydrationSnapshot(): boolean {
   return (
     useEpicCanvasStore.persist.hasHydrated() &&
     useLandingDraftStore.persist.hasHydrated() &&
-    useIdentityTabsStore.persist.hasHydrated()
+    useIdentityTabsStore.persist.hasHydrated() &&
+    // The identity store's own flag reports the ANONYMOUS bucket, which loads
+    // synchronously and holds no account records; pruning against it reads
+    // every `/identities/$id` entry as dead. Wait for the account's bucket.
+    isIdentityTabsHydrated()
   );
 }

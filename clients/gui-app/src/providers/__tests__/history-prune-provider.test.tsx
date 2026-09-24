@@ -16,7 +16,13 @@ import {
   resetIdentityTabsStoreForTests,
   useIdentityTabsStore,
 } from "@/stores/identities/identity-tabs-store";
+import {
+  __resetIdentityTabsHydrationForTests,
+  markIdentityTabsHydrated,
+} from "@/stores/identities/identity-tabs-hydration";
+import { identityTabsKey } from "@/lib/persist";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
+import { IdentityTabsPersistLifecycleBridge } from "@/providers/identity-tabs-persist-lifecycle-bridge";
 
 const WINDOW_ID = "history-prune-test-window";
 
@@ -90,6 +96,10 @@ beforeEach(() => {
   });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   resetIdentityTabsStoreForTests();
+  // These cases mount no lifecycle bridge, so stand in for the one signal it
+  // would give: the identity store already follows the account.
+  __resetIdentityTabsHydrationForTests();
+  markIdentityTabsHydrated();
 });
 
 afterEach(() => {
@@ -98,6 +108,12 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  useIdentityTabsStore.persist.setOptions({ name: identityTabsKey(null) });
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
+  });
 });
 
 describe("HistoryPruneProvider", () => {
@@ -245,6 +261,82 @@ describe("HistoryPruneProvider", () => {
 
     expect(controller.getEntries()).toEqual(["/epics/e1/t1"]);
     expect(controller.canGoForward()).toBe(false);
+    expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("holds pruning until the account's identity tabs load, then keeps a restored identity entry", () => {
+    // The store boots on the anonymous bucket and reports hydrated at once;
+    // the account's bucket - which holds identity A - loads only when auth
+    // settles beneath the lifecycle bridge. Pruning in between reads the
+    // entry as dead and deletes it before A is restored.
+    __resetIdentityTabsHydrationForTests();
+    const aliceId = "user:alice@example.com";
+    window.localStorage.setItem(
+      identityTabsKey(aliceId),
+      JSON.stringify({
+        state: {
+          tabsById: {
+            identity_a: {
+              id: "identity_a",
+              identityId: "identity_a",
+              hostId: "host-a",
+              title: "Soul",
+            },
+          },
+          openTabOrder: ["identity_a"],
+        },
+        version: 1,
+      }),
+    );
+    useAuthStore.setState({
+      status: "signing-in",
+      profile: null,
+      contextMetadata: null,
+    });
+    const history = seedPersistentHistory(
+      ["/identities/identity_a", "/epics"],
+      1,
+    );
+    const controller = controllerFor(history);
+    const router = makeRouter(history);
+    const loadSpy = vi.spyOn(router, "load");
+
+    render(
+      <IdentityTabsPersistLifecycleBridge>
+        <HistoryPruneProvider router={router} />
+      </IdentityTabsPersistLifecycleBridge>,
+    );
+    flushFrames();
+
+    // Held: nothing was pruned against the anonymous bucket.
+    expect(controller.getEntries()).toEqual([
+      "/identities/identity_a",
+      "/epics",
+    ]);
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: aliceId,
+          userName: "alice@example.com",
+          email: "alice@example.com",
+        },
+        contextMetadata: { userId: aliceId, username: "alice@example.com" },
+      });
+    });
+    flushFrames();
+
+    // Non-vacuity: the account's record really arrived, and the pruner ran
+    // (a canvas-dead entry would go) while the restored identity entry stays.
+    expect(useIdentityTabsStore.getState().openTabOrder).toEqual([
+      "identity_a",
+    ]);
+    expect(controller.getEntries()).toEqual([
+      "/identities/identity_a",
+      "/epics",
+    ]);
+    expect(controller.canGoBack()).toBe(true);
     expect(loadSpy).not.toHaveBeenCalled();
   });
 

@@ -68,6 +68,22 @@ export function adoptLegacyPersistedKey(
   window.localStorage.removeItem(legacyName);
 }
 
+/**
+ * Move a store back onto its anonymous bucket on sign-out WITHOUT deleting
+ * the outgoing account's bucket, so the account finds its state again when
+ * it signs back in on this profile. The in-memory state is reset either way:
+ * nothing of the outgoing account stays readable once it is gone. Contrast
+ * `clearAndResetPersistedStore`, which wipes the bucket for stores whose
+ * contents must not outlive the session on a shared machine.
+ */
+export function detachPersistedStore<State>(input: {
+  readonly store: PersistLifecycleStore<State>;
+  readonly anonymousName: string;
+}): void {
+  input.store.persist.setOptions({ name: input.anonymousName });
+  input.store.setState(input.store.getInitialState());
+}
+
 export function clearAndResetPersistedStore<State>(input: {
   readonly store: PersistLifecycleStore<State>;
   readonly anonymousName: string;

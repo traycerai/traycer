@@ -12,6 +12,10 @@ import {
   resetIdentityTabsStoreForTests,
   useIdentityTabsStore,
 } from "@/stores/identities/identity-tabs-store";
+import {
+  __resetIdentityTabsHydrationForTests,
+  isIdentityTabsHydrated,
+} from "@/stores/identities/identity-tabs-hydration";
 import { identityTabsKey } from "@/lib/persist";
 
 const ALICE_EMAIL = "alice@example.com";
@@ -19,7 +23,10 @@ const BOB_EMAIL = "bob@example.com";
 const ALICE_ID = `user:${ALICE_EMAIL}`;
 const BOB_ID = `user:${BOB_EMAIL}`;
 
-function resetAuth(status: "signed-out" | "signed-in", email: string | null) {
+function resetAuth(
+  status: "signed-out" | "signing-in" | "signed-in",
+  email: string | null,
+) {
   if (status === "signed-in" && email !== null) {
     const userId = `user:${email}`;
     useAuthStore.setState({
@@ -50,6 +57,7 @@ describe("<IdentityTabsPersistLifecycleBridge />", () => {
     window.localStorage.clear();
     resetAuth("signed-out", null);
     resetIdentityTabsStore();
+    __resetIdentityTabsHydrationForTests();
   });
 
   afterEach(() => {
@@ -109,6 +117,107 @@ describe("<IdentityTabsPersistLifecycleBridge />", () => {
     // Bob inherits nothing: no records, no order, nothing to activate.
     expect(useIdentityTabsStore.getState().tabsById).toEqual({});
     expect(useIdentityTabsStore.getState().openTabOrder).toEqual([]);
+  });
+
+  it("gives Alice her tabs back after Alice → sign-out → Bob → sign-out → Alice", async () => {
+    // The ticket's line: "A back → A's restored". A sign-out DETACHES the
+    // store from Alice's bucket; it must not delete it.
+    renderBridge();
+
+    act(() => {
+      resetAuth("signed-in", ALICE_EMAIL);
+    });
+    await waitFor(() => {
+      expect(useIdentityTabsStore.persist.getOptions().name).toBe(
+        identityTabsKey(ALICE_ID),
+      );
+    });
+    act(() => {
+      useIdentityTabsStore.getState().openTab({
+        identityId: "identity_alice",
+        hostId: "host-a",
+        title: "Alice's soul",
+      });
+    });
+
+    act(() => {
+      resetAuth("signed-out", null);
+    });
+    await waitFor(() => {
+      expect(useIdentityTabsStore.persist.getOptions().name).toBe(
+        identityTabsKey(null),
+      );
+    });
+    expect(useIdentityTabsStore.getState().openTabOrder).toEqual([]);
+    // Detached, not deleted.
+    expect(window.localStorage.getItem(identityTabsKey(ALICE_ID))).toContain(
+      "identity_alice",
+    );
+
+    act(() => {
+      resetAuth("signed-in", BOB_EMAIL);
+    });
+    await waitFor(() => {
+      expect(useIdentityTabsStore.persist.getOptions().name).toBe(
+        identityTabsKey(BOB_ID),
+      );
+    });
+    expect(useIdentityTabsStore.getState().openTabOrder).toEqual([]);
+    act(() => {
+      useIdentityTabsStore.getState().openTab({
+        identityId: "identity_bob",
+        hostId: "host-b",
+        title: "Bob's soul",
+      });
+    });
+
+    act(() => {
+      resetAuth("signed-out", null);
+    });
+    await waitFor(() => {
+      expect(useIdentityTabsStore.persist.getOptions().name).toBe(
+        identityTabsKey(null),
+      );
+    });
+
+    act(() => {
+      resetAuth("signed-in", ALICE_EMAIL);
+    });
+    await waitFor(() => {
+      expect(useIdentityTabsStore.getState().openTabOrder).toEqual([
+        "identity_alice",
+      ]);
+    });
+    expect(useIdentityTabsStore.getState().tabsById["identity_alice"]).toEqual({
+      id: "identity_alice",
+      identityId: "identity_alice",
+      hostId: "host-a",
+      title: "Alice's soul",
+    });
+    // And nothing of Bob's came along.
+    expect(useIdentityTabsStore.getState().tabsById["identity_bob"]).toBe(
+      undefined,
+    );
+  });
+
+  it("marks the store hydrated for the account only once auth settles", async () => {
+    resetAuth("signing-in", null);
+    renderBridge();
+    // A held attempt is not an answer: the anonymous bucket is not evidence
+    // that the account has no tabs.
+    expect(isIdentityTabsHydrated()).toBe(false);
+
+    act(() => {
+      resetAuth("signed-in", ALICE_EMAIL);
+    });
+    await waitFor(() => {
+      expect(isIdentityTabsHydrated()).toBe(true);
+    });
+  });
+
+  it("marks the store hydrated at once for an initially signed-out session", () => {
+    renderBridge();
+    expect(isIdentityTabsHydrated()).toBe(true);
   });
 
   it("restores an account's own bucket on sign-in and drops it for the next account", async () => {
