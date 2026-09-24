@@ -2071,6 +2071,12 @@ function pendingTurnMeta(
 interface AssistantTurnAccumulator {
   messageId: string;
   /**
+   * Every contributing record's id once a second record folds in, `null`
+   * while the turn has one: the common turn allocates nothing for it. See
+   * `ChatMessage.turnMessageIds`.
+   */
+  turnMessageIds: string[] | null;
+  /**
    * The record's OWN `turnId`, not this turn's accumulator key.
    *
    * The two differ, and the difference is load-bearing: `assistantTurnKey`
@@ -2730,11 +2736,16 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    existing.turnMessageIds = [
+      ...(existing.turnMessageIds ?? [existing.messageId]),
+      message.messageId,
+    ];
     existing.messageId = message.messageId;
     return;
   }
   const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
+    turnMessageIds: null,
     turnId: message.turnId,
     sender: message.sender,
     startedAt: message.startedAt,
@@ -3384,6 +3395,9 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    ...(input.acc.turnMessageIds === null
+      ? {}
+      : { turnMessageIds: input.acc.turnMessageIds }),
     // Spread rather than set: `turnId` is absent when the record carries none,
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
@@ -3695,6 +3709,7 @@ function renderLiveAssistant(
   }
   const acc: AssistantTurnAccumulator = {
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    turnMessageIds: null,
     // The live row always has a real turn id - it is what the host is
     // streaming against - so no `ts:` synthetic can reach here.
     turnId: liveAssistant.turnId,

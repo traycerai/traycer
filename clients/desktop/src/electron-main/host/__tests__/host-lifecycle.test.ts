@@ -1021,6 +1021,9 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       await lifecycle.bootstrap({ hostInstalled: true });
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
+      // The explicit reloads below drive both failures; frozen timers keep the
+      // first failure's retry from superseding the second manual reload.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
       // ONE failed probe against a live process changes nothing the renderer
       // can see. This assertion used to demand `null` - and that is the
@@ -1048,6 +1051,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     } finally {
       restoreLiveness();
       lifecycle.dispose();
+      vi.useRealTimers();
       await rm(dir, { recursive: true, force: true });
     }
   });

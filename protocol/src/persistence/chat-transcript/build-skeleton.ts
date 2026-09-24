@@ -30,6 +30,10 @@ import {
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import {
+  compareTranscriptRowOrder,
+  type TranscriptFoldUnit,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection-fold-state";
 
 /**
  * # Building the row skeleton
@@ -641,37 +645,87 @@ export function buildRowSkeleton(
   const blocksById = blocksByIdFrom(input.messages);
   const lastRowIndexByTurn = lastRowIndexByTurnKey(rows);
 
-  return rows.map((row, index) => {
-    const { source } = row;
-    const human = isHumanUserRecord(source, lookup, blocksById);
-    const preview =
-      human.message === undefined || human.sentByAgent
-        ? undefined
-        : collapsedPreview(previewText(userContent(human.message)));
-    const isLastOfTurn =
-      source.kind === "assistant-slice" &&
-      lastRowIndexByTurn.get(source.turnKey) === index;
-    const body = rowBodyFingerprint(
-      source,
-      row.context,
+  return rows.map((row, index) =>
+    skeletonEntryOf(
+      row,
+      row.source.kind === "assistant-slice" &&
+        lastRowIndexByTurn.get(row.source.turnKey) === index,
       lookup,
       blocksById,
+      previewText,
       memo,
-    );
-    return {
-      rowId: row.rowId,
-      createdAt: row.createdAt,
-      role: rowRole(source),
-      byteLength: body.byteLength,
-      bodyDigest: body.bodyDigest,
-      ...(preview === undefined ? {} : { preview }),
-      ...(human.sentByAgent ? { sentByAgent: true } : {}),
-      ...((): { usage?: RowSkeletonEntry["usage"] } => {
-        const usage = rowUsage(source, lookup, isLastOfTurn);
-        return usage === undefined ? {} : { usage };
-      })(),
-    };
-  });
+    ),
+  );
+}
+
+/**
+ * The skeleton entries of one re-described unit of the row fold, parallel to
+ * `unit.rows` - what a store persists beside each index row.
+ *
+ * Everything an entry reads is inside the unit: a user row reads its record, a
+ * turn's rows read the turn's records, its steered user records and its
+ * decorating events, a card reads its window's events. The one whole-list fact
+ * in {@link buildRowSkeleton} - which row is a turn's LAST - is local too,
+ * since every slice of a turn is in the turn's unit. So these entries equal
+ * the ones {@link buildRowSkeleton} computes for the same rows.
+ */
+export function transcriptFoldUnitSkeleton(
+  unit: TranscriptFoldUnit,
+  previewText: TranscriptPreviewProjection,
+  memo: RecordFingerprintMemo | null,
+): readonly RowSkeletonEntry[] {
+  const lookup = buildTranscriptRecordLookup(unit.messages, unit.events);
+  const blocksById = blocksByIdFrom(unit.messages);
+  const ordered = [...unit.rows].sort((a, b) =>
+    compareTranscriptRowOrder(a.order, b.order),
+  );
+  const lastSlice = ordered.findLast(
+    (row) => row.descriptor.source.kind === "assistant-slice",
+  );
+  return unit.rows.map((row) =>
+    skeletonEntryOf(
+      row.descriptor,
+      row === lastSlice,
+      lookup,
+      blocksById,
+      previewText,
+      memo,
+    ),
+  );
+}
+
+function skeletonEntryOf(
+  row: TranscriptRowDescriptor,
+  isLastOfTurn: boolean,
+  lookup: TranscriptRecordLookup,
+  blocksById: ReadonlyMap<string, ContentBlock>,
+  previewText: TranscriptPreviewProjection,
+  memo: RecordFingerprintMemo | null,
+): RowSkeletonEntry {
+  const { source } = row;
+  const human = isHumanUserRecord(source, lookup, blocksById);
+  const preview =
+    human.message === undefined || human.sentByAgent
+      ? undefined
+      : collapsedPreview(previewText(userContent(human.message)));
+  const body = rowBodyFingerprint(
+    source,
+    row.context,
+    lookup,
+    blocksById,
+    memo,
+  );
+  const usage = rowUsage(source, lookup, isLastOfTurn);
+  return {
+    rowId: row.rowId,
+    createdAt: row.createdAt,
+    role: rowRole(source),
+    byteLength: body.byteLength,
+    bodyDigest: body.bodyDigest,
+    ...(preview === undefined ? {} : { preview }),
+    ...(human.sentByAgent ? { sentByAgent: true } : {}),
+    ...(usage === undefined ? {} : { usage }),
+  };
 }
 
 function userContent(message: Message): JsonContent {

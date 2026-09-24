@@ -4,9 +4,16 @@ import {
   queryMountedChatFindUnit,
   queryMountedChatMessageRoot,
   type ChatFindAdapter,
+  type ChatFindLandingOutcome,
   type ChatFindReconcileTarget,
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find";
+import {
+  CHAT_FIND_INDEX_ABSENT,
+  ChatFindIndexDemandSource,
+  type ChatFindIndexAnswer,
+  type ChatFindTranscriptPlacement,
+} from "@/components/chat/chat-find-index";
 import {
   serializeChatCollapsibleKey,
   type ChatCollapsibleKey,
@@ -30,6 +37,7 @@ import {
   useCallback,
   useLayoutEffect,
   useRef,
+  useState,
   type RefObject,
 } from "react";
 
@@ -66,6 +74,13 @@ interface ChatFindControllerArgs {
    * hydrates.
    */
   readonly getFindCoverageMessage: () => string | null;
+  /**
+   * Where records and rows sit in the transcript (`ChatFindTranscriptPlacement`),
+   * read with the rows.
+   */
+  readonly getFindPlacement: () => ChatFindTranscriptPlacement;
+  /** Hydrate and land an older message by a row or message id (the tile's jump). */
+  readonly requestIndexJump: (target: string) => void;
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
@@ -81,6 +96,15 @@ interface ChatFindController {
   readonly scheduleMountedHighlightSync: () => void;
   /** Find-side follow-up to the timeline's rendered-data change. */
   readonly onRenderedDataChange: () => void;
+  /** What the index should be asked; feeds `ChatFindIndexSource`. */
+  readonly indexDemand: ChatFindIndexDemandSource;
+  /** The index's answer about older rows, for the adapter. */
+  readonly setIndexAnswer: (answer: ChatFindIndexAnswer) => void;
+  /** A transcript scroll request settled on `rowMessageId`. */
+  readonly onTranscriptLandingSettled: (
+    rowMessageId: string,
+    outcome: ChatFindLandingOutcome,
+  ) => void;
 }
 
 /**
@@ -100,12 +124,29 @@ export function useChatFindController(
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
     getFindCoverageMessage,
+    getFindPlacement,
+    requestIndexJump,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation,
     cancelManualNavigation,
     setScrolledActiveUserMessageIdIfChanged,
   } = args;
+
+  // One per transcript, outliving every adapter registration: the index query
+  // subscribes to it before any adapter exists.
+  const [indexDemand] = useState(() => new ChatFindIndexDemandSource());
+  // Read through refs, so a caller's new callback identity never re-registers
+  // the adapter - which would drop the search it is holding.
+  const getFindPlacementRef = useRef(getFindPlacement);
+  const requestIndexJumpRef = useRef(requestIndexJump);
+  // The last answer, so an adapter created later (a re-registration) starts
+  // from it rather than waiting for the index to answer again.
+  const indexAnswerRef = useRef<ChatFindIndexAnswer>(CHAT_FIND_INDEX_ABSENT);
+  useLayoutEffect(() => {
+    getFindPlacementRef.current = getFindPlacement;
+    requestIndexJumpRef.current = requestIndexJump;
+  }, [getFindPlacement, requestIndexJump]);
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const setFindActiveTarget = useSetChatFindActiveTarget();
@@ -433,6 +474,9 @@ export function useChatFindController(
           backgroundToolBlockIdsRef.current,
         ),
       getCoverageMessage: getFindCoverageMessage,
+      getPlacement: () => getFindPlacementRef.current(),
+      indexDemand,
+      jumpToIndexHit: (target) => requestIndexJumpRef.current(target),
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -440,6 +484,7 @@ export function useChatFindController(
       getMountedUnitRoot: (messageId, unitId) =>
         getMountedFindUnitRootRef.current(messageId, unitId),
     });
+    adapter.setIndexAnswer(indexAnswerRef.current);
     chatFindAdapterRef.current = adapter;
     const unregisterAdapter = tileFindContext.registerAdapter(adapter);
 
@@ -455,12 +500,28 @@ export function useChatFindController(
     clearFindReveal,
     getFindCoverageMessage,
     getMountedMessageRoot,
+    indexDemand,
     instanceId,
     messagesRef,
     requestFindReconcile,
     requestFindReveal,
     tileFindContext,
   ]);
+
+  const setIndexAnswer = useCallback((answer: ChatFindIndexAnswer): void => {
+    indexAnswerRef.current = answer;
+    chatFindAdapterRef.current?.setIndexAnswer(answer);
+  }, []);
+
+  const onTranscriptLandingSettled = useCallback(
+    (rowMessageId: string, outcome: ChatFindLandingOutcome): void => {
+      chatFindAdapterRef.current?.notifyTranscriptLanding(
+        rowMessageId,
+        outcome,
+      );
+    },
+    [],
+  );
 
   const onRenderedDataChange = useCallback((): void => {
     const activeReveal = activeFindRevealRef.current;
@@ -477,5 +538,8 @@ export function useChatFindController(
   return {
     scheduleMountedHighlightSync,
     onRenderedDataChange,
+    indexDemand,
+    setIndexAnswer,
+    onTranscriptLandingSettled,
   };
 }
