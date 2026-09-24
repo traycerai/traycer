@@ -19,6 +19,21 @@ import {
   useInitialChatHandoffStore,
 } from "@/stores/epics/initial-chat-handoff-store";
 
+// The directory's LOCAL host id - the machine typing, deliberately distinct
+// from `HOST_ID` (the target host the fork is created on) below, so a reader
+// quietly replaced by the target host fails alongside one replaced by a
+// constant. `startSideChat` reads this through `readLocalHostIdSnapshot()`
+// at call time, so the module has to be mocked rather than left real.
+const hostRuntimeMocks = vi.hoisted(() => ({
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
+}));
+
+vi.mock("@/lib/host/runtime", () => ({
+  getHostBindingSnapshot: () => ({
+    directory: { getLocalHostId: hostRuntimeMocks.getLocalHostId },
+  }),
+}));
+
 /**
  * `startSideChat` (`/btw`): forks the current chat and asks the remainder of
  * the prompt there. Modeled on
@@ -153,6 +168,8 @@ describe("startSideChat", () => {
     resetCanvasStore();
     useInitialChatHandoffStore.getState().resetForTests();
     setMobileApp(false);
+    hostRuntimeMocks.getLocalHostId.mockReset();
+    hostRuntimeMocks.getLocalHostId.mockReturnValue("host-local-typing");
   });
 
   afterEach(() => {
@@ -209,6 +226,30 @@ describe("startSideChat", () => {
       expect(handoff?.clientActionId).toBe(
         request.initialMessage?.clientActionId,
       );
+    });
+
+    // `sentFromHostId` names the machine the user is TYPING on (the local
+    // host), never `hostId` (`HOST_ID`, the source tab's bound host the fork
+    // is created on). The suite's default local id ("host-local-typing")
+    // already diverges from that target.
+    it("stamps the initial message's sentFromHostId with the local host id, not the target host", () => {
+      const recorder = createChatRecorder();
+      startSideChat(baseArgs({ createChat: recorder.createChat }));
+
+      const { request } = recorder.calls[0];
+      expect(request.hostId).toBe(HOST_ID);
+      expect(request.initialMessage?.sentFromHostId).toBe("host-local-typing");
+    });
+
+    // The null path stays pinned: a shell with no local host sends no sender
+    // host, rather than falling back to the target host.
+    it("sends a null sentFromHostId when the directory has no local host", () => {
+      hostRuntimeMocks.getLocalHostId.mockReturnValue(null);
+      const recorder = createChatRecorder();
+      startSideChat(baseArgs({ createChat: recorder.createChat }));
+
+      const { request } = recorder.calls[0];
+      expect(request.initialMessage?.sentFromHostId ?? null).toBeNull();
     });
 
     it("uses folderless workspaceMode for a null worktreeIntent", () => {
