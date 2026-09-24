@@ -85,7 +85,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type {
   HostInstallRecord,
@@ -219,8 +219,8 @@ function renderPanel(): RenderResult & { readonly queryClient: QueryClient } {
 }
 
 function attempt(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "a1",
@@ -244,7 +244,7 @@ function attempt(
 /** The (a)/(b)/(c) sequence's three `host.status` frames, by phase. */
 function sequencePinOperation(
   phase: "idle" | "preparing" | "parked",
-): HostStatusUpdateOperation {
+): HostStatusUpdateOperationV2 {
   if (phase === "idle") return { kind: "none" };
   if (phase === "preparing") return attempt({});
   return attempt({
@@ -258,7 +258,7 @@ function sequencePinOperation(
 /** Pin (d)'s three `host.status` frames: idle, a stale a0, then a1 parked. */
 function ackRaceOperation(
   phase: "idle" | "a0" | "a1-parked",
-): HostStatusUpdateOperation {
+): HostStatusUpdateOperationV2 {
   if (phase === "idle") return { kind: "none" };
   if (phase === "a0") return attempt({ attemptId: "a0", phase: "preparing" });
   return attempt({
@@ -855,7 +855,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
     // is armed, seen, and the only thing standing between this page and an
     // auto-open is the clear under test.
     let phase: "idle" | "preparing" | "quiet" | "parked" = "idle";
-    const statusOperation = (): HostStatusUpdateOperation => {
+    const statusOperation = (): HostStatusUpdateOperationV2 => {
       if (phase === "quiet") return { kind: "none" };
       return sequencePinOperation(phase);
     };

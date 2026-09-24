@@ -27,7 +27,7 @@ import type {
   HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type {
-  HostBusyBreakdown,
+  HostBusyBreakdownV2,
   HostStatusInstall,
   HostStatusStoreFormats,
 } from "@traycer/protocol/host/status/index";
@@ -144,7 +144,7 @@ export function buildOverviewHostFixture(options: {
   readonly hostVersion?: string;
   readonly busy?: boolean;
   readonly busySessionCount?: number;
-  readonly busyBreakdown?: HostBusyBreakdown | null;
+  readonly busyBreakdown?: HostBusyBreakdownV2 | null;
   readonly storeFormats?: HostStatusStoreFormats | null;
   /** `host.status@1.5`'s install report; `null` (the default) is "not reported". */
   readonly install?: HostStatusInstall | null;

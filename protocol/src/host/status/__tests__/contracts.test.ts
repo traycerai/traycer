@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  hostBusyBreakdownSchema,
+  hostBusyBreakdownV1Schema,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
   hostStatusUpgradeV12ToV13,
   hostStatusUpgradeV13ToV14,
   hostStatusUpgradeV14ToV15,
+  hostStatusUpgradeV15ToV16,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
   hostStatusV13,
   hostStatusV14,
   hostStatusV15,
+  hostStatusV16,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -161,7 +163,7 @@ describe("host.status@1.2 busyBreakdown", () => {
     };
     const parsed = hostStatusV12.responseSchema.parse(payload);
     expect(parsed.busyBreakdown).toEqual(BUSY_BREAKDOWN);
-    expect(hostBusyBreakdownSchema.parse(BUSY_BREAKDOWN)).toEqual(
+    expect(hostBusyBreakdownV1Schema.parse(BUSY_BREAKDOWN)).toEqual(
       BUSY_BREAKDOWN,
     );
   });
@@ -370,15 +372,16 @@ describe("host.status@1.5 install", () => {
 });
 
 describe("host.status registry membership", () => {
-  it("v1.4 and v1.5 reuse the previous line's request schema by identity", () => {
+  it("v1.4, v1.5 and v1.6 reuse the previous line's request schema by identity", () => {
     expect(hostStatusV14.requestSchema).toBe(hostStatusV13.requestSchema);
     expect(hostStatusV15.requestSchema).toBe(hostStatusV14.requestSchema);
+    expect(hostStatusV16.requestSchema).toBe(hostStatusV15.requestSchema);
   });
 
-  it("installs @1.0 through @1.5 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.6 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(5);
+    expect(entry[1].latestMinor).toBe(6);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -396,6 +399,10 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[5].contract).toBe(hostStatusV15);
     expect(entry[1].versions[5].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV14ToV15,
+    );
+    expect(entry[1].versions[6].contract).toBe(hostStatusV16);
+    expect(entry[1].versions[6].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV15ToV16,
     );
   });
 });

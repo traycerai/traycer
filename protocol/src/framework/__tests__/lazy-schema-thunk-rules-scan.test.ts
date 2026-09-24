@@ -9,7 +9,11 @@ import {
   PROVIDER_AUTH_STATUS_SCHEMA,
   PROVIDER_AUTH_STATUS_SCHEMA_V20,
 } from "../../host/provider-schemas";
-import { hostStatusV13, hostStatusV14 } from "../../host/status/contracts";
+import {
+  hostStatusV13,
+  hostStatusV14,
+  hostStatusV15,
+} from "../../host/status/contracts";
 import {
   worktreeListAllForHostRequestSchemaV11,
   worktreeListAllForHostRequestSchemaV12,
@@ -184,6 +188,13 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
   ],
   [
     "method-on-non-schema hostStatusV14.extend (protocol/src/host/status/contracts.ts)",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
+  ],
+  [
+    "method-on-non-schema hostStatusV15.extend (protocol/src/host/status/contracts.ts)",
     {
       count: 1,
       reason: "a contract object; `.responseSchema.extend` clones",
@@ -1241,6 +1252,7 @@ describe("allow-list premises", () => {
     expect(typeof BROWSER_VIEWPORT_MAX_PIXELS).toBe("number");
     expect(hostStatusV13.responseSchema instanceof z.ZodObject).toBe(true);
     expect(hostStatusV14.responseSchema instanceof z.ZodObject).toBe(true);
+    expect(hostStatusV15.responseSchema instanceof z.ZodObject).toBe(true);
   });
 
   it("every element of the chat-subscribe option arrays, and the four destructured PreAuto frames, is a zod schema", () => {

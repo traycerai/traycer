@@ -76,7 +76,7 @@ import type {
   IRunnerHost,
   LocalAttemptFacts,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -238,8 +238,8 @@ function renderPanelPersistent(): { rerender: () => void } {
 }
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -279,7 +279,7 @@ function localAttempt(
 }
 
 function statusWith(
-  operation: HostStatusUpdateOperation | null,
+  operation: HostStatusUpdateOperationV2 | null,
   extra: Partial<ResponseOfMethod<HostRpcRegistry, "host.status">> | undefined,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {

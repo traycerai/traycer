@@ -74,7 +74,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
@@ -196,8 +196,8 @@ function renderPanelPersistent(): { rerender: () => void } {
 }
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -219,7 +219,7 @@ function attemptOperation(
 }
 
 function statusWith(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -242,7 +242,7 @@ function statusWith(
 // carrying the whole signal, and that is exactly the shape this suite's
 // coarse-progress tests below exercise.
 function statusWithCoarseProgress(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   updateProgress: ResponseOfMethod<
     HostRpcRegistry,
     "host.status"
@@ -285,7 +285,7 @@ function floorCapableMinorFor(method: string): number {
 
 function statusWithBusy(
   hostVersion: string,
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   busy: boolean,
   busySessionCount: number,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
@@ -687,7 +687,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
    * what holds it to that.
    */
   function statusRunning(
-    operation: HostStatusUpdateOperation,
+    operation: HostStatusUpdateOperationV2,
     hostVersion: string,
   ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
     return {
@@ -2602,7 +2602,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
 describe("HostOverviewOperationCard — success acknowledgement (Settings-only)", () => {
   const HOST_ID = "host-a";
 
-  function completeOperation(attemptId: string): HostStatusUpdateOperation {
+  function completeOperation(attemptId: string): HostStatusUpdateOperationV2 {
     return attemptOperation({
       attemptId,
       phase: "complete",
@@ -2778,7 +2778,7 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
 
   const NON_TERMINAL_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation;
+    readonly operation: HostStatusUpdateOperationV2;
   }> = [
     {
       name: "active (downloading)",
@@ -2822,7 +2822,7 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
   // lost its dismiss/timer, and a fresh dismissal stopped matching once the
   // kind changed and the card reappeared.
   describe("retained (stale) success — PR2069 regression", () => {
-    function bindDisconnectable(operation: HostStatusUpdateOperation): {
+    function bindDisconnectable(operation: HostStatusUpdateOperationV2): {
       readonly disconnect: () => void;
     } {
       const fixture = buildOverviewHostFixture({
