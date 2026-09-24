@@ -113,7 +113,10 @@ machine_slot_acquire() {
     case "$timeout" in '' | *[!0-9]*) timeout=1800 ;; esac
     [ "${#timeout}" -gt 6 ] && timeout=1800
 
-    status_file="$(mktemp "${dir}/traycer-slot-status.XXXXXX")"
+    if ! status_file="$(mktemp "${dir}/traycer-slot-status.XXXXXX" 2>/dev/null)"; then
+        echo "machine-slot: cannot create a status file in '${dir}'; running without a slot." >&2
+        return 0
+    fi
 
     # The holder's parent must be THIS shell, so it is started directly rather
     # than from a subshell or a command substitution.

@@ -6,6 +6,9 @@
 import { describe, expect, it } from "vitest";
 import { MAX_FILES_PER_PROJECT, planLint } from "../lint-changed-files.mjs";
 
+/** Every path is still on disk unless a test says otherwise. */
+const present = () => true;
+
 /** Builds a `projectOf` that maps repo-relative paths to a project root by
  * longest-prefix match against the given project roots, or null. */
 function projectOfFactory(projectRoots) {
@@ -28,6 +31,7 @@ describe("planLint", () => {
       "tsconfig.base.json",
     ])("%s changing switches to repo mode", (repoConfigPath) => {
       const plan = planLint({
+        exists: present,
         changedPaths: [repoConfigPath, "clients/gui-app/src/App.tsx"],
         projectOf,
       });
@@ -43,7 +47,11 @@ describe("planLint", () => {
         "oxlint.config.ts",
         "eslint.config.mjs",
       ]) {
-        const plan = planLint({ changedPaths: [path], projectOf });
+        const plan = planLint({
+          exists: present,
+          changedPaths: [path],
+          projectOf,
+        });
         expect(plan.mode, path).toBe("repo");
       }
     });
@@ -53,6 +61,7 @@ describe("planLint", () => {
       // (repo-level) - only a project-relative package.json inside a
       // project's own root counts, and that is exercised separately below.
       const plan = planLint({
+        exists: present,
         changedPaths: ["clients/gui-app/nested/package.json"],
         projectOf,
       });
@@ -64,6 +73,7 @@ describe("planLint", () => {
     it("groups lintable source files under their project, project-relative and sorted", () => {
       const projectOf = projectOfFactory(["clients/gui-app"]);
       const plan = planLint({
+        exists: present,
         changedPaths: [
           "clients/gui-app/src/b.tsx",
           "clients/gui-app/src/a.ts",
@@ -87,6 +97,7 @@ describe("planLint", () => {
         "clients/desktop",
       ]);
       const plan = planLint({
+        exists: present,
         changedPaths: ["clients/gui-app/src/a.ts", "clients/desktop/src/b.ts"],
         projectOf,
       });
@@ -103,6 +114,7 @@ describe("planLint", () => {
 
     it("ignores non-source extensions such as .css and .md", () => {
       const plan = planLint({
+        exists: present,
         changedPaths: [
           "clients/gui-app/src/styles.css",
           "clients/gui-app/README.md",
@@ -115,6 +127,7 @@ describe("planLint", () => {
 
     it("produces no run for a project whose only changes are non-lintable", () => {
       const plan = planLint({
+        exists: present,
         changedPaths: [
           "clients/gui-app/src/styles.css",
           "clients/gui-app/assets/logo.svg",
@@ -134,6 +147,7 @@ describe("planLint", () => {
         "clients/desktop",
       ]);
       const plan = planLint({
+        exists: present,
         changedPaths: [
           "clients/gui-app/package.json",
           "clients/gui-app/src/a.ts",
@@ -167,6 +181,7 @@ describe("planLint", () => {
       (relativeConfig) => {
         const projectOf = projectOfFactory(["clients/gui-app"]);
         const plan = planLint({
+          exists: present,
           changedPaths: [`clients/gui-app/${relativeConfig}`],
           projectOf,
         });
@@ -184,7 +199,7 @@ describe("planLint", () => {
         { length: MAX_FILES_PER_PROJECT + 1 },
         (_, index) => `clients/gui-app/src/file-${index}.ts`,
       );
-      const plan = planLint({ changedPaths, projectOf });
+      const plan = planLint({ exists: present, changedPaths, projectOf });
       const run = plan.runs.find((r) => r.project === "clients/gui-app");
       expect(run.files).toBeNull();
       expect(run.reason).toBe(`${MAX_FILES_PER_PROJECT + 1} files changed`);
@@ -196,7 +211,7 @@ describe("planLint", () => {
         { length: MAX_FILES_PER_PROJECT },
         (_, index) => `clients/gui-app/src/file-${index}.ts`,
       );
-      const plan = planLint({ changedPaths, projectOf });
+      const plan = planLint({ exists: present, changedPaths, projectOf });
       const run = plan.runs.find((r) => r.project === "clients/gui-app");
       expect(run.files).not.toBeNull();
       expect(run.files).toHaveLength(MAX_FILES_PER_PROJECT);
@@ -207,6 +222,7 @@ describe("planLint", () => {
     it("skips a path whose projectOf returns null", () => {
       const projectOf = projectOfFactory(["clients/gui-app"]);
       const plan = planLint({
+        exists: present,
         changedPaths: ["README.md", "clients/gui-app/src/a.ts"],
         projectOf,
       });
@@ -223,10 +239,64 @@ describe("planLint", () => {
     it("returns an empty projects plan when every path is outside any project", () => {
       const projectOf = projectOfFactory(["clients/gui-app"]);
       const plan = planLint({
+        exists: present,
         changedPaths: ["README.md", "docs/notes.md"],
         projectOf,
       });
       expect(plan).toEqual({ mode: "projects", runs: [] });
+    });
+  });
+  describe("deletions", () => {
+    const projectOf = projectOfFactory(["clients/shared", "clients/gui-app"]);
+
+    it("a deleted project lint config still selects whole-project lint", () => {
+      const deleted = new Set(["clients/shared/oxlint.config.ts"]);
+      const plan = planLint({
+        changedPaths: ["clients/shared/oxlint.config.ts"],
+        projectOf,
+        exists: (path) => !deleted.has(path),
+      });
+      expect(plan).toEqual({
+        mode: "projects",
+        runs: [
+          {
+            project: "clients/shared",
+            files: null,
+            reason: "oxlint.config.ts changed",
+          },
+        ],
+      });
+    });
+
+    it("a deleted repo-level lint config still selects repo mode", () => {
+      const plan = planLint({
+        changedPaths: ["eslint/traycer-type-safety-rules.mjs"],
+        projectOf,
+        exists: () => false,
+      });
+      expect(plan.mode).toBe("repo");
+    });
+
+    it("a deleted source file is not linted", () => {
+      const deleted = new Set(["clients/gui-app/src/gone.ts"]);
+      const plan = planLint({
+        changedPaths: [
+          "clients/gui-app/src/gone.ts",
+          "clients/gui-app/src/kept.ts",
+        ],
+        projectOf,
+        exists: (path) => !deleted.has(path),
+      });
+      expect(plan).toEqual({
+        mode: "projects",
+        runs: [
+          {
+            project: "clients/gui-app",
+            files: ["src/kept.ts"],
+            reason: "1 changed file(s)",
+          },
+        ],
+      });
     });
   });
 });

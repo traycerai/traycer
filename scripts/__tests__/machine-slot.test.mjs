@@ -153,23 +153,27 @@ describe("machine-slot.sh executable mode", () => {
         "1",
         "bash",
         "-c",
-        'sleep 5 & echo $! > "$ORPHAN_PID_FILE"; exit 0',
+        // Detached stdio: an orphan holding the wrapper's pipes would delay
+        // its `close` event until the orphan exits, and by then a leaked
+        // lock fd would already be gone - the test could not see the bug.
+        'sleep 30 </dev/null >/dev/null 2>&1 & echo $! > "$ORPHAN_PID_FILE"; exit 0',
       ],
       env,
     );
+    const spawnStartedAt = Date.now();
     const spawnResult = await spawnOrphan.done;
     expect(spawnResult.code, spawnResult.stderr).toBe(0);
+    expect(Date.now() - spawnStartedAt).toBeLessThan(3000);
 
-    if (existsSync(orphanPidFile)) {
-      const orphanPid = Number.parseInt(
-        readFileSync(orphanPidFile, "utf8").trim(),
-        10,
-      );
-      if (Number.isInteger(orphanPid)) pidsToKill.push(orphanPid);
-    }
+    const orphanPid = Number.parseInt(
+      readFileSync(orphanPidFile, "utf8").trim(),
+      10,
+    );
+    expect(Number.isInteger(orphanPid)).toBe(true);
+    pidsToKill.push(orphanPid);
 
-    // A follow-up run for the SAME single slot must acquire promptly - well
-    // before the orphan's 5s sleep would finish - because the slot was
+    // A follow-up run for the SAME single slot must acquire promptly - while
+    // the orphan is still sleeping - because the slot was
     // released when the command (not the orphan) exited. A generous
     // TRAYCER_MACHINE_SLOT_TIMEOUT is only a safety net so a regression fails
     // fast instead of hanging this test for 1800s.
@@ -183,7 +187,10 @@ describe("machine-slot.sh executable mode", () => {
 
     expect(followResult.code, followResult.stderr).toBe(0);
     expect(elapsedMs).toBeLessThan(1500);
-  }, 8000);
+    // The orphan outlived the acquisition, so the prompt acquire above is
+    // evidence it held nothing - not that it had already exited.
+    expect(() => process.kill(orphanPid, 0)).not.toThrow();
+  }, 10000);
 
   it("releases the slot promptly when the wrapper shell is SIGKILLed", async () => {
     const dir = freshSlotDir();
