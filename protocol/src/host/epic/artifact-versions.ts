@@ -293,16 +293,6 @@ export type ArtifactVersionSettings = z.infer<
   typeof artifactVersionSettingsSchema
 >;
 
-export const artifactVersionStorageSummarySchema = lazySchema(() =>
-  z.object({
-    referencedBytes: z.number().int().nonnegative(),
-    reclaimableBytes: z.number().int().nonnegative(),
-  }),
-);
-export type ArtifactVersionStorageSummary = z.infer<
-  typeof artifactVersionStorageSummarySchema
->;
-
 export const artifactVersionSettingsEffectsSchema = lazySchema(() =>
   z.object({
     captureStopped: z.boolean(),
@@ -328,7 +318,6 @@ export type ArtifactVersionSettingsGetRequest = z.infer<
 export const artifactVersionSettingsGetResponseSchema = lazySchema(() =>
   z.object({
     settings: artifactVersionSettingsSchema,
-    storage: artifactVersionStorageSummarySchema,
   }),
 );
 export type ArtifactVersionSettingsGetResponse = z.infer<
@@ -366,7 +355,6 @@ export type ArtifactVersionSettingsClearHistoryRequest = z.infer<
 export const artifactVersionSettingsCommandResponseSchema = lazySchema(() =>
   z.object({
     settings: artifactVersionSettingsSchema,
-    storage: artifactVersionStorageSummarySchema,
     effects: artifactVersionSettingsEffectsSchema,
   }),
 );
