@@ -168,12 +168,11 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   const lastProgress = displayProgressUpdates.at(-1)?.text ?? null;
   // Collapsed line shows what's happening now (live progress) or the result -
   // never the task. Task + full progress live in the expanded body. The
-  // Result's presence rule holds here too: once the conversation has text,
-  // the result (an import's is the spawn tool's output, under the CLI's
-  // hand-back header) is not drawn as this card's answer.
-  const shownResult = subagentHasChildText(nested) ? null : result;
+  // Result presence rule holds here too (`shownSubagentResult`).
   const summary =
-    shownResult ?? lastProgress ?? (isStreaming ? "Starting…" : null);
+    shownSubagentResult(result, nested) ??
+    lastProgress ??
+    (isStreaming ? "Starting…" : null);
 
   const header = (
     <>
@@ -592,6 +591,19 @@ function SubagentDetails(props: SubagentDetailsProps) {
 }
 
 /**
+ * The Result presence rule, the one place every card reads it from - the
+ * Result panel and each card's collapsed header alike: once the conversation
+ * has text, the result (an import's is the spawn tool's output, under the
+ * CLI's hand-back header) is not drawn as this card's answer anywhere.
+ */
+function shownSubagentResult(
+  result: string | null,
+  nested: ReadonlyArray<SubagentChildSegment>,
+): string | null {
+  return subagentHasChildText(nested) ? null : result;
+}
+
+/**
  * The Result panel under its own find unit, drawn only when the card has no
  * child text (`subagentHasChildText`): once the subagent's prose renders in the
  * conversation, its final message is already there, and a second copy would
@@ -603,8 +615,9 @@ function SubagentResultSection(props: {
   readonly isStreaming: boolean;
   readonly nested: ReadonlyArray<SubagentChildSegment>;
 }) {
-  const { isStreaming, nested, renderId, result } = props;
-  if (result === null || subagentHasChildText(nested)) return null;
+  const { isStreaming, nested, renderId } = props;
+  const result = shownSubagentResult(props.result, nested);
+  if (result === null) return null;
   return (
     <div data-chat-find-unit={chatFindSubagentResultUnitId(renderId)}>
       <SubagentResultPanel result={result} isStreaming={isStreaming} />
@@ -806,9 +819,13 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   const displayName = cleanSubagentNotificationText(name) ?? "Workflow";
   const liveLine = workflowLiveLine(workflowMeta);
   // Collapsed line prefers the result once available, mirroring the plain
-  // agent card; while running it carries the fleet's aggregate story instead
-  // of a raw progress line (workflows have none - see workflowLiveLine).
-  const summary = result ?? liveLine ?? (isStreaming ? "Starting…" : null);
+  // agent card - under the same Result presence rule - and while running it
+  // carries the fleet's aggregate story instead of a raw progress line
+  // (workflows have none - see workflowLiveLine).
+  const summary =
+    shownSubagentResult(result, nested) ??
+    liveLine ??
+    (isStreaming ? "Starting…" : null);
 
   const header = (
     <>

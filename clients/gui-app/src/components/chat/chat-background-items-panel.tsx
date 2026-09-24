@@ -93,17 +93,25 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   return unreachableKind;
 }
 
-function cronStopControlState(
-  items: ReadonlyArray<BackgroundItem>,
-  managedCommandCount: number,
-  stoppable: boolean,
-  stopAllPending: boolean,
-): {
+function cronStopControlState(input: {
+  readonly items: ReadonlyArray<BackgroundItem>;
+  readonly managedCommandCount: number;
+  readonly stoppable: boolean;
+  readonly stopAllPending: boolean;
+  readonly hasSessionStopEscalation: boolean;
+}): {
   scheduledJobCount: number;
   harnessStopAllReady: boolean;
   showStopAll: boolean;
   stopAllLabel: string;
 } {
+  const {
+    items,
+    managedCommandCount,
+    stoppable,
+    stopAllPending,
+    hasSessionStopEscalation,
+  } = input;
   const scheduledJobCount = items.filter((item) => item.kind === "cron").length;
   const hasHarnessStopTarget = items.some((item) => item.kind !== "cron");
   const onlyCronItems = scheduledJobCount > 0 && !hasHarnessStopTarget;
@@ -111,7 +119,16 @@ function cronStopControlState(
     scheduledJobCount,
     harnessStopAllReady: !onlyCronItems && stoppable && !stopAllPending,
     showStopAll: !onlyCronItems || managedCommandCount > 0,
-    stopAllLabel: scheduledJobCount > 0 ? "Stop other items" : "Stop all",
+    // "Stop other items" promises the scheduled job survives the click. That
+    // is only true while the click stays a plain Stop all - once a gated
+    // command forces the session-stop escalation, confirming ends every
+    // harness item sharing the provider session, the cron job included, so
+    // the button has to carry the same "Stop all" label the plain, non-cron
+    // escalation path already uses.
+    stopAllLabel:
+      scheduledJobCount > 0 && !hasSessionStopEscalation
+        ? "Stop other items"
+        : "Stop all",
   };
 }
 
@@ -724,6 +741,20 @@ export function BackgroundItemsPanel(props: {
     (item) => item.kind === "wakeup",
   ).length;
   const hostId = useTabHostId();
+  // The version gate, read off the items themselves: any command the host
+  // flagged as not individually stoppable turns "Stop all" into the
+  // session-scoped escalation, which asks first - the click would otherwise
+  // do more than the label says (kill the provider session, and a live turn
+  // with it). Computed ahead of `cronStopControlState` because the button's
+  // label depends on it too - see the comment there.
+  const sessionStopEscalation = useMemo(() => {
+    for (const item of items) {
+      if (item.kind === "command" && item.individualStopUnavailable !== null) {
+        return item.individualStopUnavailable;
+      }
+    }
+    return null;
+  }, [items]);
   // Read from the same store the rows below read, so the header can never
   // claim a count the list does not show. Scoped to the TAB's bound host,
   // which is the host this panel's chat session was opened under.
@@ -733,12 +764,13 @@ export function BackgroundItemsPanel(props: {
     hostId,
   });
   const { scheduledJobCount, harnessStopAllReady, showStopAll, stopAllLabel } =
-    cronStopControlState(
+    cronStopControlState({
       items,
-      managedCommands.length,
+      managedCommandCount: managedCommands.length,
       stoppable,
-      props.stopAllPending,
-    );
+      stopAllPending: props.stopAllPending,
+      hasSessionStopEscalation: sessionStopEscalation !== null,
+    });
   const heldManagedCommands = useHeldManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
@@ -806,19 +838,6 @@ export function BackgroundItemsPanel(props: {
   // reach rather than an equality - see `backgroundHeaderSummary`.
   const managedStopAllReady =
     managedStoppable && managedCommands.length > 0 && !stopAllManagedPending;
-  // The version gate, read off the items themselves: any command the host
-  // flagged as not individually stoppable turns "Stop all" into the
-  // session-scoped escalation, which asks first - the click would otherwise
-  // do more than the label says (kill the provider session, and a live turn
-  // with it).
-  const sessionStopEscalation = useMemo(() => {
-    for (const item of items) {
-      if (item.kind === "command" && item.individualStopUnavailable !== null) {
-        return item.individualStopUnavailable;
-      }
-    }
-    return null;
-  }, [items]);
   const [confirmingSessionStop, setConfirmingSessionStop] = useState(false);
   // One button, one rule: live while there is something it can do, dead while
   // anything it started is still in flight. Re-enabling as soon as one half

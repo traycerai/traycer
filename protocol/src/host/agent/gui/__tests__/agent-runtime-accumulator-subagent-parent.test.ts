@@ -91,6 +91,48 @@ describe("accumulateEvent parentBlockId preservation", () => {
     expect(blocks[0].status).toBe("completed");
     expect(blocks[0].parentBlockId).toBe("sub-1");
   });
+
+  it.each(["text", "reasoning"] as const)(
+    "a duplicate %s.completed leaves a completed block persisted without the parent key untouched",
+    (kind) => {
+      const delta =
+        kind === "text"
+          ? ({
+              type: "text.delta",
+              blockId: "b1",
+              timestamp: 1,
+              delta: "a",
+            } as const)
+          : ({
+              type: "reasoning.delta",
+              blockId: "b1",
+              timestamp: 1,
+              delta: "a",
+            } as const);
+      const completed = {
+        type: `${kind}.completed`,
+        blockId: "b1",
+        timestamp: 5,
+      } as const;
+      const [finalized] = accumulateEvent(
+        accumulateEvent([], delta),
+        completed,
+      );
+      if (finalized === undefined) throw new Error("expected a block");
+      // A block written before `parentBlockId` existed carries no key at all.
+      const { parentBlockId: _dropped, ...withoutKey } = finalized;
+      const persisted: ContentBlock[] = [withoutKey];
+
+      // Replay / resume re-delivers the completion much later.
+      const replayed = accumulateEvent(persisted, {
+        ...completed,
+        timestamp: 99,
+      });
+
+      expect(replayed).toBe(persisted);
+      expect(replayed[0]?.timestamp).toBe(5);
+    },
+  );
 });
 
 describe("accumulateEvent subagent.progress cap", () => {

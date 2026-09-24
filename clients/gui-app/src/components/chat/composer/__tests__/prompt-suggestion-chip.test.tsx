@@ -100,6 +100,7 @@ describe("promptSuggestionChipAllowed", () => {
   const open = {
     topBannerKind: "none",
     sendDisabled: false,
+    workspaceBlocked: false,
     draftHasText: false,
     draftHasImages: false,
   } as const;
@@ -121,6 +122,15 @@ describe("promptSuggestionChipAllowed", () => {
     expect(promptSuggestionChipAllowed({ ...open, sendDisabled: true })).toBe(
       false,
     );
+  });
+
+  // The composer's `sendBlocked` does not fold the workspace in (the send
+  // button ANDs it separately), so a missing or unavailable workspace has to
+  // reach the chip on its own - or the chip fills a prompt nothing can send.
+  it("is blocked when the workspace cannot start a turn", () => {
+    expect(
+      promptSuggestionChipAllowed({ ...open, workspaceBlocked: true }),
+    ).toBe(false);
   });
 
   it("is blocked by draft text", () => {

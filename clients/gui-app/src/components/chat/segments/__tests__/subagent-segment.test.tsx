@@ -1290,6 +1290,37 @@ describe("<SubagentSegment /> conversation", () => {
     expect(screen.getByText("the final answer")).toBeTruthy();
   });
 
+  it("keeps the workflow card's collapsed header off the result once a child text exists", () => {
+    render(
+      <SubagentSegment
+        id="conv-workflow"
+        name="review-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result="[Subagent hand-back] the final answer"
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={{
+          name: "review-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: 0,
+          agentsFinished: 0,
+          totalTokens: null,
+        }}
+        nested={[textChild("t1", "the final answer")]}
+        variant="promoted"
+      />,
+    );
+    // Collapsed: the header is the only thing on screen, and it must not
+    // carry the result the body will not draw.
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+  });
+
   it("lists a progress line equal to a child text once, and keeps a summary line matching none", () => {
     render(
       <ConversationCard

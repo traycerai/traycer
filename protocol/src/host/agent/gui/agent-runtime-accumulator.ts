@@ -384,9 +384,12 @@ function finalizeBlock(
     return blocks;
   }
   const parentBlockId = resolveParentBlockId(event, existing);
+  // Normalized: a block persisted before the key existed has none, and
+  // `undefined !== null` would re-finalize it on every replayed completion,
+  // restamping `timestamp` and so inflating its "Thought for" duration.
   if (
     existing.status === "completed" &&
-    existing.parentBlockId === parentBlockId
+    (existing.parentBlockId ?? null) === parentBlockId
   ) {
     return blocks;
   }

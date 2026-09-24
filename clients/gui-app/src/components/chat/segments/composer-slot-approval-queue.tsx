@@ -9,7 +9,7 @@ import {
 import { deriveToolInputSummary } from "@/lib/segment-summary";
 import { approvalCardText } from "@/components/chat/segments/approval-text";
 import {
-  approvalNeedsIndividualDecision,
+  approvalIdsLeftOutOfApproveAll,
   bulkApprovableApprovals,
   humanActionableApprovals,
 } from "@/components/epic-canvas/renderers/chat-approval-visibility";
@@ -99,7 +99,8 @@ export function ComposerSlotApprovalQueue(
   if (count === 0) return null;
   const actionable = humanActionableApprovals(approvals);
   const bulkApprovable = bulkApprovableApprovals(approvals);
-  const individualCount = actionable.length - bulkApprovable.length;
+  const leftOutIds = approvalIdsLeftOutOfApproveAll(approvals);
+  const individualCount = leftOutIds.size;
   const showBulk = actionable.length >= 2;
   // Nothing is needed from the user while every row is still with the judge, so
   // the heading does not claim otherwise. It flips to "Approval needed" the
@@ -217,7 +218,7 @@ export function ComposerSlotApprovalQueue(
             highlightGeneration={props.highlightedGeneration ?? 0}
             stageInHeader={approval === headerApproval}
             leftOutOfApproveAll={
-              showBulk ? approvalNeedsIndividualDecision(approval) : false
+              showBulk ? leftOutIds.has(approval.approvalId) : false
             }
             ruleDraftWorkspace={props.ruleDraftWorkspace}
             onOpenSettings={props.onOpenSettings}

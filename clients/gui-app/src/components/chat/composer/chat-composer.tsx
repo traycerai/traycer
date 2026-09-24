@@ -693,6 +693,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const suggestionChipAllowed = promptSuggestionChipAllowed({
     topBannerKind,
     sendDisabled: sendBlocked,
+    workspaceBlocked,
     draftHasText,
     draftHasImages,
   });

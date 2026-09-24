@@ -3,6 +3,7 @@ import { buildChatActivityTimeline } from "@/components/chat/chat-activity-group
 import { AssistantSegment } from "@/components/chat/chat-message-assistant-body";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import { distinctRenderKeys } from "@/components/chat/segment-render-keys";
+import { ThinkingTokensSourceContext } from "@/components/chat/thinking-tokens-source";
 import type {
   SubagentChildSegment,
   SubagentSegment as SubagentSegmentModel,
@@ -55,37 +56,44 @@ export function SubagentConversation(props: SubagentConversationProps) {
   );
   if (timeline.length === 0) return null;
   return (
-    <div data-subagent-conversation="" className="flex flex-col gap-2">
-      {timeline.map((item, index) => {
-        const key = keys[index];
-        if (item.kind === "activity_group") {
-          return <ActivityGroupSegment key={key} group={item.group} />;
-        }
-        if (item.kind === "promoted_subagent") {
+    // `useActiveThinkingTokensEstimate` reads the ACTIVE TURN's estimate, and
+    // the ambient provider above the tile is scoped to that turn, not to any
+    // one subagent. A card's own reasoning has no estimate of its own to
+    // offer, so this nulls the source rather than let a streaming subagent
+    // block borrow - and mislabel - the parent turn's number.
+    <ThinkingTokensSourceContext value={null}>
+      <div data-subagent-conversation="" className="flex flex-col gap-2">
+        {timeline.map((item, index) => {
+          const key = keys[index];
+          if (item.kind === "activity_group") {
+            return <ActivityGroupSegment key={key} group={item.group} />;
+          }
+          if (item.kind === "promoted_subagent") {
+            return (
+              <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
+                <NestedSubagentCard segment={item.segment} />
+              </ChatBlockNavigationAnchor>
+            );
+          }
           return (
-            <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
-              <NestedSubagentCard segment={item.segment} />
+            <ChatBlockNavigationAnchor key={key} blockId={item.id}>
+              <AssistantSegment
+                id={item.id}
+                segment={item.segment}
+                backgroundToolBlockIds={NO_BACKGROUND_TOOL_BLOCK_IDS}
+                // A subagent's prose offers no next-step chips, fork, or
+                // turn-recovery actions: those act on the parent agent's turn.
+                nextStepActions={null}
+                forkAction={null}
+                interviewDeliveryRetry={null}
+                harnessId={null}
+                turnId={null}
+              />
             </ChatBlockNavigationAnchor>
           );
-        }
-        return (
-          <ChatBlockNavigationAnchor key={key} blockId={item.id}>
-            <AssistantSegment
-              id={item.id}
-              segment={item.segment}
-              backgroundToolBlockIds={NO_BACKGROUND_TOOL_BLOCK_IDS}
-              // A subagent's prose offers no next-step chips, fork, or
-              // turn-recovery actions: those act on the parent agent's turn.
-              nextStepActions={null}
-              forkAction={null}
-              interviewDeliveryRetry={null}
-              harnessId={null}
-              turnId={null}
-            />
-          </ChatBlockNavigationAnchor>
-        );
-      })}
-    </div>
+        })}
+      </div>
+    </ThinkingTokensSourceContext>
   );
 }
 

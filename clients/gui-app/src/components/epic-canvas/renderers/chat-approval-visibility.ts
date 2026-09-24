@@ -78,6 +78,22 @@ export function bulkApprovableApprovals(
 }
 
 /**
+ * The ids of the rows "Approve all" leaves out on purpose: answerable, and
+ * stamped for an individual decision. The header's count and each row's
+ * marker both read this, so they cannot disagree - a cautious row still with
+ * the judge has no Approve button yet, and is not one "left out" of it.
+ */
+export function approvalIdsLeftOutOfApproveAll(
+  approvals: ReadonlyArray<ChatApprovalState>,
+): ReadonlySet<string> {
+  return new Set(
+    humanActionableApprovals(approvals)
+      .filter(approvalNeedsIndividualDecision)
+      .map((approval) => approval.approvalId),
+  );
+}
+
+/**
  * The file-edit rows "Approve all" acts on: every row not stamped for an
  * individual decision. No judge ever holds a file-edit card, so every row is
  * answerable; "Deny all" still acts on all of them.

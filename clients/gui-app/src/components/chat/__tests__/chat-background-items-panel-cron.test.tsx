@@ -197,7 +197,10 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
     });
 
     openPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Stop other items" }));
+    // The gated command forces the session-stop escalation, which ends the
+    // scheduled job along with everything else - so the button reads "Stop
+    // all", not "Stop other items" (see the label test below).
+    fireEvent.click(screen.getByRole("button", { name: "Stop all" }));
 
     const dialog = screen.getByTestId("confirm-destructive-dialog");
     expect(dialog.textContent).toContain(
@@ -205,5 +208,36 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
     );
     expect(dialog.textContent).toContain("1 scheduled job");
     expect(onStopSession).not.toHaveBeenCalled();
+  });
+
+  it("labels the escalation path Stop all, not Stop other items, since confirming also ends the scheduled job", () => {
+    const gatedCommand: BackgroundItem = {
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    };
+    renderCronPanel([gatedCommand, CRON_ITEM], {
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => "action-1",
+    });
+
+    openPanel();
+
+    // "Stop other items" promises the cron job survives, but the click opens
+    // the session-stop confirmation, whose confirm action ends the scheduled
+    // job along with everything else - the same escalation the plain,
+    // non-cron path already labels "Stop all".
+    expect(
+      screen.queryByRole("button", { name: "Stop other items" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop all" })).toBeTruthy();
   });
 });

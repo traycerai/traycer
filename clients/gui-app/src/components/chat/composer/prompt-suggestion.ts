@@ -11,7 +11,9 @@ import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-
  *   re-auth prompt is something the user has to deal with, a suggestion is
  *   not.
  * - **Only when this surface can send.** Filling a composer that cannot send
- *   offers an action the user cannot finish.
+ *   offers an action the user cannot finish. Two gates, because the
+ *   composer's `sendBlocked` does not carry the workspace one: a missing or
+ *   unavailable workspace refuses the send button through its own check.
  * - **Only over an empty draft.** Filling REPLACES the document, so a chip
  *   over a draft would be one click from destroying it. Typing hides the chip;
  *   clearing the draft brings it back while the suggestion still stands.
@@ -19,12 +21,14 @@ import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-
 export function promptSuggestionChipAllowed(input: {
   readonly topBannerKind: ComposerTopBannerKind;
   readonly sendDisabled: boolean;
+  readonly workspaceBlocked: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
 }): boolean {
   return (
     input.topBannerKind === "none" &&
     !input.sendDisabled &&
+    !input.workspaceBlocked &&
     !input.draftHasText &&
     !input.draftHasImages
   );

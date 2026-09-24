@@ -206,6 +206,14 @@ describe("individual approval on cautious rows", () => {
     expect(screen.getByTestId("approval-individual-count").textContent).toBe(
       "1 needs individual approval",
     );
+    // The row markers agree with that count: the judging row is cautious too,
+    // but it has no Approve button yet, so it is not one "left out" of it.
+    const markers = screen.getAllByTestId("approval-individual-marker");
+    expect(markers).toHaveLength(1);
+    const markedRow = screen
+      .getAllByTestId("approval-row")
+      .find((row) => row.contains(markers[0] ?? null));
+    expect(markedRow?.getAttribute("data-approval-id")).toBe("careful");
     screen.getByRole("button", { name: /Approve all/ }).click();
     expect(onDecision.mock.calls).toEqual([
       ["plain", true],
