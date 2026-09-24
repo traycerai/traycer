@@ -26,6 +26,9 @@ import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { collabTileNotice } from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
+import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import { streamSyncingLabel } from "@/lib/sync/stream-syncing-state";
+import { SyncingSweepBar } from "@/components/sync/syncing-sweep-bar";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import {
   EPIC_NODE_PLACEHOLDER_TEXT,
@@ -39,6 +42,7 @@ import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
   useEpicArtifactBodySubscribeAnswered,
+  useEpicArtifactBodySyncing,
   useEpicArtifactBodyAwareness,
   useEpicArtifactFragment,
   useEpicCommentsHaveNoUsableRoom,
@@ -691,6 +695,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // the document instead of holding the tile edge.
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
+      <CollabTileBodySyncStrip artifactId={node.id} testId={testId} />
       <ArtifactHeadingMinimapMount
         editor={editor}
         node={node}
@@ -782,6 +787,53 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
           />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Syncing…" over a LIVE editor: the host is serving this body from its local
+ * copy while it reconciles that copy with the cloud.
+ *
+ * NON-BLOCKING by construction, and that is the contract it exists under. It
+ * is a sibling overlay that takes no pointer events and owns its own store
+ * subscription, so a sync-state change re-renders this strip and nothing else:
+ * the editor is never hidden, unmounted or re-keyed by it. The pre-editor
+ * states stay `collabTileNotice`'s - a body that is syncing is not a body that
+ * is missing, and saying "Reconnecting to this document…" over one the host
+ * already holds is the state this strip replaced.
+ *
+ * The same sweep and the same words as every other surface that says it is
+ * syncing, escalated the same way: after `LINK_DOWN_ESCALATION_MS` the bar
+ * stops moving and the label becomes "Still syncing…". A sync that is paused
+ * (a credential the host is waiting to see rotated) would otherwise animate for
+ * as long as the tile is open.
+ */
+function CollabTileBodySyncStrip(props: {
+  readonly artifactId: string;
+  readonly testId: string;
+}) {
+  const syncing = useEpicArtifactBodySyncing(props.artifactId);
+  const escalated = useLoadDeadline(
+    syncing ? props.artifactId : null,
+    LINK_DOWN_ESCALATION_MS,
+  );
+  if (!syncing) return null;
+  return (
+    <div
+      data-testid={`${props.testId}-body-syncing`}
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col items-end"
+    >
+      <SyncingSweepBar
+        settled={escalated}
+        testId={`${props.testId}-body-syncing-bar`}
+        className={undefined}
+      />
+      <span className="mt-1 mr-3 text-ui-xs text-muted-foreground">
+        {streamSyncingLabel(escalated)}
+      </span>
     </div>
   );
 }

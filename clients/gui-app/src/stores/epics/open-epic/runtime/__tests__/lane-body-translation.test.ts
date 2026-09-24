@@ -356,3 +356,21 @@ describe("doc-unavailable / artifact-not-found: not special-cased by code - avai
     });
   });
 });
+
+describe("laneBodyTranslationOf - doc-body-sync", () => {
+  it("translates to a room-body-sync room event keyed by the doc id, for both states", () => {
+    for (const state of ["syncing", "synced"] as const) {
+      expect(
+        laneBodyTranslationOf({
+          kind: "doc-body-sync",
+          authorityEpoch: AUTHORITY_EPOCH,
+          docId: DOC_ID,
+          state,
+        }),
+      ).toEqual({
+        kind: "room-event",
+        event: { kind: "room-body-sync", artifactRoomId: DOC_ID, state },
+      });
+    }
+  });
+});
