@@ -80,12 +80,22 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * that cannot answer must not be read as reassurance. Every host-state
  * bearing frame carries them (both lead frames and `hostStateChanged`), so a
  * client attaching after a promotion needs no replay to learn the home moved.
+ *
+ * A thunk, not an object: `.optional()` on a lazy schema materialises it, and
+ * a module-level object would do that at import time for every consumer of
+ * this file. Each frame's own `lazySchema` builder calls it instead.
  */
-export const agentIdentityDurabilityFields = {
-  durability: epicDurabilityStatusSchemaV15.optional(),
-  promotionState: epicPromotionStateSchema.optional(),
-  localProtection: epicLocalProtectionSchema.optional(),
-} as const;
+export function agentIdentityDurabilityFields(): {
+  readonly durability: z.ZodOptional<typeof epicDurabilityStatusSchemaV15>;
+  readonly promotionState: z.ZodOptional<typeof epicPromotionStateSchema>;
+  readonly localProtection: z.ZodOptional<typeof epicLocalProtectionSchema>;
+} {
+  return {
+    durability: epicDurabilityStatusSchemaV15.optional(),
+    promotionState: epicPromotionStateSchema.optional(),
+    localProtection: epicLocalProtectionSchema.optional(),
+  };
+}
 
 /**
  * The identity's own settings, as a revisioned RECORD.
@@ -355,7 +365,7 @@ const agentIdentityStateSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
     documents: z.array(agentIdentityDocumentRowSchema),
     files: z.array(agentIdentityFileRowSchema),
     shards: z.array(agentIdentityShardAvailabilitySchema),
-    ...agentIdentityDurabilityFields,
+    ...agentIdentityDurabilityFields(),
     ...epicLaneTextFrameFields,
   }),
 );
@@ -379,7 +389,7 @@ const agentIdentityStateSubscribeResumedFrameSchemaV10 = lazySchema(() =>
     position: epicLanePositionSchema,
     reconciledWithCloud: z.boolean(),
     shards: z.array(agentIdentityShardAvailabilitySchema),
-    ...agentIdentityDurabilityFields,
+    ...agentIdentityDurabilityFields(),
     ...epicLaneTextFrameFields,
   }),
 );
@@ -406,7 +416,7 @@ const agentIdentityStateSubscribeHostStateFrameSchemaV10 = lazySchema(() =>
     ...epicLaneEpochFrameFields,
     reconciledWithCloud: z.boolean(),
     shards: z.array(agentIdentityShardAvailabilitySchema),
-    ...agentIdentityDurabilityFields,
+    ...agentIdentityDurabilityFields(),
     ...epicLaneTextFrameFields,
   }),
 );
