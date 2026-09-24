@@ -28,6 +28,8 @@ import type {
   StopServiceOptions,
   UninstallServiceOptions,
 } from "../service";
+import type { ServiceDefinitionRefresher } from "../service/definition-refresh";
+import type { ServiceDefinitionRefresh } from "../service/service-definition";
 
 /**
  * The only contender-aware way for commands to mutate the install tree.
@@ -111,6 +113,24 @@ export async function installHostServiceWithAttempt(
       },
     );
   });
+}
+
+/**
+ * Final-actuator facade for a definition-only refresh (`host service
+ * refresh`, and the lifecycle mode change that runs it). Unlike
+ * {@link installHostServiceWithAttempt} there is no host-start adoption: a
+ * refresh starts nothing, so it publishes no grant and waits for no spawn.
+ * The authority scope is what every platform write re-checks.
+ */
+export async function refreshHostServiceDefinitionWithAttempt(
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+  refresher: Pick<ServiceDefinitionRefresher, "refresh">,
+  label: ServiceLabel,
+): Promise<ServiceDefinitionRefresh> {
+  const verify = (): Promise<void> =>
+    requireCliUpdateMutationCapability(capability, contenderOptions);
+  return withServiceMutationAuthority(verify, () => refresher.refresh(label));
 }
 
 /** Final-actuator facade for an OS-service deregistration/bootout. */

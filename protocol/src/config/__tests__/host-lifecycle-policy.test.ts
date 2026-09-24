@@ -13,7 +13,9 @@ import {
   hostLifecyclePolicyPath,
   parseHostLifecyclePolicy,
   parseHostLifecyclePolicyText,
+  refreshOnModeChange,
   serializeHostLifecyclePolicy,
+  type HostLifecycleMode,
   type HostLifecyclePolicy,
 } from "../host-lifecycle-policy";
 
@@ -181,6 +183,90 @@ describe("unknown extra keys are ignored", () => {
     expect(parsed).toEqual(VALID_POLICY);
     expect(parsed).not.toBeNull();
     expect(parsed && "someFutureField" in parsed).toBe(false);
+  });
+});
+
+/**
+ * `refreshOnModeChange`: exhaustive over all 25 `(previous, next)` mode
+ * pairs (`HOST_LIFECYCLE_MODES.length ** 2`), hardcoded rather than
+ * re-derived from `previous !== next && next !== "background"` - the same
+ * expression the implementation uses - so this table catches a refactor
+ * that keeps the code "looking right" while changing what it actually
+ * computes (e.g. flipping to `previous === next || next === "background"`,
+ * or keying off `previous` instead of `next` for the Background exclusion).
+ */
+const MODE_PAIR_EXPECTATIONS: ReadonlyArray<
+  readonly [HostLifecycleMode, HostLifecycleMode, boolean]
+> = [
+  ["background", "background", false],
+  ["background", "linked", true],
+  ["background", "ask", true],
+  ["background", "stop-if-idle", true],
+  ["background", "none", true],
+  ["linked", "background", false],
+  ["linked", "linked", false],
+  ["linked", "ask", true],
+  ["linked", "stop-if-idle", true],
+  ["linked", "none", true],
+  ["ask", "background", false],
+  ["ask", "linked", true],
+  ["ask", "ask", false],
+  ["ask", "stop-if-idle", true],
+  ["ask", "none", true],
+  ["stop-if-idle", "background", false],
+  ["stop-if-idle", "linked", true],
+  ["stop-if-idle", "ask", true],
+  ["stop-if-idle", "stop-if-idle", false],
+  ["stop-if-idle", "none", true],
+  ["none", "background", false],
+  ["none", "linked", true],
+  ["none", "ask", true],
+  ["none", "stop-if-idle", true],
+  ["none", "none", false],
+];
+
+describe("refreshOnModeChange", () => {
+  it("the table above covers every one of the 25 (previous, next) pairs exactly once", () => {
+    expect(MODE_PAIR_EXPECTATIONS.length).toBe(
+      HOST_LIFECYCLE_MODES.length ** 2,
+    );
+    const seen = new Set(
+      MODE_PAIR_EXPECTATIONS.map(([previous, next]) => `${previous}->${next}`),
+    );
+    expect(seen.size).toBe(MODE_PAIR_EXPECTATIONS.length);
+    for (const previous of HOST_LIFECYCLE_MODES) {
+      for (const next of HOST_LIFECYCLE_MODES) {
+        expect(seen.has(`${previous}->${next}`)).toBe(true);
+      }
+    }
+  });
+
+  it.each(MODE_PAIR_EXPECTATIONS)(
+    "(%s -> %s) = %s",
+    (previous, next, expected) => {
+      expect(refreshOnModeChange(previous, next)).toBe(expected);
+    },
+  );
+
+  it("is false for every mode re-set onto itself (the diagonal): re-choosing the mode already in force is not a transition", () => {
+    for (const mode of HOST_LIFECYCLE_MODES) {
+      expect(refreshOnModeChange(mode, mode)).toBe(false);
+    }
+  });
+
+  it("is false whenever `next` is background, regardless of `previous`: background parks nothing, so it needs no refresh", () => {
+    for (const previous of HOST_LIFECYCLE_MODES) {
+      expect(refreshOnModeChange(previous, "background")).toBe(false);
+    }
+  });
+
+  it("is true for every OTHER transition into a non-background mode, `none` included", () => {
+    for (const previous of HOST_LIFECYCLE_MODES) {
+      for (const next of HOST_LIFECYCLE_MODES) {
+        if (previous === next || next === "background") continue;
+        expect(refreshOnModeChange(previous, next)).toBe(true);
+      }
+    }
   });
 });
 

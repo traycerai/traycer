@@ -38,9 +38,11 @@ vi.mock("../host-start-adoption", () => ({
 import {
   installHostServiceWithAttempt,
   commitHostInstallSourceWithAttempt,
+  refreshHostServiceDefinitionWithAttempt,
   stopHostForRestartWithAttempt,
   stopHostServiceWithAttempt,
 } from "../update-mutation";
+import type { ServiceDefinitionRefresh } from "../../service/service-definition";
 import { withCliUpdateExecutionSegment } from "../update-contender";
 import type {
   InstallServiceOptions,
@@ -660,6 +662,87 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(order).toEqual(["boundary", "actuator"]);
     expect(onAuthorityVerified).toHaveBeenCalledTimes(1);
     expect(stopForRestart).toHaveBeenCalledTimes(1);
+  });
+
+  // `refreshHostServiceDefinitionWithAttempt` (M1): the definition-only
+  // refresh facade. Unlike `installHostServiceWithAttempt` there is no host
+  // start adoption to publish or wait for - the mechanism under test is
+  // simply "the refresher's `refresh` runs exactly once, under the
+  // authority scope, with the label it was given".
+  it("refreshHostServiceDefinitionWithAttempt: refresher.refresh is called exactly once, inside the mutation authority, with the given label", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const refreshResult: ServiceDefinitionRefresh = { kind: "current" };
+    const refresh = vi.fn(async () => refreshResult);
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: contenderOptions.reason,
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: contenderOptions.admission,
+      },
+      (capability) =>
+        refreshHostServiceDefinitionWithAttempt(
+          capability,
+          contenderOptions,
+          { refresh },
+          serviceOptions.label,
+        ),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: refreshResult });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith(serviceOptions.label);
+  });
+
+  it("refreshHostServiceDefinitionWithAttempt: a forged capability is rejected before the refresher ever runs", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const refresh = vi.fn(async (): Promise<ServiceDefinitionRefresh> => ({
+      kind: "current",
+    }));
+    const forged = { hostHomeDir } as UpdateMutationCapability;
+
+    await expect(
+      refreshHostServiceDefinitionWithAttempt(
+        forged,
+        contenderOptions,
+        { refresh },
+        serviceOptions.label,
+      ),
+    ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshHostServiceDefinitionWithAttempt: propagates the refresher's own rejection unchanged", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const refreshFailure = new Error("could not rewrite the unit file");
+    const refresh = vi.fn(async (): Promise<ServiceDefinitionRefresh> => {
+      throw refreshFailure;
+    });
+
+    await expect(
+      withUpdateContender(
+        {
+          hostHomeDir,
+          reason: contenderOptions.reason,
+          waitMs: 0,
+          pollIntervalMs: 10,
+          admission: contenderOptions.admission,
+        },
+        (capability) =>
+          refreshHostServiceDefinitionWithAttempt(
+            capability,
+            contenderOptions,
+            { refresh },
+            serviceOptions.label,
+          ),
+      ),
+    ).rejects.toBe(refreshFailure);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
 

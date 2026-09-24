@@ -2026,7 +2026,8 @@ export type MutationKind =
   | "freePortAndRestart"
   | "uninstallHost"
   | "removeTraycer"
-  | "stopHost";
+  | "stopHost"
+  | "refreshService";
 
 export interface MutationLaneStatus {
   readonly kind: MutationKind;
@@ -2348,6 +2349,11 @@ export type DoctorRepairIntent =
  * waiting behind whatever is running is the point, and a surface reachable
  * when Settings cannot render must never learn to say no.
  *
+ * `refresh-service` ("Update service") is the one repair BOTH surfaces
+ * queue: it rewrites only the service definition, starting and stopping
+ * nothing, so landing behind another intent can disturb nothing the person
+ * chose.
+ *
  * That exemption is about TIMING only. Identity is a separate question and is
  * enforced here exactly as it is everywhere else — the console outlives the
  * host it names, and a replacement must not inherit repairs aimed at its
@@ -2357,7 +2363,12 @@ export type QueuedDoctorRepair =
   | "converge-ready"
   | "converge-latest"
   | "register-service"
-  | "restart";
+  | "restart"
+  // `host service refresh`: bring the registered service definition to the
+  // current launcher without starting or stopping anything - the same lane
+  // call a lifecycle mode change makes. Idempotent, so queueing it behind
+  // another intent is harmless; the refresh reads the definition when it runs.
+  | "refresh-service";
 
 /**
  * `declined` covers both "nothing was enqueued because this is no longer that

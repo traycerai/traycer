@@ -1,4 +1,5 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { extractExecStartTokens } from "@traycer-clients/shared/host-lifecycle";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
@@ -10,8 +11,25 @@ import {
   readHostPidMetadataEvidence,
   type HostPidMetadataEvidence,
 } from "../../host/pid-metadata";
-import { CLI_ERROR_CODES, cliError, type CliError } from "../../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  cliError,
+  isErrnoException,
+  type CliError,
+} from "../../runner/errors";
 import { forceStopHostProcessReporting } from "./desktop-agent-shutdown";
+import {
+  directHostStartInvocation,
+  existingFileMode,
+  replaceDefinitionFile,
+  SERVICE_REFRESH_COMMAND,
+  SERVICE_REINSTALL_COMMAND,
+  serviceDefinitionRefreshFailed,
+  type ServiceDefinitionAppliesAt,
+  type ServiceDefinitionForm,
+  type ServiceDefinitionRefresh,
+  type ServiceDefinitionState,
+} from "../service-definition";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
@@ -1041,3 +1059,166 @@ WantedBy=default.target
 }
 
 export { buildUnit as buildSystemdUnit };
+
+// ---- Definition refresh (see ../service-definition.ts) ----------------------
+
+type LinuxDefinitionPlan =
+  | Exclude<ServiceDefinitionState, { readonly kind: "stale" }>
+  | {
+      readonly kind: "stale";
+      readonly form: ServiceDefinitionForm;
+      readonly appliesAt: ServiceDefinitionAppliesAt;
+      readonly unitText: string;
+    };
+
+/**
+ * The CLI invocation a unit's `ExecStart` runs, and the form it was written
+ * in. Every Traycer wrapper is `/bin/sh -c <script> <cli...>` with the CLI
+ * as the script's `"$0" "$@"` (the capability probe, the retired grep probe
+ * and today's adoption chain alike); the launcher-less form is
+ * `<cli...> host start`. The invocation is carried over unchanged, so a
+ * refresh never repoints the service at a different CLI.
+ */
+function registeredUnitInvocation(
+  tokens: readonly string[],
+  labelId: string,
+): {
+  readonly cli: CliInvocation;
+  readonly form: ServiceDefinitionForm;
+} | null {
+  const script = tokens[2];
+  const command = tokens[3];
+  if (
+    tokens[0] === "/bin/sh" &&
+    tokens[1] === "-c" &&
+    script !== undefined &&
+    script.includes('"$0" "$@" host ') &&
+    command !== undefined &&
+    command.length > 0
+  ) {
+    return {
+      cli: { command, args: tokens.slice(4) },
+      form: "inline-script",
+    };
+  }
+  const direct = directHostStartInvocation(tokens, labelId);
+  return direct === null ? null : { cli: direct, form: "direct" };
+}
+
+async function planLinuxDefinition(
+  label: ServiceLabel,
+): Promise<LinuxDefinitionPlan> {
+  let text: string;
+  try {
+    text = await readFile(serviceManifestPath(label), "utf8");
+  } catch (cause) {
+    if (isErrnoException(cause) && cause.code === "ENOENT") {
+      return { kind: "not-registered" };
+    }
+    return {
+      kind: "unrecognized",
+      reason: `the unit file cannot be read (${describeCause(cause)})`,
+    };
+  }
+  const tokens = extractExecStartTokens(text);
+  if (tokens === null) {
+    return { kind: "unrecognized", reason: "the unit has no ExecStart" };
+  }
+  const registered = registeredUnitInvocation(tokens, label.id);
+  if (registered === null) {
+    return {
+      kind: "unrecognized",
+      reason: "its ExecStart is not a Traycer host start",
+    };
+  }
+  let unitText: string;
+  try {
+    unitText = buildUnit({ label, cli: registered.cli });
+  } catch (cause) {
+    return { kind: "unrecognized", reason: describeCause(cause) };
+  }
+  // Whole-text equality against the installer's own emitter: `buildUnit` is
+  // deterministic for a given label and invocation, so "current" means
+  // exactly what `host service install` would write today - the launcher
+  // script and every directive (a changed `TimeoutStopSec` is drift too).
+  if (text === unitText) return { kind: "current" };
+  return {
+    kind: "stale",
+    form: registered.form,
+    appliesAt: "next-start",
+    unitText,
+  };
+}
+
+/** Read-only: what a refresh would find. No write, no `systemctl`. */
+export async function inspectLinuxServiceDefinition(
+  label: ServiceLabel,
+): Promise<ServiceDefinitionState> {
+  const plan = await planLinuxDefinition(label);
+  if (plan.kind !== "stale") return plan;
+  return { kind: "stale", form: plan.form, appliesAt: plan.appliesAt };
+}
+
+/**
+ * Rewrite a stale unit and `daemon-reload`. That is the whole write: no
+ * `enable`, `start`, `restart` or `disable`, no grant and no rollback.
+ * `daemon-reload` re-reads unit files without touching running processes
+ * (PROBE-RELOAD-LNX: `MainPID` unchanged, the running process still the old
+ * argv, `ExecStart` the new one, and a `Restart=` respawn running the new
+ * one), so the host keeps running and the new launcher applies from its next
+ * start. A current unit costs one file read and zero `systemctl` calls.
+ *
+ * `run` must be the authority-verifying runner the controller uses.
+ */
+export async function refreshLinuxServiceDefinition(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<ServiceDefinitionRefresh> {
+  const plan = await planLinuxDefinition(label);
+  switch (plan.kind) {
+    case "not-registered":
+    case "current":
+      return plan;
+    case "unrecognized":
+      throw serviceDefinitionRefreshFailed({
+        subject: unitName(label),
+        reason: plan.reason,
+        remedy: SERVICE_REINSTALL_COMMAND,
+      });
+    case "stale":
+      break;
+  }
+  const manifestPath = serviceManifestPath(label);
+  try {
+    await replaceDefinitionFile(
+      manifestPath,
+      plan.unitText,
+      await existingFileMode(manifestPath),
+    );
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    throw serviceDefinitionRefreshFailed({
+      subject: unitName(label),
+      reason: `the unit file could not be rewritten (${describeCause(cause)})`,
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+  try {
+    await run("systemctl", ["--user", "daemon-reload"], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
+      tolerateNonZeroExit: false,
+    });
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    // The file is already the current form - strictly better than the stale
+    // one, and what the user manager loads at its next start - so it stays.
+    throw serviceDefinitionRefreshFailed({
+      subject: unitName(label),
+      reason: `the unit file was rewritten, but systemd could not reload it (${describeCause(cause)}), so a restart before the next login would still run the old launcher`,
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+  return { kind: "refreshed", form: plan.form, appliesAt: plan.appliesAt };
+}

@@ -2,16 +2,19 @@ import {
   mkdirSync,
   mkdtempSync,
   existsSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
 import type { HostPidMetadata } from "../../host/pid-metadata";
+import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
+import type { ServiceDefinitionRefreshOutcome } from "../service-refresh";
 
 // `traycer host lifecycle get | set <mode>` - the CLI half of the host
 // lifecycle setting. These tests exercise the commands against a REAL temp
@@ -115,14 +118,58 @@ function lifecyclePolicyFilePath(): string {
   return join(workHome, ".traycer", "host", "lifecycle-policy.json");
 }
 
+/** Writes the policy file directly, bypassing the command under test, so a
+ * test can start from a chosen PREVIOUS effective mode without that setup
+ * write itself counting as a refresh call. */
+function seedPolicy(mode: HostLifecycleMode, rev: number): void {
+  mkdirSync(dirname(lifecyclePolicyFilePath()), { recursive: true });
+  writeFileSync(
+    lifecyclePolicyFilePath(),
+    JSON.stringify(
+      {
+        v: 1,
+        rev,
+        mode,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        updatedBy: "cli",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
+function readPolicyModeFromDisk(): string {
+  const raw = readFileSync(lifecyclePolicyFilePath(), "utf8");
+  return (JSON.parse(raw) as { mode: string }).mode;
+}
+
+const FAKE_REFRESH_LABEL = {
+  id: "ai.traycer.host",
+  displayName: "Traycer Host",
+  environment: "production" as const,
+  devSlot: null,
+};
+
+/** A refresh stub that does nothing observable - the default for every test
+ * that isn't itself exercising the M1 refresh-on-mode-change wiring. */
+async function noopRefresh(): Promise<ServiceDefinitionRefreshOutcome> {
+  return {
+    label: FAKE_REFRESH_LABEL,
+    result: { kind: "not-registered" },
+  };
+}
+
 describe("host lifecycle get/set commands", () => {
   it("round-trips 'set linked' then 'get': mode linked, rev 1 after the first set", async () => {
     const { buildHostLifecycleSetCommand, hostLifecycleGetCommand } =
       await import("../host-lifecycle");
 
-    const setResult = await buildHostLifecycleSetCommand({ mode: "linked" })(
-      makeCtx(),
-    );
+    const setResult = await buildHostLifecycleSetCommand({
+      mode: "linked",
+      refreshServiceDefinition: noopRefresh,
+    })(makeCtx());
     expect(setResult.exitCode).toBe(0);
     const setData = setResult.data as { policy: { mode: string; rev: number } };
     expect(setData.policy.mode).toBe("linked");
@@ -142,14 +189,16 @@ describe("host lifecycle get/set commands", () => {
   it("increments rev to 2 on a second 'set'", async () => {
     const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
 
-    const first = await buildHostLifecycleSetCommand({ mode: "linked" })(
-      makeCtx(),
-    );
+    const first = await buildHostLifecycleSetCommand({
+      mode: "linked",
+      refreshServiceDefinition: noopRefresh,
+    })(makeCtx());
     expect((first.data as { policy: { rev: number } }).policy.rev).toBe(1);
 
-    const second = await buildHostLifecycleSetCommand({ mode: "ask" })(
-      makeCtx(),
-    );
+    const second = await buildHostLifecycleSetCommand({
+      mode: "ask",
+      refreshServiceDefinition: noopRefresh,
+    })(makeCtx());
     expect((second.data as { policy: { rev: number } }).policy.rev).toBe(2);
   });
 
@@ -158,9 +207,13 @@ describe("host lifecycle get/set commands", () => {
       await import("../host-lifecycle");
     const { CliError, CLI_ERROR_CODES } = await import("../../runner/errors");
 
-    const error = await buildHostLifecycleSetCommand({ mode: "bogus" })(
-      makeCtx(),
-    ).catch((err: unknown) => err);
+    const error = await buildHostLifecycleSetCommand({
+      mode: "bogus",
+      // An invalid mode must fail before this is ever read.
+      refreshServiceDefinition: async () => {
+        throw new Error("must not be called for an invalid mode");
+      },
+    })(makeCtx()).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(CliError);
     if (!(error instanceof CliError)) throw new Error("unreachable");
@@ -191,9 +244,10 @@ describe("host lifecycle get/set commands", () => {
   it("mode 'none' note says nothing was stopped", async () => {
     const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
 
-    const result = await buildHostLifecycleSetCommand({ mode: "none" })(
-      makeCtx(),
-    );
+    const result = await buildHostLifecycleSetCommand({
+      mode: "none",
+      refreshServiceDefinition: noopRefresh,
+    })(makeCtx());
 
     expect(result.human).toContain("Nothing was stopped");
   });
@@ -203,9 +257,10 @@ describe("host lifecycle get/set commands", () => {
 
     const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
 
-    const result = await buildHostLifecycleSetCommand({ mode: "linked" })(
-      makeCtx(),
-    );
+    const result = await buildHostLifecycleSetCommand({
+      mode: "linked",
+      refreshServiceDefinition: noopRefresh,
+    })(makeCtx());
 
     expect(result.human).toContain("restart the host to apply");
     expect(result.human).toContain("traycer host restart");
@@ -215,10 +270,135 @@ describe("host lifecycle get/set commands", () => {
     // Default mock: readHostPidMetadata resolves null (not running).
     const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
 
-    const result = await buildHostLifecycleSetCommand({ mode: "linked" })(
-      makeCtx(),
-    );
+    const result = await buildHostLifecycleSetCommand({
+      mode: "linked",
+      refreshServiceDefinition: noopRefresh,
+    })(makeCtx());
 
     expect(result.human).not.toContain("restart the host to apply");
+  });
+});
+
+describe("host lifecycle set: service definition refresh on mode change (M1)", () => {
+  it("absent policy (= background): 'set ask' calls refresh exactly once, and the policy file already reads 'ask' when it runs", async () => {
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const refreshServiceDefinition = vi.fn(
+      async (): Promise<ServiceDefinitionRefreshOutcome> => {
+        // The policy write must have landed on disk BEFORE the refresh is
+        // invoked - this is the mechanism, not just the end state.
+        expect(readPolicyModeFromDisk()).toBe("ask");
+        return { label: FAKE_REFRESH_LABEL, result: { kind: "current" } };
+      },
+    );
+
+    const result = await buildHostLifecycleSetCommand({
+      mode: "ask",
+      refreshServiceDefinition,
+    })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(refreshServiceDefinition).toHaveBeenCalledTimes(1);
+    expect(refreshServiceDefinition).toHaveBeenCalledWith("production");
+  });
+
+  it("'ask' -> 'set ask' (re-setting the mode already in force): zero refresh calls", async () => {
+    seedPolicy("ask", 1);
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const refreshServiceDefinition = vi.fn(noopRefresh);
+
+    const result = await buildHostLifecycleSetCommand({
+      mode: "ask",
+      refreshServiceDefinition,
+    })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(refreshServiceDefinition).not.toHaveBeenCalled();
+  });
+
+  it("'ask' -> 'set background': zero refresh calls (background parks nothing)", async () => {
+    seedPolicy("ask", 1);
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const refreshServiceDefinition = vi.fn(noopRefresh);
+
+    const result = await buildHostLifecycleSetCommand({
+      mode: "background",
+      refreshServiceDefinition,
+    })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(refreshServiceDefinition).not.toHaveBeenCalled();
+  });
+
+  it("'background' -> 'set none': refresh called exactly once", async () => {
+    seedPolicy("background", 1);
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const refreshServiceDefinition = vi.fn(noopRefresh);
+
+    const result = await buildHostLifecycleSetCommand({
+      mode: "none",
+      refreshServiceDefinition,
+    })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(refreshServiceDefinition).toHaveBeenCalledTimes(1);
+  });
+
+  it("'linked' -> 'set stop-if-idle': refresh called exactly once", async () => {
+    seedPolicy("linked", 1);
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const refreshServiceDefinition = vi.fn(noopRefresh);
+
+    const result = await buildHostLifecycleSetCommand({
+      mode: "stop-if-idle",
+      refreshServiceDefinition,
+    })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(refreshServiceDefinition).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refresh failure rejects with E_SERVICE_DEFINITION_REFRESH_FAILED, non-zero exit, names 'traycer host service refresh', and the policy write still stands", async () => {
+    seedPolicy("background", 1);
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const { CliError, CLI_ERROR_CODES } = await import("../../runner/errors");
+    const refreshServiceDefinition = vi.fn(async (): Promise<never> => {
+      throw new Error("systemctl daemon-reload failed");
+    });
+
+    const error = await buildHostLifecycleSetCommand({
+      mode: "ask",
+      refreshServiceDefinition,
+    })(makeCtx()).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error("unreachable");
+    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED);
+    expect(error.exitCode).toBe(1);
+    expect(error.message).toContain("traycer host service refresh");
+    // The policy write happened before the refresh attempt and is not
+    // rolled back by a refresh failure.
+    expect(readPolicyModeFromDisk()).toBe("ask");
+  });
+
+  it("human output of a 'refreshed'/'next-login' outcome mentions the next login", async () => {
+    seedPolicy("background", 1);
+    const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
+    const refreshServiceDefinition =
+      async (): Promise<ServiceDefinitionRefreshOutcome> => ({
+        label: FAKE_REFRESH_LABEL,
+        result: {
+          kind: "refreshed",
+          form: "launcher-file",
+          appliesAt: "next-login",
+        },
+      });
+
+    const result = await buildHostLifecycleSetCommand({
+      mode: "ask",
+      refreshServiceDefinition,
+    })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("applies at the next login");
   });
 });

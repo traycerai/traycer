@@ -45,6 +45,8 @@ export function fixActionLabel(fixAction: string): string {
       return "Install host";
     case "service-install":
       return "Register service";
+    case "service-refresh":
+      return "Update service";
     case "host-start":
       return "Start host";
     case "host-restart":
@@ -120,6 +122,16 @@ export async function runFixAction(
         repair: "restart",
         expectedHostId,
       });
+    // "Update service": `host service refresh`, which rewrites the service
+    // definition and starts or stops nothing. Queued from BOTH surfaces (the
+    // watched sheet has no refusing twin for it) - landing behind another
+    // intent disturbs nothing, and the refresh reads the definition when it
+    // runs.
+    case "service-refresh":
+      return management.runDoctorRepairQueued({
+        repair: "refresh-service",
+        expectedHostId,
+      });
     case "host-free-port-and-restart": {
       const input = parseFreePortInput(issue);
       if (input === null) {
@@ -146,8 +158,10 @@ export async function runFixAction(
  *     negotiated `host.restart` away (see `rpcRestartSupported`), where the
  *     mechanism that can actually do it is the local bridge's respawn.
  *   - `local-bridge` — the three repair-a-down-host actions, on THIS computer,
- *     where the CLI bridge can still run them.
- *   - `copy-command` — the same three for a host on another machine. Nothing
+ *     where the CLI bridge can still run them, and `service-refresh` ("Update
+ *     service"), which rewrites this machine's service definition and is
+ *     equally out of an RPC's reach.
+ *   - `copy-command` — the same four for a host on another machine. Nothing
  *     here can reach that box's service manager or its ports, so the honest
  *     affordance is the command to run there. Not a fallback for a missing RPC:
  *     these repair a host that is typically not answering RPCs at all, which is

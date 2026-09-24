@@ -51,3 +51,51 @@ describe("<HostDoctorIssueCard /> Open in Terminal hint", () => {
     expect(button.textContent).not.toContain(modLabel());
   });
 });
+
+// M1: "Update service" (`service-refresh`) - the `host service refresh` doctor
+// fix. Same card, a different issue shape.
+const serviceRefreshIssue: HostDoctorIssue = {
+  code: "HOST_SERVICE_DEFINITION_STALE",
+  severity: "warning",
+  title: "Host service definition is out of date",
+  message: "The registered service predates the current launcher.",
+  fixAction: "service-refresh",
+  terminalCommand: "traycer host service refresh",
+  details: null,
+};
+
+describe("<HostDoctorIssueCard /> service-refresh (M1)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('shows the "Update service" fix button', () => {
+    render(
+      <HostDoctorIssueCard
+        issue={serviceRefreshIssue}
+        expanded={false}
+        recurrenceLocked={false}
+        fixPendingCode={null}
+        onFix={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Update service" });
+    expect(button.textContent).toBe("Update service");
+  });
+
+  it("shows the terminal command as secondary text once expanded", () => {
+    render(
+      <HostDoctorIssueCard
+        issue={serviceRefreshIssue}
+        expanded
+        recurrenceLocked={false}
+        fixPendingCode={null}
+        onFix={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+    const command = screen.getByTestId("host-doctor-issue-terminal-command");
+    expect(command.textContent).toBe("traycer host service refresh");
+  });
+});

@@ -27,3 +27,15 @@ export function escapeXml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 }
+
+// Inverse of `escapeXml`'s five replacements (`&amp;` last so a literal
+// `&lt;` round-trips instead of double-decoding). For reading back a
+// manifest this module's `escapeXml` wrote.
+export function unescapeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}

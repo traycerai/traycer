@@ -227,6 +227,19 @@ export const DOCTOR_ISSUE_CODES = {
   // through a CLI upgrade, or a record left by a supervisor that is gone).
   // The mode takes effect at the next host restart.
   HOST_LIFECYCLE_POLICY_NOT_ENFORCED: "HOST_LIFECYCLE_POLICY_NOT_ENFORCED",
+  // A non-Background mode is set, but the registered service definition is
+  // not in this CLI's current launcher form. The modes park only LABELLED
+  // service starts, and a definition older than labelled starts launches the
+  // host unlabelled at login, which no mode can park. Choosing a mode
+  // refreshes the definition, so this is what is left when that refresh
+  // failed, when the mode was already set before it existed, or when an older
+  // CLI re-registered the service since. `host service refresh` repairs it
+  // without starting or stopping anything.
+  HOST_SERVICE_DEFINITION_STALE: "HOST_SERVICE_DEFINITION_STALE",
+  // A non-Background mode is set, and the registration under this service's
+  // own name is not one a Traycer emitter wrote (or cannot be read), so the
+  // refresh leaves it alone. A full re-registration replaces it.
+  HOST_SERVICE_DEFINITION_UNRECOGNIZED: "HOST_SERVICE_DEFINITION_UNRECOGNIZED",
 } as const;
 
 export type DoctorIssueCode =

@@ -1,5 +1,8 @@
 import type { DesktopPresenceOnExit } from "@traycer/protocol/config/desktop-presence";
-import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
+import {
+  refreshOnModeChange,
+  type HostLifecycleMode,
+} from "@traycer/protocol/config/host-lifecycle-policy";
 import type {
   HostLifecycleSetRequest,
   HostLifecycleSetResult,
@@ -13,6 +16,8 @@ import type {
   ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   LocalHostMutationIntent,
+  MutationOutcome,
+  ServiceDefinitionRefreshOk,
   StopHostOutcome,
   StopHostRequest,
 } from "./host-controller-types";
@@ -67,6 +72,9 @@ export interface HostLifecycleTransitionsController {
     versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stopHost(request: StopHostRequest): Promise<StopHostOutcome>;
+  refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  >;
   quiesce(): void;
   holdAutomaticIntents(): AutomaticIntentHold;
 }
@@ -362,6 +370,10 @@ export class HostLifecycleService {
     } catch (error) {
       return this.writeFailed(request.mode, error);
     }
+    // Before the lanes test on purpose: a mode chosen while this launch runs
+    // no local host still governs the next login start, and the refresh
+    // starts and stops nothing.
+    this.refreshDefinitionAfterWrite(current.mode, request.mode);
     if (!lanesActive) {
       return { kind: "applied", view: await this.getView() };
     }
@@ -372,6 +384,49 @@ export class HostLifecycleService {
       void this.convergeIfDown(rev);
     }
     return { kind: "applied", view: await this.getView() };
+  }
+
+  /**
+   * After a policy write that parks (`refreshOnModeChange`): bring the
+   * registered service definition to the current launcher through the
+   * controller's one `host service refresh` lane call, so a definition that
+   * predates labelled starts cannot run the host at the next login under a
+   * mode meant to park it. The CLI's `lifecycle set` runs the same refresh
+   * for its own writes.
+   *
+   * Off the serialized chain: the write is the commitment and the result is
+   * `applied` either way, so a refresh waiting on the CLI lock must not hold
+   * up the next observation. A failure is logged by its outcome kind alone
+   * (no path, no id), and the doctor's HOST_SERVICE_DEFINITION_STALE is the
+   * surface that offers the retry.
+   */
+  private refreshDefinitionAfterWrite(
+    previous: HostLifecycleMode,
+    next: HostLifecycleMode,
+  ): void {
+    if (!refreshOnModeChange(previous, next)) return;
+    void this.controller
+      .refreshServiceDefinition()
+      .then((outcome) => {
+        if (outcome.kind === "ok") {
+          log.info("[host-lifecycle] service definition refreshed", {
+            mode: next,
+            result: outcome.value.result,
+            appliesAt: outcome.value.appliesAt,
+          });
+          return;
+        }
+        log.warn("[host-lifecycle] service definition refresh failed", {
+          mode: next,
+          reason: outcome.kind,
+        });
+      })
+      .catch(() => {
+        log.warn("[host-lifecycle] service definition refresh failed", {
+          mode: next,
+          reason: "threw",
+        });
+      });
   }
 
   private async commitNone(
@@ -420,6 +475,9 @@ export class HostLifecycleService {
         } catch (error) {
           return this.writeFailed("none", error);
         }
+        // Only for this write: an `after` that already says `none` was
+        // written by the CLI, whose own `lifecycle set` ran the refresh.
+        this.refreshDefinitionAfterWrite(after.mode, "none");
       }
       await this.store.removeOwnPresence();
       this.presenceRev = null;

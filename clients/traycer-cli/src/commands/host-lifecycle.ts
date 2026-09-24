@@ -1,32 +1,49 @@
 import {
   HOST_LIFECYCLE_MODES,
+  refreshOnModeChange,
   type HostLifecycleMode,
+  type HostLifecyclePolicy,
 } from "@traycer/protocol/config/host-lifecycle-policy";
 import {
   lifecycleSnapshotRows,
   readHostLifecycleSnapshot,
   type HostLifecycleSnapshot,
 } from "../host/lifecycle-snapshot";
-import { writeHostLifecyclePolicyFromCli } from "../host/lifecycle-files";
+import {
+  effectiveModeOf,
+  readHostLifecyclePolicy,
+  writeHostLifecyclePolicyFromCli,
+} from "../host/lifecycle-files";
 import {
   publishedHostProcessGone,
   readHostPidMetadata,
 } from "../host/pid-metadata";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
+import { SERVICE_REFRESH_COMMAND } from "../service/service-definition";
+import {
+  describeServiceDefinitionRefresh,
+  type ServiceDefinitionRefreshOutcome,
+} from "./service-refresh";
 
 // `traycer host lifecycle get | set <mode>` - the CLI half of the host
 // lifecycle setting (lifecycle mechanics, D7). Traycer Desktop's Settings card
 // writes the same `lifecycle-policy.json`; the CLI supervisor is the only
 // thing that enforces it.
 //
-// `set` only WRITES the policy. It never stops, starts or restarts anything:
-// the running host keeps running under whatever supervisor it has, and the
-// mode governs the next unattended start (and, for a desktop-owned run, what
-// the supervisor does when that desktop goes away). `set none` in particular
+// `set` only WRITES. It never stops, starts or restarts anything: the running
+// host keeps running under whatever supervisor it has, and the mode governs
+// the next unattended start (and, for a desktop-owned run, what the
+// supervisor does when that desktop goes away). `set none` in particular
 // stops nothing - the desktop observes the change and applies it at its next
 // launch, without replaying a stop this command promised not to make.
+//
+// The one other write is the service DEFINITION, and only on a transition
+// into a mode that parks (`refreshOnModeChange`): a definition that predates
+// labelled starts launches the host unlabelled, which no mode can park, so
+// it is brought to the current launcher form in place - `host service
+// refresh`, the same definition-only write, starting and stopping nothing.
 
 /** `host lifecycle get`: the policy, presence, owner and supervisor capability. */
 export const hostLifecycleGetCommand: CommandFn = async (
@@ -45,6 +62,13 @@ export const hostLifecycleGetCommand: CommandFn = async (
 export interface HostLifecycleSetArgs {
   /** The positional `<mode>` exactly as typed; validated in the command. */
   readonly mode: string | undefined;
+  /**
+   * `host service refresh`'s mutation (`refreshServiceDefinitionUnderContender`
+   * in production), run when the write is a transition into a parking mode.
+   */
+  readonly refreshServiceDefinition: (
+    environment: Environment,
+  ) => Promise<ServiceDefinitionRefreshOutcome>;
 }
 
 /**
@@ -58,6 +82,9 @@ export function buildHostLifecycleSetCommand(
     // Inside the CommandFn so a bad mode renders as the runner's error
     // envelope, not a raw throw out of Commander's action.
     const mode = parseModeArgument(args.mode);
+    const previousMode = effectiveModeOf(
+      await readHostLifecyclePolicy(ctx.runtime.environment),
+    );
     const policy = await writeHostLifecyclePolicyFromCli(
       ctx.runtime.environment,
       mode,
@@ -68,16 +95,59 @@ export function buildHostLifecycleSetCommand(
       mode: policy.mode,
       rev: policy.rev,
     });
+    let refresh: ServiceDefinitionRefreshOutcome | null = null;
+    if (refreshOnModeChange(previousMode, policy.mode)) {
+      try {
+        refresh = await args.refreshServiceDefinition(ctx.runtime.environment);
+      } catch (cause) {
+        throw refreshFailedAfterWrite(policy, cause);
+      }
+      ctx.runtime.logger.info("Host service definition refreshed for mode", {
+        environment: ctx.runtime.environment,
+        mode: policy.mode,
+        result: refresh.result.kind,
+      });
+    }
     const view = await readLifecycleView(ctx.runtime.environment);
     return {
-      data: { policy, ...view },
+      data: {
+        policy,
+        ...view,
+        serviceDefinition: refresh === null ? null : refresh.result,
+      },
       human: [
         `host lifecycle mode set to '${policy.mode}' (rev ${policy.rev})`,
         ...setNotes(policy.mode, view),
+        ...(refresh === null
+          ? []
+          : [describeServiceDefinitionRefresh(refresh)]),
       ].join("\n"),
       exitCode: 0,
     };
   };
+}
+
+/**
+ * The policy IS written - the mode is in force for every labelled start -
+ * but the service definition still launches the host in a form the mode
+ * cannot park, so the command must not exit 0. The cause's own message is
+ * carried whole: it already names what was left and the repair.
+ */
+function refreshFailedAfterWrite(
+  policy: HostLifecyclePolicy,
+  cause: unknown,
+): CliError {
+  const why = cause instanceof Error ? cause.message : String(cause);
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED,
+    message: `host lifecycle mode set to '${policy.mode}' (rev ${policy.rev}), but the registered host service could not be brought to the current launcher, so a login start may run the host in a form this mode cannot park: ${why}. Retry with '${SERVICE_REFRESH_COMMAND}'.`,
+    details: {
+      mode: policy.mode,
+      rev: policy.rev,
+      cause: cause instanceof CliError ? cause.code : null,
+    },
+    exitCode: 1,
+  });
 }
 
 function parseModeArgument(value: string | undefined): HostLifecycleMode {

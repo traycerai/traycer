@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
@@ -10,7 +10,12 @@ import {
 import { hostPidMetadataPath } from "../../store/paths";
 import { probeHostHealth } from "../health-probe";
 import { createCliLogger } from "../../logger";
-import { CLI_ERROR_CODES, cliError, type CliError } from "../../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  cliError,
+  isErrnoException,
+  type CliError,
+} from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import {
   getPublishedProcessIdentityVerdict,
@@ -18,12 +23,24 @@ import {
 } from "../../store/process-identity";
 import type { CliInvocation } from "../cli-binary";
 import { HOST_V8_FLAGS } from "../host-node-options";
-import { escapeXml } from "../escape-xml";
+import { escapeXml, unescapeXml } from "../escape-xml";
 import {
   buildHostStartLauncherScript,
   COMPATIBLE_HOST_START_SCRIPT_PREFIX,
 } from "./host-start-script";
 import { fileExists } from "../install-binary";
+import {
+  directHostStartInvocation,
+  existingFileMode,
+  replaceDefinitionFile,
+  SERVICE_REFRESH_COMMAND,
+  SERVICE_REINSTALL_COMMAND,
+  serviceDefinitionRefreshFailed,
+  type ServiceDefinitionAppliesAt,
+  type ServiceDefinitionForm,
+  type ServiceDefinitionRefresh,
+  type ServiceDefinitionState,
+} from "../service-definition";
 import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
@@ -2961,6 +2978,9 @@ ${programArgsXml}
  * version of `buildPlist` has ever emitted that shape, and a speculative
  * parse arm on a closed set is a liability, not tolerance.
  */
+const PROGRAM_ARGUMENTS_PATTERN =
+  /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/;
+
 async function readRegisteredCliInvocation(
   label: ServiceLabel,
 ): Promise<CliInvocation | null> {
@@ -2970,9 +2990,7 @@ async function readRegisteredCliInvocation(
   } catch {
     return null;
   }
-  const arrayMatch = xml.match(
-    /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/,
-  );
+  const arrayMatch = xml.match(PROGRAM_ARGUMENTS_PATTERN);
   if (arrayMatch === null) return null;
   const body = arrayMatch[1];
   if (body === undefined) return null;
@@ -3004,15 +3022,233 @@ async function readRegisteredCliInvocation(
   return { command, args: args.slice(1, args.length - 2) };
 }
 
-// Inverse of `escapeXml`'s five replacements (`&amp;` last so a literal
-// `&lt;` round-trips instead of double-decoding).
-function unescapeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+// ---- Definition refresh (see ../service-definition.ts) ----------------------
+//
+// CLI-owned LaunchAgents only, and with ZERO `launchctl` calls: `bootout`
+// kills the running job and `bootstrap` (RunAtLoad) would start a host, and
+// neither is a definition-only write. A Desktop-owned registration is never
+// touched - its SMAppService plist and launcher ship inside the app bundle,
+// where they are always the current form for that app, and the CLI label's
+// `~/Library/LaunchAgents` manifest does not exist beside it.
+
+type MacosDefinitionPlan =
+  | Exclude<ServiceDefinitionState, { readonly kind: "stale" }>
+  | {
+      readonly kind: "stale";
+      readonly form: ServiceDefinitionForm;
+      readonly appliesAt: ServiceDefinitionAppliesAt;
+      /** The patched plist, or `null` when only the launcher file changes. */
+      readonly plistText: string | null;
+    };
+
+function launchAgentProgramArguments(xml: string): readonly string[] | null {
+  const body = xml.match(PROGRAM_ARGUMENTS_PATTERN)?.[1];
+  if (body === undefined) return null;
+  return [...body.matchAll(/<string>([\s\S]*?)<\/string>/g)]
+    .map((m) => m[1])
+    .filter((value): value is string => value !== undefined)
+    .map(unescapeXml);
+}
+
+/**
+ * The CLI invocation a plist's `ProgramArguments` runs, and its form. Same
+ * three members as {@link readRegisteredCliInvocation}, with two deliberate
+ * differences: the inline form is matched by the `"$0" "$@" host ` shape
+ * every Traycer wrapper shares (the retired grep probe included), and the
+ * command is not required to exist - a refresh carries the invocation over
+ * unchanged, it does not judge it.
+ */
+function registeredLaunchAgentInvocation(
+  args: readonly string[],
+  label: ServiceLabel,
+): {
+  readonly cli: CliInvocation;
+  readonly form: ServiceDefinitionForm;
+} | null {
+  const first = args[1];
+  if (
+    args[0] === serviceLauncherScriptPath(label) &&
+    first !== undefined &&
+    first.length > 0
+  ) {
+    return {
+      cli: { command: first, args: args.slice(2) },
+      form: "launcher-file",
+    };
+  }
+  const script = args[2];
+  const command = args[3];
+  if (
+    args[0] === "/bin/sh" &&
+    args[1] === "-c" &&
+    script !== undefined &&
+    script.includes('"$0" "$@" host ') &&
+    command !== undefined &&
+    command.length > 0
+  ) {
+    return {
+      cli: { command, args: args.slice(4) },
+      form: "inline-script",
+    };
+  }
+  const direct = directHostStartInvocation(args, label.id);
+  return direct === null ? null : { cli: direct, form: "direct" };
+}
+
+/** The launcher file is today's body and executable by its owner. */
+async function launcherFileIsCurrent(label: ServiceLabel): Promise<boolean> {
+  const launcherPath = serviceLauncherScriptPath(label);
+  try {
+    const [body, info] = await Promise.all([
+      readFile(launcherPath, "utf8"),
+      stat(launcherPath),
+    ]);
+    return (
+      body === buildHostStartLauncherScript(label.id) &&
+      (info.mode & 0o100) !== 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The plist with ONLY its `ProgramArguments` replaced, in `buildPlist`'s own
+ * layout. The rest of the file is kept byte for byte: `buildPlist` bakes the
+ * WRITER's `PATH` into `EnvironmentVariables`, so regenerating the whole plist
+ * from the desktop would hand the service Electron's minimal Finder `PATH`.
+ */
+function patchProgramArguments(
+  xml: string,
+  programArgs: readonly string[],
+): string {
+  const programArgsXml = programArgs
+    .map((arg) => `    <string>${escapeXml(arg)}</string>`)
+    .join("\n");
+  return xml.replace(
+    PROGRAM_ARGUMENTS_PATTERN,
+    () =>
+      `<key>ProgramArguments</key>\n  <array>\n${programArgsXml}\n  </array>`,
+  );
+}
+
+async function planMacosDefinition(
+  label: ServiceLabel,
+): Promise<MacosDefinitionPlan> {
+  let xml: string;
+  try {
+    xml = await readFile(serviceManifestPath(label), "utf8");
+  } catch (cause) {
+    if (isErrnoException(cause) && cause.code === "ENOENT") {
+      return { kind: "not-registered" };
+    }
+    return {
+      kind: "unrecognized",
+      reason: `the LaunchAgent plist cannot be read (${describeCause(cause)})`,
+    };
+  }
+  const args = launchAgentProgramArguments(xml);
+  if (args === null) {
+    return {
+      kind: "unrecognized",
+      reason: "the LaunchAgent plist has no ProgramArguments",
+    };
+  }
+  const registered = registeredLaunchAgentInvocation(args, label);
+  if (registered === null) {
+    return {
+      kind: "unrecognized",
+      reason: "its ProgramArguments are not a Traycer host start",
+    };
+  }
+  if (registered.form === "launcher-file") {
+    // `ProgramArguments` already names the launcher with the registered
+    // invocation after it, which is exactly the vector `buildPlist` emits,
+    // so the launcher file's body is the whole question.
+    if (await launcherFileIsCurrent(label)) return { kind: "current" };
+    // launchd execs `ProgramArguments[0]` on every spawn, so a rewritten
+    // launcher file applies from the next one - in-session respawns too.
+    return {
+      kind: "stale",
+      form: "launcher-file",
+      appliesAt: "next-start",
+      plistText: null,
+    };
+  }
+  return {
+    kind: "stale",
+    form: registered.form,
+    // The loaded job keeps the `ProgramArguments` launchd cached until it is
+    // unloaded (a loaded job whose file is gone keeps running from memory
+    // until logout - see `retireCompetingRegistration`), and unloading it is
+    // the `bootout` this path must not run. So the rewrite waits for login.
+    appliesAt: "next-login",
+    plistText: patchProgramArguments(xml, [
+      serviceLauncherScriptPath(label),
+      registered.cli.command,
+      ...registered.cli.args,
+    ]),
+  };
+}
+
+/** Read-only: what a refresh would find. No write, no `launchctl`. */
+export async function inspectMacosServiceDefinition(
+  label: ServiceLabel,
+): Promise<ServiceDefinitionState> {
+  const plan = await planMacosDefinition(label);
+  if (plan.kind !== "stale") return plan;
+  return { kind: "stale", form: plan.form, appliesAt: plan.appliesAt };
+}
+
+/**
+ * Write the current launcher file and, for a plist that predates it, patch
+ * the plist's `ProgramArguments` to run it - the launcher first, because the
+ * plist it is patched into executes it. No `launchctl` at all.
+ */
+export async function refreshMacosServiceDefinition(
+  label: ServiceLabel,
+): Promise<ServiceDefinitionRefresh> {
+  const plan = await planMacosDefinition(label);
+  const subject = `LaunchAgent '${label.id}'`;
+  switch (plan.kind) {
+    case "not-registered":
+    case "current":
+      return plan;
+    case "unrecognized":
+      throw serviceDefinitionRefreshFailed({
+        subject,
+        reason: plan.reason,
+        remedy: SERVICE_REINSTALL_COMMAND,
+      });
+    case "stale":
+      break;
+  }
+  try {
+    const launcherPath = serviceLauncherScriptPath(label);
+    await verifyServiceMutationAuthority();
+    await mkdir(dirname(launcherPath), { recursive: true });
+    await replaceDefinitionFile(
+      launcherPath,
+      buildHostStartLauncherScript(label.id),
+      0o755,
+    );
+    if (plan.plistText !== null) {
+      const manifestPath = serviceManifestPath(label);
+      await replaceDefinitionFile(
+        manifestPath,
+        plan.plistText,
+        await existingFileMode(manifestPath),
+      );
+    }
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    throw serviceDefinitionRefreshFailed({
+      subject,
+      reason: `the launcher could not be rewritten (${describeCause(cause)})`,
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+  return { kind: "refreshed", form: plan.form, appliesAt: plan.appliesAt };
 }
 
 export {

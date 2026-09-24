@@ -834,6 +834,7 @@ export function laneBusyRestartMessage(kind: MutationKind): string {
       return "Traycer is installing an update on this host. Restart it once that finishes.";
     case "register":
     case "deregister":
+    case "refreshService":
       return "Traycer is changing this host's background service. Restart it once that finishes.";
     case "uninstallHost":
     case "removeTraycer":
@@ -1554,7 +1555,8 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         repair !== "converge-ready" &&
         repair !== "converge-latest" &&
         repair !== "register-service" &&
-        repair !== "restart"
+        repair !== "restart" &&
+        repair !== "refresh-service"
       ) {
         throw new Error(`Unknown doctor repair: ${String(repair)}`);
       }
@@ -1568,6 +1570,21 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const identity = await checkLocalHostIsStill(bridge, expectedHostId);
       if (!identity.ok) {
         return { kind: "declined", message: identity.message };
+      }
+      if (repair === "refresh-service") {
+        // "Update service": the same `host service refresh` lane call a
+        // lifecycle mode change makes (`HostController
+        // .refreshServiceDefinition`), so there is one refresh with two
+        // callers. It carries no guard intent: it rewrites the service
+        // definition for this slot's label, which is the same file whichever
+        // host identity later runs under it, and it starts nothing.
+        const outcome =
+          await bridge.options.hostController.refreshServiceDefinition();
+        const failure = failureMessageOf(outcome);
+        if (failure !== null) {
+          throw new Error(failure);
+        }
+        return { kind: "applied" };
       }
       if (repair === "restart") {
         // Queued like its two siblings, so the identity question rides the

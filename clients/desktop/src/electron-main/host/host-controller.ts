@@ -123,6 +123,7 @@ import {
   type PendingRevisionCaller,
   type RemoveTraycerOk,
   type LocalHostMutationIntent,
+  type ServiceDefinitionRefreshOk,
   type ServiceRegistrationOk,
   type StopHostOutcome,
   type StopHostRequest,
@@ -640,6 +641,31 @@ function parseServiceStartResult(raw: unknown): ServiceStartResultShape {
     // safe-stop into a silent no-op report.
     deferredForParkedActivation: data.deferredForParkedActivation === true,
   };
+}
+
+/**
+ * `host service refresh`'s `data.result`. The verb ships in this same bundle,
+ * so a shape outside its three arms is a contract break, and it throws (the
+ * lane reports it as the refresh failing) rather than reading as "current".
+ */
+function parseServiceDefinitionRefresh(
+  raw: unknown,
+): ServiceDefinitionRefreshOk {
+  const data = isPlainObject(raw) && isPlainObject(raw.data) ? raw.data : raw;
+  const result =
+    isPlainObject(data) && isPlainObject(data.result) ? data.result : null;
+  const kind = result === null ? null : result.kind;
+  if (kind === "not-registered" || kind === "current") {
+    return { result: kind, appliesAt: null };
+  }
+  if (
+    kind === "refreshed" &&
+    result !== null &&
+    (result.appliesAt === "next-start" || result.appliesAt === "next-login")
+  ) {
+    return { result: "refreshed", appliesAt: result.appliesAt };
+  }
+  throw new Error("host service refresh returned an unrecognized result");
 }
 
 interface UninstallResultShape {
@@ -4623,6 +4649,38 @@ export class HostController {
           return this.classifyMutationSubprocessError(err, "retry-with-force");
         }
         return { kind: "ok", value: { registered: false } };
+      },
+    );
+  }
+
+  /**
+   * `host service refresh` on the exclusive mutation lane: bring the
+   * registered OS service definition to the bundled CLI's current launcher
+   * WITHOUT starting, stopping or restarting anything (the CLI's
+   * `service/service-definition.ts`). The desktop's one route to that verb,
+   * with two callers: `HostLifecycleService` after a mode write that parks
+   * (`refreshOnModeChange`), and the Doctor's "Update service" repair.
+   *
+   * Coalesced: the refresh reads the definition when it runs, so a second
+   * request while one is queued is answered by it. The flat run wrapper, not
+   * the streaming one: the verb emits no progress, and its worst case - the
+   * CLI's 30 s lock wait plus a definition write - fits the run bound.
+   * Resolves, never rejects; a refused or failed refresh is its outcome.
+   */
+  refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return this.enqueueMutation<MutationOutcome<ServiceDefinitionRefreshOk>>(
+      "refreshService",
+      "refreshService",
+      async (): Promise<MutationOutcome<ServiceDefinitionRefreshOk>> => {
+        let raw: unknown;
+        try {
+          raw = await this.runBundled<unknown>(["host", "service", "refresh"]);
+        } catch (err) {
+          return this.classifyMutationSubprocessError(err, "retry-with-force");
+        }
+        return { kind: "ok", value: parseServiceDefinitionRefresh(raw) };
       },
     );
   }

@@ -73,6 +73,16 @@ import {
 } from "../service";
 import { smAppServiceAgentLabelId } from "../service/label";
 import {
+  createServiceDefinitionRefresher,
+  type ServiceDefinitionRefresher,
+} from "../service/definition-refresh";
+import {
+  SERVICE_REFRESH_COMMAND,
+  SERVICE_REINSTALL_COMMAND,
+  type ServiceDefinitionState,
+} from "../service/service-definition";
+import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
+import {
   createRealLaunchdPrintRunner,
   probeMacosWedgedJob,
 } from "./launchd-wedge";
@@ -888,8 +898,65 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     hostProcessAlive,
   );
   issues.push(...lifecycleIssues(lifecycle, hostProcessAlive));
+  issues.push(
+    ...(await serviceDefinitionIssues(opts.environment, lifecycle.policy.mode)),
+  );
 
   return { issues, lifecycle };
+}
+
+/**
+ * The registered service definition, read back under a mode that parks.
+ * The same predicate `host service refresh` acts on, so this is the retry
+ * path when a mode change's own refresh failed - and the only signal when
+ * the mode was already set, since re-choosing it is not a transition.
+ */
+async function serviceDefinitionIssues(
+  environment: Environment,
+  mode: HostLifecycleMode,
+): Promise<DoctorIssue[]> {
+  if (mode === "background") return [];
+  let refresher: ServiceDefinitionRefresher;
+  try {
+    refresher = createServiceDefinitionRefresher(null);
+  } catch {
+    // Unsupported platform: there is no definition to judge.
+    return [];
+  }
+  // `inspect` reports an unreadable definition as `unrecognized` rather
+  // than throwing, so nothing else is swallowed here.
+  const state: ServiceDefinitionState = await refresher.inspect(
+    serviceLabelFor(environment),
+  );
+  if (state.kind === "stale") {
+    return [
+      {
+        code: DOCTOR_ISSUE_CODES.HOST_SERVICE_DEFINITION_STALE,
+        severity: "warning",
+        title: "Login starts may not follow the lifecycle mode",
+        message: `The lifecycle mode is '${mode}', but the registered host service is older than this CLI's launcher. The mode parks only labelled service starts, and an older launcher can start the host at login without its label, which then runs instead of being parked. Refreshing the definition starts and stops nothing${state.appliesAt === "next-login" ? "; on macOS it applies at the next login, not to a respawn before then" : "; the new launcher applies from the host's next start"}.`,
+        // Desktop's "Update service" runs the same `host service refresh`
+        // its own mode change runs; the terminal command is the same verb.
+        fixAction: "service-refresh",
+        terminalCommand: SERVICE_REFRESH_COMMAND,
+        details: { mode, form: state.form, appliesAt: state.appliesAt },
+      },
+    ];
+  }
+  if (state.kind === "unrecognized") {
+    return [
+      {
+        code: DOCTOR_ISSUE_CODES.HOST_SERVICE_DEFINITION_UNRECOGNIZED,
+        severity: "warning",
+        title: "Host service definition is not recognized",
+        message: `The lifecycle mode is '${mode}', but the registered host service could not be read as one Traycer wrote (${state.reason}), so it is left alone and cannot be relied on to park login starts. Re-registering the service replaces it; that restarts the host.`,
+        fixAction: "service-install",
+        terminalCommand: SERVICE_REINSTALL_COMMAND,
+        details: { mode, reason: state.reason },
+      },
+    ];
+  }
+  return [];
 }
 
 /**

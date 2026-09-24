@@ -22,6 +22,8 @@ import type {
   ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   LocalHostMutationIntent,
+  MutationOutcome,
+  ServiceDefinitionRefreshOk,
   StopHostOutcome,
   StopHostRequest,
 } from "../host-controller-types";
@@ -38,6 +40,8 @@ vi.mock("../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   describeLogError: (cause: unknown) => String(cause),
 }));
+
+import { log } from "../../app/logger";
 
 const OWN_PID = 4242;
 const POLL_MS = 3_600_000;
@@ -68,6 +72,17 @@ class FakeController implements HostLifecycleTransitionsController {
   stopOutcome: StopHostOutcome = { kind: "stopped", forced: false };
   onStop: () => Promise<void> = () => Promise.resolve();
 
+  /** M1: `refreshServiceDefinition` calls, in the order made. */
+  readonly refreshCalls: number[] = [];
+  refreshOutcome: MutationOutcome<ServiceDefinitionRefreshOk> = {
+    kind: "ok",
+    value: { result: "current", appliesAt: null },
+  };
+  refreshRejection: Error | null = null;
+  refreshNeverSettles = false;
+  /** Hook for order assertions against another spied-on call. */
+  onRefreshCall: () => void = () => undefined;
+
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
@@ -84,6 +99,20 @@ class FakeController implements HostLifecycleTransitionsController {
     this.stops.push(request);
     await this.onStop();
     return this.stopOutcome;
+  }
+
+  refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    this.refreshCalls.push(this.refreshCalls.length + 1);
+    this.onRefreshCall();
+    if (this.refreshNeverSettles) {
+      return new Promise(() => undefined);
+    }
+    if (this.refreshRejection !== null) {
+      return Promise.reject(this.refreshRejection);
+    }
+    return Promise.resolve(this.refreshOutcome);
   }
 
   quiesce(): void {
@@ -758,5 +787,193 @@ describe("readQuitPolicy / localHostLanesActive", () => {
       mode: "none",
       rev: 5,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M1: `refreshDefinitionAfterWrite` - the fire-and-forget `host service
+// refresh` call `applySetMode`/`commitNone` make after a policy write that
+// parks (`refreshOnModeChange`: previous !== next && next !== "background").
+// Mechanism, not just end state - call counts, and order against
+// `writePolicy`.
+// ---------------------------------------------------------------------------
+describe("refreshDefinitionAfterWrite (M1)", () => {
+  it("background -> ask calls refreshServiceDefinition exactly once, only after writePolicy resolves", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await harness.service.writeLaunchPresence();
+    const order: string[] = [];
+    const realWritePolicy = harness.store.writePolicy.bind(harness.store);
+    vi.spyOn(harness.store, "writePolicy").mockImplementation(
+      async (mode: HostLifecycleMode) => {
+        const written = await realWritePolicy(mode);
+        order.push("writePolicy");
+        return written;
+      },
+    );
+    harness.controller.onRefreshCall = () => {
+      order.push("refreshServiceDefinition");
+    };
+
+    const result = await harness.service.setMode({ mode: "ask", stop: null });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+    expect(order).toEqual(["writePolicy", "refreshServiceDefinition"]);
+  });
+
+  it("ask -> ask (unchanged) makes zero refreshServiceDefinition calls", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 2, "ask");
+    await harness.service.writeLaunchPresence();
+
+    const result = await harness.service.setMode({ mode: "ask", stop: null });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(0);
+  });
+
+  it("ask -> background makes zero refreshServiceDefinition calls (background parks nothing)", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 2, "ask");
+    await harness.service.writeLaunchPresence();
+
+    const result = await harness.service.setMode({
+      mode: "background",
+      stop: null,
+    });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(0);
+  });
+
+  it("linked -> stop-if-idle calls refreshServiceDefinition exactly once (positive control for the ask zero-call cases above)", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 2, "linked");
+    await harness.service.writeLaunchPresence();
+
+    const result = await harness.service.setMode({
+      mode: "stop-if-idle",
+      stop: null,
+    });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+  });
+
+  it("stays applied when the refresh outcome is non-ok, and warns with mode+reason only", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await harness.service.writeLaunchPresence();
+    harness.controller.refreshOutcome = {
+      kind: "failed",
+      message: "refresh failed",
+    };
+
+    const result = await harness.service.setMode({ mode: "ask", stop: null });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+    await vi.waitFor(() => {
+      expect(vi.mocked(log.warn)).toHaveBeenCalled();
+    });
+    const call = vi.mocked(log.warn).mock.calls.at(-1);
+    expect(call?.[0]).toBe(
+      "[host-lifecycle] service definition refresh failed",
+    );
+    const payload = call?.[1] as Record<string, unknown>;
+    expect(payload).toEqual({ mode: "ask", reason: "failed" });
+    expect(Object.keys(payload).sort()).toEqual(["mode", "reason"]);
+  });
+
+  it('stays applied when the refresh promise rejects, and warns with reason "threw"', async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await harness.service.writeLaunchPresence();
+    harness.controller.refreshRejection = new Error("cli exploded");
+
+    const result = await harness.service.setMode({ mode: "ask", stop: null });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+    await vi.waitFor(() => {
+      expect(vi.mocked(log.warn)).toHaveBeenCalled();
+    });
+    const call = vi.mocked(log.warn).mock.calls.at(-1);
+    expect(call?.[0]).toBe(
+      "[host-lifecycle] service definition refresh failed",
+    );
+    const payload = call?.[1] as Record<string, unknown>;
+    expect(payload).toEqual({ mode: "ask", reason: "threw" });
+    expect(Object.keys(payload).sort()).toEqual(["mode", "reason"]);
+  });
+
+  it("applySetMode resolves even when the refresh promise never settles", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await harness.service.writeLaunchPresence();
+    harness.controller.refreshNeverSettles = true;
+
+    const winner = await Promise.race([
+      harness.service
+        .setMode({ mode: "ask", stop: null })
+        .then(() => "applied" as const),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 250);
+      }),
+    ]);
+
+    expect(winner).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+  });
+
+  it("still runs on the !lanesActive early-return path (booted with the none capability)", async () => {
+    const harness = makeHarness("none", POLL_MS);
+    await harness.service.writeLaunchPresence();
+
+    const result = await harness.service.setMode({ mode: "ask", stop: null });
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+  });
+
+  it("commitNone calls refreshServiceDefinition once when the prior mode was background", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await harness.service.writeLaunchPresence();
+
+    const result = await runNone(harness, "if-idle");
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+  });
+
+  it("commitNone calls refreshServiceDefinition once when the prior mode was linked", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 4, "linked");
+    await harness.service.writeLaunchPresence();
+
+    const result = await runNone(harness, "if-idle");
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(1);
+  });
+
+  it("commitNone makes zero refreshServiceDefinition calls when the policy is already none", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 3, "none");
+    await harness.service.writeLaunchPresence();
+
+    const result = await runNone(harness, "if-idle");
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(0);
+  });
+
+  it("commitNone makes zero refreshServiceDefinition calls when a CLI none write races the stop (positive controls above establish the mechanism fires)", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 4, "ask");
+    await harness.service.writeLaunchPresence();
+    harness.controller.onStop = () => writeCliPolicy(harness.store, 5, "none");
+
+    const result = await runNone(harness, "if-idle");
+
+    expect(result.kind).toBe("applied");
+    expect(harness.controller.refreshCalls.length).toBe(0);
   });
 });

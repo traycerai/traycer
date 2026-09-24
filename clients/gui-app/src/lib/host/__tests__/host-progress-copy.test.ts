@@ -22,6 +22,7 @@ const ALL_MUTATION_KINDS: readonly MutationKind[] = [
   "install",
   "register",
   "deregister",
+  "refreshService",
   "respawn",
   "recoverIfDown",
   "freePortAndRestart",
@@ -54,6 +55,12 @@ describe("hostProgressHeading", () => {
     );
     expect(hostProgressHeading("apply", null)).not.toBe(
       "Downloading Traycer Host…",
+    );
+  });
+
+  it('M1: "refreshService" reads "Updating the host service…"', () => {
+    expect(hostProgressHeading("refreshService", null)).toBe(
+      "Updating the host service…",
     );
   });
 });

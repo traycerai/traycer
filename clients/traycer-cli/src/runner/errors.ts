@@ -161,6 +161,10 @@ export const CLI_ERROR_CODES = {
   SERVICE_UNINSTALL_FAILED: "E_SERVICE_UNINSTALL_FAILED",
   SERVICE_CONTROL_FAILED: "E_SERVICE_CONTROL_FAILED",
   SERVICE_CLI_PATH_UNRESOLVED: "E_SERVICE_CLI_PATH_UNRESOLVED",
+  // The registered definition could not be brought to the current launcher
+  // form (`host service refresh`, or the lifecycle mode change that runs it).
+  // Nothing was started or stopped; the message names the repair.
+  SERVICE_DEFINITION_REFRESH_FAILED: "E_SERVICE_DEFINITION_REFRESH_FAILED",
 
   // --- CLI install lifecycle (foundation only in NP-1) ---
   CLI_LOCK_BUSY: "E_CLI_LOCK_BUSY",

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   doctorFixRoute,
+  fixActionLabel,
   freePortConfirmWentStale,
   runFixAction,
 } from "@/components/settings/panels/host-doctor-actions";
@@ -92,6 +93,47 @@ describe("runFixAction", () => {
       expect(result).toEqual({ kind: "applied" });
     },
   );
+
+  it("M1: service-refresh dispatches runDoctorRepairQueued with refresh-service exactly once, and calls nothing else on management", async () => {
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve<QueuedDoctorRepairResult>({ kind: "applied" }),
+    );
+    const management = makeManagementWithRunDoctorRepairQueued(
+      runDoctorRepairQueued,
+    );
+
+    const result = await runFixAction(
+      management,
+      makeIssue("service-refresh"),
+      "local-host",
+    );
+
+    expect(runDoctorRepairQueued).toHaveBeenCalledTimes(1);
+    expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+      repair: "refresh-service",
+      expectedHostId: "local-host",
+    });
+    expect(result).toEqual({ kind: "applied" });
+    // "Calls nothing else": every other IHostManagement method in the fake
+    // rejects with "not implemented in mock" the moment it is invoked, so a
+    // clean resolve above already proves no other method ran.
+    expect(management.convergeReady).not.toHaveBeenCalled();
+    expect(management.registerService).not.toHaveBeenCalled();
+    expect(management.restartHost).not.toHaveBeenCalled();
+    expect(management.freePortAndRestart).not.toHaveBeenCalled();
+  });
+});
+
+describe("fixActionLabel", () => {
+  it('M1: "service-refresh" reads "Update service"', () => {
+    expect(fixActionLabel("service-refresh")).toBe("Update service");
+  });
+
+  it("labels the other known fix actions distinctly (positive controls)", () => {
+    expect(fixActionLabel("service-install")).toBe("Register service");
+    expect(fixActionLabel("host-restart")).toBe("Restart host");
+    expect(fixActionLabel("unknown-fix-action")).toBe("Fix");
+  });
 });
 
 describe("doctorFixRoute", () => {
@@ -166,6 +208,36 @@ describe("doctorFixRoute", () => {
       ).toBe(row.expected);
     },
   );
+
+  it("M1: service-refresh is local-bridge when local with a bridge, copy-command otherwise", () => {
+    expect(
+      doctorFixRoute({
+        fixAction: "service-refresh",
+        isLocalMachine: true,
+        hasLocalBridge: true,
+        rpcRestartSupported: false,
+        bridgeRestartRoute: false,
+      }),
+    ).toBe("local-bridge");
+    expect(
+      doctorFixRoute({
+        fixAction: "service-refresh",
+        isLocalMachine: false,
+        hasLocalBridge: true,
+        rpcRestartSupported: false,
+        bridgeRestartRoute: false,
+      }),
+    ).toBe("copy-command");
+    expect(
+      doctorFixRoute({
+        fixAction: "service-refresh",
+        isLocalMachine: true,
+        hasLocalBridge: false,
+        rpcRestartSupported: false,
+        bridgeRestartRoute: false,
+      }),
+    ).toBe("copy-command");
+  });
 
   it("routes host-logs to rpc regardless of restart support, locality, or a bridge", () => {
     expect(

@@ -291,6 +291,11 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
         "fakeHostController.deregisterService: not used by these tests",
       );
     },
+    refreshServiceDefinition: () => {
+      throw new Error(
+        "fakeHostController.refreshServiceDefinition: not used by these tests",
+      );
+    },
     respawn: () => {
       throw new Error("fakeHostController.respawn: not used by these tests");
     },

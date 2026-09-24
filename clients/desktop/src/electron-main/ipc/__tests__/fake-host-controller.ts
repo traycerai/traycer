@@ -23,6 +23,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -128,6 +129,18 @@ export class FakeHostController implements IpcHostController {
   }
   isPendingRevisionRefreshQuarantined(): boolean {
     return false;
+  }
+  /**
+   * M1: `host service refresh` on the mutation lane. Defaults to an
+   * already-current, no-op outcome - the overwhelming common case for a
+   * suite that is not itself testing the refresh - so the one field that
+   * changed here (a new controller method) never has to be re-stubbed by
+   * every existing IPC double.
+   */
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
   }
   onMutationProgress(
     _listener: (progress: MutationProgress) => void,

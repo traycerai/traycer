@@ -140,3 +140,24 @@ export function effectiveHostLifecycleMode(
 ): HostLifecycleMode {
   return policy === null ? HOST_LIFECYCLE_DEFAULT_MODE : policy.mode;
 }
+
+/**
+ * Whether a policy write from `previous` to `next` (both EFFECTIVE modes)
+ * must bring the registered service definition up to the current launcher
+ * form (`traycer host service refresh`).
+ *
+ * Only a labelled service start can be parked (`decideUnattendedStart`), and
+ * a definition written before labelled starts existed launches the host
+ * unlabelled - a start the policy can never park. Background parks nothing,
+ * so it needs no refresh; every other mode parks, `none` included. Both
+ * writers - `traycer host lifecycle set` and the desktop's
+ * `HostLifecycleService` - ask this one question, so the trigger cannot
+ * drift between them. Re-setting the mode already in force is not a
+ * transition; `traycer host service refresh` is the explicit retry.
+ */
+export function refreshOnModeChange(
+  previous: HostLifecycleMode,
+  next: HostLifecycleMode,
+): boolean {
+  return previous !== next && next !== "background";
+}

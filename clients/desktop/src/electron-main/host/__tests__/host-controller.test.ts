@@ -4726,6 +4726,118 @@ describe("platform matrix", () => {
     // reddens on both mock assertions.
   });
 
+  // ---------------------------------------------------------------------------
+  // M1: `refreshServiceDefinition` - `host service refresh` on the exclusive
+  // mutation lane, flat (never streamed: the verb emits no progress). Brings
+  // the registered service definition to the bundled CLI's current launcher
+  // WITHOUT starting, stopping or restarting anything.
+  // ---------------------------------------------------------------------------
+  describe("refreshServiceDefinition (M1)", () => {
+    it("runs `host service refresh` exactly once, flat (not streamed), on the mutation lane", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      const gate = deferred<unknown>();
+      vi.mocked(runBundledTraycerCliJson).mockReturnValueOnce(gate.promise);
+
+      const outcomePromise = controller.refreshServiceDefinition();
+      await vi.waitFor(() => {
+        expect(runBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+      });
+      expect(controller.lifecycleAdmissionBlock).toEqual({
+        kind: "mutation",
+        lane: {
+          kind: "refreshService",
+          progress: null,
+          startedAt: expect.any(String),
+        },
+      });
+      expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+        "host",
+        "service",
+        "refresh",
+      ]);
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+
+      gate.resolve({
+        label: "traycer",
+        environment: "production",
+        result: { kind: "current" },
+      });
+      const outcome = await outcomePromise;
+      expect(outcome).toEqual({
+        kind: "ok",
+        value: { result: "current", appliesAt: null },
+      });
+      expect(controller.lifecycleAdmissionBlock).toBeNull();
+    });
+
+    it('parses a refreshed/next-login payload to {result: "refreshed", appliesAt: "next-login"}', async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(runBundledTraycerCliJson).mockResolvedValueOnce({
+        label: "traycer",
+        environment: "production",
+        result: {
+          kind: "refreshed",
+          form: "launcher-file",
+          appliesAt: "next-login",
+        },
+      });
+
+      const outcome = await controller.refreshServiceDefinition();
+
+      expect(outcome).toEqual({
+        kind: "ok",
+        value: { result: "refreshed", appliesAt: "next-login" },
+      });
+    });
+
+    it("resolves failed (never rejects) on a result shape outside the three recognized arms", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(runBundledTraycerCliJson).mockResolvedValueOnce({
+        label: "traycer",
+        environment: "production",
+        result: { kind: "unexpected-future-kind" },
+      });
+
+      const outcome = await controller.refreshServiceDefinition();
+
+      expect(outcome).toEqual({
+        kind: "failed",
+        message: expect.stringContaining("unrecognized"),
+      });
+    });
+
+    it("classifies a subprocess error (E_HOST_BUSY -> busy/retry-with-force)", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(runBundledTraycerCliJson).mockRejectedValueOnce(
+        new TraycerCliError("E_HOST_BUSY", "host busy"),
+      );
+
+      const outcome = await controller.refreshServiceDefinition();
+
+      expect(outcome).toEqual({
+        kind: "busy",
+        continuation: "retry-with-force",
+        message: expect.stringContaining("work in progress"),
+      });
+    });
+  });
+
   // ---- user-repair reprovision intent -------------------------------------
   //
   // These pin the half of a Doctor lifecycle repair that the IPC handler

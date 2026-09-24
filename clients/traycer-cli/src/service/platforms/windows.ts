@@ -4,7 +4,12 @@ import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
 } from "../mutation-authority";
-import { markRegistrationCommitted } from "../cli-invocation-record";
+import {
+  CLI_INVOCATION_TXN_POLL_MS,
+  CLI_INVOCATION_TXN_WAIT_MS,
+  markRegistrationCommitted,
+  runServiceRegistrationWithInvocationRecord,
+} from "../cli-invocation-record";
 import {
   atServiceInstallEdge,
   atServiceSpawnEdge,
@@ -47,10 +52,25 @@ import {
   cliError,
   isErrnoException,
 } from "../../runner/errors";
-import type { CliInvocation } from "../cli-binary";
-import { escapeXml } from "../escape-xml";
+import { resolveServiceCliInvocation, type CliInvocation } from "../cli-binary";
+import { escapeXml, unescapeXml } from "../escape-xml";
 import { serviceLabelFor, windowsTaskName, type ServiceLabel } from "../label";
-import { ProcessRunError, runCommand } from "../process-runner";
+import {
+  ProcessRunError,
+  runCommand,
+  runCommandForBytes,
+  type RunBytesResult,
+} from "../process-runner";
+import {
+  replaceDefinitionFile,
+  SERVICE_REFRESH_COMMAND,
+  SERVICE_REINSTALL_COMMAND,
+  serviceDefinitionRefreshFailed,
+  type ServiceDefinitionAppliesAt,
+  type ServiceDefinitionForm,
+  type ServiceDefinitionRefresh,
+  type ServiceDefinitionState,
+} from "../service-definition";
 import { cliInstallHomeDir, hostHomeDir } from "../../store/paths";
 import type {
   InstallServiceOptions,
@@ -2764,6 +2784,352 @@ function resolveTaskUserId(): string {
     details: { USERDOMAIN: domain, USERNAME: name },
     exitCode: 1,
   });
+}
+
+// ---- Definition refresh (see ../service-definition.ts) ----------------------
+//
+// A task's definition is its action plus the launcher script that action
+// runs. Both refresh legs leave a running host alone (PROBE-TASK-REDEFINE-WIN,
+// on a throwaway task cloned from Traycer's own): renaming a new `.vbs` over
+// the one a running `wscript` executes succeeds first time, because WSH
+// compiles the whole script at start and does not hold it open or read it
+// incrementally; and `schtasks /Create /F` redefining a RUNNING task returns
+// 0 with the instance, its children and its Running state untouched. Neither
+// leg runs `/Run`, `/End` or `/Change`.
+
+/** What `schtasks /Query /TN <task> /XML` answered. */
+export type ScheduledTaskXmlQuery =
+  | { readonly kind: "absent" }
+  | { readonly kind: "failed"; readonly reason: string }
+  | { readonly kind: "xml"; readonly xml: string };
+
+export interface WindowsDefinitionDeps {
+  /** Read-only: the registered task's XML. */
+  readonly queryTaskXml: (taskName: string) => Promise<ScheduledTaskXmlQuery>;
+  /**
+   * The invocation a re-registration would emit. Re-resolved rather than read
+   * back from the launcher, exactly as `host update` re-resolves on Windows
+   * (`install-lifecycle.ts`); the resolver's slot staging is the same one
+   * every CLI command already runs before it dispatches.
+   */
+  readonly resolveCli: (label: ServiceLabel) => Promise<CliInvocation>;
+}
+
+const defaultWindowsDefinitionDeps: WindowsDefinitionDeps = {
+  queryTaskXml: queryScheduledTaskXml,
+  resolveCli: (label) =>
+    resolveServiceCliInvocation({
+      environment: label.environment,
+      override: null,
+      allowSelfInvocation: false,
+    }),
+};
+
+let windowsDefinitionDeps: WindowsDefinitionDeps = defaultWindowsDefinitionDeps;
+
+/** Test-only replacement for the task query and CLI resolution seams. */
+export function setWindowsDefinitionDepsForTests(
+  deps: WindowsDefinitionDeps | null,
+): void {
+  windowsDefinitionDeps = deps ?? defaultWindowsDefinitionDeps;
+}
+
+async function queryScheduledTaskXml(
+  taskName: string,
+): Promise<ScheduledTaskXmlQuery> {
+  let result: RunBytesResult;
+  try {
+    result = await runCommandForBytes(
+      "schtasks",
+      ["/Query", "/TN", taskName, "/XML"],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
+      },
+    );
+  } catch (cause) {
+    return {
+      kind: "failed",
+      reason: `schtasks /Query could not run (${describeCause(cause)})`,
+    };
+  }
+  // Any non-zero exit reads as "no such task", the same convention
+  // `statusService` applies to the same query without `/XML`.
+  if (result.exitCode !== 0) return { kind: "absent" };
+  const xml = decodeSchtasksXml(result.stdout);
+  return xml === null
+    ? { kind: "failed", reason: "schtasks /Query /XML output is not text" }
+    : { kind: "xml", xml };
+}
+
+/**
+ * `schtasks /XML` writes UTF-16LE, with a BOM or without depending on how
+ * stdout is redirected; decide from the bytes. Strict decoders: a repaired
+ * sequence would be a path the task never named.
+ */
+function decodeSchtasksXml(bytes: Buffer): string | null {
+  try {
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+      return new TextDecoder("utf-16le", { fatal: true }).decode(
+        bytes.subarray(2),
+      );
+    }
+    if (bytes.length >= 2 && bytes[1] === 0x00) {
+      return new TextDecoder("utf-16le", { fatal: true }).decode(bytes);
+    }
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+      bytes,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** The task's single `<Exec>` action, or `null` for any other shape. */
+function parseTaskExecAction(xml: string): TaskExecAction | null {
+  const execs = [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/g)];
+  if (execs.length !== 1) return null;
+  const body = execs[0]?.[1];
+  if (body === undefined) return null;
+  const command = body.match(/<Command>([\s\S]*?)<\/Command>/)?.[1];
+  if (command === undefined) return null;
+  const argumentsLine = body.match(/<Arguments>([\s\S]*?)<\/Arguments>/)?.[1];
+  return {
+    command: unescapeXml(command.trim()),
+    argumentsLine: unescapeXml(argumentsLine ?? ""),
+  };
+}
+
+function sameWindowsPath(a: string, b: string): boolean {
+  const normalize = (value: string): string =>
+    value.replace(/\//g, "\\").toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
+function isAbsoluteWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
+// The launcher-less generation (W1, `cli-v1.0.0`-`v1.1.4`): the CLI is the
+// task's `<Command>` and its arguments end in `host start`, each token
+// optionally quoted.
+const DIRECT_HOST_START_TAIL = /(^|\s)"?host"?\s+"?start"?\s*$/;
+
+/** The initial `<cli...> host start` line the launcher assigns, as emitted. */
+function launcherCommandLine(cli: CliInvocation): string {
+  return [cli.command, ...cli.args, "host", "start"]
+    .map(quoteWindowsArg)
+    .join(" ");
+}
+
+/**
+ * Whether the launcher on disk already runs `cli`. Every launcher
+ * generation assigns its initial command line as one VBScript literal
+ * (`commandLine = <literal>`, or the run-only generations'
+ * `exitCode = shell.Run(<literal>, 0, True)`), so finding the literal this
+ * CLI would emit is proof the invocation is unchanged. Anything else -
+ * including no launcher at all - is treated as a change, which only costs
+ * the invocation record's transaction.
+ */
+function launcherRunsInvocation(
+  previous: Buffer | null,
+  cli: CliInvocation,
+): boolean {
+  if (previous === null) return false;
+  const text = previous.toString("utf16le").replace(/^﻿/, "");
+  const literal = quoteVbsString(launcherCommandLine(cli));
+  return (
+    text.includes(`commandLine = ${literal}\r\n`) ||
+    text.includes(`exitCode = shell.Run(${literal}, 0, True)`)
+  );
+}
+
+type WindowsDefinitionPlan =
+  | Exclude<ServiceDefinitionState, { readonly kind: "stale" }>
+  | {
+      readonly kind: "stale";
+      readonly form: ServiceDefinitionForm;
+      readonly appliesAt: ServiceDefinitionAppliesAt;
+      readonly cli: CliInvocation;
+      readonly launcherBytes: Buffer;
+      /** The action itself is not today's: `/Create /F` (no `/Run`). */
+      readonly redefineTask: boolean;
+      /** The registered invocation is `cli` already: no record transaction. */
+      readonly invocationUnchanged: boolean;
+    };
+
+async function planWindowsDefinition(
+  label: ServiceLabel,
+  deps: WindowsDefinitionDeps,
+): Promise<WindowsDefinitionPlan> {
+  const query = await deps.queryTaskXml(windowsTaskName(label));
+  if (query.kind === "absent") return { kind: "not-registered" };
+  if (query.kind === "failed") {
+    return { kind: "unrecognized", reason: query.reason };
+  }
+  const action = parseTaskExecAction(query.xml);
+  if (action === null) {
+    return {
+      kind: "unrecognized",
+      reason: "the task does not have exactly one Exec action",
+    };
+  }
+  const launcherPath = hiddenHostLauncherPath(label);
+  const expectedAction = buildTaskAction(label);
+  const actionCurrent =
+    sameWindowsPath(action.command, expectedAction.command) &&
+    action.argumentsLine === expectedAction.argumentsLine;
+  const launcherAction =
+    actionCurrent ||
+    (sameWindowsPath(
+      action.command.slice(action.command.lastIndexOf("\\") + 1),
+      "wscript.exe",
+    ) &&
+      action.argumentsLine.toLowerCase().includes(launcherPath.toLowerCase()));
+  const directAction =
+    !launcherAction &&
+    isAbsoluteWindowsPath(action.command) &&
+    DIRECT_HOST_START_TAIL.test(action.argumentsLine);
+  if (!launcherAction && !directAction) {
+    return {
+      kind: "unrecognized",
+      reason: "its action is not a Traycer host start",
+    };
+  }
+  let cli: CliInvocation;
+  try {
+    cli = await deps.resolveCli(label);
+  } catch (cause) {
+    return {
+      kind: "unrecognized",
+      reason: `the CLI to register could not be resolved (${describeCause(cause)})`,
+    };
+  }
+  let previous: Buffer | null;
+  try {
+    previous = await readFile(launcherPath);
+  } catch (cause) {
+    if (!(isErrnoException(cause) && cause.code === "ENOENT")) {
+      return {
+        kind: "unrecognized",
+        reason: `the launcher cannot be read (${describeCause(cause)})`,
+      };
+    }
+    previous = null;
+  }
+  const launcherBytes = Buffer.from(
+    `﻿${buildHiddenHostLauncher(cli, label)}`,
+    "utf16le",
+  );
+  if (actionCurrent && previous !== null && previous.equals(launcherBytes)) {
+    return { kind: "current" };
+  }
+  return {
+    kind: "stale",
+    form: launcherAction ? "launcher-vbs" : "direct-action",
+    appliesAt: "next-start",
+    cli,
+    launcherBytes,
+    redefineTask: !actionCurrent,
+    invocationUnchanged: launcherAction
+      ? launcherRunsInvocation(previous, cli)
+      : sameWindowsPath(action.command, cli.command) &&
+        action.argumentsLine.trim() ===
+          [...cli.args, "host", "start"].map(quoteWindowsArg).join(" "),
+  };
+}
+
+/** Read-only: what a refresh would find. One read-only `schtasks /Query`. */
+export async function inspectWindowsServiceDefinition(
+  label: ServiceLabel,
+): Promise<ServiceDefinitionState> {
+  const plan = await planWindowsDefinition(label, windowsDefinitionDeps);
+  if (plan.kind !== "stale") return plan;
+  return { kind: "stale", form: plan.form, appliesAt: plan.appliesAt };
+}
+
+/**
+ * Rewrite the launcher script and, when the task's action predates it,
+ * redefine the task with `/Create /F` - and nothing else: no `/Run`, `/End`
+ * or `/Change`, no grant and no restore. A current task costs one read-only
+ * query and one file read.
+ *
+ * The invocation record (`cli-invocation.json`) is left alone while the
+ * launcher already runs the re-resolved CLI; when it would run a different
+ * one, the write goes through the record's transaction like any other
+ * registration.
+ */
+export async function refreshWindowsServiceDefinition(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<ServiceDefinitionRefresh> {
+  const taskName = windowsTaskName(label);
+  const plan = await planWindowsDefinition(label, windowsDefinitionDeps);
+  switch (plan.kind) {
+    case "not-registered":
+    case "current":
+      return plan;
+    case "unrecognized":
+      throw serviceDefinitionRefreshFailed({
+        subject: `Scheduled Task '${taskName}'`,
+        reason: plan.reason,
+        remedy: SERVICE_REINSTALL_COMMAND,
+      });
+    case "stale":
+      break;
+  }
+  const launcherPath = hiddenHostLauncherPath(label);
+  const write = async (): Promise<void> => {
+    await verifyServiceMutationAuthority();
+    await mkdir(dirname(launcherPath), { recursive: true });
+    await replaceDefinitionFile(launcherPath, plan.launcherBytes, null);
+    if (!plan.redefineTask) return;
+    await verifyServiceMutationAuthority();
+    const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
+    try {
+      const xmlPath = join(tmpDir, "task.xml");
+      await writeFile(
+        xmlPath,
+        Buffer.from(`﻿${buildTaskXml({ label, cli: plan.cli })}`, "utf16le"),
+      );
+      await run(
+        "schtasks",
+        ["/Create", "/TN", taskName, "/XML", xmlPath, "/F"],
+        {
+          env: undefined,
+          cwd: undefined,
+          timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
+          tolerateNonZeroExit: false,
+        },
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  };
+  try {
+    if (plan.invocationUnchanged) {
+      await write();
+    } else {
+      await runServiceRegistrationWithInvocationRecord({
+        environment: label.environment,
+        hostHomeDir: hostHomeDir(label.environment),
+        serviceLabel: label.id,
+        cli: plan.cli,
+        register: write,
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      });
+    }
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${taskName}'`,
+      reason: describeCause(cause),
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+  return { kind: "refreshed", form: plan.form, appliesAt: plan.appliesAt };
 }
 
 export {

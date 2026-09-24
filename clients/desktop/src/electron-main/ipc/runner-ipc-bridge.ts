@@ -136,6 +136,7 @@ import type {
   MutationProgress,
   RemoveTraycerOk,
   LocalHostMutationIntent,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -495,6 +496,9 @@ export interface IpcHostController {
     intent: LocalHostMutationIntent,
   ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  >;
   respawn(
     intent: LocalHostMutationIntent,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;

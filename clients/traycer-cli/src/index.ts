@@ -120,6 +120,10 @@ import { buildServiceInstallCommand } from "./commands/service-install";
 import { buildServiceStartCommand } from "./commands/service-start";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
+import {
+  refreshServiceDefinitionUnderContender,
+  serviceRefreshCommand,
+} from "./commands/service-refresh";
 import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import {
@@ -2242,6 +2246,18 @@ function registerServiceCommands(host: Command): void {
     () => serviceStatusCommand,
   );
 
+  // Definition-only, beside the verbs that also start or stop: see
+  // commands/service-refresh.ts. Traycer Desktop runs it after a lifecycle
+  // mode change it writes, and the doctor names it as the repair.
+  withRunner(
+    service
+      .command("refresh")
+      .description(
+        "Rewrite the registered OS service definition to this CLI's current launcher, without starting, stopping or restarting anything. The running host keeps running; the new launcher applies from its next start (on macOS, for a definition older than the launcher file, from the next login). Needed for a lifecycle mode other than background to park login starts. Does nothing when the definition is already current or nothing is registered.",
+      ),
+    () => serviceRefreshCommand,
+  );
+
   withRunner(
     service
       .command("uninstall")
@@ -2274,10 +2290,14 @@ function registerHostLifecycleCommands(host: Command): void {
     lifecycle
       .command("set")
       .description(
-        "Choose the lifecycle mode. Writes the setting only: nothing is started or stopped, and 'none' does not stop a running host. The mode applies to the next unattended host start.",
+        "Choose the lifecycle mode. Nothing is started or stopped, and 'none' does not stop a running host. The mode applies to the next unattended host start. Choosing a mode other than background also brings the registered service definition to the current launcher (as 'traycer host service refresh' does), so login starts can be parked.",
       )
       .argument("<mode>", "background | linked | ask | stop-if-idle | none"),
-    (_opts, args) => buildHostLifecycleSetCommand({ mode: args[0] }),
+    (_opts, args) =>
+      buildHostLifecycleSetCommand({
+        mode: args[0],
+        refreshServiceDefinition: refreshServiceDefinitionUnderContender,
+      }),
   );
 }
 

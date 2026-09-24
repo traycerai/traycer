@@ -34,6 +34,7 @@ import type {
   MutationKind,
   LifecycleAdmissionBlock,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -212,6 +213,11 @@ class FakeHostController implements IpcHostController {
     kind: "ok",
     value: { registered: false },
   };
+  refreshServiceDefinitionResult: MutationOutcome<ServiceDefinitionRefreshOk> =
+    {
+      kind: "ok",
+      value: { result: "current", appliesAt: null },
+    };
   freePortAndRestartResult: MutationOutcome<ActivateInstalledOk> = {
     kind: "ok",
     value: { activated: true },
@@ -319,6 +325,12 @@ class FakeHostController implements IpcHostController {
   async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
     this.calls.push({ method: "deregisterService", args: [] });
     return this.deregisterServiceResult;
+  }
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    this.calls.push({ method: "refreshServiceDefinition", args: [] });
+    return this.refreshServiceDefinitionResult;
   }
   async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
     this.calls.push({ method: "respawn", args: [] });

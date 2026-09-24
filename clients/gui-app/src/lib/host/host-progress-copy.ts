@@ -99,6 +99,8 @@ export function hostProgressHeading(
       return "Removing Traycer…";
     case "stopHost":
       return "Stopping Traycer Host…";
+    case "refreshService":
+      return "Updating the host service…";
   }
 }
 

@@ -20,7 +20,8 @@ export type MutationKind =
   | "freePortAndRestart"
   | "uninstallHost"
   | "removeTraycer"
-  | "stopHost";
+  | "stopHost"
+  | "refreshService";
 
 export interface MutationProgress {
   readonly stage: string | null;
@@ -384,6 +385,17 @@ export interface InstallVersionOk {
 
 export interface ServiceRegistrationOk {
   readonly registered: boolean;
+}
+
+/**
+ * What `host service refresh` found and did (`HostController
+ * .refreshServiceDefinition`). `appliesAt` is set only for `refreshed`:
+ * `next-login` is the macOS plist that predates the launcher file, whose
+ * rewrite launchd picks up at the next login rather than at a respawn.
+ */
+export interface ServiceDefinitionRefreshOk {
+  readonly result: "not-registered" | "current" | "refreshed";
+  readonly appliesAt: "next-start" | "next-login" | null;
 }
 
 export interface UninstallOk {

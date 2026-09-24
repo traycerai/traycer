@@ -124,6 +124,50 @@ export function runCommand(
   });
 }
 
+export interface RunBytesResult {
+  readonly stdout: Buffer;
+  readonly exitCode: number;
+}
+
+/**
+ * {@link runCommand} for a READ whose stdout is not UTF-8 - `schtasks /Query
+ * /XML` writes UTF-16LE, which a `utf8` decode turns into garbage. Resolves
+ * with the raw bytes and the exit code whatever that code is (the caller
+ * decides what a non-zero exit means); rejects only when the child could not
+ * be run at all, ran past `timeoutMs`, or overflowed the output cap.
+ */
+export function runCommandForBytes(
+  command: string,
+  args: readonly string[],
+  options: Omit<RunOptions, "tolerateNonZeroExit">,
+): Promise<RunBytesResult> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      [...args],
+      {
+        env: options.env ?? process.env,
+        cwd: options.cwd,
+        timeout: options.timeoutMs,
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+        encoding: "buffer",
+      },
+      (err, stdout) => {
+        if (err === null) {
+          resolve({ stdout, exitCode: 0 });
+          return;
+        }
+        if (typeof err.code === "number") {
+          resolve({ stdout, exitCode: err.code });
+          return;
+        }
+        reject(err);
+      },
+    );
+  });
+}
+
 export class ProcessRunError extends Error {
   public readonly command: string;
   public readonly args: readonly string[];
