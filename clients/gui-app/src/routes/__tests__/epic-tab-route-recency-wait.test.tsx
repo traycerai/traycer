@@ -89,6 +89,14 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
+// Route recency is the subject here. The root route now mounts the real
+// organization projection beside route content, and that projection needs a
+// host runtime which this route-only harness intentionally does not build.
+vi.mock("@/hooks/organization/organization-provider", () => ({
+  OrganizationProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+
 vi.mock("@/components/layout/header/desktop-menu-bar", () => ({
   DesktopMenuBar: () => null,
 }));
