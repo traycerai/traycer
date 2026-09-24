@@ -371,12 +371,16 @@ describe("AssistantMessageBody intermediate text", () => {
       name: "Show earlier activity",
     });
     const finalText = screen.getByText("Final answer");
+    expect(activityToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(activityToggle.getAttribute("aria-controls")).toBeNull();
     expect(
       activityToggle.compareDocumentPosition(finalText) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(activityToggle);
+    expect(activityToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(activityToggle.getAttribute("aria-controls")).toBeNull();
 
     const trigger = screen.getByRole("button", { name: "Earlier response" });
     expect(

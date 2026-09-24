@@ -1082,26 +1082,23 @@ function IntermediateContentDisclosure(props: {
   readonly onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <Collapsible
-      open={props.open}
-      onOpenChange={props.onOpenChange}
-      className="text-ui-sm text-muted-foreground"
+    <button
+      type="button"
+      data-state={props.open ? "open" : "closed"}
+      data-chat-intermediate-trigger="true"
+      aria-expanded={props.open}
+      aria-label={
+        props.open ? "Hide earlier activity" : "Show earlier activity"
+      }
+      onClick={() => props.onOpenChange(!props.open)}
+      className="group/intermediate-content flex max-w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
-      <CollapsibleTrigger
-        data-chat-intermediate-trigger="true"
-        aria-label={
-          props.open ? "Hide earlier activity" : "Show earlier activity"
-        }
-        variant="quiet"
-        className="group/intermediate-content flex max-w-full items-center overflow-hidden text-left"
-      >
-        <span className="min-w-0 truncate">Earlier activity</span>
-        <ChevronRight
-          className="ml-2 size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color] group-hover/intermediate-content:translate-x-0 group-hover/intermediate-content:text-foreground group-focus-visible/intermediate-content:translate-x-0 group-focus-visible/intermediate-content:text-foreground group-focus-visible/intermediate-content:opacity-100 group-data-[state=open]/intermediate-content:translate-x-0 group-data-[state=open]/intermediate-content:rotate-90 group-data-[state=open]/intermediate-content:text-foreground group-data-[state=open]/intermediate-content:opacity-100"
-          aria-hidden
-        />
-      </CollapsibleTrigger>
-    </Collapsible>
+      <span className="min-w-0 truncate">Earlier activity</span>
+      <ChevronRight
+        className="size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color] group-hover/intermediate-content:translate-x-0 group-hover/intermediate-content:text-foreground group-focus-visible/intermediate-content:translate-x-0 group-focus-visible/intermediate-content:text-foreground group-focus-visible/intermediate-content:opacity-100 group-data-[state=open]/intermediate-content:translate-x-0 group-data-[state=open]/intermediate-content:rotate-90 group-data-[state=open]/intermediate-content:text-foreground group-data-[state=open]/intermediate-content:opacity-100"
+        aria-hidden
+      />
+    </button>
   );
 }
 
