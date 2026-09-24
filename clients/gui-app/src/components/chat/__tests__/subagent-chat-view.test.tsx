@@ -113,9 +113,7 @@ function makeFixture(transcript: HTMLElement | null): ViewFixture {
   };
 }
 
-function transcriptWithControls(
-  ids: ReadonlyArray<string>,
-): HTMLElement {
+function transcriptWithControls(ids: ReadonlyArray<string>): HTMLElement {
   const container = document.createElement("div");
   for (const id of ids) {
     const button = document.createElement("button");
@@ -197,20 +195,18 @@ describe("<SubagentChatView />", () => {
     it("steps back to the parent from a nested card and closes at the top", () => {
       const fixture = makeFixture(null);
       const first = render(viewElement("leaf", fixture));
-      fireEvent.keyDown(
-        screen.getByRole("heading", { name: "leaf-agent" }),
-        { key: "Escape" },
-      );
+      fireEvent.keyDown(screen.getByRole("heading", { name: "leaf-agent" }), {
+        key: "Escape",
+      });
       expect(fixture.handlers.open).toHaveBeenCalledWith("root");
       expect(fixture.handlers.close).not.toHaveBeenCalled();
       first.unmount();
 
       const second = makeFixture(null);
       render(viewElement("root", second));
-      fireEvent.keyDown(
-        screen.getByRole("heading", { name: "root-agent" }),
-        { key: "Escape" },
-      );
+      fireEvent.keyDown(screen.getByRole("heading", { name: "root-agent" }), {
+        key: "Escape",
+      });
       expect(second.handlers.close).toHaveBeenCalledTimes(1);
       expect(second.handlers.open).not.toHaveBeenCalled();
     });
@@ -223,10 +219,9 @@ describe("<SubagentChatView />", () => {
       };
       document.addEventListener("keydown", onCapture, true);
       try {
-        fireEvent.keyDown(
-          screen.getByRole("heading", { name: "root-agent" }),
-          { key: "Escape" },
-        );
+        fireEvent.keyDown(screen.getByRole("heading", { name: "root-agent" }), {
+          key: "Escape",
+        });
       } finally {
         document.removeEventListener("keydown", onCapture, true);
       }
@@ -321,7 +316,9 @@ describe("<SubagentChatView />", () => {
         messages: [
           {
             ...makeMessage(1, "assistant"),
-            segments: [{ ...card("root", "root-agent", []), result: "Final answer" }],
+            segments: [
+              { ...card("root", "root-agent", []), result: "Final answer" },
+            ],
           },
         ],
       };

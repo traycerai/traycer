@@ -203,7 +203,9 @@ function useDrillInFocus(args: DrillInFocusArgs): void {
     if (previous.openId === null) entryIdRef.current = openId;
     const section = sectionRef.current;
     const returnTo =
-      section === null ? null : steppedBackFocusTarget(section, openId, previous);
+      section === null
+        ? null
+        : steppedBackFocusTarget(section, openId, previous);
     (returnTo ?? headingRef.current ?? section)?.focus();
   }, [headingRef, openId, pathIds, sectionRef, transcriptRef]);
 }

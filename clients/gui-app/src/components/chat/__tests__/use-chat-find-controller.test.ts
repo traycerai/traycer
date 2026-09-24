@@ -206,7 +206,10 @@ describe("useChatFindController - chain-open on reveal", () => {
 
   it("force-opens the owning chain on a genuine find reveal", () => {
     const messages = makeTranscriptWithSubagentBodyNeedle();
-    const { getAdapter, forceStore } = renderController(messages, TRANSCRIPT_SCOPE);
+    const { getAdapter, forceStore } = renderController(
+      messages,
+      TRANSCRIPT_SCOPE,
+    );
     const adapter = getAdapter();
 
     act(() => {
@@ -231,7 +234,10 @@ describe("useChatFindController - chain-open on reveal", () => {
 
   it("does not re-force-open on a passive reconcile of the same target", () => {
     const messages = makeTranscriptWithSubagentBodyNeedle();
-    const { getAdapter, forceStore } = renderController(messages, TRANSCRIPT_SCOPE);
+    const { getAdapter, forceStore } = renderController(
+      messages,
+      TRANSCRIPT_SCOPE,
+    );
     const adapter = getAdapter();
 
     act(() => {
@@ -254,8 +260,10 @@ describe("useChatFindController - chain-open on reveal", () => {
   it("resumes an offscreen interview detail reveal when virtualization mounts the unit", () => {
     onTestFinished(installMockHighlights());
     const messages = makeTranscriptWithInterviewDetailNeedle();
-    const { getAdapter, getController, forceStore } =
-      renderController(messages, TRANSCRIPT_SCOPE);
+    const { getAdapter, getController, forceStore } = renderController(
+      messages,
+      TRANSCRIPT_SCOPE,
+    );
     const adapter = getAdapter();
 
     act(() => {
@@ -301,8 +309,10 @@ describe("useChatFindController - chain-open on reveal", () => {
 
   it("clears an interview target when passive reconciliation moves to an ordinary unit", () => {
     const messages = makeTranscriptWithInterviewDetailNeedle();
-    const { getAdapter, forceStore, rerenderMessages } =
-      renderController(messages, TRANSCRIPT_SCOPE);
+    const { getAdapter, forceStore, rerenderMessages } = renderController(
+      messages,
+      TRANSCRIPT_SCOPE,
+    );
     const adapter = getAdapter();
 
     act(() => {
@@ -385,7 +395,11 @@ describe("useChatFindController - chain-open on reveal", () => {
       const adapter = getAdapter();
 
       act(() => {
-        void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+        void adapter.search({
+          requestId: 1,
+          query: "needle",
+          matchCase: false,
+        });
       });
       flushFrames();
 
@@ -407,11 +421,17 @@ describe("useChatFindController - chain-open on reveal", () => {
       const adapter = getAdapter();
 
       act(() => {
-        void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+        void adapter.search({
+          requestId: 1,
+          query: "needle",
+          matchCase: false,
+        });
       });
       expect(adapter.getSnapshot().total).toBe(2);
 
-      act(() => rerenderScope({ openSubagentId: CARD_ID, getSubagentViewRoot }));
+      act(() =>
+        rerenderScope({ openSubagentId: CARD_ID, getSubagentViewRoot }),
+      );
       expect(getAdapter().getSnapshot().total).toBe(1);
 
       act(() => rerenderScope({ openSubagentId: null, getSubagentViewRoot }));

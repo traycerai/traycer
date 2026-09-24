@@ -1616,7 +1616,10 @@ describe("buildSubagentChatFindRows", () => {
 
   it("orders task, child text and nested header, rooted at the view", () => {
     const rows = buildSubagentChatFindRows(
-      openCard({ result: "Ignored result", children: [childText, nestedCard()] }),
+      openCard({
+        result: "Ignored result",
+        children: [childText, nestedCard()],
+      }),
       TILE_INSTANCE_ID,
     );
     expect(rows).toHaveLength(1);
@@ -1642,9 +1645,7 @@ describe("buildSubagentChatFindRows", () => {
     const rows = buildSubagentChatFindRows(
       openCard({
         result: "Final answer",
-        children: [
-          toolChild(),
-        ],
+        children: [toolChild()],
       }),
       TILE_INSTANCE_ID,
     );
