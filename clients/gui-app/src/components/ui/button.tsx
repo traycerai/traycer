@@ -151,6 +151,12 @@ const buttonVariants = cva(
         // one call site.
         "card-row":
           "h-auto min-w-0 justify-start gap-3 rounded-xl px-4 py-3 text-left",
+        // A multiline disclosure spanning one row of a divided settings list.
+        "disclosure-row":
+          "h-auto min-h-11 min-w-0 items-start justify-start gap-3 rounded-none px-4 py-4 text-left whitespace-normal",
+        // Text actions that must remain comfortable to tap on a phone.
+        touch:
+          "h-auto min-h-11 min-w-0 max-w-full gap-1.5 px-2 py-2 text-ui-xs whitespace-normal",
       },
     },
     defaultVariants: {

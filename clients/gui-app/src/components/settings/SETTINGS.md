@@ -4340,39 +4340,39 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     buttons are disabled at that boundary so a refused move is never offered as
     an active control. Neither can fire on a ladder this panel wrote, where
     `notify` is last and every movable row is above it.
-  - **The Advanced per-failure matrix is collapsed by default and derived, not
-    written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
-    `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
-    is added rather than silently missing one. Each row has three chips
-    (`notify` has no column - it is eligible everywhere, so the column would
-    carry no information) in three states: **runs**, **off**, and
-    **impossible**, the last rendered as a non-interactive `<span>` carrying
-    its own reason inline. That third state is why the eligibility table
-    `REASON_ELIGIBLE_RUNGS` had to move into `@traycer/protocol` (it was
-    host-private): the matrix must distinguish "you turned this off" from
-    "this cannot help that failure", and a second copy GUI-side would have
-    drawn a policy the engine does not execute the first time a row moved.
-    A write from this matrix carries `notify` through explicitly and takes its
-    order from the editor's four-row display order, never from the chips on
-    screen; an override that ends up equal to the base ladder is **removed**
-    rather than stored, so a later change to the main order keeps applying to
-    that failure. The excluded reasons collapse into one read-only line -
-    exclusion is not a preference - and `Reset overrides only` clears
-    `reasonOverrides` alone, leaving the ladder and Behavior untouched.
-    **What the matrix cannot express, disclosed rather than left to be
-    discovered (RF5, D142/D146).** Turning every override chip off leaves the
-    brief retry that outages and connection failures start with, and the
-    notification at the end - but **no cancellation window**: the all-off shape
-    arms no grace hold, so there is no countdown to cancel. Settings does not
-    author the wire's per-reason `off` value, and Notify stays last. That is
-    `FALLBACK_OVERRIDES_DISCLOSURE`'s promise in substance, and the two are
-    meant to stay in step. The
-    wire schema permits both - `reasonOverrides` accepts the literal `"off"`,
-    and `fallbackLadderSchema` checks length and uniqueness only, so an early
-    `notify` is a valid stored ladder - and the panel deliberately writes
-    neither. D142 and D146 settled that (the user fixed both); the sentence
-    above is the disclosure obligation those decisions carry, and it lives in
-    the panel's own help copy as well as here.
+  - **Overrides is a responsive list of problems with one inline editor open
+    at a time.** Every row starts collapsed and shows its configured behavior
+    and whether it follows the main plan or has a saved custom rule. Expansion
+    is local UI state, never a policy write. Eligible actions are checkboxes;
+    unavailable actions are explained in a disclosure, never disabled controls.
+    Rows and eligibility are derived from the protocol taxonomy. Connection
+    failures and excluded reasons have read-only summaries, with a per-reason
+    reset when a stored override exists.
+    The preview respects the stored order and stops at the first `notify`;
+    selected actions after it are marked as unreachable. A transient retry is
+    shown only when the narrowed sequence is nonempty. Explicit `"off"`, empty
+    sequences and sequences with only ineligible actions do not promise retries.
+    With automatic routing off, summaries describe what the settings would do
+    when it is enabled. Billing's notification and confirmed-sign-out gating
+    remain disclosed, and switch choices explain the fresh session.
+    Writes still use the existing four-row display order, carry terminal
+    `notify` through, and remove an override only when its FULL sequence equals
+    the base plan. Disabled checkboxes keep their place when that order agrees
+    with the saved sequence; viewing an older custom sequence never rewrites it.
+    **Use main plan** removes one override; **Reset all to main plan** removes
+    all overrides without touching other policy fields. Undo is an inverse of
+    that reset, held by the parent editor so it survives a tab change. It waits
+    for a confirmed current view, is unavailable for unknown/refused saves,
+    preserves unrelated fields, and expires on the next policy edit, full reset,
+    group restore, or device/editor remount.
+    Save feedback sits above the collapsible list. Unknown request IDs retain
+    their originating row so a collapsed row can say **Check save** without
+    treating the most recently edited row as the failed request. Existing
+    tab-level attention and the parent reducer's save/reconciliation rules
+    remain authoritative. Quiet save confirmation requires the submitted policy
+    to match the current confirmed view; a read-back that restores older values
+    cannot claim the change was saved. Undo and read-only reset restore focus to
+    stable labels. No new policy storage or recovery engine behavior.
   - **Equivalent models** is the user's statement about which models are
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
