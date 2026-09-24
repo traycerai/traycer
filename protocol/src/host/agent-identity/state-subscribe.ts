@@ -59,7 +59,33 @@ import {
 } from "@traycer/protocol/host/agent-identity/schemas";
 import { identityFileEntrySchema } from "@traycer/protocol/host/agent-identity/files";
 import { identityDocumentProvenanceKindSchema } from "@traycer/protocol/persistence/identity/schemas";
+import {
+  epicDurabilityStatusSchemaV15,
+  epicLocalProtectionSchema,
+  epicPromotionStateSchema,
+} from "@traycer/protocol/host/epic/subscribe";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+
+/**
+ * Where the identity's bytes are safe, and whether this session has local
+ * (WAL) protection at all - the epic lane's `@1.6` durability legs, one
+ * container over, and deliberately the SAME schemas rather than an identity
+ * spelling of them: an identity is local-first (T14), its rooms are armed
+ * into the same local room store an epic's are, and the renderer that
+ * presents "local / promoting / cloud" for an epic presents exactly those
+ * states for an identity.
+ *
+ * All three are OPTIONAL, and absence means UNKNOWN, never synced - the same
+ * conservative reading `epic.subscribe` gives, for the same reason: a host
+ * that cannot answer must not be read as reassurance. Every host-state
+ * bearing frame carries them (both lead frames and `hostStateChanged`), so a
+ * client attaching after a promotion needs no replay to learn the home moved.
+ */
+export const agentIdentityDurabilityFields = {
+  durability: epicDurabilityStatusSchemaV15.optional(),
+  promotionState: epicPromotionStateSchema.optional(),
+  localProtection: epicLocalProtectionSchema.optional(),
+} as const;
 
 /**
  * The identity's own settings, as a revisioned RECORD.
@@ -329,6 +355,7 @@ const agentIdentityStateSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
     documents: z.array(agentIdentityDocumentRowSchema),
     files: z.array(agentIdentityFileRowSchema),
     shards: z.array(agentIdentityShardAvailabilitySchema),
+    ...agentIdentityDurabilityFields,
     ...epicLaneTextFrameFields,
   }),
 );
@@ -352,6 +379,7 @@ const agentIdentityStateSubscribeResumedFrameSchemaV10 = lazySchema(() =>
     position: epicLanePositionSchema,
     reconciledWithCloud: z.boolean(),
     shards: z.array(agentIdentityShardAvailabilitySchema),
+    ...agentIdentityDurabilityFields,
     ...epicLaneTextFrameFields,
   }),
 );
@@ -378,6 +406,7 @@ const agentIdentityStateSubscribeHostStateFrameSchemaV10 = lazySchema(() =>
     ...epicLaneEpochFrameFields,
     reconciledWithCloud: z.boolean(),
     shards: z.array(agentIdentityShardAvailabilitySchema),
+    ...agentIdentityDurabilityFields,
     ...epicLaneTextFrameFields,
   }),
 );
