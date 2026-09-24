@@ -435,4 +435,104 @@ describe("LegendList estimate recovery", () => {
       expect(after).not.toBeCloseTo(before, 0);
     });
   });
+
+  /**
+   * Companion to "refreshes never-measured cached estimates..." above, for
+   * the transcript's OTHER maintain configuration: a same-key, content-only
+   * commit (`{data: false, size: true}` - what `chat-timeline.tsx` sends
+   * for the accepted-message/first-token pass, when the row key sequence
+   * did not change; see quote-send-scroll-position.test.tsx). The test
+   * above only proves a poisoned estimate recovers across an APPEND
+   * (`{data: true}`, key sequence changed). A production fix for a
+   * detached reader's position moving on the same-key commit must not
+   * "fix" it by leaving a stale cached estimate frozen there forever - this
+   * proves recovery still reaches a never-individually-measured row on
+   * that commit too.
+   */
+  describe("estimate recovery across a same-key (data: false) commit", () => {
+    it("recovers a poisoned estimate through a same-key content commit, not only through an append", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      const sameKeyMvcp: MaintainVisibleContentPositionConfig<Row> = {
+        data: false,
+        size: true,
+      };
+      const data = rows(50);
+      const { rerender } = render(
+        createTranscriptList(data, listRef, sameKeyMvcp),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      // A genuinely measured baseline, mirroring "refreshes never-measured
+      // cached estimates..." above - `sizeAtIndex` reads `sizesKnown`
+      // (measured-only) and is `undefined` for row-40 below, which this
+      // test deliberately never measures, so it cannot supply this value.
+      const measuredSize = list.getState().getAverageItemSizes()
+        .assistant.average;
+
+      const effectiveSizeAt = (index: number): number => {
+        const state = list.getState();
+        return state.positionAtIndex(index + 1) - state.positionAtIndex(index);
+      };
+
+      // Poison the live average through a row this test never mounts or
+      // scrolls near, exactly as "refreshes never-measured cached
+      // estimates..." above does with row-45 - a row close to the top
+      // (like row-10) sits inside the render+buffer window a top-mounted
+      // list actually draws, so its own real (unmocked) layout-effect
+      // measurement re-fires on every rerender and overwrites this poke
+      // back to the flat 90px default; row-45 stays outside that window.
+      act(() => {
+        list.setItemSize("row-45", {
+          height: measuredSize * 1_000,
+          width: 800,
+        });
+      });
+      const poisonedAverage = list.getState().getAverageItemSizes().assistant;
+      expect(poisonedAverage.average).toBeGreaterThan(measuredSize * 10);
+
+      // A same-key, content-only rerender - new row objects, same ids - is
+      // exactly what an accepted-message/token commit looks like; it goes
+      // through the same `{data: false, size: true}` config the transcript
+      // selects for it.
+      rerender(
+        createTranscriptList(
+          data.map((row) => ({ ...row })),
+          listRef,
+          sameKeyMvcp,
+        ),
+      );
+      await settleLegendList();
+
+      expect(effectiveSizeAt(40)).toBeGreaterThan(measuredSize * 10);
+
+      // Heal the poisoning row back to a normal size.
+      act(() => {
+        list.setItemSize("row-45", { height: measuredSize, width: 800 });
+      });
+      const recoveredAverage = list.getState().getAverageItemSizes().assistant;
+      expect(recoveredAverage.average).toBeLessThan(measuredSize * 2);
+
+      // Another same-key, content-only rerender under the same
+      // `{data: false}` config: row-40's effective size must not stay
+      // frozen at the poisoned value - it should reflect the healed
+      // average, exactly as the append-direction test above requires of an
+      // appended row.
+      rerender(
+        createTranscriptList(
+          data.map((row) => ({ ...row })),
+          listRef,
+          sameKeyMvcp,
+        ),
+      );
+      await settleLegendList();
+
+      expect(effectiveSizeAt(40)).toBeLessThan(measuredSize * 2);
+    });
+  });
 });

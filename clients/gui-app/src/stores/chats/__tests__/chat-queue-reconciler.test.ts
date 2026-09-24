@@ -77,6 +77,7 @@ function createPendingAction(
     accountContext: null,
     deliveryPolicy: null,
     hashOnlyRetry: false,
+    sentFromHostId: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -176,6 +177,7 @@ function createQueueItem(
     sender: SENDER,
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,
@@ -269,6 +271,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -344,6 +347,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -780,6 +784,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -894,6 +899,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };

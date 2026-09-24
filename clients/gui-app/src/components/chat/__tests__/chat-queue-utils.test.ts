@@ -41,6 +41,7 @@ function promptItem(messageId: string): ChatQueuedItem {
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,
