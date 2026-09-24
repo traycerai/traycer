@@ -9,7 +9,13 @@ import {
   __resetCrossWindowEpicVisibilityForTests,
   installCrossWindowEpicVisibility,
 } from "@/lib/epics/cross-window-epic-visibility";
-import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_PARK_HIDDEN_EPIC_AFTER_MS,
+  MOBILE_RETENTION_PROFILE,
+  PARK_HIDDEN_EPIC_AFTER_MS,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
@@ -985,6 +991,102 @@ describe("epic-parking - visibility roll-up (C6)", () => {
       expect(isEpicParked(EPIC)).toBe(false);
       vi.advanceTimersByTime(1);
       expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+});
+
+describe("epic-parking - the window comes from the retention profile", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __setAgentActivityPlaneAnsweringForTests();
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+  });
+
+  afterEach(() => {
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    __resetEpicParkingForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetAgentActivity();
+    resetCanvasStore();
+    vi.useRealTimers();
+  });
+
+  it("parks a hidden epic after the mobile window, well inside the desktop one", () => {
+    const EPIC = "epic-park-mobile-window";
+    const TAB = "tab-park-mobile-window";
+    const th = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC, () => th.handle);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-mobile-window", false);
+      vi.advanceTimersByTime(MOBILE_PARK_HIDDEN_EPIC_AFTER_MS - 1);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      vi.advanceTimersByTime(1);
+      expect(MOBILE_PARK_HIDDEN_EPIC_AFTER_MS).toBeLessThan(
+        PARK_HIDDEN_EPIC_AFTER_MS,
+      );
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(th.disposed).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  it("keeps the desktop window on the desktop profile", () => {
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    const EPIC = "epic-park-desktop-window";
+    const TAB = "tab-park-desktop-window";
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-desktop-window", false);
+      vi.advanceTimersByTime(MOBILE_PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      vi.advanceTimersByTime(
+        PARK_HIDDEN_EPIC_AFTER_MS - MOBILE_PARK_HIDDEN_EPIC_AFTER_MS,
+      );
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  it("still refuses a dirty epic once the shorter window elapses", () => {
+    const EPIC = "epic-park-mobile-dirty";
+    const TAB = "tab-park-mobile-dirty";
+    const dirty = buildParkableEpicHandle(EPIC, true);
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC, () => dirty.handle);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-mobile-dirty", false);
+      vi.advanceTimersByTime(MOBILE_PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(dirty.disposed).toBe(false);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  it("still refuses an epic with an agent working once the shorter window elapses", () => {
+    const EPIC = "epic-park-mobile-busy";
+    const TAB = "tab-park-mobile-busy";
+    const busy = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC, () => busy.handle);
+    markAgentWorking(EPIC, "agent-1");
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-mobile-busy", false);
+      vi.advanceTimersByTime(MOBILE_PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(busy.disposed).toBe(false);
     } finally {
       closeEpicTab(TAB);
     }
