@@ -1608,6 +1608,48 @@ describe("forwarded foreground display gate", () => {
     },
   );
 
+  it("plays the most severe chime in a structured relay batch", () => {
+    focusChatTile("chat-3");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Traycer",
+        body: "2 new notifications",
+        payload: null,
+        replaceKey: "notification-batch",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key: feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1"),
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+          relayOccurrence({
+            key: feedOccurrenceKey("origin-host-1", "n-2", 10, "n-2"),
+            replaceKey: "host:chat:chat-2",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-2",
+            chimeEventType: "failure",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledExactlyOnceWith("failure");
+  });
+
   it("suppresses a relay occurrence minted for a different account than the current one", () => {
     useAuthStore.setState({
       status: "signed-in",

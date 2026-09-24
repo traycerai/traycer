@@ -141,8 +141,11 @@ export function displayForwardedForegroundNotification(
     id: eligible.replaceKey ?? undefined,
   });
   target.playChime(
-    eligible.feedOccurrences?.[0]?.chimeEventType ??
-      (parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done"),
+    notificationChimeEventTypeForSeverities(
+      eligible.feedOccurrences?.map(
+        (occurrence) => occurrence.chimeEventType,
+      ) ?? [],
+    ) ?? (parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done"),
   );
 }
 

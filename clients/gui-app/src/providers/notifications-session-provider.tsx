@@ -1172,6 +1172,8 @@ function NotificationsSessionBody(
               showNotification,
               playChime: playNotificationChime,
               onToastClick: (row) => onToastClickRef.current(row),
+            }).catch(() => {
+              // The feed remains authoritative if presentation fails.
             });
           },
         );
@@ -1229,7 +1231,9 @@ function NotificationsSessionBody(
                   onToastClick: (row) => onToastClickRef.current(row),
                 },
                 streamHostId,
-              );
+              ).catch(() => {
+                // The feed remains authoritative if presentation fails.
+              });
             },
             onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
             onPresenceChanged: (frame) =>
