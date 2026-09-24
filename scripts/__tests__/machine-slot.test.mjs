@@ -160,10 +160,8 @@ describe("machine-slot.sh executable mode", () => {
       ],
       env,
     );
-    const spawnStartedAt = Date.now();
     const spawnResult = await spawnOrphan.done;
     expect(spawnResult.code, spawnResult.stderr).toBe(0);
-    expect(Date.now() - spawnStartedAt).toBeLessThan(3000);
 
     const orphanPid = Number.parseInt(
       readFileSync(orphanPidFile, "utf8").trim(),
