@@ -12,13 +12,20 @@ import {
   displayHostChannelEmission,
   displayNotificationRows,
   notificationReplaceKey,
+  resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
 import type {
   NotificationForegroundDisplay,
   NotificationShowOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  projectNotificationFeedDisplay,
+  type NotificationFeedOccurrence,
+} from "@traycer-clients/shared/notifications/feed-delivery";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import type { NotificationShowRequest } from "@/hooks/notifications/use-notifications";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   __resetHostNotificationsStoreForTests,
@@ -601,14 +608,40 @@ function cloudRow(
   };
 }
 
-const EMISSION_N1_N2_DELIVERY_KEY = JSON.stringify([
-  JSON.stringify(["host:n-1", 10, "n-1"]),
-  JSON.stringify(["host:n-2", 10, "n-2"]),
-]);
+/** Mirrors the production canonical occurrence key: a schema tag, the
+ * signed-in user id (`null` here - these tests run unauthenticated), origin
+ * host, semantic/coalesceKey, updatedAt, sourceRef. */
+function feedOccurrenceKey(
+  originHostId: string | null,
+  coalesceKey: string,
+  updatedAt: number,
+  sourceRef: string | null,
+): string {
+  return JSON.stringify([
+    "feed-occurrence-v1",
+    null,
+    originHostId,
+    coalesceKey,
+    updatedAt,
+    sourceRef,
+  ]);
+}
+
+/** Mirrors the production aggregate delivery key: sorted occurrence keys. */
+function aggregateDeliveryKey(keys: ReadonlyArray<string>): string {
+  return JSON.stringify([...keys].sort());
+}
+
+const N1_KEY = feedOccurrenceKey("stream-host-1", "n-1", 10, "n-1");
+const N2_KEY = feedOccurrenceKey("stream-host-1", "n-2", 10, "n-2");
 
 describe("host channel emission focus gate", () => {
   beforeEach(() => {
     toastCalls.length = 0;
+    // Isolates the cross-plane dedup receipt set (a module singleton meant to
+    // span one renderer's lifetime) between tests, which otherwise disagree
+    // about whether an entry id reused across tests is "already delivered".
+    resetNotificationFeedDisplayReceiptsForTests();
   });
 
   afterEach(() => {
@@ -638,27 +671,30 @@ describe("host channel emission focus gate", () => {
     );
   }
 
+  /** Accepts and echoes back everything it was asked to show, as an
+   * `undeliverable` structured result - the one outcome that chimes
+   * unconditionally, so `playChime` assertions are deterministic regardless
+   * of this test file's focus state. (`presented` never chimes locally - the
+   * native banner owns the sound - and is exercised on its own below.) */
   function displayTarget() {
     return {
-      showNotification: vi.fn(
-        (_input: {
-          readonly title: string;
-          readonly body: string;
-          readonly payload: unknown;
-          readonly replaceKey: string | null;
-          readonly deliveryKey: string | null;
-        }) => Promise.resolve<NotificationShowOutcome>("presented"),
+      showNotification: vi.fn((input: NotificationShowRequest) =>
+        Promise.resolve<NotificationShowOutcome>({
+          kind: "feed",
+          outcome: "undeliverable",
+          display: projectNotificationFeedDisplay(input.feedOccurrences ?? []),
+        }),
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
     };
   }
 
-  it("suppresses rows addressed to the focused chat, including epic rollups", () => {
+  it("suppresses rows addressed to the focused chat, including epic rollups", async () => {
     focusChatTile("chat-1");
     const target = displayTarget();
 
-    displayHostChannelEmission(
+    await displayHostChannelEmission(
       [hostEntry("n-1", "chat-1", null), hostEntry("n-2", null, null)],
       target,
       "stream-host-1",
@@ -669,11 +705,11 @@ describe("host channel emission focus gate", () => {
     expect(toastCalls).toHaveLength(0);
   });
 
-  it("still displays rows for a sibling chat in the same epic", () => {
+  it("still displays rows for a sibling chat in the same epic", async () => {
     focusChatTile("chat-1");
     const target = displayTarget();
 
-    displayHostChannelEmission(
+    await displayHostChannelEmission(
       [hostEntry("n-1", "chat-1", null), hostEntry("n-2", "chat-2", null)],
       target,
       "stream-host-1",
@@ -696,18 +732,28 @@ describe("host channel emission focus gate", () => {
         },
       },
       replaceKey: "host:chat:chat-2",
-      // Names the whole emission, not this window's visible subset.
-      deliveryKey: EMISSION_N1_N2_DELIVERY_KEY,
+      // The aggregate key now reflects only this window's VISIBLE set (n-1
+      // was filtered by focus), not the whole emission - per-row identity is
+      // what main-process dedup consumes now, via `feedOccurrences`.
+      deliveryKey: aggregateDeliveryKey([N2_KEY]),
+      feedOccurrences: [
+        expect.objectContaining({
+          key: N2_KEY,
+          feedSource: "host",
+          replaceKey: "host:chat:chat-2",
+        }),
+      ],
     });
+    expect(nativeCall.feedOccurrences).toHaveLength(1);
     expect(typeof nativeCall.title).toBe("string");
     expect(typeof nativeCall.body).toBe("string");
   });
 
-  it("still displays the same chat when it arrives from another host", () => {
+  it("still displays the same chat when it arrives from another host", async () => {
     focusChatTile("chat-1");
     const target = displayTarget();
 
-    displayHostChannelEmission(
+    await displayHostChannelEmission(
       [hostEntry("host-b-chat", "chat-1", null)],
       target,
       "stream-host-2",
@@ -717,11 +763,11 @@ describe("host channel emission focus gate", () => {
     expect(target.playChime).toHaveBeenCalledOnce();
   });
 
-  it("keeps cloud focus suppression scoped to the row's origin host", () => {
+  it("keeps cloud focus suppression scoped to the row's origin host", async () => {
     focusChatTile("chat-1");
     const target = displayTarget();
 
-    displayCloudSnapshotArrivals(
+    await displayCloudSnapshotArrivals(
       [cloudRow("cloud-host-b-chat", "chat-1", "stream-host-2", null)],
       target,
     );
@@ -730,14 +776,14 @@ describe("host channel emission focus gate", () => {
     expect(target.playChime).toHaveBeenCalledOnce();
   });
 
-  it("skips a cloud arrival that was already read at birth", () => {
+  it("skips a cloud arrival that was already read at birth", async () => {
     // No tile is focused here, so the focus gate is disarmed and only the
     // read gate can suppress this row. The origin host marked it read when it
     // wrote it (fresh presence there, or a recovery row), and the local plane
     // never emits one - without this gate every other device toasts it.
     const target = displayTarget();
 
-    displayCloudSnapshotArrivals(
+    await displayCloudSnapshotArrivals(
       [cloudRow("cloud-read-row", "chat-1", "stream-host-2", 20)],
       target,
     );
@@ -747,10 +793,10 @@ describe("host channel emission focus gate", () => {
     expect(toastCalls).toHaveLength(0);
   });
 
-  it("displays only the unread arrivals of a mixed snapshot diff", () => {
+  it("displays only the unread arrivals of a mixed snapshot diff", async () => {
     const target = displayTarget();
 
-    displayCloudSnapshotArrivals(
+    await displayCloudSnapshotArrivals(
       [
         cloudRow("cloud-read-row", "chat-1", "stream-host-2", 20),
         cloudRow("cloud-unread-row", "chat-2", "stream-host-2", null),
@@ -770,13 +816,13 @@ describe("host channel emission focus gate", () => {
     expect(toastCalls).toHaveLength(1);
   });
 
-  it("still skips an unread cloud arrival for the focused entity", () => {
+  it("still skips an unread cloud arrival for the focused entity", async () => {
     // The read gate is additive: focus suppression on this window's own
     // entity keeps working for rows the origin host left unread.
     focusChatTile("chat-1");
     const target = displayTarget();
 
-    displayCloudSnapshotArrivals(
+    await displayCloudSnapshotArrivals(
       [cloudRow("cloud-focused-row", "chat-1", "stream-host-1", null)],
       target,
     );
@@ -785,12 +831,13 @@ describe("host channel emission focus gate", () => {
     expect(toastCalls).toHaveLength(0);
   });
 
-  it("keys an emission identically whether or not this window filtered it", () => {
-    // Delivery identity must survive focus filtering. A focused window that
-    // drops the focused row and a background window that keeps it are showing
-    // the SAME emission; if their keys differed, neither the main-process nor
-    // the renderer-local set would dedupe, and the focused window would show
-    // its filtered toast plus the relayed full batch - two chimes.
+  it("shares the sibling occurrence's key across a focused and a background window", async () => {
+    // Per-row identity (`feedOccurrences`), not the aggregate `deliveryKey`,
+    // is what lets a real main process dedupe the SAME occurrence delivered
+    // by two windows: a focused window that drops its own chat's row and a
+    // background window that keeps it must still agree on the shared
+    // sibling row's key, even though their visible sets - and so their
+    // aggregate batch identity - differ.
     const entries = [
       hostEntry("n-1", "chat-1", null),
       hostEntry("n-2", "chat-2", null),
@@ -798,46 +845,78 @@ describe("host channel emission focus gate", () => {
 
     focusChatTile("chat-1");
     const focused = displayTarget();
-    displayHostChannelEmission(entries, focused, "stream-host-1");
+    await displayHostChannelEmission(entries, focused, "stream-host-1");
 
+    // Each simulated window is a SEPARATE renderer process in reality, each
+    // with its own dedup receipt singleton. This test module holds only one,
+    // so it must be reset between windows - otherwise the background
+    // window's delivery would be wrongly suppressed as "already seen" by the
+    // focused window's own receipt, which is not what either real window
+    // would observe.
+    resetNotificationFeedDisplayReceiptsForTests();
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const background = displayTarget();
-    displayHostChannelEmission(entries, background, "stream-host-1");
+    await displayHostChannelEmission(entries, background, "stream-host-1");
 
-    const focusedKey = focused.showNotification.mock.calls[0][0].deliveryKey;
-    const backgroundKey =
-      background.showNotification.mock.calls[0][0].deliveryKey;
-    expect(focusedKey).toBe(EMISSION_N1_N2_DELIVERY_KEY);
-    expect(backgroundKey).toBe(focusedKey);
-    // Each simulated window renders its own subset - the focused one shows
-    // only the sibling row, the background one the full batch - but the
-    // shared key is what lets the main process deliver the emission once.
+    const focusedCall = focused.showNotification.mock.calls[0][0];
+    const backgroundCall = background.showNotification.mock.calls[0][0];
+
+    // Focused window filtered its own chat's row; only the sibling is visible.
+    expect(focusedCall.feedOccurrences).toHaveLength(1);
+    expect(backgroundCall.feedOccurrences).toHaveLength(2);
+    expect(focusedCall.feedOccurrences?.[0]?.key).toBe(N2_KEY);
+    expect(
+      backgroundCall.feedOccurrences?.some((occ) => occ.key === N2_KEY),
+    ).toBe(true);
+    expect(
+      backgroundCall.feedOccurrences?.some((occ) => occ.key === N1_KEY),
+    ).toBe(true);
+
+    // The aggregate batch identity is NOT forced equal across windows
+    // anymore - it reflects each window's own visible set.
+    expect(focusedCall.deliveryKey).toBe(aggregateDeliveryKey([N2_KEY]));
+    expect(backgroundCall.deliveryKey).toBe(
+      aggregateDeliveryKey([N1_KEY, N2_KEY]),
+    );
+    expect(focusedCall.deliveryKey).not.toBe(backgroundCall.deliveryKey);
+
+    // Each simulated window still renders its own subset - the focused one
+    // shows only the sibling row, the background one the full batch. Both
+    // chime: the default mock's `undeliverable` outcome chimes
+    // unconditionally (a shell-elected single winner per window), unlike the
+    // local-fallback path, which is genuinely focus-gated (see the blurred
+    // local-fallback test below).
     expect(toastCalls.map((call) => call.options.id)).toEqual([
       "host:chat:chat-2",
       "notification-batch",
     ]);
     expect(focused.playChime).toHaveBeenCalledOnce();
-    expect(background.playChime).not.toHaveBeenCalled();
+    expect(background.playChime).toHaveBeenCalledOnce();
   });
 
-  it("renders a blurred window's toast but withholds its chime", () => {
+  it("renders a blurred window's local-fallback toast but withholds its chime", async () => {
+    // Blur disarms the entity gate, so the row goes out even though this
+    // window has chat-1 open. With BOTH shell attempts failing, this window
+    // is the last resort - the toast still renders (an unseen toast is
+    // harmless), but the local-fallback chime is gated on focus specifically:
+    // several blurred windows failing the same way must not all sound at
+    // once. Only the outcome-based `undeliverable` chime (a shell-elected
+    // single winner) is unconditional - exercised elsewhere in this suite.
     focusChatTile("chat-1");
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    const target = displayTarget();
+    const target = {
+      showNotification: vi.fn(() => Promise.reject(new Error("ipc failure"))),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
 
-    displayHostChannelEmission(
+    await displayHostChannelEmission(
       [hostEntry("n-1", "chat-1", null)],
       target,
       "stream-host-1",
     );
 
-    // Blur disarms the entity gate, so the row goes out. The toast must
-    // still render: the main process relays nothing back to a focused
-    // sender, so a renderer that skipped its own toast could leave the
-    // arrival with no surface when focus lands between the two checks.
-    // Only the chime - audible from a window nobody is looking at, and
-    // never the sole delivery - is withheld.
-    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.showNotification).toHaveBeenCalledTimes(2);
     expect(toastCalls).toHaveLength(1);
     expect(target.playChime).not.toHaveBeenCalled();
   });
@@ -846,6 +925,7 @@ describe("host channel emission focus gate", () => {
 describe("forwarded foreground display gate", () => {
   beforeEach(() => {
     toastCalls.length = 0;
+    resetNotificationFeedDisplayReceiptsForTests();
   });
 
   afterEach(() => {
@@ -1169,6 +1249,439 @@ describe("forwarded foreground display gate", () => {
 
     expect(toastCalls).toHaveLength(0);
     expect(playChime).not.toHaveBeenCalled();
+  });
+
+  // The cases below exercise the structured relay's `feedOccurrences`
+  // metadata (production behavior landed after this suite was drafted; see
+  // notes inline for the durable epicId/chatId/originHostId fields added to
+  // each occurrence). A legacy relay (no `feedOccurrences`, covered above)
+  // is unaffected and keeps the `ownFeedIsDelivering` gate.
+
+  /** A manually-built occurrence for a structured relay fixture. The
+   * durable `originHostId`/`epicId`/`chatId` are what let the focus gate
+   * work even when the relay's own `payload` degrades to `null`; the
+   * durable `chimeEventType` is what lets the chime pick the right sound
+   * from the same payload-null relay, instead of falling back to `"done"`. */
+  function relayOccurrence(options: {
+    readonly key: string;
+    readonly replaceKey: string;
+    readonly originHostId: string;
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly chimeEventType: "needs_action" | "failure" | "done" | "info";
+    readonly userId: string | null;
+  }): NotificationFeedOccurrence {
+    return {
+      key: options.key,
+      userId: options.userId,
+      chimeEventType: options.chimeEventType,
+      title: "Agent",
+      body: "Agent • Stopped",
+      payload: null,
+      replaceKey: options.replaceKey,
+      feedSource: "host",
+      originHostId: options.originHostId,
+      epicId: options.epicId,
+      chatId: options.chatId,
+    };
+  }
+
+  it("records a structured relay's occurrence key so a later direct arrival for it doesn't duplicate", async () => {
+    focusChatTile("chat-2");
+    // The own host feed is CONNECTED/delivering - `ownFeedIsDelivering`
+    // would drop a legacy relay outright. A structured relay bypasses that
+    // gate and is deduped via the receipt below instead.
+    deliveringHostFeed();
+    const playChime = vi.fn();
+    const key = feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1");
+
+    displayForwardedForegroundNotification(
+      {
+        ...forwardedHostFeedDisplay("chat-1"),
+        feedOccurrences: [
+          relayOccurrence({
+            key,
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+    expect(toastCalls).toHaveLength(1);
+
+    // A later direct host-channel arrival naming the SAME occurrence (same
+    // origin host, coalesceKey, updatedAt, sourceRef) must not duplicate:
+    // the relay already claimed its receipt.
+    const target = {
+      showNotification: vi.fn(() =>
+        Promise.resolve<NotificationShowOutcome>("presented"),
+      ),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+    await displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1", null)],
+      target,
+      "origin-host-1",
+    );
+
+    expect(target.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("filters a partial-metadata relay down to the occurrence not already displayed locally", async () => {
+    focusChatTile("chat-4");
+    deliveringHostFeed();
+    const keyA = feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1");
+
+    // A was already displayed by this window's own host emission - claiming
+    // its receipt - before the relay for the same batch arrives.
+    const localTarget = {
+      showNotification: vi.fn(() =>
+        Promise.resolve<NotificationShowOutcome>("presented"),
+      ),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+    await displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1", null)],
+      localTarget,
+      "origin-host-1",
+    );
+    expect(localTarget.showNotification).toHaveBeenCalledOnce();
+
+    const playChime = vi.fn();
+    displayForwardedForegroundNotification(
+      {
+        title: "Traycer",
+        body: "2 new notifications",
+        payload: null,
+        replaceKey: "notification-batch",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key: keyA,
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+          relayOccurrence({
+            key: feedOccurrenceKey("origin-host-1", "n-2", 10, "n-2"),
+            replaceKey: "host:chat:chat-2",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-2",
+            chimeEventType: "done",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    // One toast from the local A delivery, one more for the relay - but only
+    // for the unseen B, never a redundant second A.
+    expect(toastCalls).toHaveLength(2);
+    expect(toastCalls.at(-1)?.options.id).toBe("host:chat:chat-2");
+  });
+
+  it("suppresses a focused, own-feed-connected relay whose payload is null but whose occurrence names the focused entity", () => {
+    // Payload degraded to null (unrecognized/legacy shape) previously meant
+    // the entity gate could not act on it at all. The durable
+    // originHostId/epicId/chatId on the occurrence are what let it gate on
+    // the focused entity anyway.
+    focusChatTile("chat-1");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:chat:chat-1",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key: feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1"),
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("still displays a payload-null relay naming the same epic/chat from a remote origin host", () => {
+    // Same epicId/chatId as the focused tile, but a DIFFERENT origin host -
+    // this is a different machine's occurrence for what looks like the same
+    // entity, and must not be suppressed.
+    focusChatTile("chat-1");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:chat:chat-1",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key: feedOccurrenceKey("remote-host-9", "n-1", 10, "n-1"),
+            replaceKey: "host:chat:chat-1",
+            originHostId: "remote-host-9",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("does not poison the dedup receipt when a relay was suppressed by focus", async () => {
+    // Mirrors the host-side no-poison rule for the relay path: a relay
+    // dropped by the focus gate must not claim its occurrence's receipt -
+    // a later direct arrival for the SAME occurrence, seen once unfocused,
+    // must still display.
+    focusChatTile("chat-1");
+    deliveringHostFeed();
+    const key = feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1");
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:chat:chat-1",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key,
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime: vi.fn(), onToastClick: vi.fn() },
+    );
+    expect(toastCalls).toHaveLength(0);
+
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const target = {
+      showNotification: vi.fn(() =>
+        Promise.resolve<NotificationShowOutcome>("presented"),
+      ),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+    await displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1", null)],
+      target,
+      "origin-host-1",
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+  });
+
+  it("dedupes a structured relay interleaved with a pending direct call, even with the own feed connected", async () => {
+    focusChatTile("chat-2");
+    deliveringHostFeed();
+    const key = feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1");
+
+    let resolveDirect: (outcome: NotificationShowOutcome) => void = () => {};
+    const directOutcome = new Promise<NotificationShowOutcome>((resolve) => {
+      resolveDirect = resolve;
+    });
+    const directTarget = {
+      showNotification: vi.fn(() => directOutcome),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+
+    // Direct call kicked off but its native response is still pending.
+    const directCall = displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1", null)],
+      directTarget,
+      "origin-host-1",
+    );
+
+    // A structured relay for the SAME occurrence arrives before the direct
+    // call resolves - nothing has rendered yet, so it renders and claims
+    // the receipt.
+    const relayChime = vi.fn();
+    displayForwardedForegroundNotification(
+      {
+        ...forwardedHostFeedDisplay("chat-1"),
+        feedOccurrences: [
+          relayOccurrence({
+            key,
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: null,
+          }),
+        ],
+      },
+      { playChime: relayChime, onToastClick: vi.fn() },
+    );
+    expect(toastCalls).toHaveLength(1);
+
+    // The main process eventually answers the direct request; it now knows
+    // this occurrence was already delivered and reports a duplicate.
+    resolveDirect("duplicate");
+    await directCall;
+
+    expect(toastCalls).toHaveLength(1);
+    expect(directTarget.playChime).not.toHaveBeenCalled();
+  });
+
+  it.each([["failure" as const], ["needs_action" as const]])(
+    "plays the occurrence's own %s chime on a payload-null structured relay, not a done fallback",
+    (chimeEventType) => {
+      focusChatTile("chat-2");
+      deliveringHostFeed();
+      const playChime = vi.fn();
+
+      displayForwardedForegroundNotification(
+        {
+          title: "Agent",
+          body: "Agent • Stopped",
+          payload: null,
+          replaceKey: "host:chat:chat-1",
+          deliveryKey: null,
+          feedSource: "host",
+          foregroundAppLocal: null,
+          feedOccurrences: [
+            relayOccurrence({
+              key: feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1"),
+              replaceKey: "host:chat:chat-1",
+              originHostId: "origin-host-1",
+              epicId: "epic-1",
+              chatId: "chat-1",
+              chimeEventType,
+              userId: null,
+            }),
+          ],
+        },
+        { playChime, onToastClick: vi.fn() },
+      );
+
+      expect(toastCalls).toHaveLength(1);
+      expect(playChime).toHaveBeenCalledWith(chimeEventType);
+    },
+  );
+
+  it("suppresses a relay occurrence minted for a different account than the current one", () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-new", username: "user-new" },
+    });
+    focusChatTile("chat-2");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:chat:chat-1",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key: feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1"),
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: "user-old",
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  });
+
+  it("still displays a relay occurrence for the same account when this session is merely unverified", () => {
+    useAuthStore.setState({
+      status: "unverified",
+      contextMetadata: { userId: "user-1", username: "user-1" },
+    });
+    focusChatTile("chat-2");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:chat:chat-1",
+        deliveryKey: null,
+        feedSource: "host",
+        foregroundAppLocal: null,
+        feedOccurrences: [
+          relayOccurrence({
+            key: feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1"),
+            replaceKey: "host:chat:chat-1",
+            originHostId: "origin-host-1",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chimeEventType: "done",
+            userId: "user-1",
+          }),
+        ],
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   });
 });
 
