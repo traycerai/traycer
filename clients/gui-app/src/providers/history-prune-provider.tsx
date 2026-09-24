@@ -8,6 +8,11 @@ import type { AppRouter } from "@/router";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
+import {
+  isIdentityTabsHydrated,
+  subscribeIdentityTabsHydration,
+} from "@/stores/identities/identity-tabs-hydration";
 
 export interface HistoryPruneProviderProps {
   /**
@@ -33,15 +38,17 @@ export interface HistoryPruneProviderProps {
  * bar — not derived state.
  *
  * Lifecycle:
- * - **Install gate**: only after the canvas + landing-draft stores have hydrated
- *   AND the desktop per-window snapshot has been applied at least once. Pruning
- *   before the stores carry their real contents would read every persisted
- *   `/epics/$epicId/$tabId` and `/draft/$draftId` entry as dead and destroy live
- *   back/forward targets.
- * - **Reactive, not eager**: the scheduler prunes in response to canvas/draft
- *   mutations (the same stores `isHistoryEntryDead` consults). A boot stack that
- *   references now-missing epics is reconciled when `EpicTabExistenceReconciler`
- *   closes those tabs — that store write drives the prune.
+ * - **Install gate**: only after the canvas, landing-draft and identity-tab
+ *   stores have hydrated AND the desktop per-window snapshot has been applied
+ *   at least once. Pruning before the stores carry their real contents would
+ *   read every persisted `/epics/$epicId/$tabId`, `/draft/$draftId` and
+ *   `/identities/$identityId` entry as dead and destroy live back/forward
+ *   targets.
+ * - **Reactive, not eager**: the scheduler prunes in response to canvas, draft
+ *   and identity-tab mutations (the same stores `isHistoryEntryDead`
+ *   consults). A boot stack that references now-missing epics is reconciled
+ *   when `EpicTabExistenceReconciler` closes those tabs — that store write
+ *   drives the prune.
  * - **Load-free + non-interleaving**: `isLoadInFlight` is derived from the live
  *   router state so a prune never runs while a navigation is loading or
  *   committing; the scheduler itself calls only `controller.prune`, never
@@ -81,9 +88,11 @@ export function HistoryPruneProvider(
       subscribeStores: (onChange) => {
         const unsubscribeCanvas = useEpicCanvasStore.subscribe(onChange);
         const unsubscribeDrafts = useLandingDraftStore.subscribe(onChange);
+        const unsubscribeIdentities = useIdentityTabsStore.subscribe(onChange);
         return () => {
           unsubscribeCanvas();
           unsubscribeDrafts();
+          unsubscribeIdentities();
         };
       },
       isLoadInFlight: () => isRouterLoadInFlight(router),
@@ -110,9 +119,9 @@ function isRouterLoadInFlight(router: AppRouter): boolean {
 }
 
 /**
- * `true` once BOTH backing stores have finished hydrating from persistence. The
- * snapshot is a primitive boolean, so `useSyncExternalStore` sees a stable value
- * and the gate flips exactly once.
+ * `true` once ALL THREE backing stores have finished hydrating from
+ * persistence. The snapshot is a primitive boolean, so `useSyncExternalStore`
+ * sees a stable value and the gate flips exactly once.
  */
 function useStoresHydrated(): boolean {
   return useSyncExternalStore(
@@ -127,15 +136,25 @@ function subscribeStoreHydration(callback: () => void): () => void {
     useEpicCanvasStore.persist.onFinishHydration(callback);
   const unsubscribeDrafts =
     useLandingDraftStore.persist.onFinishHydration(callback);
+  const unsubscribeIdentities =
+    useIdentityTabsStore.persist.onFinishHydration(callback);
+  const unsubscribeIdentityAccount = subscribeIdentityTabsHydration(callback);
   return () => {
     unsubscribeCanvas();
     unsubscribeDrafts();
+    unsubscribeIdentities();
+    unsubscribeIdentityAccount();
   };
 }
 
 function getStoreHydrationSnapshot(): boolean {
   return (
     useEpicCanvasStore.persist.hasHydrated() &&
-    useLandingDraftStore.persist.hasHydrated()
+    useLandingDraftStore.persist.hasHydrated() &&
+    useIdentityTabsStore.persist.hasHydrated() &&
+    // The identity store's own flag reports the ANONYMOUS bucket, which loads
+    // synchronously and holds no account records; pruning against it reads
+    // every `/identities/$id` entry as dead. Wait for the account's bucket.
+    isIdentityTabsHydrated()
   );
 }

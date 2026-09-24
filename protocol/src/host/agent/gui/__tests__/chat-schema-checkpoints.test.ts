@@ -23,6 +23,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -198,6 +199,13 @@ const SERVER_FRAME_DIGESTS = {
     "944de3a5f3e27b39673eaf6d76d8165c2993161a04c7772b50a5c8d35a4a5663",
     "822b1b2217a53a5570acd151cfcac14d1d5ed77a03167a74d0a21d1a5847ef90",
   ],
+  // 1.17 is captured ON TIME, from the train tree at OSS commit 2e88f7f4c,
+  // before the bound identity on the active turn (`activeTurn.identityId`)
+  // took 1.18 above it, and re-verified after the freeze: identical.
+  17: [
+    "0526bebdadfd28288c29924257acc2f045a092d409f588a1189448895d56e04c",
+    "3fb2a9327f872de86ee4ba9133f8203157b7240db280c9b43756e5f2f0686c8f",
+  ],
 } as const;
 
 const contracts = [
@@ -218,10 +226,11 @@ const contracts = [
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.16 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.17 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

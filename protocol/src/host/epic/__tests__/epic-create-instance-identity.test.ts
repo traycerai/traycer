@@ -112,6 +112,27 @@ describe("epic.create@1.2 leaf freeze - shape pins on the released instances", (
     );
   });
 
+  it("the released initial-message settings leaf has no identityId key; the V12 leaf has it", () => {
+    expect(
+      createChatInitialMessageSchema.shape.settings.shape,
+    ).not.toHaveProperty("identityId");
+    expect(
+      createChatInitialMessageSchemaV12.shape.settings.shape,
+    ).toHaveProperty("identityId");
+  });
+
+  it("the released createChat fork settings tuple has no identityId key; V12's has it", () => {
+    expect(
+      unwrapNullableOptional(createChatRequestSchema.shape.settings).shape,
+    ).not.toHaveProperty("identityId");
+    expect(
+      unwrapNullableOptional(createChatRequestSchemaV11.shape.settings).shape,
+    ).not.toHaveProperty("identityId");
+    expect(
+      unwrapNullableOptional(createChatRequestSchemaV12.shape.settings).shape,
+    ).toHaveProperty("identityId");
+  });
+
   it("the existing createEpicChatSeedSchema has no deferWorktreeProvisioning key", () => {
     expect(createEpicChatSeedSchema.shape).not.toHaveProperty(
       "deferWorktreeProvisioning",

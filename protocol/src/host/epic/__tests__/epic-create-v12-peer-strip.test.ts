@@ -24,8 +24,13 @@ import type {
  * every value typed as the request, even though `parse` would have filled it.
  * Stated here rather than omitted: these fixtures are typed as the request, so
  * leaving them out type-checks nowhere while still passing at runtime.
+ *
+ * `identityId` is a `@1.2` key on the settings leaf, so the released lines
+ * strip it with the two fields this suite is about - `strippedSettings` is
+ * what an older minor's schema hands back. `epic-create-identity-strip.test.ts`
+ * pins that leaf on its own.
  */
-const settings = {
+const strippedSettings = {
   harnessId: "codex" as const,
   model: "gpt-5.4",
   permissionMode: "supervised" as const,
@@ -33,8 +38,8 @@ const settings = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
-  identityId: null,
 };
+const settings = { ...strippedSettings, identityId: null };
 
 const initialMessageV12 = {
   messageId: "message-1",
@@ -112,11 +117,14 @@ describe("epic.create@1.2 request strips to an older minor's own schema", () => 
           messageId: "message-1",
           clientActionId: "action-1",
           sender: { type: "user", userId: "user-1" },
-          settings,
+          settings: strippedSettings,
           accountContext: { type: "PERSONAL" },
         },
       },
     });
+    expect(stripped.chat?.initialMessage?.settings).not.toHaveProperty(
+      "identityId",
+    );
   });
 
   it("epicCreateV10.requestSchema strips both new fields too", () => {
@@ -147,10 +155,11 @@ describe("epic.createChat@1.2 request strips to an older minor's own schema", ()
         messageId: "message-1",
         clientActionId: "action-1",
         sender: { type: "user", userId: "user-1" },
-        settings,
+        settings: strippedSettings,
         accountContext: { type: "PERSONAL" },
       },
     });
+    expect(stripped.initialMessage?.settings).not.toHaveProperty("identityId");
   });
 
   it("epicCreateChatV10.requestSchema strips both new fields too", () => {

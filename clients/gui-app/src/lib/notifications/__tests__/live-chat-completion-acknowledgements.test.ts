@@ -231,6 +231,7 @@ function startTurn(callbacks: ChatStreamCallbacks, turnId: string): void {
     activeTurn: {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId,
       status: "running",
       harnessId: "codex",

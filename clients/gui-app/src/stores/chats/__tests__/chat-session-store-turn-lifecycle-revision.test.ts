@@ -97,6 +97,7 @@ function activeTurn(
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
+    identityId: null,
     turnId,
     status: "running",
     harnessId: "codex",

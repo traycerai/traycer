@@ -299,6 +299,7 @@ function markChatActiveTurn(handle: ChatSessionStoreHandle): void {
     activeTurn: {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",

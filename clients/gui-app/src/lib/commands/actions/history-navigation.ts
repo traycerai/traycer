@@ -14,6 +14,7 @@ import {
   type ClosedTilePayload,
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
   getEpicSessionHandleHostId,
@@ -106,7 +107,12 @@ export function resolveEligibleHistoryTarget(
     controller.getEntries(),
     index,
     direction,
-    (href) => isHistoryEntryEligible(href, useEpicCanvasStore.getState()),
+    (href) =>
+      isHistoryEntryEligible(
+        href,
+        useEpicCanvasStore.getState(),
+        useIdentityTabsStore.getState(),
+      ),
   );
   if (offset === null) return null;
   const target = index + offset;

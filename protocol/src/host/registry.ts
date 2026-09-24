@@ -298,6 +298,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -12362,7 +12363,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 17,
+      latestMinor: 18,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12458,6 +12459,14 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // a non-strict object at every minor, so the host withholds nothing.
         17: {
           contract: chatSubscribeV117,
+        },
+        // @1.18 adds `identityId` on the active turn (snapshot and
+        // `turnStateChanged`): the agent identity the running turn is bound
+        // to, so the renderer can refuse a same-turn steer under a different
+        // identity before the host does. A defaulted key in a non-strict
+        // object, so the host withholds nothing.
+        18: {
+          contract: chatSubscribeV118,
         },
       },
     },

@@ -3,6 +3,7 @@ import {
   findEligibleOffset,
   isHistoryEntryEligible,
   type HistoryEligibilityState,
+  type HistoryIdentityEligibilityState,
 } from "@/lib/history-navigation/eligibility";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 
@@ -22,6 +23,21 @@ function state(
   };
 }
 
+const NO_IDENTITY_TABS: HistoryIdentityEligibilityState = { tabsById: {} };
+
+function identityTabs(
+  ...identityIds: readonly string[]
+): HistoryIdentityEligibilityState {
+  return {
+    tabsById: Object.fromEntries(
+      identityIds.map((id) => [
+        id,
+        { id, identityId: id, hostId: "host-a", title: id },
+      ]),
+    ),
+  };
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -33,14 +49,20 @@ afterEach(() => {
 describe("isHistoryEntryEligible", () => {
   it("treats non-epic-tab routes as always eligible", () => {
     const canvas = state({ t1: tab("t1", "e1") }, []);
-    expect(isHistoryEntryEligible("/draft/d1", canvas)).toBe(true);
-    expect(isHistoryEntryEligible("/", canvas)).toBe(true);
-    expect(isHistoryEntryEligible("/settings/general", canvas)).toBe(true);
+    expect(isHistoryEntryEligible("/draft/d1", canvas, NO_IDENTITY_TABS)).toBe(
+      true,
+    );
+    expect(isHistoryEntryEligible("/", canvas, NO_IDENTITY_TABS)).toBe(true);
+    expect(
+      isHistoryEntryEligible("/settings/general", canvas, NO_IDENTITY_TABS),
+    ).toBe(true);
   });
 
   it("treats an unknown tabId as eligible when its fallback tab is open", () => {
     const canvas = state({ t1: tab("t1", "e1") }, ["t1"]);
-    expect(isHistoryEntryEligible("/epics/e1/unknown-tab", canvas)).toBe(true);
+    expect(
+      isHistoryEntryEligible("/epics/e1/unknown-tab", canvas, NO_IDENTITY_TABS),
+    ).toBe(true);
   });
 
   it("treats an unknown nested target as ineligible despite an open fallback", () => {
@@ -49,6 +71,7 @@ describe("isHistoryEntryEligible", () => {
       isHistoryEntryEligible(
         "/epics/e1/unknown-tab?focusPaneId=p1&focusTileInstanceId=i1",
         canvas,
+        NO_IDENTITY_TABS,
       ),
     ).toBe(false);
   });
@@ -58,27 +81,55 @@ describe("isHistoryEntryEligible", () => {
       ...state({ t1: tab("t1", "e1") }, []),
       mostRecentTabIdByEpicId: { e1: "t1" },
     };
-    expect(isHistoryEntryEligible("/epics/e1/unknown-tab", canvas)).toBe(false);
+    expect(
+      isHistoryEntryEligible("/epics/e1/unknown-tab", canvas, NO_IDENTITY_TABS),
+    ).toBe(false);
   });
 
   it("treats open Tasks (in openTabOrder) as eligible", () => {
     const canvas = state({ t1: tab("t1", "e1") }, ["t1"]);
-    expect(isHistoryEntryEligible("/epics/e1/t1", canvas)).toBe(true);
+    expect(
+      isHistoryEntryEligible("/epics/e1/t1", canvas, NO_IDENTITY_TABS),
+    ).toBe(true);
     expect(
       isHistoryEntryEligible(
         "/epics/e1/t1?focusPaneId=p1&focusTileInstanceId=i1",
         canvas,
+        NO_IDENTITY_TABS,
       ),
     ).toBe(true);
   });
 
   it("treats closed Tasks (in tabsById, not in openTabOrder) as ineligible", () => {
     const canvas = state({ t1: tab("t1", "e1") }, []);
-    expect(isHistoryEntryEligible("/epics/e1/t1", canvas)).toBe(false);
+    expect(
+      isHistoryEntryEligible("/epics/e1/t1", canvas, NO_IDENTITY_TABS),
+    ).toBe(false);
     expect(
       isHistoryEntryEligible(
         "/epics/e1/t1?focusPaneId=p1&focusTileInstanceId=i1",
         canvas,
+        NO_IDENTITY_TABS,
+      ),
+    ).toBe(false);
+  });
+
+  // Finding 41: an identity tab's history entry follows the identity store,
+  // not the canvas. Closing the tab deletes its record, so Back/Forward must
+  // skip the entry rather than land on it and recreate the tab.
+  it("treats an identity entry as eligible only while its tab is held", () => {
+    const canvas = state({}, []);
+    expect(
+      isHistoryEntryEligible("/identities/id-1", canvas, identityTabs("id-1")),
+    ).toBe(true);
+    expect(
+      isHistoryEntryEligible("/identities/id-1", canvas, NO_IDENTITY_TABS),
+    ).toBe(false);
+    expect(
+      isHistoryEntryEligible(
+        "/identities/id-1?panel=history",
+        canvas,
+        identityTabs("id-2"),
       ),
     ).toBe(false);
   });

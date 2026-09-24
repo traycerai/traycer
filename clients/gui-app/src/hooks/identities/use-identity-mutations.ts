@@ -18,6 +18,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { RPC_ERROR_CODES } from "@traycer/protocol/framework/versioned-rpc-types";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { identityMutationKeys } from "@/lib/query-keys";
@@ -36,7 +37,20 @@ const LIST_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
 const HISTORY_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
   "agentIdentity.history.list",
 ];
+const LIST_AND_HISTORY_INVALIDATIONS: ReadonlyArray<
+  keyof HostRpcRegistry & string
+> = [...LIST_INVALIDATIONS, ...HISTORY_INVALIDATIONS];
 const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
+
+/**
+ * Every wire code, for a mutation whose caller renders EVERY rejection
+ * inline: the Hermes importer shows the host's own message for a scan or a
+ * run that failed, whatever the code, so a toast for the same failure would
+ * give it two surfaces. Silencing `RPC_ERROR` alone left `UNAUTHORIZED`,
+ * `FORBIDDEN` and `DOWNGRADE_UNSUPPORTED` toasting beside the panel's notice
+ * (finding 47).
+ */
+const ALL_CODES_INLINE = RPC_ERROR_CODES;
 
 export function useIdentityCreateForClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -181,8 +195,14 @@ export function useIdentitySkillsImportForClient(
 /**
  * The Hermes profile importer's two calls. `scan` is a read, but it is a
  * mutation here because it runs on demand over a directory the user typed,
- * not over a key a query could cache by. A run may create an identity, so it
- * invalidates the list.
+ * not over a key a query could cache by. Both are fully inline-error
+ * mutations: the panel renders every rejection itself (`ALL_CODES_INLINE`).
+ *
+ * A run may create an identity, so it invalidates the list - and it replaces
+ * files in an EXISTING identity, retaining the prior versions, so it
+ * invalidates the history reads too: an already-mounted history panel reads
+ * the non-polled `agentIdentity.history.list` and would otherwise keep
+ * showing the pre-import entries (finding 48).
  */
 export function useIdentityHermesScanForClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -192,7 +212,7 @@ export function useIdentityHermesScanForClient(
     mutationKey: identityMutationKeys.scanHermesProfile(),
     errorMessage: "Couldn't read that Hermes profile.",
     invalidateMethods: NO_INVALIDATIONS,
-    silentCodes: ["RPC_ERROR"],
+    silentCodes: ALL_CODES_INLINE,
   });
 }
 
@@ -203,7 +223,7 @@ export function useIdentityHermesRunForClient(
     method: "agentIdentity.import.hermes.run",
     mutationKey: identityMutationKeys.runHermesImport(),
     errorMessage: "Couldn't import the Hermes profile.",
-    invalidateMethods: LIST_INVALIDATIONS,
-    silentCodes: ["RPC_ERROR"],
+    invalidateMethods: LIST_AND_HISTORY_INVALIDATIONS,
+    silentCodes: ALL_CODES_INLINE,
   });
 }

@@ -10,6 +10,13 @@
  * node's host - and therefore the subscription set, its events and its cursor -
  * change whenever the user switches hosts anywhere else in the app. Legacy
  * chats stay unattributed and render as "host unknown".
+ *
+ * An identity's EVOLUTION chat is not a node here. It is the host's own
+ * background review pass, hidden from every user-facing chat list
+ * (`chatListedAsArchived`), and drawing it as an ordinary active agent would
+ * show the user a desk nobody sat down at. Rows that name it are skipped by
+ * `aggregateCommGraphEdges` exactly as any edge to an absent node is - the
+ * event log itself keeps every row.
  */
 import { useMemo } from "react";
 import {
@@ -17,6 +24,7 @@ import {
   useEpicTerminalAgentRecords,
 } from "@/lib/epic-selectors";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
+import { chatShownInCommGraph } from "@/lib/chats/chat-list-visibility";
 
 export interface CommGraphAgents {
   readonly nodes: ReadonlyArray<CommGraphAgentNode>;
@@ -36,20 +44,22 @@ export function useCommGraphAgents(): CommGraphAgents {
   const terminalAgents = useEpicTerminalAgentRecords();
 
   const nodes = useMemo<ReadonlyArray<CommGraphAgentNode>>(() => {
-    const chatNodes = chats.map<CommGraphAgentNode>((chat) => ({
-      id: chat.id,
-      kind: "chat",
-      name: chat.title,
-      hostId: chat.hostId,
-      parentId: chat.parentId,
-      // A chat's harness and model live in its persisted run settings, which
-      // are absent until the chat has been given some.
-      harnessId: chat.settings?.harnessId ?? null,
-      model: chat.settings?.model ?? null,
-      archived: chat.archivedAt !== null,
-      archivedAt: chat.archivedAt,
-      createdAt: chat.createdAt,
-    }));
+    const chatNodes = chats
+      .filter(chatShownInCommGraph)
+      .map<CommGraphAgentNode>((chat) => ({
+        id: chat.id,
+        kind: "chat",
+        name: chat.title,
+        hostId: chat.hostId,
+        parentId: chat.parentId,
+        // A chat's harness and model live in its persisted run settings, which
+        // are absent until the chat has been given some.
+        harnessId: chat.settings?.harnessId ?? null,
+        model: chat.settings?.model ?? null,
+        archived: chat.archivedAt !== null,
+        archivedAt: chat.archivedAt,
+        createdAt: chat.createdAt,
+      }));
     const agentNodes = terminalAgents.map<CommGraphAgentNode>((agent) => ({
       id: agent.id,
       kind: "terminal-agent",

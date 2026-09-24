@@ -614,9 +614,14 @@ export const epicCreateV12 = defineRpcContract({
 // difference is the WIDER refusal enum, and every `@1.1` refusal kind is a
 // `@1.2` refusal kind. Nothing to synthesize in either direction.
 //
-// One exception since the `@1.2` initial message grew `sentFromHostId`: a
-// `@1.1` caller's folded chat names no machine, so the upgrade fills the
-// honest `null` on its initial message and leaves everything else as sent.
+// Two exceptions since the `@1.2` initial message grew `sentFromHostId` and
+// its settings leaf grew `identityId`: a `@1.1` caller's folded chat names no
+// machine and can state no identity, so the upgrade fills the honest `null`
+// for both on its initial message and leaves everything else as sent. That
+// `null` on `identityId` reads as the stock identity, which is the only one a
+// caller below `@1.2` could have meant - a new chat has no stored identity
+// to preserve, so unlike `epic.updateChatRunSettings` the host needs no
+// received-minor branch here.
 export const epicCreateUpgradeV11ToV12 = defineUpgradePath<
   typeof epicCreateV11,
   typeof epicCreateV12
@@ -633,7 +638,14 @@ export const epicCreateUpgradeV11ToV12 = defineUpgradePath<
             initialMessage:
               request.chat.initialMessage === null
                 ? null
-                : { ...request.chat.initialMessage, sentFromHostId: null },
+                : {
+                    ...request.chat.initialMessage,
+                    settings: {
+                      ...request.chat.initialMessage.settings,
+                      identityId: null,
+                    },
+                    sentFromHostId: null,
+                  },
           },
   }),
   upgradeResponse: (response) => response,
@@ -854,10 +866,13 @@ export const epicCreateChatV12 = defineRpcContract({
 
 // The response upgrade is the identity, for the same reason as
 // `epicCreateUpgradeV11ToV12`'s: it only GAINS an optional key a `@1.1` host
-// never set. The request upgrade fills the one `@1.2` key that is not an
-// additive optional: a `@1.1` caller's initial message names no machine, so
-// its `sentFromHostId` is the honest `null`. `attachmentsByHash` and
-// `deferWorktreeProvisioning` stay absent, which already means `false`.
+// never set. The request upgrade fills the `@1.2` keys that are not additive
+// optionals: a `@1.1` caller's initial message names no machine, so its
+// `sentFromHostId` is the honest `null`, and neither its initial message nor
+// its fork `settings` can state an identity, so `identityId` is `null` on
+// both - the stock identity, the only one such a caller could have meant.
+// `attachmentsByHash` and `deferWorktreeProvisioning` stay absent, which
+// already means `false`.
 export const epicCreateChatUpgradeV11ToV12 = defineUpgradePath<
   typeof epicCreateChatV11,
   typeof epicCreateChatV12
@@ -866,10 +881,18 @@ export const epicCreateChatUpgradeV11ToV12 = defineUpgradePath<
   to: epicCreateChatV12.schemaVersion,
   upgradeRequest: (request) => ({
     ...request,
+    settings:
+      request.settings === null || request.settings === undefined
+        ? request.settings
+        : { ...request.settings, identityId: null },
     initialMessage:
       request.initialMessage === null || request.initialMessage === undefined
         ? request.initialMessage
-        : { ...request.initialMessage, sentFromHostId: null },
+        : {
+            ...request.initialMessage,
+            settings: { ...request.initialMessage.settings, identityId: null },
+            sentFromHostId: null,
+          },
   }),
   upgradeResponse: (response) => response,
 });

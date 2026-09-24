@@ -33,6 +33,7 @@ import {
 } from "@traycer/protocol/host/search-text-preview-schema";
 import {
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreIdentity,
   chatRunSettingsStrictSchema,
   chatRunSettingsStrictSchemaPreIdentity,
   guiHarnessIdSchema,
@@ -473,6 +474,15 @@ export type BatchDeleteResponse = z.infer<typeof batchDeleteResponseSchema>;
  * (turn-overlap). Reuses the exact send-frame value schemas;
  * `messageId`/`clientActionId` are shared with any fallback `send` frame so the
  * host's idempotency gate dedupes.
+ *
+ * RELEASED, and frozen at the settings LEAF: `settings` binds
+ * `chatRunSettingsSchemaPreIdentity`, the tuple as it stood when
+ * `epic.create@1.0`/`@1.1` and `epic.createChat@1.0`/`@1.1` shipped. The four
+ * lines bound the live tuple by reference, so when it grew `identityId` every
+ * one of them grew it too - and the older-minor strip
+ * (`prepareRequestPayload` re-parsing through THIS schema) became a no-op for
+ * the new key, delivering an identity to a `host-v1.3.1` peer that never
+ * negotiated one. `identityId` arrives on the `@1.2` leaf below.
  */
 export const createChatInitialMessageSchema = lazySchema(() =>
   z.object({
@@ -480,7 +490,7 @@ export const createChatInitialMessageSchema = lazySchema(() =>
     clientActionId: z.string(),
     content: getRecordSchema(commonRecordRegistry, "json-content", "latest"),
     sender: userMessageSenderSchema,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreIdentity,
     // Billing/account context the initial turn runs under. Global app-wide
     // selection (not per-chat), stamped at create time.
     accountContext: accountContextSchema,
@@ -717,6 +727,15 @@ export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
  */
 export const createChatInitialMessageSchemaV12 = lazySchema(() =>
   createChatInitialMessageSchema.extend({
+    /**
+     * The LIVE tuple, `identityId` included - re-typed here rather than
+     * inherited, because the released leaf above is frozen without it. A
+     * `@1.2` caller states which identity the first turn runs as (`null` is
+     * the stock one); a `@1.1` caller could not say, and the upgrade path
+     * fills `null` for it. The same one-minor-later arrival
+     * `epic.updateChatRunSettings@1.2` made for the settings write.
+     */
+    settings: chatRunSettingsSchema,
     attachmentsByHash: z.boolean().optional(),
     /**
      * The host id of the machine the creating app runs on - its LOCAL host,
@@ -2005,7 +2024,12 @@ export const createChatRequestSchema = lazySchema(() =>
     // Optional per-chat run settings to stamp on the new chat. Existing callers
     // omit this and let the chat start with host defaults; fork creation passes
     // the user's modal-selected provider/model settings.
-    settings: chatRunSettingsSchema.nullable().optional(),
+    //
+    // FROZEN pre-identity, for the reason `createChatInitialMessageSchema`
+    // gives: this object is `epic.createChat@1.0`'s request and `@1.1` extends
+    // it, so a key on the live tuple would ride both released lines. `@1.2`
+    // re-types it onto the live tuple.
+    settings: chatRunSettingsSchemaPreIdentity.nullable().optional(),
     // Optional intent - when present the host orchestrator resolves it into a
     // local SQLite WorktreeBinding row for this chat before the first
     // chat.subscribe send is processed. Intent only carries mode + entries; the
@@ -2042,6 +2066,10 @@ export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
  * two fields `epic.create@1.2` grows, with the same meanings and the same
  * "absent means false" reading. See `createChatInitialMessageSchemaV12`.
  *
+ * `settings` is re-typed onto the LIVE tuple too, so a fork can name the
+ * identity it runs as; the released lines bind the pre-identity copy and the
+ * upgrade path fills `identityId: null` for a caller below this minor.
+ *
  * DERIVED FROM `createChatRequestSchemaV11`, NOT from the `@1.0` base: `@1.1`'s
  * whole content is the widened `forkSource` union, and extending the base would
  * silently drop it - re-narrowing `epic.createChat@1.2` to the precise-boundary
@@ -2049,6 +2077,7 @@ export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
  */
 export const createChatRequestSchemaV12 = lazySchema(() =>
   createChatRequestSchemaV11.extend({
+    settings: chatRunSettingsSchema.nullable().optional(),
     initialMessage: createChatInitialMessageSchemaV12.nullable().optional(),
     deferWorktreeProvisioning: z.boolean().optional(),
   }),

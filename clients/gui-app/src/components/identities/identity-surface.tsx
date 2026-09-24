@@ -17,6 +17,7 @@ import { OpenIdentityProvider } from "@/providers/open-identity-provider";
 import { useOpenIdentityState } from "@/lib/identity-selectors";
 import {
   buildIdentityFileTree,
+  defaultIdentityFilePath,
   type IdentityTreeFile,
   type IdentityTreeGroup,
 } from "@/lib/identities/file-tree";
@@ -98,14 +99,6 @@ function isNarrowPane(value: string): value is NarrowPane {
   return value === "files" || value === "editor" || value === "details";
 }
 
-/** The file an identity opens on: its first root markdown file. */
-function defaultPath(groups: readonly IdentityTreeGroup[]): string | null {
-  for (const group of groups) {
-    if (group.files.length > 0) return group.files[0].path;
-  }
-  return null;
-}
-
 function findFile(
   groups: readonly IdentityTreeGroup[],
   path: string | null,
@@ -131,7 +124,8 @@ function IdentityWorkspace(props: IdentitySurfaceProps): ReactNode {
   // default; the pick itself is kept so a rename that lands the same path
   // back (an undo) re-selects it without a click.
   const selected =
-    findFile(groups, pickedPath) ?? findFile(groups, defaultPath(groups));
+    findFile(groups, pickedPath) ??
+    findFile(groups, defaultIdentityFilePath(groups));
   const selectedPath = selected?.path ?? null;
 
   const onSelect = (path: string) => {

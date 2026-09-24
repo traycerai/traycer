@@ -396,6 +396,118 @@ describe("IdentityFileBody - document", () => {
   });
 });
 
+function hostStateFrame(
+  shardState: "ready" | "retrying" | "unavailable",
+): Extract<
+  AgentIdentityStateSubscribeServerFrameV10,
+  { kind: "hostStateChanged" }
+> {
+  const parsed = agentIdentityStateSubscribeServerFrameSchemaV10.parse({
+    kind: "hostStateChanged",
+    authorityEpoch: EPOCH,
+    reconciledWithCloud: false,
+    shards: [{ shardRoomId: "shard-a", state: shardState }],
+    hasBinaryPayload: false,
+  });
+  if (parsed.kind !== "hostStateChanged") {
+    throw new Error("fixture drift: hostStateChanged");
+  }
+  return parsed;
+}
+
+describe("IdentityFileBody - document shard availability (finding 40)", () => {
+  it("locks the editor read-only while the document's shard is retrying, and releases it on ready", async () => {
+    const rig = createRig();
+    opened.push(rig.handle);
+
+    rig.state.latest().callbacks.onSnapshot(
+      snapshotFrame([
+        {
+          path: "SOUL.md",
+          incarnation: "inc:SOUL.md",
+          shardRoomId: "shard-a",
+          fragmentName: "doc",
+          updatedAt: 1000,
+          provenance: "agent",
+          revision: 1,
+        },
+      ]),
+    );
+
+    const { container } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <OpenIdentityContext.Provider
+          value={{ kind: "ready", handle: rig.handle }}
+        >
+          <IdentityFileBody
+            identityId={IDENTITY_ID}
+            hostId={HOST_ID}
+            file={DOCUMENT_FILE}
+            hydrated
+          />
+        </OpenIdentityContext.Provider>
+      </TabHostProvider>,
+    );
+
+    const donor = new Y.Doc();
+    const paragraph = new Y.XmlElement("paragraph");
+    paragraph.insert(0, [new Y.XmlText("kept bytes")]);
+    donor.getXmlFragment("doc").insert(0, [paragraph]);
+    act(() => {
+      rig.file
+        .forPath("SOUL.md")
+        .request.callbacks.onDoc(
+          docFrame(
+            "SOUL.md",
+            "guid-1",
+            encodeDocStateVectorBase64(new Y.Doc()),
+          ),
+          Y.encodeStateAsUpdate(donor),
+        );
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector(".tc-editor-body .ProseMirror"),
+      ).not.toBeNull();
+    });
+    expect(screen.queryByTestId("identity-document-retrying")).toBeNull();
+
+    // The index lane reports the shard room as retrying: the last bytes stay
+    // readable, but the editor must not take edits the host cannot land.
+    act(() => {
+      rig.state
+        .latest()
+        .callbacks.onHostStateChanged(hostStateFrame("retrying"));
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("identity-document-retrying").textContent,
+      ).toContain("The host is reconnecting to this file's room.");
+    });
+    expect(container.textContent).toContain("kept bytes");
+    await waitFor(() => {
+      const prosemirror = container.querySelector(
+        ".tc-editor-body .ProseMirror",
+      );
+      expect(prosemirror?.getAttribute("contenteditable")).toBe("false");
+    });
+
+    // The room comes back: the lock lifts without a remount.
+    act(() => {
+      rig.state.latest().callbacks.onHostStateChanged(hostStateFrame("ready"));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("identity-document-retrying")).toBeNull();
+    });
+    await waitFor(() => {
+      const prosemirror = container.querySelector(
+        ".tc-editor-body .ProseMirror",
+      );
+      expect(prosemirror?.getAttribute("contenteditable")).toBe("true");
+    });
+  });
+});
+
 describe("IdentityFileBody - blob", () => {
   it("renders an image preview for a PNG blob", () => {
     blobMocks.data = {

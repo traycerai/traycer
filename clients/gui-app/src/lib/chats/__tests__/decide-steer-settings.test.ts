@@ -26,6 +26,7 @@ const TURN: ChatActiveTurn = {
   reasoningEffort: "medium",
   serviceTier: "default",
   profileId: null,
+  identityId: null,
   userMessageId: "message-1",
   startedAt: 1,
   updatedAt: 1,
@@ -117,6 +118,53 @@ describe("decideSteerSettings", () => {
       kind: "interrupt_restart",
       newSettings: { ...SETTINGS, profileId: "profile-a" },
       changed: ["profile"],
+    });
+  });
+
+  // The identity is baked into the turn's system prompt the way the profile is
+  // baked into its provider process, and the host refuses the fold-in on its
+  // side (`queuedSettingsMatchActiveExecution`); this mirror asks first.
+  it("restarts when the queued item is bound to a different identity than the running turn", () => {
+    const turnOnIdentityA: ChatActiveTurn = {
+      ...TURN,
+      identityId: "identity_a",
+    };
+    const result = decideSteerSettings(turnOnIdentityA, {
+      ...SETTINGS,
+      identityId: "identity_b",
+    });
+    expect(result).toEqual({
+      kind: "interrupt_restart",
+      newSettings: { ...SETTINGS, identityId: "identity_b" },
+      changed: ["identity"],
+    });
+  });
+
+  it("injects silently when the queued item stays on the turn's own identity", () => {
+    const turnOnIdentityA: ChatActiveTurn = {
+      ...TURN,
+      identityId: "identity_a",
+    };
+    const result = decideSteerSettings(turnOnIdentityA, {
+      ...SETTINGS,
+      identityId: "identity_a",
+    });
+    expect(result.kind).toBe("silent_inject");
+  });
+
+  // Same skew rule as `profileId`: a turn from a pre-`chat.subscribe@1.18`
+  // host parses with `identityId: null`, and binding an identity to the queued
+  // item must still restart rather than silently fold into a turn whose
+  // identity is unknown.
+  it("restarts when the active turn has no recorded identityId (old-turn default) and an identity is now bound", () => {
+    const result = decideSteerSettings(TURN, {
+      ...SETTINGS,
+      identityId: "identity_a",
+    });
+    expect(result).toEqual({
+      kind: "interrupt_restart",
+      newSettings: { ...SETTINGS, identityId: "identity_a" },
+      changed: ["identity"],
     });
   });
 });

@@ -1212,6 +1212,7 @@ function runningActiveTurn(): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
+    identityId: null,
     turnId: "turn-active",
     status: "running",
     harnessId: "codex",
@@ -1820,6 +1821,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
@@ -1867,6 +1869,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
@@ -2104,6 +2107,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -2220,6 +2224,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -2293,6 +2298,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -3025,6 +3031,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: AUTO_SESSION_SETTINGS.harnessId,
@@ -3116,6 +3123,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: AUTO_SESSION_SETTINGS.harnessId,
@@ -3210,6 +3218,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: AUTO_SESSION_SETTINGS.harnessId,
@@ -3885,6 +3894,7 @@ describe("<ChatTile />", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-1",
           status: "running",
           harnessId: QUEUED_SETTINGS.harnessId,

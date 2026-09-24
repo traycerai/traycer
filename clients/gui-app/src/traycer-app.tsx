@@ -41,6 +41,7 @@ import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/compose
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { IdentityTabsPersistLifecycleBridge } from "@/providers/identity-tabs-persist-lifecycle-bridge";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-position-persist-lifecycle-bridge";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
@@ -271,36 +272,38 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                     <WorktreeIntentMemoryPersistLifecycleBridge>
                       <WorktreeIntentStagingPersistLifecycleBridge>
                         <EpicCanvasPersistLifecycleBridge>
-                          <LandingTerminalPersistLifecycleBridge>
-                            <LandingTerminalTombstoneRecoveryBridge />
-                            <EpicSessionControllerBridge />
-                            <EpicTabExistenceReconciler />
-                            <HostStreamProvider>
-                              <HostScopeReady scope="default-host">
-                                <WorktreeChangedStreamMount />
-                                <ProvidersChangedStreamMount />
-                                <ChatRecordsStreamMount />
-                                <LandingDraftMirrorMount />
-                              </HostScopeReady>
-                              {/* Above the shell split on purpose: the onboarding tour
+                          <IdentityTabsPersistLifecycleBridge>
+                            <LandingTerminalPersistLifecycleBridge>
+                              <LandingTerminalTombstoneRecoveryBridge />
+                              <EpicSessionControllerBridge />
+                              <EpicTabExistenceReconciler />
+                              <HostStreamProvider>
+                                <HostScopeReady scope="default-host">
+                                  <WorktreeChangedStreamMount />
+                                  <ProvidersChangedStreamMount />
+                                  <ChatRecordsStreamMount />
+                                  <LandingDraftMirrorMount />
+                                </HostScopeReady>
+                                {/* Above the shell split on purpose: the onboarding tour
                                   renders through `StandaloneShell`, not `AppShell`, so a
                                   mount inside the app shell left the tour's Import button
                                   with no run handle to call. This is the lowest node both
                                   shells share that still has the host stream. */}
-                              <SessionImportRunController />
-                              <AppLocalNotificationsPersistLifecycleBridge>
-                                <ReadingPositionPersistLifecycleBridge>
-                                  <NotificationsSessionProvider
-                                    navigate={props.router.navigate}
-                                  >
-                                    <TraycerAppRuntimeSurface
-                                      router={props.router}
-                                    />
-                                  </NotificationsSessionProvider>
-                                </ReadingPositionPersistLifecycleBridge>
-                              </AppLocalNotificationsPersistLifecycleBridge>
-                            </HostStreamProvider>
-                          </LandingTerminalPersistLifecycleBridge>
+                                <SessionImportRunController />
+                                <AppLocalNotificationsPersistLifecycleBridge>
+                                  <ReadingPositionPersistLifecycleBridge>
+                                    <NotificationsSessionProvider
+                                      navigate={props.router.navigate}
+                                    >
+                                      <TraycerAppRuntimeSurface
+                                        router={props.router}
+                                      />
+                                    </NotificationsSessionProvider>
+                                  </ReadingPositionPersistLifecycleBridge>
+                                </AppLocalNotificationsPersistLifecycleBridge>
+                              </HostStreamProvider>
+                            </LandingTerminalPersistLifecycleBridge>
+                          </IdentityTabsPersistLifecycleBridge>
                         </EpicCanvasPersistLifecycleBridge>
                       </WorktreeIntentStagingPersistLifecycleBridge>
                     </WorktreeIntentMemoryPersistLifecycleBridge>

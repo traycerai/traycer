@@ -102,6 +102,31 @@ export function hydrateDesktopTabs(
   return { route: restoredRoute, revision: snapshot.revision ?? 0 };
 }
 
+/**
+ * Whether restoring `snapshot` reads the Identities-tab SOURCE records: a v2
+ * layout holding an identity ref, or - on the legacy reconstruction path - an
+ * identity route to focus. `sanitizeDesktopLayout` drops a ref whose record
+ * is absent, so a restore that runs before the account's identity bucket has
+ * loaded loses the tab's placement, split and selection; the windows bridge
+ * asks this before hydrating so it waits only when there is something to
+ * lose. Mirrors `hydrateDesktopTabs`'s own choice of path.
+ */
+export function desktopSnapshotReferencesIdentityTabs(
+  snapshot: DesktopPerWindowSnapshot,
+  compatible: boolean,
+  legacyHistoryRoute: string | null,
+): boolean {
+  if (compatible && hasPersistedV2Layout(snapshot.tabStripLayout)) {
+    return flattenLayoutRefs(
+      migrateTabsPersistedState(snapshot.tabStripLayout),
+    ).some((ref) => ref.kind === "identity");
+  }
+  return (
+    identityRouteRef(routePath(legacyHistoryRoute)) !== null ||
+    identityRouteRef(routePath(snapshot.activeRoute ?? null)) !== null
+  );
+}
+
 export function consumeDesktopRestoredRoute(): string | null {
   const route = pendingRestoredRoute;
   pendingRestoredRoute = null;

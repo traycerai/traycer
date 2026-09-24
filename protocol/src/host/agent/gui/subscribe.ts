@@ -55,6 +55,7 @@ import {
   type Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  agentIdentityIdSchema,
   agentModeSchema,
   permissionModeSchema,
   permissionModeSchemaPreAuto,
@@ -1057,11 +1058,31 @@ export const chatActiveTurnSchemaPreReasonix = lazySchema(() =>
   }),
 );
 
-// Live shape, bound only to the unreleased `1.7` line: re-widens `harnessId` to
-// the full enum so a Reasonix turn is expressible on the wire it ships with.
-export const chatActiveTurnSchema = lazySchema(() =>
+// The `1.7`–`1.17` active-turn shape: re-widens `harnessId` to the full enum
+// so a Reasonix turn is expressible on the wire it ships with, and nothing
+// after that. Every snapshot and `turnStateChanged` frame below `1.18` binds
+// this copy, so the identity key opened by `1.18` cannot reach a line whose
+// surface `chat-schema-checkpoints.test.ts` has already captured.
+export const chatActiveTurnSchemaPreIdentity = lazySchema(() =>
   chatActiveTurnSchemaPreReasonix.extend({
     harnessId: guiHarnessIdSchema,
+  }),
+);
+
+// Live shape, bound only to the unreleased `1.18` line.
+export const chatActiveTurnSchema = lazySchema(() =>
+  chatActiveTurnSchemaPreIdentity.extend({
+    // The agent identity the turn is bound to, mirrored from its
+    // `ChatRunSettings.identityId` (`chat.subscribe@1.18`), so the renderer's
+    // `decideSteerSettings` can refuse a same-turn steer under a different
+    // identity the way the host's own compatibility check does - the identity
+    // shapes the system prompt the provider process was started with, so a
+    // differently-bound prompt cannot fold into the running turn. `null` for a
+    // turn with no identity bound. Defaults to `null` so a turn received from
+    // a `<=1.17` host (the client decodes every line through the live union)
+    // still parses; `decideSteerSettings` documents the safe direction of
+    // that skew.
+    identityId: agentIdentityIdSchema.nullable().default(null),
   }),
 );
 export type ChatActiveTurn = z.infer<typeof chatActiveTurnSchema>;
@@ -1930,7 +1951,7 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
     // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
     // in-progress indicators read this, not `activeTurn`.
     runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
+    activeTurn: chatActiveTurnSchemaPreIdentity.nullable(),
     pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     // Local-only worktree binding projected from host SQLite at subscribe
@@ -2015,6 +2036,10 @@ export const chatSnapshotSchema = lazySchema(() =>
     // the field is here to keep that type in step with the windowed snapshot,
     // and `[]` is simply true of every line that carries a full snapshot.
     portForwards: z.array(chatPortForwardSchema).default([]),
+    // Same reason: the client's snapshot TYPE carries the `1.18` identity key,
+    // in step with the windowed snapshot; the V17 base stays pre-identity for
+    // the released lines that embed it.
+    activeTurn: chatActiveTurnSchema.nullable(),
     pendingApprovals: z.array(chatApprovalStateSchema),
     backgroundItems: z.array(backgroundItemSchema).optional(),
     // The live fallback traversal, or absent when there is none
@@ -2064,42 +2089,56 @@ const chatSubscribeSnapshotServerFrameSchema = lazySchema(() =>
   }),
 );
 
+// The `turnStateChanged` frame as every line from `1.10` to `1.17` ships it:
+// the live frame with the pre-identity active turn. Every union below `1.18`
+// binds this copy (the pre-`auto` freeze extends it), and only the live union
+// binds the live frame, so `activeTurn.identityId` opens with `1.18` alone.
+const chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity = lazySchema(
+  () =>
+    z.object({
+      kind: z.literal("turnStateChanged"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      // `runStatus` rides every turn-state broadcast so the GUI's in-progress
+      // indicator updates the instant a turn is requested, stops, or completes -
+      // including the request→activeTurn window where `activeTurn` is still null.
+      runStatus: chatRunStatusSchema,
+      activeTurn: chatActiveTurnSchemaPreIdentity.nullable(),
+      // Background-items deltas ride this same broadcast (added/settled/stopped).
+      // Optional for the same capability-sentinel reason as the snapshot field; an
+      // older host omits it and the renderer keeps its last snapshot value.
+      backgroundItems: z.array(backgroundItemSchema).optional(),
+      // See `chatSnapshotSchema.turnInProgress` - same predicate, same
+      // optionality, same conservative-fallback contract.
+      turnInProgress: z.boolean().optional(),
+      // Rides this broadcast for the same reason `backgroundItems` does: every
+      // transition the DTO describes is a turn-state transition too, so a separate
+      // frame would be a second ordering to get wrong. Absent means "no traversal",
+      // and unlike `backgroundItems` the renderer must NOT keep its last value -
+      // that is how a settled traversal's card would outlive it.
+      pendingFallback: pendingFallbackSchema.optional(),
+      // Same rule, same reason: the banner must vanish when the offer is answered,
+      // so an absent key CLEARS rather than preserving the last value.
+      pendingReturn: pendingReturnSchema.optional(),
+      // Same rule again (D152). The card must vanish when a replacement lands or a
+      // traversal takes the chat back over, so an absent key CLEARS - a renderer
+      // that kept its last value would offer Retry on a turn that has since
+      // succeeded, which is the exact defect D122 closed on the host side.
+      lastFailedAttempt: lastFailedAttemptSchema.optional(),
+      // The last confirmed automatic outcome (D215). The clearing rule is the same
+      // in mechanism and OPPOSITE in timing: an absent key clears, but this one is
+      // cleared by the next ARM rather than by the traversal ending - a settled
+      // traversal's outcome is exactly what a consumer still needs to speak.
+      lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    }),
+);
+
+// The live `turnStateChanged` frame (`chat.subscribe@1.18`): the pre-identity
+// frame with the active turn re-widened to name its bound identity. `.extend`
+// over the existing key keeps its position.
 const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
-  z.object({
-    kind: z.literal("turnStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    // `runStatus` rides every turn-state broadcast so the GUI's in-progress
-    // indicator updates the instant a turn is requested, stops, or completes -
-    // including the request→activeTurn window where `activeTurn` is still null.
-    runStatus: chatRunStatusSchema,
+  chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity.extend({
     activeTurn: chatActiveTurnSchema.nullable(),
-    // Background-items deltas ride this same broadcast (added/settled/stopped).
-    // Optional for the same capability-sentinel reason as the snapshot field; an
-    // older host omits it and the renderer keeps its last snapshot value.
-    backgroundItems: z.array(backgroundItemSchema).optional(),
-    // See `chatSnapshotSchema.turnInProgress` - same predicate, same
-    // optionality, same conservative-fallback contract.
-    turnInProgress: z.boolean().optional(),
-    // Rides this broadcast for the same reason `backgroundItems` does: every
-    // transition the DTO describes is a turn-state transition too, so a separate
-    // frame would be a second ordering to get wrong. Absent means "no traversal",
-    // and unlike `backgroundItems` the renderer must NOT keep its last value -
-    // that is how a settled traversal's card would outlive it.
-    pendingFallback: pendingFallbackSchema.optional(),
-    // Same rule, same reason: the banner must vanish when the offer is answered,
-    // so an absent key CLEARS rather than preserving the last value.
-    pendingReturn: pendingReturnSchema.optional(),
-    // Same rule again (D152). The card must vanish when a replacement lands or a
-    // traversal takes the chat back over, so an absent key CLEARS - a renderer
-    // that kept its last value would offer Retry on a turn that has since
-    // succeeded, which is the exact defect D122 closed on the host side.
-    lastFailedAttempt: lastFailedAttemptSchema.optional(),
-    // The last confirmed automatic outcome (D215). The clearing rule is the same
-    // in mechanism and OPPOSITE in timing: an absent key clears, but this one is
-    // cleared by the next ARM rather than by the traversal ending - a settled
-    // traversal's outcome is exactly what a consumer still needs to speak.
-    lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
   }),
 );
 
@@ -2110,7 +2149,7 @@ const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
 // shared by every minor, which is why freezing the snapshot alone left `1.10`
 // still advertising `auto` through it.
 const chatSubscribeTurnStateChangedServerFrameSchemaPreAuto = lazySchema(() =>
-  chatSubscribeTurnStateChangedServerFrameSchema.extend({
+  chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity.extend({
     pendingFallback: pendingFallbackSchemaPreAuto.optional(),
     pendingReturn: pendingReturnSchemaPreAuto.optional(),
     lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
@@ -4597,7 +4636,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV17ToV19 = lazySchema(() =>
     ...textFrameFields,
     ...chatReferenceFields,
     runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
+    activeTurn: chatActiveTurnSchemaPreIdentity.nullable(),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     turnInProgress: z.boolean().optional(),
   }),
@@ -4711,7 +4750,7 @@ const chatWindowedSnapshotSchemaV18 = lazySchema(() =>
     access: chatAccessSchema,
     queue: chatQueueStateSchemaPreShellHostPreAuto,
     runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
+    activeTurn: chatActiveTurnSchemaPreIdentity.nullable(),
     pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
@@ -4800,7 +4839,7 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
     access: chatAccessSchema,
     queue: chatQueueStateSchemaPreShellHostPreAuto,
     runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
+    activeTurn: chatActiveTurnSchemaPreIdentity.nullable(),
     pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
@@ -4896,11 +4935,19 @@ const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
     pendingApprovals: z.array(chatApprovalStateSchema),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.17`): `1.16` with the queue
-// re-widened so its prompt item names the machine it was sent from.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.17` ships it: `1.16` with the
+// queue re-widened so its prompt item names the machine it was sent from.
+const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
   chatWindowedSnapshotSchemaV116.extend({
     queue: chatQueueStateSchema,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.18`): `1.17` with the active
+// turn re-widened to name its bound identity. `.extend` over the existing key
+// keeps its position, so the shape moves by that nested key alone.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV117.extend({
+    activeTurn: chatActiveTurnSchema.nullable(),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -5052,7 +5099,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5071,7 +5118,7 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5090,11 +5137,30 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV116,
+  ]),
+);
+
+// `chat.subscribe@1.17`'s server frames: the live union with the pre-identity
+// active turn, on the snapshot and on `turnStateChanged` alike.
+const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV117,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
 
@@ -5145,7 +5211,7 @@ const chatWindowedSnapshotSchemaV19 = lazySchema(() =>
     access: chatAccessSchema,
     queue: chatQueueStateSchemaPreShellHostPreAuto,
     runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
+    activeTurn: chatActiveTurnSchemaPreIdentity.nullable(),
     pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
@@ -5265,7 +5331,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreIdentity,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV113,
@@ -5747,10 +5813,45 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * a peer whether the key can be present - and because the checkpoint gate
  * freezes every line but the newest, so adding the key to `1.13`–`1.16` in
  * place moved their captured surfaces.
+ *
+ * Frozen at the pre-identity active turn since `1.18` opened above it
+ * (`chatSubscribeServerFrameSchemaV117`). The client frames are the live
+ * ones: `1.18` adds nothing on that side.
  */
 export const chatSubscribeV117 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 17 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV117,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The bound-identity line.
+ *
+ * `1.18` adds one optional key, `identityId`, on the active turn
+ * (`chatActiveTurnSchema`), on the snapshot and on `turnStateChanged` alike:
+ * the agent identity the running turn was started under, mirrored from its
+ * run settings. The host refuses to fold a queued or immediate steer into a
+ * turn bound to a different identity, and this key is what lets the
+ * renderer's `decideSteerSettings` say so BEFORE the send rather than learn
+ * it from the refusal.
+ *
+ * TOLERANCE, not projection. The key is `.nullable().default(null)` inside a
+ * non-strict object, so the host writes it at every minor: a `<=1.17` peer's
+ * decoder drops it as an unknown member, and a `1.18` client reading a
+ * `<=1.17` host's turn fills `null`, which `decideSteerSettings` treats as
+ * "no identity bound" - the same safe direction the `profileId` default
+ * takes. Nothing is withheld and nothing is refused.
+ *
+ * A new minor although `1.17` is unreleased, for the same two reasons `1.17`
+ * gives: the minor is what tells a peer whether the key can be present, and
+ * the checkpoint gate freezes every line but the newest. The client frames
+ * are `1.17`'s, unchanged: the identity on the turn is host-authored.
+ */
+export const chatSubscribeV118 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

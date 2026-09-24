@@ -46,6 +46,7 @@ import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__
 const EPIC_ID = "epic-comm-graph-agents";
 const SETTLED_CHAT_ID = "chat-settled";
 const BARE_CHAT_ID = "chat-bare";
+const EVOLUTION_CHAT_ID = "chat-evolution";
 const TUI_ID = "tui-1";
 const HOST_A = "host-a";
 
@@ -83,6 +84,19 @@ function seedDoc(doc: Y.Doc): void {
   bare.set("hostId", HOST_A);
   bare.set("messages", new Y.Array<unknown>());
   chats.set(BARE_CHAT_ID, bare);
+
+  // An identity's evolution chat: folded into the sidebar's archive
+  // partition, and not a desk on the floor (finding 35).
+  const evolution = new Y.Map<unknown>();
+  evolution.set("id", EVOLUTION_CHAT_ID);
+  evolution.set("title", "Evolution");
+  evolution.set("parentId", null);
+  evolution.set("createdAt", 4);
+  evolution.set("updatedAt", 4);
+  evolution.set("hostId", HOST_A);
+  evolution.set("kind", "evolution");
+  evolution.set("messages", new Y.Array<unknown>());
+  chats.set(EVOLUTION_CHAT_ID, evolution);
 
   const tuiAgents = new Y.Map<unknown>();
   const tui = new Y.Map<unknown>();
@@ -153,6 +167,22 @@ describe("useCommGraphAgents harness and model", () => {
     // no harness, and the floor draws no logo rather than the wrong one.
     expect(bare?.harnessId).toBeNull();
     expect(bare?.model).toBeNull();
+  });
+
+  it("leaves an identity's evolution chat off the floor", async () => {
+    const { result } = renderHook(() => useCommGraphAgents(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.nodes.length).toBe(3);
+    });
+    // The sidebar files the evolution chat under Archived; the office has no
+    // archived state, so the same record is simply not a desk.
+    expect(result.current.nodes.map((node) => node.id).sort()).toEqual(
+      [BARE_CHAT_ID, SETTLED_CHAT_ID, TUI_ID].sort(),
+    );
+    expect(
+      result.current.nodes.find((node) => node.id === EVOLUTION_CHAT_ID),
+    ).toBeUndefined();
   });
 
   it("takes a terminal agent's harness and model from its own record", async () => {
