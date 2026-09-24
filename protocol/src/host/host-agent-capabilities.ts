@@ -1,8 +1,14 @@
 /**
- * Cross-host target-side capabilities: repo → path enumeration, a
- * non-persistent one-off shell, and the host directory an agent needs in
- * order to name a peer at all. Brand-new unary methods on the
+ * Cross-host target-side capabilities: repo → path enumeration and a
+ * non-persistent one-off shell. Brand-new unary methods on the
  * optional-capability channel (`degrade: unsupported`).
+ *
+ * **There is deliberately no `host.directory.list` either.** It was added
+ * after the last release and removed before the next, with no caller: an
+ * agent learns its fleet from the A2A `list_hosts` tool, which the host
+ * answers from its own inventory, and a client reads the account's registry
+ * from its local host's `host.hostInventory.subscribe`. A unary listing here
+ * would be a third reader of the same rows.
  *
  * **There is deliberately no `host.file.read` / `host.file.write` here.**
  * Both existed briefly and were removed before release: their `content` was
@@ -28,10 +34,6 @@ import {
   createAgentRequestSchemaV30,
   createAgentResponseSchema,
 } from "./agent/shared";
-import {
-  hostCommandInterpreterSchema,
-  hostConnectivitySchema,
-} from "./host-status";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const hostResolveRepoPathsRequestSchema = lazySchema(() =>
@@ -102,85 +104,6 @@ export const hostOneOffShellRunV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostOneOffShellRunRequestSchema,
   responseSchema: hostOneOffShellRunResponseSchema,
-});
-
-/**
- * One machine in the caller's own fleet, as the cloud host directory
- * describes it. This is the answer to "which hosts exist?", which every
- * other cross-host verb assumes has already been answered: they all take a
- * target host id, and until this method existed an agent had no supported
- * way to obtain one for any machine but its own.
- *
- * **`connectivity` is a FACT, not a verdict.** It is the cloud's own liveness
- * word for the host — the single value `GET /api/v3/hosts` reports, typed here
- * by the same {@link hostConnectivitySchema} the GUI status mirror uses — and
- * it is deliberately not named `reachable`: nothing in the dial path gates on
- * it. The router resolves a target and *attempts the dial* whatever this says,
- * letting a genuine failure surface as `HOST_UNREACHABLE`, precisely so a stale
- * directory reading cannot refuse a machine that would in fact answer. Treat it
- * as a hint for choosing among hosts, never as a precondition to check before
- * calling — a second dialability predicate living here would be a second
- * reading of a rule the dialer already owns. `unknown` in particular is *not*
- * offline; it means the cloud could not read its liveness store.
- *
- * There is deliberately **no `busy`**. The cloud host list carries no
- * drain state at all any more (it described a "right now" a minutes-scale
- * lease cannot carry), and projecting a fabricated `false` here would tell an
- * agent a machine is idle when nothing in the system knows that.
- *
- * **`commandInterpreter` is the LAST SUCCESSFULLY REPORTED one**, and `null`
- * means unknown with no fallback. It answers "what shell dialect should I
- * write this command in for that machine?", which `platform` cannot: on
- * Windows the same command meets Git Bash, PowerShell or cmd depending on
- * what the user configured, and only that host knows which. Do NOT infer it
- * from `platform` when it is null — that inference is the defect this field
- * exists to remove. It can lag a Settings change, a shell installation, or an
- * offline period, and it describes a NEWLY resolved command only: an
- * already-persisted managed command keeps the interpreter it was created with.
- *
- * `publicKey` is **not** projected: it is the dialer's Noise material, not
- * something an agent has any use for.
- *
- * `platform` is passed through as the cloud's free-text string (it is what
- * feeds the desktop host directory). Do not narrow it to an enum here — the
- * value's shape is authn's to define, and an enum would drift the moment it
- * writes something new. It is NOT how an agent learns which shell a command
- * will meet: that is `commandInterpreter`, and the claim that `platform`
- * answers it was only ever true on POSIX.
- */
-export const hostDirectoryEntrySchema = lazySchema(() =>
-  z.object({
-    hostId: z.string(),
-    displayName: z.string().nullable(),
-    platform: z.string().nullable(),
-    appVersion: z.string().nullable(),
-    connectivity: hostConnectivitySchema,
-    commandInterpreter: hostCommandInterpreterSchema.nullable(),
-  }),
-);
-export type HostDirectoryEntrySummary = z.infer<
-  typeof hostDirectoryEntrySchema
->;
-
-export const hostDirectoryListRequestSchema = lazySchema(() => z.object({}));
-export type HostDirectoryListRequest = z.infer<
-  typeof hostDirectoryListRequestSchema
->;
-
-export const hostDirectoryListResponseSchema = lazySchema(() =>
-  z.object({
-    hosts: z.array(hostDirectoryEntrySchema),
-  }),
-);
-export type HostDirectoryListResponse = z.infer<
-  typeof hostDirectoryListResponseSchema
->;
-
-export const hostDirectoryListV10 = defineRpcContract({
-  method: "host.directory.list",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: hostDirectoryListRequestSchema,
-  responseSchema: hostDirectoryListResponseSchema,
 });
 
 /**
