@@ -32,6 +32,10 @@ const settings = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
+  // The live run-settings tuple carries the chat's agent identity (defaulted
+  // null), so a parsed @1.1 message reads it back even though no @1.1 caller
+  // ever sent it.
+  identityId: null,
 };
 
 const initialMessageV11 = {

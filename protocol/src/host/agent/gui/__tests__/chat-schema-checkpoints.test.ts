@@ -180,17 +180,23 @@ const SERVER_FRAME_DIGESTS = {
     "5cd4121cfd8360c6ca0bc41944b46e133004ed027c109e8853970df6251b59ca",
     "22d50843f7b95a6be5d9869b8387255c24f81a5314f44fc96dccdb07a7c7dd74",
   ],
+  // `1.14`-`1.16` RE-CAPTURED on the tgill-release-train-2 merge of the agent
+  // identity stack, for the same reason and under the same rule as `1.13`
+  // above: they bind the live chat record and settings tuple by reference, so
+  // `chat.kind`, `chat.evolutionTurnsSinceReview` and `settings.identityId`
+  // move them the moment they land. Released `chat.subscribe` is still `1.8`;
+  // `1.0`-`1.12` are byte-identical across the merge.
   14: [
-    "728c4ca15b52ea128e6509f24f37ad44248d4f0056054db96ab832faf78cf3ab",
-    "05098db0e4bf4d54d8ef7503440b9b5f43aea1c1c744263f99802c687edd3e12",
+    "2debf2e6043f185a50d4dcdaa0560af22da5e2a08d995efc84dade97e7285478",
+    "f36e1d5e008a2557a1f87183fe2b3dacc15a7bc8e849a6f58a75e3805a5224b9",
   ],
   15: [
-    "9aca2d28d1d127a05921e532e779a43c929645bdf50a117b9953a64b3a3b35f0",
-    "1f5c285666d7c8a100624291edafaae223ee22220a8787a68cdb41df701016b3",
+    "3e1998c45b5cb09d2d005ab00562c8b98b179804f396c7919110cf9e62382086",
+    "33b7c62df6cfaefadf46f207774a445aaf2eab47f19e5ced88ebd11de6fbd340",
   ],
   16: [
-    "183b34c92b34eb6837d89bad85cabc8a1bc2223bee85d43ff27f372c47f1a760",
-    "258a4753885b4195260a7a9b32e99d43fcc76543ff8eade2249f36a375c7bbae",
+    "944de3a5f3e27b39673eaf6d76d8165c2993161a04c7772b50a5c8d35a4a5663",
+    "822b1b2217a53a5570acd151cfcac14d1d5ed77a03167a74d0a21d1a5847ef90",
   ],
 } as const;
 

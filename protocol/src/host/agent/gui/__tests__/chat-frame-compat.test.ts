@@ -16,7 +16,6 @@ import {
   chatSubscribeClientFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
   chatSubscribeSnapshotServerFrameShallowSchema,
-  chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
