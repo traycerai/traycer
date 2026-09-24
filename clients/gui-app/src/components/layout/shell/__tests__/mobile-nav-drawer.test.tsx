@@ -71,23 +71,40 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 
 const trackMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
-    data: {
-      items: testState.items,
-      totalCount: testState.items.length,
-      hostRequiresCloudToList: testState.hostRequiresCloudToList,
+// Counts live observers the way the query cache would: one per mounted caller,
+// released on unmount. The real hook is what owns the history list, the
+// worktree index and its per-path enrichment, so "no caller mounted" is "none
+// of those observed".
+const historyObservers = vi.hoisted(() => ({ live: 0 }));
+
+vi.mock("@/hooks/home/use-history-query", async () => {
+  const { useEffect } = await import("react");
+  return {
+    useHistoryQuery: () => {
+      useEffect(() => {
+        historyObservers.live += 1;
+        return () => {
+          historyObservers.live -= 1;
+        };
+      }, []);
+      return {
+        data: {
+          items: testState.items,
+          totalCount: testState.items.length,
+          hostRequiresCloudToList: testState.hostRequiresCloudToList,
+        },
+        isPending: testState.isPending,
+        cloudPagePending: testState.cloudPagePending,
+        isFetching: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+        fetchNextPage: () => undefined,
+        hasNextPage: false,
+        isFetchingNextPage: false,
+      };
     },
-    isPending: testState.isPending,
-    cloudPagePending: testState.cloudPagePending,
-    isFetching: false,
-    error: null,
-    refetch: () => Promise.resolve(),
-    fetchNextPage: () => undefined,
-    hasNextPage: false,
-    isFetchingNextPage: false,
-  }),
-}));
+  };
+});
 
 vi.mock("@/lib/analytics", () => ({
   AnalyticsEvent: {
@@ -261,8 +278,9 @@ describe("MobileNavDrawer", () => {
 
     // The panel outlives the open state because the drag engine can only start
     // a gesture against a component that has already subscribed - so a closed
-    // drawer is a mounted one, parked off screen. `inert` is what keeps that
-    // from becoming a menu a keyboard user can tab into while it is invisible.
+    // drawer is a mounted one, parked off screen (its content is not; see
+    // "content lifetime"). `inert` is what keeps that from becoming a menu a
+    // keyboard user can tab into while it is invisible.
     it("keeps the panel mounted but sealed off while the drawer is closed", async () => {
       setMobileApp(true);
       useMobileNavStore.setState({ open: false });
@@ -436,6 +454,105 @@ describe("MobileNavDrawer", () => {
 
       expect(drawer.hasAttribute("inert")).toBe(false);
       expect(drawer.getAttribute("aria-modal")).toBe("false");
+    });
+
+    // The content edges are the request and the settle, not either alone: the
+    // task list is there in the commit the open request starts sliding from,
+    // so the panel never crosses the screen empty, and it stays through the
+    // slide out, so the panel does not empty itself on the way off.
+    it("has its content in place for the whole slide in and the whole slide out", async () => {
+      // The slide out needs a panel that has actually left the park, which
+      // takes a running frame loop - the faked clock does not drive one.
+      vi.useRealTimers();
+      testState.items = [
+        historyItem({ id: "e1", title: "Fix login", updatedAtMs: NOW_MS }),
+      ];
+      renderDrawer();
+      await screen.findByTestId("mobile-nav-drawer");
+      expect(screen.queryByTestId("mobile-nav-task-list")).toBeNull();
+
+      act(() => {
+        useMobileNavStore.setState({ open: true });
+      });
+
+      // Still travelling - not modal yet - and already populated.
+      expect(
+        screen.getByTestId("mobile-nav-drawer").getAttribute("aria-modal"),
+      ).toBe("false");
+      expect(screen.getByTestId("mobile-nav-task-row")).toBeTruthy();
+      expect(historyObservers.live).toBe(1);
+
+      // A close before the panel has left the park has nowhere to travel and
+      // settles on the spot, so let the slide in actually get going first.
+      const scrim = screen.getByTestId("mobile-nav-drawer-scrim");
+      await waitFor(() => {
+        expect(scrim.style.opacity).not.toBe("0");
+      });
+      act(() => {
+        useMobileNavStore.setState({ open: false });
+      });
+
+      // The close was requested, but the panel is still in flight.
+      expect(screen.getByTestId("mobile-nav-task-row")).toBeTruthy();
+      expect(historyObservers.live).toBe(1);
+    });
+  });
+
+  /**
+   * The drawer's task list is what keeps the history list, the worktree index
+   * and its per-path enrichment observed, so every worktree frame refetches
+   * them. A drawer nobody has opened, or one that has settled shut, must not be
+   * holding any of that live behind its park.
+   */
+  describe("content lifetime", () => {
+    beforeEach(() => {
+      setMobileApp(true);
+      useMobileNavStore.setState({ open: false });
+      testState.items = [
+        historyItem({ id: "e1", title: "Fix login", updatedAtMs: NOW_MS }),
+      ];
+    });
+
+    it("observes no task data while the drawer has never opened", async () => {
+      renderDrawer();
+      await screen.findByTestId("mobile-nav-drawer");
+
+      expect(historyObservers.live).toBe(0);
+      expect(testState.indicatorEpicIdCalls).toEqual([]);
+      expect(screen.queryByTestId("mobile-nav-task-list")).toBeNull();
+    });
+
+    it("observes task data once opened and releases it when it settles shut", async () => {
+      renderDrawer();
+      await screen.findByTestId("mobile-nav-drawer");
+
+      act(() => {
+        useMobileNavStore.setState({ open: true });
+      });
+
+      expect(historyObservers.live).toBe(1);
+      expect(testState.indicatorEpicIdCalls).toContainEqual(["e1"]);
+      expect(await screen.findByTestId("mobile-nav-task-row")).toBeTruthy();
+
+      // jsdom's zero width makes both endpoints one coordinate, so this close
+      // settles in the same pass - the at-rest case.
+      act(() => {
+        useMobileNavStore.setState({ open: false });
+      });
+
+      expect(historyObservers.live).toBe(0);
+      expect(screen.queryByTestId("mobile-nav-task-list")).toBeNull();
+
+      // And the frame is still there for the next open to slide.
+      expect(
+        screen.getByTestId("mobile-nav-drawer").hasAttribute("inert"),
+      ).toBe(true);
+
+      act(() => {
+        useMobileNavStore.setState({ open: true });
+      });
+
+      expect(historyObservers.live).toBe(1);
     });
   });
 

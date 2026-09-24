@@ -53,6 +53,14 @@ interface MobileNavDrawerSurfaceProps {
  * because the pointer event that would have begun the drag is gone by the time
  * the new subtree has rendered.
  *
+ * Its CONTENT is not. The children mount on the open request and unmount once
+ * the panel has settled closed, so nothing inside them - the task list's
+ * history and worktree queries above all - stays subscribed behind a drawer no
+ * one can see. The request is the right edge rather than the settle: the
+ * children render in the same commit the settle starts from, so the panel never
+ * slides in empty. Every gesture that moves the panel starts from open, so
+ * none of them needs content that is not already there.
+ *
  * Both directions are one drag on one element. Opening is the header's
  * hamburger, which asks for a settle rather than a drag; closing is a pointer
  * landing on the panel or on the scrim, either of which is handed to the same
@@ -367,6 +375,11 @@ export function MobileNavDrawerSurface(
   // at rest and closed - which is where a keyboard user could otherwise tab
   // into an off-screen menu.
   const inert = !settledOpen && !inFlight;
+  // Mounted exactly while the drawer is anything other than closed and at
+  // rest - requested, travelling, or open. Whatever the children keep live
+  // (query observers, clock subscriptions) is released when it settles shut;
+  // the query cache outlives them, so a reopen renders from it.
+  const contentMounted = open || !inert;
 
   return createPortal(
     <div
@@ -479,7 +492,7 @@ export function MobileNavDrawerSurface(
           data-overlay-surface={settledOpen ? "open" : "closed"}
           data-mobile-shell-touch-scope=""
         >
-          {children}
+          {contentMounted ? children : null}
         </m.div>
       </div>
     </div>,
