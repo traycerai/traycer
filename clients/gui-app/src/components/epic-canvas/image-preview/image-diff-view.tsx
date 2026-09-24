@@ -25,9 +25,9 @@ import {
   type UseFileAssetResult,
 } from "@/hooks/assets/use-file-asset";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
+import { fitInstance } from "./fit-instance";
 import {
   clampPositionToVisibleBounds,
-  fitScaleFor,
   MAX_SCALE,
   MIN_SCALE,
   SCALE_EPSILON,
@@ -433,7 +433,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   );
 
   const handleFit = useCallback(() => {
-    dualDispatch((instance) => fitInstance(instance));
+    dualDispatch((instance) => fitInstance(instance, 0));
   }, [dualDispatch]);
   const handleActualSize = useCallback(() => {
     dualDispatch((instance) => instance.centerView(1, 0));
@@ -584,21 +584,6 @@ function dispatchToSide(
   if (instance === null) return;
   pendingRef.current += 1;
   action(instance);
-}
-
-/** Independently fits `instance`'s own content to its own wrapper - never a shared number forced onto a differently-sized peer (ticket 07). */
-function fitInstance(instance: ReactZoomPanPinchRef): void {
-  const wrapper = instance.instance.wrapperComponent;
-  const content = instance.instance.contentComponent;
-  if (wrapper === null || content === null) return;
-  const wrapperRect = wrapper.getBoundingClientRect();
-  instance.centerView(
-    fitScaleFor(
-      { width: wrapperRect.width, height: wrapperRect.height },
-      { width: content.offsetWidth, height: content.offsetHeight },
-    ),
-    0,
-  );
 }
 
 /**
