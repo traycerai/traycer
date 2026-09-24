@@ -228,6 +228,8 @@ function snapshot(input: {
         activeSessionChain: null,
         claudePendingWakes: [],
         pinnedUserProviderHandle: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
