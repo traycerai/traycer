@@ -252,6 +252,7 @@ function queuedPromptItem(
     sender: { type: "user" as const, userId: OWNER_ID },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn" as const,
     status: "pending" as const,
     targetTurnId: null,

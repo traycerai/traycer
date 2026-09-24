@@ -560,6 +560,7 @@ function runnableQueue(itemCount: number): ChatQueueState {
       sender: { type: "user" as const, userId: "owner-1" },
       settings: SETTINGS,
       accountContext: { type: "PERSONAL" as const },
+      sentFromHostId: null,
       delivery: "next_turn" as const,
       status: "pending" as const,
       targetTurnId: null,

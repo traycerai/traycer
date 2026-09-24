@@ -813,6 +813,7 @@ function queuedPromptItemFixture(
     sender: SEND_SENDER,
     settings: SEND_SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

@@ -109,6 +109,7 @@ import type {
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
@@ -288,6 +289,21 @@ type ChatOwnerActionFrame = Exclude<
   ChatSubscribeClientFrame,
   { readonly kind: "ping" }
 >;
+
+/**
+ * The host id of THIS machine, read at send time the way `accountContext` is
+ * read: the directory's durable local identity (the imperative twin of
+ * `useReactiveLocalHostId`), which survives the local host restarting. `null`
+ * on a shell with no local host (browser, mobile) and before the runtime has
+ * resolved a binding.
+ *
+ * NOT the tab's `hostId`. The tab is bound to the machine the chat runs on;
+ * this names the machine the user is typing on, which is what the host places
+ * a routed browser realm by.
+ */
+function sentFromHostIdSnapshot(): string | null {
+  return getHostBindingSnapshot()?.directory.getLocalHostId() ?? null;
+}
 type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
 
 /**
@@ -6791,6 +6807,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Frozen, not re-read: this is the same logical send, not a new user
         // action, and the ambient values have had a whole recovery to move.
         accountContext: recovery.accountContext,
+        // Read live, unlike the frozen account context: this is the machine
+        // the app runs on, and it cannot have changed between the send and
+        // its retry.
+        sentFromHostId: sentFromHostIdSnapshot(),
         deliveryPolicy: recovery.deliveryPolicy,
         worktreeIntent: recovery.worktreeIntent,
         browserAnnotations: [...recovery.restore.browserAnnotations],
@@ -9440,6 +9460,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           sender: input.sender,
           settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
+          sentFromHostId: sentFromHostIdSnapshot(),
           deliveryPolicy: input.deliveryPolicy,
           worktreeIntent,
           browserAnnotations,
@@ -9675,6 +9696,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // Account context is GLOBAL, not per-chat: read the live selection at
           // dispatch as a sibling of the per-chat `settings`.
           accountContext: useAccountContextStore.getState().accountContext,
+          sentFromHostId: sentFromHostIdSnapshot(),
           deliveryPolicy: "auto",
           // The handoff's intent rides the frame as well as `epic.create`. On
           // the deferred path this resend is a duplicate of the seeded message
@@ -9813,6 +9835,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           sender: input.sender,
           settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
+          sentFromHostId: sentFromHostIdSnapshot(),
           worktreeIntent,
           revertFileChanges: input.revertFileChanges,
           revertArtifacts: input.revertArtifacts,
@@ -12406,6 +12429,7 @@ function repaintOptimisticQueueRowForRetry(input: {
     // same logical send, and the live selection has had a whole recovery to
     // move.
     accountContext: input.recovery.accountContext,
+    sentFromHostId: sentFromHostIdSnapshot(),
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,
@@ -12435,6 +12459,7 @@ function optimisticQueuedItemForSend(
     sender: input.sender,
     settings: input.settings,
     accountContext: useAccountContextStore.getState().accountContext,
+    sentFromHostId: sentFromHostIdSnapshot(),
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

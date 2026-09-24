@@ -584,6 +584,16 @@ export const chatQueuedPromptItemSchema = lazySchema(() =>
     // selection (not per-chat), captured from the send frame at queue time.
     // Defaulted PERSONAL so older queued items still parse.
     accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+    // The machine the queued message was sent from (the send frame's
+    // `sentFromHostId`), captured at queue time like `accountContext`, so a
+    // queued send is placed by where it was SENT from rather than where the
+    // queue happened to drain. The queue is durable, so it is defaulted: a row
+    // written before the key rehydrates as "no machine named". Null for every
+    // host-authored item (A2A prompts, deliveries). Lives on the live item
+    // and on `1.13`'s pre-port-forward freeze only; every line below `1.13`
+    // binds the hand-frozen `chatQueuedPromptItemSchemaPreAuto`, which has no
+    // such key.
+    sentFromHostId: z.string().nullable().default(null),
     delivery: chatQueueItemDeliverySchema.default("next_turn"),
     status: chatQueueItemStatusSchema.default("pending"),
     targetTurnId: z.string().nullable().default(null),
@@ -774,7 +784,14 @@ const chatQueuedManagedCommandItemSchemaPreShellHost = lazySchema(() =>
 // own union and the composed freeze both build on it.
 
 /**
- * Wire-freeze of the queued turn's `permissionMode`, pre-`auto`.
+ * Wire-freeze of the queued prompt item as every line from `1.7` through
+ * `1.12` ships it: the queued turn's `permissionMode` pre-`auto`, and no
+ * `sentFromHostId`, which entered the live item at `1.13`.
+ *
+ * Hand-frozen field-for-field, NOT `.extend()` off the live item as it once
+ * was: that derivation carried every later live key down to the released
+ * `1.7`/`1.8` snapshot and `queueChanged` frames, which is exactly what the
+ * released-baseline gate exists to refuse.
  *
  * `chatQueuedItemSchemaPreAuto` pairs it with the LIVE managed-command item,
  * which is what `1.11` needs: that line carries the shell host but predates
@@ -782,8 +799,21 @@ const chatQueuedManagedCommandItemSchemaPreShellHost = lazySchema(() =>
  * `chatQueueStateSchemaPreShellHostPreAuto` below.
  */
 const chatQueuedPromptItemSchemaPreAuto = lazySchema(() =>
-  chatQueuedPromptItemSchema.extend({
+  z.object({
+    kind: z.literal("prompt").default("prompt"),
+    queueItemId: z.string(),
+    messageId: z.string(),
+    message: userMessagePayloadSchema,
+    sender: userMessageSenderSchema,
     settings: chatRunSettingsSchemaPreAuto,
+    accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    status: chatQueueItemStatusSchema.default("pending"),
+    targetTurnId: z.string().nullable().default(null),
+    steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+    fallbackReason: z.string().nullable().default(null),
+    createdAt: z.number(),
+    updatedAt: z.number(),
   }),
 );
 // A plain `z.union`, managed-command arm FIRST - mirroring
@@ -3367,6 +3397,29 @@ const chatSubscribeClientFrameSchemaOptionsPreAuto = [
   fallbackReleaseChoiceClientFrameSchema,
 ] as const;
 
+/**
+ * The host id of the machine the sending app runs on - the app's LOCAL host,
+ * never the tab's `hostId` - carried on the two turn-starting client frames
+ * (`send`, `editUserMessage`) and stamped at send time exactly as
+ * `accountContext` is. `null` from web and mobile, from a desktop app whose
+ * local host has not published yet, and from every client below `1.13`, whose
+ * frozen frames have no such key and whose frames are normalized up through
+ * the live schema, which fills the default.
+ *
+ * What it decides: where a routed browser realm born on that turn is placed
+ * (the machine the message was sent from, when it is one of the user's hosts
+ * and can place a tab natively), and nothing else. It is a client claim; the
+ * host checks membership against its own host inventory before dialing.
+ *
+ * Bound to `1.13`–`1.16` - every line below keeps its own `send` object above
+ * - and added to those lines in place rather than on a new minor: none of
+ * them has shipped in a host release, and a client→host key whose absence
+ * means the same as `null` gives no peer a floor to negotiate against.
+ */
+const sentFromHostIdFrameField = {
+  sentFromHostId: z.string().nullable().default(null),
+} as const;
+
 // Live client frame (`chat.subscribe@1.11`) - the `1.10` composition with the
 // six mode-bearing frames re-bound to the live permission-mode enum. Same
 // frames in the same order; `1.11` is the first line whose client may say
@@ -3375,12 +3428,14 @@ const chatSubscribeClientFrameSchemaOptionsPreMessageDelivery = [
   lazySchema(() =>
     chatSubscribeClientFrameSchemaV17ToV19Options[0].extend({
       settings: chatRunSettingsSchema,
+      ...sentFromHostIdFrameField,
     }),
   ),
   deleteMessageSuffixClientFrameSchema,
   lazySchema(() =>
     chatSubscribeClientFrameSchemaV17ToV19Options[2].extend({
       settings: chatRunSettingsSchema,
+      ...sentFromHostIdFrameField,
     }),
   ),
   ...chatSubscribeClientFrameSchemaMiddleOptionsLive,

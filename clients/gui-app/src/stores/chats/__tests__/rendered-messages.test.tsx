@@ -157,6 +157,7 @@ function steerRequestedQueueItem(
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: mode === "safe_point" ? "same_turn" : "next_turn",
     status: "steer_requested",
     targetTurnId: "turn-1",
