@@ -8,7 +8,6 @@ import {
   HOST_FILE_TRANSFER_MAX_CHUNK_BYTES,
   HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
   hostAgentCreateFromRemoteSenderV10,
-  hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyFailureSchema,
   hostFileCopyManifestSchema,
@@ -43,7 +42,6 @@ const NEW_METHODS = [
   managedCommandRestartV10.method,
   hostResolveRepoPathsV10.method,
   hostOneOffShellRunV10.method,
-  hostDirectoryListV10.method,
   hostFileCopyStartV10.method,
   hostFileCopyStatusV10.method,
   hostFileCopyCancelV10.method,
@@ -65,57 +63,6 @@ describe("host-agent capability contracts", () => {
       const entry = hostRpcRegistry[method];
       expect(entry).toBeDefined();
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-    }
-  });
-
-  it("projects a directory entry without the dialer's key material", () => {
-    const parsed = hostDirectoryListV10.responseSchema.parse({
-      hosts: [
-        {
-          hostId: "host-b",
-          displayName: "Studio",
-          platform: "darwin",
-          appVersion: "1.2.3",
-          connectivity: "connectable",
-          commandInterpreter: "posix-shell",
-          // A server that volunteers key material must not have it survive
-          // into the agent-facing value; the closed schema strips it.
-          publicKey: "MUST-NOT-SURVIVE",
-        },
-      ],
-    });
-    expect(parsed.hosts[0]).not.toHaveProperty("publicKey");
-    expect(parsed.hosts[0]?.platform).toBe("darwin");
-  });
-
-  it("carries the cloud's liveness word verbatim, including the legacy tolerance, and has no busy field to fabricate", () => {
-    // `connectivity` is typed by the same schema the GUI status mirror uses,
-    // so every value authn can emit — `local-only` included, which older
-    // servers still send — survives the projection rather than failing the
-    // agent's whole directory read.
-    for (const connectivity of [
-      "connectable",
-      "offline",
-      "unknown",
-      "local-only",
-    ] as const) {
-      const parsed = hostDirectoryListV10.responseSchema.parse({
-        hosts: [
-          {
-            hostId: "host-b",
-            displayName: null,
-            platform: null,
-            appVersion: null,
-            connectivity,
-            commandInterpreter: null,
-            // The cloud list carries no drain state; a server that
-            // volunteered one must not reach the agent as a fact.
-            busy: false,
-          },
-        ],
-      });
-      expect(parsed.hosts[0]?.connectivity).toBe(connectivity);
-      expect(parsed.hosts[0]).not.toHaveProperty("busy");
     }
   });
 
@@ -472,50 +419,6 @@ describe("host-agent capability contracts", () => {
         target: "../escape",
       }).success,
     ).toBe(false);
-  });
-
-  it("carries the last reported command interpreter, with null meaning unknown", () => {
-    // The reason this field exists: `platform` cannot tell an agent which
-    // shell dialect a Windows host will meet, and null must read as unknown
-    // rather than licensing a platform guess.
-    for (const commandInterpreter of [
-      "posix-shell",
-      "git-bash",
-      "powershell",
-      "cmd",
-      null,
-    ]) {
-      const parsed = hostDirectoryListV10.responseSchema.parse({
-        hosts: [
-          {
-            hostId: "host-b",
-            displayName: null,
-            platform: "win32",
-            appVersion: null,
-            connectivity: "connectable",
-            commandInterpreter,
-          },
-        ],
-      });
-      expect(parsed.hosts[0]?.commandInterpreter).toBe(commandInterpreter);
-    }
-  });
-
-  it("refuses an interpreter token the agent contract does not define", () => {
-    expect(() =>
-      hostDirectoryListV10.responseSchema.parse({
-        hosts: [
-          {
-            hostId: "host-b",
-            displayName: null,
-            platform: "win32",
-            appVersion: null,
-            connectivity: "connectable",
-            commandInterpreter: "fish",
-          },
-        ],
-      }),
-    ).toThrow();
   });
 
   describe("host.agent.createFromRemoteSender", () => {

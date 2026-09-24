@@ -414,7 +414,6 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
   hostAgentCreateFromRemoteSenderV10,
-  hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -8793,19 +8792,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostResolveRepoPathsV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.directory.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostDirectoryListV10,
           upgradeFromPreviousVersion: null,
         },
       },
