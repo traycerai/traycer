@@ -347,6 +347,14 @@ const SERVICE_RELAUNCH_BUSY_EXIT_CODE = 76;
 const RESTART_OWED_EXIT_CODE = 77;
 
 /**
+ * The exit code a Windows host child is left with by our own handle-bound
+ * kill: .NET `Process.Kill()` is `TerminateProcess(handle, -1)`, which Node
+ * reports as 4294967295. Under a requested stop it is that stop, not a crash
+ * (`persistChildExit`).
+ */
+const WINDOWS_REQUESTED_KILL_EXIT_CODE = 0xffffffff;
+
+/**
  * A stop announced itself while this supervisor sat in the admission wait.
  *
  * Thrown from INSIDE the admission callback, immediately before `spawn()`,
@@ -2677,9 +2685,22 @@ export async function runHostStart(
       continue;
     }
 
+    // Whether this death was ASKED for, read before the marker from the same
+    // evidence `decideRelaunch` reads below: the latch, and the stop intent,
+    // which `hasStopIntent` only reads (the intent stays on disk for that
+    // later read). A Windows kill has no signal to say so, only an exit code.
+    const stopRequested =
+      shuttingDown ||
+      (await deps.hasStopIntent(
+        opts.environment,
+        Date.now(),
+        servedStopIntentAtStartup,
+      )) !== null;
     const outcome = await persistChildExit({
       code: ending.code,
       signal: ending.signal,
+      platform: deps.lifecycle.teardown.platform,
+      stopRequested,
       deps,
       logger,
       environment: opts.environment,
@@ -3299,6 +3320,13 @@ function disposeAttemptStderr(
 async function persistChildExit(input: {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
+  /** The supervisor's platform (injected, so the win32 arm is testable). */
+  readonly platform: NodeJS.Platform;
+  /**
+   * A stop was requested of this child: the shutdown latch, or an actionable
+   * stop intent. Only the Windows requested-kill arm reads it.
+   */
+  readonly stopRequested: boolean;
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
   readonly environment: Environment;
@@ -3474,6 +3502,47 @@ async function persistChildExit(input: {
       ),
       exitCode: code ?? 0,
       abnormal: false,
+    });
+  }
+  if (
+    input.platform === "win32" &&
+    input.stopRequested &&
+    code === WINDOWS_REQUESTED_KILL_EXIT_CODE
+  ) {
+    // The Windows twin of a forwarded SIGTERM or SIGKILL death: a stop was
+    // asked for, and this is the exit code our own handle-bound kill leaves
+    // (`$process.Kill()`, i.e. TerminateProcess(-1), in
+    // `service/platforms/windows.ts`). Recorded as `killed`, as a POSIX
+    // signal death is - no crash diagnostics, no crash telemetry, and doctor
+    // does not read it as a crash. `abnormal` stays true for the same reason
+    // it does there: `decideRelaunch` owns the relaunch answer. Any OTHER
+    // code under a stop (an access violation during shutdown, say) is still
+    // a crash below.
+    logger.info("Host child ended by a requested stop", {
+      environment,
+      exitCode: code,
+      attemptId,
+    });
+    return persistTerminalMarker({
+      deps,
+      logger,
+      environment,
+      phase: "killed",
+      fields: markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: undefined,
+          bundle,
+          exitCode: code,
+          signal: undefined,
+          error: undefined,
+        },
+        null,
+      ),
+      exitCode: code,
+      abnormal: true,
     });
   }
   logger.error(

@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { constants as osConstants } from "node:os";
@@ -41,6 +41,11 @@ import {
   SHUTDOWN_FORCE_EXIT_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
+import {
+  actionableStopIntentReason,
+  readStopIntentIdentity,
+  writeStopIntent,
+} from "../../host/stop-intent";
 import type { StopIntentIdentity } from "../../host/stop-intent";
 import type {
   DesktopPresenceLiveness,
@@ -57,7 +62,7 @@ import {
   HOST_CRASH_REPORT_TIMEOUT_MS,
   type HostCrashTelemetry,
 } from "../../host/crash-telemetry";
-import { hostHomeDir } from "../../store/paths";
+import { hostHomeDir, hostStopIntentPath } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
 import type {
@@ -1586,6 +1591,353 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(recorded.errors.join("\n")).toContain(
       CLI_ERROR_CODES.HOST_SPAWN_FAILED,
     );
+  });
+});
+
+// --------------------------------- O-WIN-1: the Windows requested-kill arm
+//
+// On Windows, `$process.Kill()` is `TerminateProcess(-1)`, leaving the child
+// with exit code 4294967295 (0xffffffff) and NO signal - indistinguishable,
+// by exit shape alone, from a genuine crash. `persistChildExit` only records
+// `killed` (no crash marker, no telemetry, no diagnostics logging) for that
+// exact code, on `platform === "win32"`, and only when a stop was actually
+// requested (the `shuttingDown` latch, or a stop intent `hasStopIntent`
+// reads). Every other combination - a different code, a different platform,
+// or no stop requested at all - stays on the ordinary crash path. These
+// tests pin both halves: the arm firing when every condition holds, and each
+// condition's absence falling back to the unchanged crash behaviour.
+
+function withLifecyclePlatform(
+  base: Partial<RunHostStartDeps>,
+  platform: NodeJS.Platform,
+): Partial<RunHostStartDeps> {
+  const baseLifecycle = base.lifecycle;
+  if (baseLifecycle === undefined) {
+    throw new Error("test lifecycle dependency missing");
+  }
+  return {
+    ...base,
+    lifecycle: {
+      ...baseLifecycle,
+      teardown: { ...baseLifecycle.teardown, platform },
+    },
+  };
+}
+
+describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+  const WIN32_KILL_EXIT_CODE = 0xffffffff;
+
+  it("records a killed marker with no crash evidence when a forwarded signal latches the stop", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const child = makeStubChild();
+    // The stub's twin of `$process.Kill()`: the forwarded signal does not
+    // kill the child with a POSIX signal, it ends it with the Windows exit
+    // code the real handle-bound kill leaves behind.
+    child.kill = () => {
+      setImmediate(() => {
+        child.emit("exit", WIN32_KILL_EXIT_CODE, null);
+      });
+      return true;
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...win32Deps,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                // `currentChild` is assigned once spawn() returns, so by now
+                // the handler has a child to forward to.
+                process.emit("SIGTERM");
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    const killed = recorded.markers.find((m) => m.phase === "killed");
+    expect(killed).toBeDefined();
+    expect(killed?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+    expect(killed?.fields.signal).toBeUndefined();
+    expect(recorded.markers.some((m) => m.phase === "crashed")).toBe(false);
+    expect(recorded.crashReports).toHaveLength(0);
+    expect(
+      recorded.loggerErrors.some((e) => e.message === "Host crash diagnostics"),
+    ).toBe(false);
+    expect(
+      recorded.loggerErrors.some(
+        (e) => e.message === "Host child exited with non-zero status",
+      ),
+    ).toBe(false);
+    const info = recorded.loggerInfos.find(
+      (e) => e.message === "Host child ended by a requested stop",
+    );
+    expect(info).toBeDefined();
+    expect(info?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+    expect(info?.fields.environment).toBe("production");
+  });
+
+  it("records the same outcome when the stop evidence is a stop INTENT rather than the latch", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const child = makeStubChild();
+    let stopIntentPresent = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...win32Deps,
+            // `false` until the child is about to end - every earlier read
+            // (the pre-spawn guard, the admission-window check, the
+            // post-spawn raced-stop probe) sees `null` and finds nothing, so
+            // `shuttingDown` is never latched here. Only `stopRequested`'s
+            // own read, and `decideRelaunch`'s later one, see the intent.
+            hasStopIntent: async () => (stopIntentPresent ? "stop" : null),
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                stopIntentPresent = true;
+                child.emit("exit", WIN32_KILL_EXIT_CODE, null);
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    const killed = recorded.markers.find((m) => m.phase === "killed");
+    expect(killed).toBeDefined();
+    expect(killed?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+    expect(killed?.fields.signal).toBeUndefined();
+    expect(recorded.markers.some((m) => m.phase === "crashed")).toBe(false);
+    expect(recorded.crashReports).toHaveLength(0);
+    expect(
+      recorded.loggerErrors.some((e) => e.message === "Host crash diagnostics"),
+    ).toBe(false);
+    expect(
+      recorded.loggerErrors.some(
+        (e) => e.message === "Host child exited with non-zero status",
+      ),
+    ).toBe(false);
+    const info = recorded.loggerInfos.find(
+      (e) => e.message === "Host child ended by a requested stop",
+    );
+    expect(info).toBeDefined();
+    // Not relaunched: `decideRelaunch` reads the same still-present intent
+    // and refuses with the plain "stop" mapping (exit 0), never the child's
+    // raw 4294967295.
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("crash control (a): win32 with no stop requested still crashes on 4294967295", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(win32Deps, child, WIN32_KILL_EXIT_CODE, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(WIN32_KILL_EXIT_CODE);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+    expect(
+      recorded.loggerErrors.some(
+        (e) => e.message === "Host child exited with non-zero status",
+      ),
+    ).toBe(true);
+    expect(
+      recorded.loggerErrors.some((e) => e.message === "Host crash diagnostics"),
+    ).toBe(true);
+  });
+
+  it("crash control (b): win32 with a stop requested still crashes on a different code", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const accessViolation = 0xc0000005;
+    let stopIntentPresent = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...win32Deps,
+            hasStopIntent: async () => (stopIntentPresent ? "stop" : null),
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                stopIntentPresent = true;
+                child.emit("exit", accessViolation, null);
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(accessViolation);
+    expect(recorded.markers.some((m) => m.phase === "killed")).toBe(false);
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.exitCode).toBe(accessViolation);
+    expect(
+      recorded.loggerErrors.some(
+        (e) => e.message === "Host child exited with non-zero status",
+      ),
+    ).toBe(true);
+    expect(
+      recorded.loggerErrors.some((e) => e.message === "Host crash diagnostics"),
+    ).toBe(true);
+  });
+
+  it("crash control (c): a non-Windows platform still crashes on 4294967295 even when stop was requested", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    // Explicit, though it is the harness default: this control's whole point
+    // is the PLATFORM half of the guard.
+    const linuxDeps = withLifecyclePlatform(deps, "linux");
+    const originalSpawn = linuxDeps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopIntentPresent = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...linuxDeps,
+            hasStopIntent: async () => (stopIntentPresent ? "stop" : null),
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                stopIntentPresent = true;
+                child.emit("exit", WIN32_KILL_EXIT_CODE, null);
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+    expect(recorded.markers.some((m) => m.phase === "killed")).toBe(false);
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(
+      recorded.loggerErrors.some(
+        (e) => e.message === "Host child exited with non-zero status",
+      ),
+    ).toBe(true);
+    expect(
+      recorded.loggerErrors.some((e) => e.message === "Host crash diagnostics"),
+    ).toBe(true);
+  });
+
+  it("never consumes the stop intent it reads: the file is unchanged and decideRelaunch still sees it", async () => {
+    const slot = `owin1-nonconsuming-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await withDevDesktopSlot(slot, async () => {
+      const devHome = hostHomeDir("dev");
+      try {
+        const { child, recorded, deps } = makeRunStubs(
+          sampleRecord(exec),
+          null,
+        );
+        const win32Deps = withLifecyclePlatform(deps, "win32");
+        const realStopIntentDeps: Partial<RunHostStartDeps> = {
+          ...win32Deps,
+          // The REAL implementations, not the harness's file-avoiding stubs:
+          // this test's whole point is whether `persistChildExit`'s caller
+          // leaves the on-disk record untouched.
+          readStopIntentIdentity,
+          hasStopIntent: actionableStopIntentReason,
+        };
+        const originalSpawn = realStopIntentDeps.spawn;
+        if (originalSpawn === undefined) {
+          throw new Error("test spawn dependency missing");
+        }
+        let bytesAtWrite: Buffer | undefined;
+
+        await runUntilExit(
+          () =>
+            runHostStart(
+              { environment: "dev", cwd: null },
+              {
+                ...realStopIntentDeps,
+                spawn: (command, args, options) => {
+                  originalSpawn(command, args, options);
+                  setImmediate(() => {
+                    // No record exists when this supervisor "starts" (see
+                    // `servedStopIntentAtStartup` above), so this is a stop
+                    // that races the running child - written only now, well
+                    // after every pre-spawn check already read nothing.
+                    void writeStopIntent("dev", "stop").then(() => {
+                      bytesAtWrite = readFileSync(hostStopIntentPath("dev"));
+                      child.emit("exit", WIN32_KILL_EXIT_CODE, null);
+                    });
+                  });
+                  return asChildProcess(child);
+                },
+              },
+            ),
+          recorded,
+        );
+
+        const killed = recorded.markers.find((m) => m.phase === "killed");
+        expect(killed).toBeDefined();
+        expect(killed?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
+        expect(recorded.crashReports).toHaveLength(0);
+
+        if (bytesAtWrite === undefined) {
+          throw new Error("test did not capture the intent file's bytes");
+        }
+        const bytesAfterRun = readFileSync(hostStopIntentPath("dev"));
+        expect(bytesAfterRun.equals(bytesAtWrite)).toBe(true);
+
+        // `decideRelaunch` reads the SAME still-present record: no relaunch,
+        // and the supervisor exits with the "stop" mapping (0), never the
+        // child's raw 4294967295.
+        expect(recorded.spawnCalls).toHaveLength(1);
+        expect(recorded.exited).toBe(0);
+      } finally {
+        rmSync(devHome, { recursive: true, force: true });
+      }
+    });
   });
 });
 

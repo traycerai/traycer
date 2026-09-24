@@ -54,6 +54,12 @@ export function describeOutcome(marker: BootstrapMarkerEntry): string {
       return `Host crashed with code ${code}${signal}.`;
     }
     case "killed": {
+      // No signal but a code: a Windows host ended by a requested stop (the
+      // supervisor records our own kill's exit code as `killed`, the way a
+      // POSIX signal death is recorded).
+      if (fields.signal === undefined && fields.code !== undefined) {
+        return `Host was stopped on request (exit code ${fields.code}).`;
+      }
       const signal = fields.signal ?? "unknown";
       return `Host was killed with signal ${signal}.`;
     }

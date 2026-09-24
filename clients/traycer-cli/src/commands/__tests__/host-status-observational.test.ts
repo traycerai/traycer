@@ -247,4 +247,26 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     expect(result.human).toContain("Lifecycle");
     expect(result.human).toContain("corrupt");
   });
+
+  // O-WIN-1: a Windows requested-kill is recorded as `killed` with the
+  // handle-bound kill's exit CODE and no signal (`persistChildExit`). The
+  // human renderer must show that code, not silently drop it the way a bare
+  // `killed` (no code, no signal) would.
+  it("renders a killed marker's exit code in both the Recent activity list and the Last phase row", async () => {
+    mocks.readBootstrapMarkersMock.mockResolvedValue([
+      {
+        timestamp: "2026-08-01T00:00:00.000Z",
+        phase: "killed",
+        fields: { code: "4294967295" },
+        writer: "supervisor",
+      },
+    ] satisfies readonly BootstrapLogEntry[]);
+
+    const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+    expect(result.human).toContain("Recent activity");
+    expect(result.human).toContain("code=4294967295");
+    // The single-row "Last phase" summary uses the parenthesized form.
+    expect(result.human).toContain("killed (code=4294967295)");
+  });
 });
