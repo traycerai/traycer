@@ -125,6 +125,58 @@ describe("withHostNodeOptions", () => {
     assertOnlyFlagTokens(result);
   });
 
+  it(
+    "strips an inherited old-space cap while preserving unrelated and canonical flags",
+    () => {
+      const result = withHostNodeOptions(
+        "--max-old-space-size=4096 --trace-warnings",
+      );
+
+      expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+      expect(result).not.toContain("--max-old-space-size=4096");
+      assertOnlyFlagTokens(result);
+    },
+  );
+
+  // Node.js v24.18.0 CLI docs: https://nodejs.org/download/release/v24.18.0/docs/api/cli.html
+  // Lines 380-385 allow dash/underscore aliases; 1358-1362 describe the
+  // percentage override; 2400 and 2494-2504 list flags accepted in
+  // NODE_OPTIONS. Rejected `initial-*` and `stack-size` flags are out of
+  // scope: Node 24.20 exits 9 before host boot.
+  describe("inherited heap caps (=value and space-separated aliases)", () => {
+    const cases = [
+      ["--max-old-space-size", "4096"],
+      ["--max-old-space-size-percentage", "50"],
+      ["--max-heap-size", "4096"],
+      ["--max-semi-space-size", "16"],
+    ] as const;
+    const inputs = cases.flatMap(([flag, value]) => {
+      const underscoreAlias = `--${flag.slice(2).replaceAll("-", "_")}`;
+      return [flag, underscoreAlias].flatMap((spelling) => [
+        `${spelling}=${value} --trace-warnings`,
+        `${spelling} ${value} --trace-warnings`,
+      ]);
+    });
+
+    it.each(inputs)("strips %s", (input) => {
+      const result = withHostNodeOptions(input);
+
+      expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+      expect(result).toContain("--max-semi-space-size=64");
+      expect(result.match(/--max-semi-space-size/g)).toHaveLength(1);
+      assertOnlyFlagTokens(result);
+    });
+  });
+
+  it("strips whole-quoted numeric values for inherited heap caps", () => {
+    const result = withHostNodeOptions(
+      '--max-old-space-size="4096" --max-old-space-size-percentage "50" --max-heap-size="8192" --trace-warnings',
+    );
+
+    expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+    assertOnlyFlagTokens(result);
+  });
+
   it("does not corrupt neighbors when a value CONTAINS another flag name", () => {
     // A path that embeds `--max-semi-space-size` must not re-trigger the
     // semi-space strip or leave an orphan token.

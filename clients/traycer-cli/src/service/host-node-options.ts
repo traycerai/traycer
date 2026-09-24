@@ -64,11 +64,15 @@ export const HOST_DIAGNOSTIC_REPORT_FLAGS =
 
 const HOST_APPENDED_FLAGS = `${HOST_V8_FLAGS} ${HOST_DIAGNOSTIC_REPORT_FLAGS}`;
 
-// Value-taking flags this helper canonically owns. Each is stripped from the
-// inherited value before the canonical set is appended.
+// Value-taking flags this helper strips before appending the canonical set.
+// Node's NODE_OPTIONS allowlist admits the four heap-limit families below.
+// An inherited old-generation flag would override a Worker's
+// resourceLimits.maxOldGenerationSizeMb, so none may reach the spawned host.
+// The one deliberate exception is our own semi-space cap, re-appended below:
+// it overrides workers' young-generation limit, not their old-generation cap.
 //
 // The strip MUST be quote-aware and MUST cover the space-separated form:
-// NODE_OPTIONS accepts `--flag value` as well as `--flag=value`, and values
+// some NODE_OPTIONS flags accept `--flag value` as well as `--flag=value`, and values
 // may be double-quoted (`--report-directory="/path with spaces"`). Removing
 // only the flag leaves the VALUE behind as a bare token, and Node rejects the
 // whole of NODE_OPTIONS on an unrecognized token - so the host never starts
@@ -76,6 +80,9 @@ const HOST_APPENDED_FLAGS = `${HOST_V8_FLAGS} ${HOST_DIAGNOSTIC_REPORT_FLAGS}`;
 // why every arm goes through one shared pattern instead of hand-rolled
 // variants that drift (the `--max-semi-space-size` arm had exactly that gap).
 const VALUE_FLAGS_OWNED = [
+  "--max-old-space-size",
+  "--max-old-space-size-percentage",
+  "--max-heap-size",
   "--max-semi-space-size",
   "--report-directory",
   // Not appended by us, but stripped: an inherited constant report filename
@@ -92,21 +99,23 @@ const BOOLEAN_FLAGS_OWNED = [
 ] as const;
 
 // `--flag`, optionally followed by `=value` or ` value`, where value may be
-// quoted. The space-separated arm refuses to swallow a following `--flag`, so
-// a malformed value-less token cannot eat its neighbor.
+// quoted. Node accepts dashes and underscores interchangeably in option
+// names; a whole quoted numeric option is also accepted. The space-separated
+// arm refuses to swallow a following `--flag`, so a malformed value-less
+// token cannot eat its neighbor.
 function valueFlagPattern(flag: string): RegExp {
+  const spelling = flag.slice(2).replaceAll("-", "[-_]");
   return new RegExp(
-    `(^|\\s)${flag}(?:=(?:"[^"]*"|\\S+)|\\s+(?:"[^"]*"|(?!--)\\S+))?(?=\\s|$)`,
+    `(^|\\s)(["']?)--${spelling}(?:=(?:"[^"]*"|'[^']*'|[^\\s"']+)|\\s+(?:"[^"]*"|'[^']*'|(?!--)\\S+))?\\2(?=\\s|$)`,
     "g",
   );
 }
 
 // Appends the host's required creation-time flags to an inherited
-// NODE_OPTIONS value, after stripping every token this helper owns - so the
-// host always lands on the canonical set whether the inherited value is the
-// macOS plist's identical copy (a true no-op) or something an operator set in
-// their shell that would silently defeat or duplicate it. Unrelated operator
-// tokens are preserved.
+// NODE_OPTIONS value, after stripping heap-limit overrides and every token
+// this helper owns. The host always lands on the canonical set whether the
+// inherited value is the macOS plist's identical copy (a true no-op) or
+// something an operator set in their shell. Unrelated operator tokens survive.
 export function withHostNodeOptions(existing: string | undefined): string {
   if (existing === undefined || existing.length === 0) {
     return HOST_APPENDED_FLAGS;
