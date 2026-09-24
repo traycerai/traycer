@@ -284,7 +284,7 @@ export function ArtifactVersionSettingsSection(props: {
           control={
             <Switch
               checked={settings.enabled}
-              disabled={pending}
+              disabled={!props.enabled || pending}
               aria-label="Capture artifact versions"
               onCheckedChange={(checked) => {
                 if (checked) setEnabled.mutate({ enabled: true });
@@ -307,6 +307,7 @@ export function ArtifactVersionSettingsSection(props: {
                   type="number"
                   min={1}
                   max={MAX_ARTIFACT_VERSION_RETENTION_DAYS}
+                  disabled={!props.enabled}
                   value={retentionDays ?? String(settings.retentionDays)}
                   onChange={(event) =>
                     updateRetentionDraft("retentionDays", event.target.value)
@@ -323,6 +324,7 @@ export function ArtifactVersionSettingsSection(props: {
                   type="number"
                   min={1}
                   max={MAX_ARTIFACT_VERSIONS_PER_ARTIFACT}
+                  disabled={!props.enabled}
                   value={maxVersions ?? String(settings.maxVersionsPerArtifact)}
                   onChange={(event) =>
                     updateRetentionDraft("maxVersions", event.target.value)
@@ -339,6 +341,7 @@ export function ArtifactVersionSettingsSection(props: {
                   type="number"
                   min={1}
                   max={MAX_ARTIFACT_VERSION_MEGABYTES_PER_ARTIFACT}
+                  disabled={!props.enabled}
                   value={
                     maxMegabytes ??
                     String(
@@ -354,7 +357,7 @@ export function ArtifactVersionSettingsSection(props: {
                 className="col-span-3 justify-self-end"
                 size="sm"
                 variant="outline"
-                disabled={!retentionChanged || pending}
+                disabled={!props.enabled || !retentionChanged || pending}
                 onClick={() => {
                   if (tightensRetention) {
                     setConfirm({
@@ -375,7 +378,7 @@ export function ArtifactVersionSettingsSection(props: {
             <Button
               size="sm"
               variant="outline"
-              disabled={pending}
+              disabled={!props.enabled || pending}
               onClick={() =>
                 setConfirm({ hostId: props.hostId, action: "clear" })
               }
@@ -396,7 +399,7 @@ export function ArtifactVersionSettingsSection(props: {
       </SettingsGroup>
 
       <Dialog
-        open={confirmForHost !== null}
+        open={props.enabled ? confirmForHost !== null : false}
         onOpenChange={(open) => !open && setConfirm(null)}
       >
         <DialogContent className="sm:max-w-lg">
