@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
+import {
+  artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV11,
+} from "@traycer/protocol/host/epic/artifact-subscribe";
 import type {
   AdapterHost,
   AdapterStatus,
@@ -809,5 +812,51 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-paylo
     );
 
     expect(recorder.awarenessCalls).toBe(0);
+  });
+});
+
+// ─── bodySync -> doc-body-sync (O2) ─────────────────────────────────────────
+
+describe("createArtifactLaneAdapter - bodySync", () => {
+  function bodySyncFrame(authorityEpoch: string, state: "syncing" | "synced") {
+    const parsed = artifactSubscribeServerFrameSchemaV11.parse({
+      kind: "bodySync",
+      authorityEpoch,
+      artifactId: ARTIFACT_ID,
+      state,
+      hasBinaryPayload: false,
+    });
+    if (parsed.kind !== "bodySync") throw new Error("fixture drift: bodySync");
+    return parsed;
+  }
+
+  it("emits doc-body-sync carrying the frame's epoch and state, addressed to the adapter's artifact", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onDoc(docFrame({}), new Uint8Array([1]));
+    latest().callbacks.onBodySync(bodySyncFrame("epoch-7", "syncing"));
+    latest().callbacks.onBodySync(bodySyncFrame("epoch-7", "synced"));
+
+    expect(
+      emittedEvents(log).filter((event) => event.kind === "doc-body-sync"),
+    ).toEqual([
+      {
+        kind: "doc-body-sync",
+        authorityEpoch: "epoch-7",
+        docId: ARTIFACT_ID,
+        state: "syncing",
+      },
+      {
+        kind: "doc-body-sync",
+        authorityEpoch: "epoch-7",
+        docId: ARTIFACT_ID,
+        state: "synced",
+      },
+    ]);
   });
 });

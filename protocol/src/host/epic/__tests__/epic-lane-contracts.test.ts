@@ -36,6 +36,7 @@ import {
   artifactSubscribeOpenRequestSchemaV10,
   artifactSubscribeSeedOfferSchema,
   artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV11,
   artifactSubscribeUnavailableCodeSchema,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
@@ -1588,5 +1589,70 @@ describe("epic.state.subscribe@1.1: tombstones carry artifact metadata; @1.0 sta
       artifactTombstones: [ticketWithoutStatus],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("artifact.subscribe@1.1 bodySync frame (O1)", () => {
+  const bodySyncBase = {
+    kind: "bodySync" as const,
+    authorityEpoch: "epoch-1",
+    artifactId: "artifact-1",
+    hasBinaryPayload: false as const,
+  };
+
+  it.each(["syncing", "synced"] as const)(
+    "@1.1 accepts bodySync state %s",
+    (state) => {
+      expect(
+        artifactSubscribeServerFrameSchemaV11.safeParse({
+          ...bodySyncBase,
+          state,
+        }).success,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["syncing", "synced"] as const)(
+    "@1.0 rejects bodySync state %s: the frame does not exist on the frozen line",
+    (state) => {
+      expect(
+        artifactSubscribeServerFrameSchemaV10.safeParse({
+          ...bodySyncBase,
+          state,
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects hasBinaryPayload: true", () => {
+    expect(
+      artifactSubscribeServerFrameSchemaV11.safeParse({
+        ...bodySyncBase,
+        state: "syncing",
+        hasBinaryPayload: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown state", () => {
+    expect(
+      artifactSubscribeServerFrameSchemaV11.safeParse({
+        ...bodySyncBase,
+        state: "stale",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still accepts every @1.0 frame kind (V11 is a strict superset)", () => {
+    expect(
+      artifactSubscribeServerFrameSchemaV11.safeParse({
+        kind: "doc",
+        authorityEpoch: "epoch-1",
+        artifactId: "artifact-1",
+        docGuid: "guid-1",
+        stateVectorBase64: "AQ==",
+        hasBinaryPayload: true,
+      }).success,
+    ).toBe(true);
   });
 });
