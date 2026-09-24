@@ -26,6 +26,7 @@ import type {
   InterviewSegment,
   MessageSegment,
   SubagentSegment,
+  TextSegment,
 } from "@/stores/composer/chat-store";
 import { makeMessage } from "./chat-message-fixtures";
 
@@ -1217,7 +1218,7 @@ describe("chat find projection", () => {
       return buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
     }
 
-    function childText(id: string, markdown: string): MessageSegment {
+    function childText(id: string, markdown: string): TextSegment {
       return {
         id,
         kind: "text",

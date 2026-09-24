@@ -415,6 +415,7 @@ function surfacesProps(patch: {
       // must actually contain the strip, not `null`.
       workspaceControls: <ChatDockCompactStrip />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      suggestedPrompt: undefined,
     },
     todo: null,
     restoreContext: patch.restoreContext,

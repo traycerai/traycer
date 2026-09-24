@@ -312,6 +312,7 @@ function surfacesProps(
       onSettingsChange: null,
       workspaceControls: <ChatDockCompactStrip />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      suggestedPrompt: undefined,
     },
     todo: null,
     restoreContext: EMPTY_RESTORE,

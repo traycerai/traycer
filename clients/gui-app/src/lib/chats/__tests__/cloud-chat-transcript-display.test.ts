@@ -17,6 +17,7 @@ import {
   type PresentedChat,
   type PresentedChatEvent,
 } from "@traycer/protocol/persistence/chat-sync/presentation";
+import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import {
   snapshotChatEventSchema,
   snapshotContentBlockSchema,
@@ -348,20 +349,28 @@ describe("a subagent's parented rows", () => {
       readonly parentBlockId: string | null;
     },
   ): PresentedContentBlock {
-    const body =
+    // Each variant spelled out whole: a ternary between two literals widens to
+    // optional `undefined` members, which a JSON object cannot hold.
+    const raw: JsonObject =
       input.variant === "text"
-        ? { text: "some words", providerNotice: null }
-        : { content: "some thoughts", startedAt: null };
-    const raw = {
-      blockId: input.blockId,
-      status: "completed",
-      timestamp: 21,
-      type: input.variant,
-      ...body,
-      ...(input.parentBlockId === null
-        ? {}
-        : { parentBlockId: input.parentBlockId }),
-    };
+        ? {
+            blockId: input.blockId,
+            status: "completed",
+            timestamp: 21,
+            type: "text",
+            text: "some words",
+            providerNotice: null,
+            parentBlockId: input.parentBlockId,
+          }
+        : {
+            blockId: input.blockId,
+            status: "completed",
+            timestamp: 21,
+            type: "reasoning",
+            content: "some thoughts",
+            startedAt: null,
+            parentBlockId: input.parentBlockId,
+          };
     return {
       ...template,
       blockId: input.blockId,
