@@ -47,23 +47,20 @@ function confirmTitle(action: ConfirmAction): string {
   return "Clear version history?";
 }
 
-function confirmDescription(
-  action: ConfirmAction,
-  reclaimableBytes: number,
-): string {
+function confirmDescription(action: ConfirmAction): string {
   if (action === "disable") {
     return "Edits made while history is off are never recoverable. On a Sync plan, this host's edits will produce no cloud history either. Existing saved versions remain available.";
   }
   if (action === "retention") {
     return "Observations beyond the new age, version-count, or per-artifact byte limits will be pruned immediately. This cannot be undone.";
   }
-  return `${formatBytes(reclaimableBytes)} is reclaimable and will be removed. Checkpoint-owned blobs remain because checkpoints still reference them.`;
+  return "Every saved version is removed from this host and, on a Sync plan, from the cloud. Undo for agent turns is unaffected. This cannot be undone.";
 }
 
 function confirmButtonLabel(action: ConfirmAction): string {
   if (action === "disable") return "Turn off";
   if (action === "retention") return "Prune and save";
-  return "Clear reclaimable history";
+  return "Clear history";
 }
 
 function formatBytes(value: number): string {
@@ -373,17 +370,6 @@ export function ArtifactVersionSettingsSection(props: {
           }
         />
         <SettingsRow
-          row={HOST_OVERVIEW.definitions.storage}
-          control={
-            <div className="text-right text-ui-sm">
-              <p>{formatBytes(snapshot.storage.referencedBytes)} referenced</p>
-              <p className="text-muted-foreground">
-                {formatBytes(snapshot.storage.reclaimableBytes)} reclaimable
-              </p>
-            </div>
-          }
-        />
-        <SettingsRow
           row={HOST_OVERVIEW.definitions.clearVersionHistory}
           control={
             <Button
@@ -417,10 +403,7 @@ export function ArtifactVersionSettingsSection(props: {
           <DialogHeader>
             <DialogTitle>{confirmTitle(confirmForHost)}</DialogTitle>
             <DialogDescription>
-              {confirmDescription(
-                confirmForHost,
-                snapshot.storage.reclaimableBytes,
-              )}
+              {confirmDescription(confirmForHost)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
