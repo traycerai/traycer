@@ -267,6 +267,8 @@ export interface ChatLowerComposerState {
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
+  /** The host's `suggestedPrompt` (`chat.subscribe@1.17`), for the chip. */
+  readonly suggestedPrompt: string | undefined;
 }
 
 interface ComposerSurfaceModel {
@@ -792,6 +794,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         waitingWakeCount: dedupedBackgroundItems.filter(
           (item) => item.kind === "wakeup",
         ).length,
+        scheduledJobCount: dedupedBackgroundItems.filter(
+          (item) => item.kind === "cron",
+        ).length,
         portForwardCount: input.portForwardCount,
       }),
     [
@@ -1231,6 +1236,7 @@ function LiveChatComposer(props: {
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
       topSlot={null}
+      suggestedPrompt={model.composer.suggestedPrompt}
     />
   );
 }

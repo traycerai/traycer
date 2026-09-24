@@ -1,5 +1,6 @@
 import { Shimmer } from "@/components/ui/shimmer";
 import { reasoningBlockLabel } from "@/components/chat/chat-activity-groups";
+import { ThinkingTokensEstimate } from "@/components/chat/thinking-tokens-estimate";
 import { useLiveActivityPromote } from "./live-activity-promote-context";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
@@ -532,6 +533,10 @@ function ReasoningHeader(props: ReasoningHeaderProps) {
           {label}
         </span>
       )}
+      {/* The provider's live thinking-token estimate, beside the STREAMING
+          label only. Not on a visually hidden header: that block's visible
+          label is the group header, which draws the estimate itself. */}
+      {isStreaming && !visuallyHidden ? <ThinkingTokensEstimate /> : null}
       {/* Trailing, and hidden until the row is hovered/focused/open - the
           leading always-on caret it replaces sat next to the Brain icon and
           read as two glyphs competing to be the row's marker. */}

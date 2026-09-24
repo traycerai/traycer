@@ -77,6 +77,11 @@ import {
   type ProfileEligibilityGate,
 } from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
+import { ComposerPromptSuggestion } from "./prompt-suggestion-chip";
+import {
+  fillComposerWithSuggestion,
+  promptSuggestionChipAllowed,
+} from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
@@ -232,6 +237,12 @@ interface ChatComposerProps {
    * `null` renders nothing.
    */
   readonly topSlot: ReactNode | null;
+  /**
+   * The provider's predicted next prompt (`chat.subscribe@1.17`), drawn as a
+   * click-to-fill chip in the banner portal. `undefined` draws nothing - which
+   * is also every host below `1.17`.
+   */
+  readonly suggestedPrompt: string | undefined;
 }
 
 export interface ChatComposerSubmitInput {
@@ -301,6 +312,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
     getDraftBlobBridgeSupported,
+    suggestedPrompt,
   } = props;
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
@@ -674,6 +686,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
+  // The suggestion chip FILLS and focuses - it never sends.
+  const fillSuggestedPrompt = useCallback((suggestion: string) => {
+    fillComposerWithSuggestion(editorRef.current, suggestion);
+  }, []);
+  const suggestionChipAllowed = promptSuggestionChipAllowed({
+    topBannerKind,
+    sendDisabled: sendBlocked,
+    draftHasText,
+    draftHasImages,
+  });
+
   // Excludes the model-resolution gate: ComposerToolbarRight ANDs the
   // store-derived `modelResolved` onto the send button, and the submit hook
   // re-checks it at dispatch, so this composer never re-renders when the
@@ -706,6 +729,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
         epicId={currentEpicId}
         hostId={tabHostId}
         canAct={fallbackControlsCanAct(sendDisabled)}
+      />
+      <ComposerPromptSuggestion
+        suggestedPrompt={suggestedPrompt}
+        allowed={suggestionChipAllowed}
+        onFill={fillSuggestedPrompt}
       />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>

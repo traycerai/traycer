@@ -493,6 +493,7 @@ function makeNoopCallbacks(
     onManagedCommandsChanged: () => undefined,
     onHeldUpdatesChanged: () => undefined,
     onPortForwardsChanged: () => undefined,
+    onThinkingTokens: () => undefined,
     onConnectionStatus: () => undefined,
   };
 }
@@ -623,6 +624,7 @@ describe("ChatStreamClient", () => {
           frame.portForwards.map((forward) => forward.forwardId),
         );
       },
+      onThinkingTokens: () => undefined,
       onConnectionStatus: () => undefined,
     };
 
@@ -1296,6 +1298,7 @@ function recordingCallbacks(): {
         frame.portForwards.map((forward) => forward.forwardId),
       );
     },
+    onThinkingTokens: () => undefined,
     onConnectionStatus: () => undefined,
   };
   return { callbacks, recorded };

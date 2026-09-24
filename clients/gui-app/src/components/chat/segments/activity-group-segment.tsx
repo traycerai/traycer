@@ -45,9 +45,17 @@ import { FileChangeSegment } from "./file-change-segment";
 import { LiveActivityWindow } from "./live-activity-window";
 import { useLiveActivityWindowMounted } from "./live-activity-window-mount";
 import { ReasoningSegment } from "./reasoning-segment";
+import { ThinkingTokensEstimate } from "@/components/chat/thinking-tokens-estimate";
 import { LiveElapsed } from "./segment-elapsed";
 import { SubagentSegment } from "./subagent-segment";
 import { ToolSegment } from "./tool-segment";
+
+/** Whether the group's only segment is a reasoning block still streaming. */
+function soleSegmentIsStreaming(group: ActivityGroupModel): boolean {
+  if (group.segments.length !== 1) return false;
+  const sole = group.segments[0];
+  return sole.kind === "reasoning" && sole.isStreaming;
+}
 
 interface ActivityGroupSegmentProps {
   readonly group: ActivityGroupModel;
@@ -118,6 +126,11 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   const soleReasoningId = shapeHeaderless ? group.segments[0].id : null;
   const everHeaded = useActivityGroupEverHeaded(soleReasoningId);
   const soleReasoningHeaderless = shapeHeaderless && !everHeaded;
+  // When the lone reasoning block drops its header, THIS label is its
+  // streaming "Thinking" label verbatim, so the thinking-token estimate is
+  // drawn here instead of on the (visually hidden) block header.
+  const showsThinkingTokens =
+    soleReasoningHeaderless && group.isActive && soleSegmentIsStreaming(group);
   // The children only EXIST in two containers: the bounded live window, and
   // `CollapsibleContent`, which unmounts its subtree when closed. A settled,
   // collapsed group renders neither - so a shrink that happens before anyone
@@ -237,6 +250,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
             {group.label}
           </span>
         )}
+        {showsThinkingTokens ? <ThinkingTokensEstimate /> : null}
         {group.isActive && group.activeStartedAt !== null ? (
           <span data-find-skip className="contents">
             <LiveElapsed startedAt={group.activeStartedAt} />
