@@ -25,6 +25,12 @@ vi.mock("../../installer/apply", () => ({
 vi.mock("../../installer/install", () => ({
   commitHostInstallSource: (options: unknown) => commitMock.invoke(options),
 }));
+const busyMock = vi.hoisted(() => ({
+  assertIdle: vi.fn(),
+}));
+vi.mock("../busy-check", () => ({
+  assertHostIdleForStop: busyMock.assertIdle,
+}));
 vi.mock("../host-start-adoption", () => ({
   publishHostStartAdoption: adoptionMock.publish,
 }));
@@ -33,9 +39,14 @@ import {
   installHostServiceWithAttempt,
   commitHostInstallSourceWithAttempt,
   stopHostForRestartWithAttempt,
+  stopHostServiceWithAttempt,
 } from "../update-mutation";
 import { withCliUpdateExecutionSegment } from "../update-contender";
-import type { InstallServiceOptions, RestartStop } from "../../service";
+import type {
+  InstallServiceOptions,
+  RestartStop,
+  ServiceController,
+} from "../../service";
 import type {
   CommitHostInstallSourceOptions,
   StagedHostInstallSource,
@@ -649,5 +660,129 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(order).toEqual(["boundary", "actuator"]);
     expect(onAuthorityVerified).toHaveBeenCalledTimes(1);
     expect(stopForRestart).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("stopHostServiceWithAttempt busy gate", () => {
+  const platforms = ["macOS", "Linux", "Windows"] as const;
+
+  async function runInsideContender(
+    run: (capability: UpdateMutationCapability) => Promise<unknown>,
+  ): Promise<void> {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: contenderOptions.reason,
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: contenderOptions.admission,
+      },
+      run,
+    );
+  }
+
+  function controllerNamedFor(
+    platform: (typeof platforms)[number],
+    order: string[],
+  ): Pick<ServiceController, "stop"> {
+    return {
+      stop: async () => {
+        order.push(`${platform}:stop`);
+      },
+    };
+  }
+
+  it.each(platforms)(
+    "%s: if-idle probes then stops, in that order, with the label's environment",
+    async (platform) => {
+      const order: string[] = [];
+      busyMock.assertIdle.mockReset();
+      busyMock.assertIdle.mockImplementation(async () => {
+        order.push("probe");
+      });
+      const controller = controllerNamedFor(platform, order);
+      await runInsideContender((capability) =>
+        stopHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          controller,
+          serviceOptions.label,
+          { force: false },
+          "if-idle",
+        ),
+      );
+      expect(order).toEqual(["probe", `${platform}:stop`]);
+      expect(busyMock.assertIdle).toHaveBeenCalledWith(
+        serviceOptions.label.environment,
+      );
+    },
+  );
+
+  it.each(platforms)(
+    "%s: a busy host rejects E_HOST_BUSY and the controller is never stopped",
+    async (platform) => {
+      const order: string[] = [];
+      busyMock.assertIdle.mockReset();
+      busyMock.assertIdle.mockRejectedValue(
+        cliError({
+          code: CLI_ERROR_CODES.HOST_BUSY,
+          message: "busy",
+          details: null,
+          exitCode: 1,
+        }),
+      );
+      const controller = controllerNamedFor(platform, order);
+      await runInsideContender(async (capability) => {
+        await expect(
+          stopHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            serviceOptions.label,
+            { force: false },
+            "if-idle",
+          ),
+        ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+      });
+      expect(order).toEqual([]);
+    },
+  );
+
+  it.each(platforms)("%s: unconditional never probes", async (platform) => {
+    const order: string[] = [];
+    busyMock.assertIdle.mockReset();
+    const controller = controllerNamedFor(platform, order);
+    await runInsideContender((capability) =>
+      stopHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        serviceOptions.label,
+        { force: false },
+        "unconditional",
+      ),
+    );
+    expect(order).toEqual([`${platform}:stop`]);
+    expect(busyMock.assertIdle).not.toHaveBeenCalled();
+  });
+
+  it("the capability check comes before the probe", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    busyMock.assertIdle.mockReset();
+    const forged = { hostHomeDir } as UpdateMutationCapability;
+    await expect(
+      stopHostServiceWithAttempt(
+        forged,
+        contenderOptions,
+        { stop: async () => undefined },
+        serviceOptions.label,
+        { force: false },
+        "if-idle",
+      ),
+    ).rejects.toBeDefined();
+    expect(busyMock.assertIdle).not.toHaveBeenCalled();
   });
 });

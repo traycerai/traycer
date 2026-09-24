@@ -1301,6 +1301,14 @@ function registerHostCommands(program: Command): void {
     host
       .command("stop")
       .description("Stop the host service")
+      // Hidden: the desktop's automatic idle-only quit stop, not a
+      // user-facing switch - see commands/host-stop.ts.
+      .addOption(
+        new Option(
+          "--if-idle",
+          "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before stop",
+        ).hideHelp(),
+      )
       .option(
         "--force",
         "Stop even if the host has work in progress: skip the cooperative shutdown claim and kill the host process (SIGTERM, then SIGKILL after the exit grace). Running terminal sessions and in-flight agent work are killed.",
@@ -1309,6 +1317,7 @@ function registerHostCommands(program: Command): void {
     (opts) =>
       buildHostStopCommand({
         force: opts.force === true,
+        ifIdle: opts.ifIdle === true,
       }),
   );
 

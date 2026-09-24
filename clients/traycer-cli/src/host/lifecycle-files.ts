@@ -273,9 +273,11 @@ export interface ObservedDesktopPresence {
  *
  * Written at admission (and, from T04, whenever the policy observer changes
  * one of these facts); removed with `supervisor.json` on every supervisor
- * exit. `supervisorStartIdentity` is what lets a reader tell this
- * supervisor's record from one a killed supervisor left behind under a pid
- * the OS has since reused.
+ * exit except one that owes a successor (77 / 76), which keeps it for that
+ * successor to continue (`SupervisorRecordRemoval`,
+ * `readInheritableRunOwnership`). `supervisorStartIdentity` is what lets a
+ * reader tell this supervisor's record from one a killed supervisor left
+ * behind under a pid the OS has since reused.
  *
  * - `adopted` - a live desktop presence has been observed during this run.
  *   Sticky: once desktop-owned, the run stays desktop-owned (lifecycle
@@ -362,6 +364,55 @@ export function readSupervisorRunState(
   );
 }
 
+/** The ownership a successor supervisor continues from its predecessor's run. */
+export interface InheritedRunOwnership {
+  readonly adopted: true;
+  readonly lastPresence: ObservedDesktopPresence | null;
+}
+
+/**
+ * The desktop ownership a restart-owed successor carries over, or `null`.
+ *
+ * An exit that owes a successor (77, 76) keeps `supervisor-run.json` (see
+ * `SupervisorRecordRemoval`) because the run is not over: the supervisor that
+ * comes back - the update's or restart's relaunch - is the same run, and a
+ * run that was desktop-owned must stay so. Without this the successor never
+ * saw a live presence, started `adopted: false`, and a Linked host whose
+ * desktop died during an update ran unowned indefinitely.
+ *
+ * Carried over only when ALL hold, and `null` otherwise:
+ *
+ * - the file parses and says `adopted: true`;
+ * - it records a start identity, and the supervisor it names is provably gone
+ *   by pid + that identity (`dead`, or its pid now runs something else). A
+ *   live or unverifiable predecessor is not a predecessor: a second
+ *   supervisor may still be running, and its run is its own.
+ *
+ * Never throws; every failure is `null`, which degrades to an unowned run -
+ * the behaviour before this existed.
+ */
+export async function readInheritableRunOwnership(
+  environment: Environment,
+): Promise<InheritedRunOwnership | null> {
+  const read = await readSupervisorRunState(environment);
+  if (read.kind !== "valid") return null;
+  const predecessor = read.record;
+  if (!predecessor.adopted || predecessor.supervisorStartIdentity === null) {
+    return null;
+  }
+  try {
+    const verdict = await verifyProcessIdentityAsync({
+      pid: predecessor.supervisorPid,
+      startedAtMs: null,
+      startIdentity: predecessor.supervisorStartIdentity,
+    });
+    if (verdict !== "dead" && verdict !== "alive-different") return null;
+  } catch {
+    return null;
+  }
+  return { adopted: true, lastPresence: predecessor.lastPresence };
+}
+
 // ---- the supervisor's own records -------------------------------------------
 
 /** What the supervisor publishes about itself at admission. */
@@ -390,8 +441,22 @@ export async function writeSupervisorRecords(
 }
 
 /**
- * Remove this supervisor's `supervisor.json` and `supervisor-run.json` -
- * only if they still name `supervisorPid`.
+ * What a supervisor's exit removes.
+ *
+ * - `all` - both records: every exit that ends the run.
+ * - `keep-run-state` - `supervisor.json` only, on an exit that owes a
+ *   successor (77 restart-owed, 76 relaunch refused busy; see
+ *   `exitOwesSuccessor` in `commands/host-start.ts`). The run is not over,
+ *   so its ownership facts stay on disk for that successor to continue
+ *   (`readInheritableRunOwnership`).
+ *   With `supervisor.json` gone, no reader attributes the kept file to a
+ *   running supervisor: `readHostLifecycleSnapshot` pairs the two by pid.
+ */
+export type SupervisorRecordRemoval = "all" | "keep-run-state";
+
+/**
+ * Remove this supervisor's `supervisor.json` and (unless `removal` keeps it)
+ * `supervisor-run.json` - only if they still name `supervisorPid`.
  *
  * Guarded because a second supervisor for the same host home is a case the
  * supervisor already reasons about (two service labels at a cold login, a
@@ -409,11 +474,13 @@ export async function writeSupervisorRecords(
 export async function removeSupervisorRecords(
   environment: Environment,
   supervisorPid: number,
+  removal: SupervisorRecordRemoval,
 ): Promise<void> {
   await removeIfOwned(
     supervisorRecordPath(hostHomeDir(environment)),
     (text) => parseSupervisorRecordText(text)?.pid === supervisorPid,
   );
+  if (removal === "keep-run-state") return;
   await removeIfOwned(
     supervisorRunStatePath(environment),
     (text) =>

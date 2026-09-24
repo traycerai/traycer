@@ -7,7 +7,19 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
+  assertIdle: vi.fn(),
 }));
+
+vi.mock("../../host/busy-check", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../host/busy-check")>();
+  return {
+    ...actual,
+    assertHostIdleForStop: (environment: string) => {
+      mocks.controllerCalls.push("probe");
+      return mocks.assertIdle(environment);
+    },
+  };
+});
 
 vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
@@ -50,6 +62,7 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
 });
 
 import { buildHostStopCommand } from "../host-stop";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 
 function fakeCtx(): CommandContext {
@@ -84,10 +97,62 @@ describe("buildHostStopCommand", () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
 
-    const result = await buildHostStopCommand({ force: false })(fakeCtx());
+    const result = await buildHostStopCommand({ force: false, ifIdle: false })(
+      fakeCtx(),
+    );
 
     expect(mocks.lockCalls).toEqual([{ reason: "host-stop" }]);
     expect(mocks.controllerCalls).toEqual(["stop"]);
     expect(result.data).toMatchObject({ stopped: true });
+  });
+
+  it("--if-idle with --force is refused before the lock is taken", async () => {
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    await expect(
+      buildHostStopCommand({ force: true, ifIdle: true })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+    expect(mocks.lockCalls).toEqual([]);
+    expect(mocks.controllerCalls).toEqual([]);
+  });
+
+  it("--if-idle on an idle host probes, then stops, inside the lock", async () => {
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    mocks.assertIdle.mockReset();
+    mocks.assertIdle.mockResolvedValue(undefined);
+    const result = await buildHostStopCommand({ force: false, ifIdle: true })(
+      fakeCtx(),
+    );
+    expect(mocks.lockCalls).toEqual([{ reason: "host-stop" }]);
+    expect(mocks.controllerCalls).toEqual(["probe", "stop"]);
+    expect(mocks.assertIdle).toHaveBeenCalledWith("production");
+    expect(result.data).toMatchObject({ stopped: true });
+  });
+
+  it("--if-idle on a busy host rejects E_HOST_BUSY after taking the lock, and never stops", async () => {
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    mocks.assertIdle.mockReset();
+    mocks.assertIdle.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "busy",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    await expect(
+      buildHostStopCommand({ force: false, ifIdle: true })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+    expect(mocks.lockCalls).toEqual([{ reason: "host-stop" }]);
+    expect(mocks.controllerCalls).toEqual(["probe"]);
+  });
+
+  it("a plain stop never probes", async () => {
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    await buildHostStopCommand({ force: false, ifIdle: false })(fakeCtx());
+    expect(mocks.controllerCalls).toEqual(["stop"]);
   });
 });

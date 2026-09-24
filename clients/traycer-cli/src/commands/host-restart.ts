@@ -171,6 +171,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             controller,
             label,
             { force: args.force },
+            "unconditional",
           );
           return {
             kind: "stopped-for-parked-activation" as const,

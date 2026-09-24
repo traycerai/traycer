@@ -43,6 +43,26 @@ export async function assertHostNotBusy(
   }
 }
 
+/**
+ * {@link assertHostNotBusy} for a STOP: the same probe and the same
+ * `E_HOST_BUSY`, worded for `host stop --if-idle`, whose caller (the
+ * desktop's automatic idle-only quit stop) branches on the code and falls
+ * back to asking the user.
+ */
+export async function assertHostIdleForStop(
+  environment: Environment,
+): Promise<void> {
+  if ((await probeHostForRestart(environment)) === "busy") {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message:
+        "The running host has work in progress; refusing to stop it and lose that work. Re-run with --force to stop it anyway.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+}
+
 async function probeHostForRestart(
   environment: Environment | undefined,
 ): Promise<RestartVerdict> {

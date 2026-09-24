@@ -241,6 +241,7 @@ export async function runHostUninstallWithAttempt(
         controller,
         label,
         options,
+        "unconditional",
       ),
     verifyMutationCapability,
     discardAttemptRecord: async () => {

@@ -16,6 +16,7 @@ import {
   withServiceMutationAuthority,
 } from "../service/mutation-authority";
 import { runWithLeaseAtServiceSpawnEdge } from "../service/spawn-edge";
+import { assertHostIdleForStop } from "./busy-check";
 import { publishHostStartAdoption } from "./host-start-adoption";
 import type { HostStartOrigin } from "./lifecycle-origin";
 import type {
@@ -126,6 +127,20 @@ export async function uninstallHostServiceWithAttempt(
   );
 }
 
+/**
+ * Whether a stop must first find the host idle.
+ *
+ * - `if-idle` - probe `assertHostIdleForStop` immediately before the
+ *   controller's stop, inside the caller's lock and after the capability is
+ *   re-proved; busy (or unprovably idle) throws `E_HOST_BUSY` with nothing
+ *   touched, not even the stop intent (`withStopIntent` announces inside
+ *   `controller.stop`). The same answer on every platform, which plain stop
+ *   is not: Linux `systemctl stop`, Windows `schtasks /End` and a CLI-owned
+ *   macOS `launchctl kill` reach the host with no probe at all.
+ * - `unconditional` - today's stop, unchanged.
+ */
+export type HostStopBusyGate = "if-idle" | "unconditional";
+
 /** Final-actuator facade for a stop or force-stop. */
 export async function stopHostServiceWithAttempt(
   capability: UpdateMutationCapability,
@@ -133,12 +148,16 @@ export async function stopHostServiceWithAttempt(
   controller: Pick<ServiceController, "stop">,
   label: ServiceLabel,
   options: StopServiceOptions,
+  busyGate: HostStopBusyGate,
 ): Promise<void> {
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
-  await withServiceMutationAuthority(verify, () =>
-    controller.stop(label, options),
-  );
+  await withServiceMutationAuthority(verify, async () => {
+    if (busyGate === "if-idle") {
+      await assertHostIdleForStop(label.environment);
+    }
+    await controller.stop(label, options);
+  });
 }
 
 /** Final-actuator facade for a restart. */

@@ -198,6 +198,7 @@ export function buildHostFreePortAndRestartCommand(
               controller,
               label,
               { force: false },
+              "unconditional",
             );
           }
           return {

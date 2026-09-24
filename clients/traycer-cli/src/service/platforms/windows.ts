@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
+  withServiceMutationAuthority,
 } from "../mutation-authority";
 import { markRegistrationCommitted } from "../cli-invocation-record";
 import {
@@ -48,7 +49,7 @@ import {
 } from "../../runner/errors";
 import type { CliInvocation } from "../cli-binary";
 import { escapeXml } from "../escape-xml";
-import { windowsTaskName, type ServiceLabel } from "../label";
+import { serviceLabelFor, windowsTaskName, type ServiceLabel } from "../label";
 import { ProcessRunError, runCommand } from "../process-runner";
 import { cliInstallHomeDir, hostHomeDir } from "../../store/paths";
 import type {
@@ -444,7 +445,12 @@ async function uninstallService(
   });
   // Reap the orphaned host tree so the host doesn't keep running (and serving
   // its port) after the task is deleted.
-  await killHostProcessTree(options.label, run, deps);
+  await killVerifiedProcessTree(
+    options.label,
+    run,
+    deps,
+    callerOnlyKillScope(),
+  );
   await run("schtasks", ["/Delete", "/TN", taskName, "/F"], {
     env: undefined,
     cwd: undefined,
@@ -537,7 +543,7 @@ async function stopService(
     timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
-  await killHostProcessTree(label, run, deps);
+  await killVerifiedProcessTree(label, run, deps, callerOnlyKillScope());
   // The force-kill above never lets the host honor its "remove pid.json on
   // graceful shutdown" contract, and metadata left behind makes this
   // deliberate stop indistinguishable from a crash - the desktop's health
@@ -617,11 +623,28 @@ async function stopService(
 // loop converges normally). If the live Windows run shows this flaking, the
 // lever is a short settle before the re-scan, NOT a wider bound: more rounds
 // would only spend more time re-killing the same pids.
-async function killHostProcessTree(
+//
+// ONE implementation for every caller, told apart only by `scope`
+// (`WindowsTreeKillScope`): `stopService` and the install swap's escalation
+// pass no root and exclude this CLI; the supervisor's lifecycle teardown
+// (`killSupervisedHostTree`) passes its own host child as the root and
+// excludes itself, so the tree under it dies while the supervisor - which is
+// that tree's parent, and would otherwise spare all of it as "the CLI's own
+// branch" - survives to exit on its own terms.
+async function killVerifiedProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
   deps: WindowsControllerDeps,
+  scope: WindowsTreeKillScope,
 ): Promise<void> {
+  // The root's identity, fixed at its first sighting: the creation time the
+  // first scan that placed it recorded. A pid is only a name, and a root that
+  // exits mid-loop can hand its number on; later rounds seed the root only
+  // while the row still carries this birth. Unplaced (`null`) until a scan
+  // shows the root as a VALIDATED child of an excluded process - the edge the
+  // scan itself vouches for (`PARENT_EDGE_VALIDATION_SCRIPT_LINES`) is what
+  // proves the row is the process the caller spawned.
+  let rootCreated: number | null = null;
   // What earlier rounds placed in the host's tree - killed, or spared as one of
   // this CLI's own ancestors - with the age each had when it was seen. The
   // loop's memory: once a parent is dead the table can no longer prove its
@@ -697,7 +720,16 @@ async function killHostProcessTree(
     // The kill boundary, and the only place a pid has to be POSITIVE: the scan
     // and its algebra work over an unfiltered table that includes pid 0, and
     // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
-    const killSet = computeWindowsHostKillSet(table, process.pid, memory);
+    const placedRoot = placeKillRoot(table, scope, rootCreated);
+    if (placedRoot !== null) rootCreated = placedRoot.created;
+    const killSet = computeWindowsTreeKillSet(
+      table,
+      {
+        placedRoot: placedRoot === null ? null : placedRoot.processId,
+        excludedPids: scope.excludedPids,
+      },
+      memory,
+    );
     const pids = uniqueProcessIds(killSet.kill);
     const unattributed = uniqueProcessIds(killSet.unattributed);
     const undecided = uniqueProcessIds(killSet.undecided);
@@ -843,6 +875,48 @@ async function killHostProcessTree(
   }
 }
 
+/**
+ * Who a verified tree kill is FOR, as opposed to what the slot scan finds.
+ *
+ * - `excludedPids` - the processes issuing the kill. Never killed; their own
+ *   descendant branches (the scan and kill PowerShell subprocesses) and their
+ *   non-slot ancestors are spared, exactly as `computeWindowsHostKillSet`
+ *   has always spared the CLI.
+ * - `rootPid` - a process the caller SPAWNED and wants gone with everything
+ *   under it, or `null` when the slot scan alone decides. It hangs below an
+ *   excluded process by construction, so without it the whole tree would be
+ *   spared as that process's own branch. Seeded only once a scan shows it as
+ *   a validated child of an excluded process, and afterwards only while it
+ *   keeps the birth that scan recorded (`placeKillRoot`).
+ */
+export interface WindowsTreeKillScope {
+  readonly rootPid: number | null;
+  readonly excludedPids: ReadonlySet<number>;
+}
+
+// `stopService` and the install swap's escalation: no root, and only this CLI
+// excluded. Built per call so it reads `process.pid` when the kill runs.
+function callerOnlyKillScope(): WindowsTreeKillScope {
+  return { rootPid: null, excludedPids: new Set([process.pid]) };
+}
+
+// The root's row in this round's table, when it may be seeded: at its first
+// sighting only as a validated child of an excluded process with a readable
+// birth, and afterwards only under that same birth. `null` otherwise - the
+// root has exited (its children are the carry-over memory's to find), or the
+// row wearing its number is a different process.
+function placeKillRoot(
+  table: readonly WindowsProcessTableRow[],
+  scope: WindowsTreeKillScope,
+  rootCreated: number | null,
+): WindowsProcessTableRow | null {
+  if (scope.rootPid === null) return null;
+  const row = table.find((candidate) => candidate.processId === scope.rootPid);
+  if (row === undefined || row.created === 0) return null;
+  if (rootCreated !== null) return row.created === rootCreated ? row : null;
+  return scope.excludedPids.has(row.parentProcessId) ? row : null;
+}
+
 function rememberIncarnation<T>(
   memory: Map<number, T[]>,
   pid: number,
@@ -859,7 +933,7 @@ function rememberIncarnation<T>(
 // One process the round decided to kill: the pid the scan listed and the
 // creation time it listed beside it, in the scan's epoch microseconds. The pair
 // is the identity; the pid alone is not (see the header of
-// `killHostProcessTree`).
+// `killVerifiedProcessTree`).
 export interface WindowsKillTarget {
   readonly processId: number;
   readonly created: number;
@@ -1344,7 +1418,7 @@ async function restartService(
   });
   // Reap the orphaned host tree before re-running, otherwise the old node keeps
   // its port + install dir and the fresh task races a stale host.
-  await killHostProcessTree(label, run, deps);
+  await killVerifiedProcessTree(label, run, deps, callerOnlyKillScope());
   // Restart reuses the verified start path (baseline + post-/Run evidence)
   // so a stop-then-start that the scheduler accepts but never spawns fails
   // with Last Run Result instead of a silent no-op.
@@ -1620,7 +1694,7 @@ export interface WindowsProcessTableRow {
  * All-or-nothing on purpose. A partially-parsed table produces a kill set built
  * from a partial ancestry, and a missing edge there does not read as an error -
  * it reads as "this process has no parent", which spares nothing and kills a
- * branch that should have been spared. `null` makes `killHostProcessTree`
+ * branch that should have been spared. `null` makes `killVerifiedProcessTree`
  * refuse: before its first kill it refuses to start, after one it refuses to
  * report the tree down. There is no weaker path to fall back to - the
  * pid.json `taskkill` that used to be one was removed for being unverified.
@@ -1743,10 +1817,50 @@ function parseProcessTableJson(
  * even when its slot-matched scan lands in the closure under an undecided CLI.
  * `unattributed` is `undecided` minus the CLI's uncertain ancestors as well -
  * what the loop reports, as opposed to what it remembers.
+ *
+ * The CLI-only form of {@link computeWindowsTreeKillSet}: no root, and the CLI
+ * the only excluded process.
  */
 export function computeWindowsHostKillSet(
   table: readonly WindowsProcessTableRow[],
   cliPid: number,
+  memory: WindowsKillMemory,
+): WindowsHostKillSet {
+  return computeWindowsTreeKillSet(
+    table,
+    { placedRoot: null, excludedPids: new Set([cliPid]) },
+    memory,
+  );
+}
+
+/**
+ * {@link computeWindowsTreeKillSet}'s view of a {@link WindowsTreeKillScope}
+ * once the loop has placed the root for this round: `placedRoot` is the root's
+ * pid when this table's row may be seeded (`placeKillRoot`), else `null`.
+ */
+export interface WindowsKillSetScope {
+  readonly placedRoot: number | null;
+  readonly excludedPids: ReadonlySet<number>;
+}
+
+/**
+ * {@link computeWindowsHostKillSet}'s algebra with the caller generalised:
+ *
+ *   victims = (slot ∪ {root}) ∪ descendants(slot ∪ {root})
+ *   spared  = (excluded ∪ descendants(excluded)) − subtree(root)
+ *             ∪ excluded ∪ (ancestors(excluded) − slot)
+ *   kill    = victims − spared
+ *
+ * With no root and `excluded = {cli}` this is exactly the CLI form. The root
+ * is what lets a SUPERVISOR kill its own host: the host is the supervisor's
+ * child, so "the caller's own branch" is the whole host tree, and only
+ * removing the root's subtree from that branch puts it back in the kill set.
+ * The excluded processes themselves are re-added after the subtraction, so no
+ * shape of table can put the caller in its own kill set.
+ */
+export function computeWindowsTreeKillSet(
+  table: readonly WindowsProcessTableRow[],
+  scope: WindowsKillSetScope,
   memory: WindowsKillMemory,
 ): WindowsHostKillSet {
   const children = new Map<number, number[]>();
@@ -1763,6 +1877,7 @@ export function computeWindowsHostKillSet(
     if (row.slot) slot.add(row.processId);
   }
   const seeds = new Set<number>(slot);
+  if (scope.placedRoot !== null) seeds.add(scope.placedRoot);
   const undecided = new Set<number>();
   for (const row of table) {
     const claim = classifyCarryOverClaim(row, memory);
@@ -1777,8 +1892,16 @@ export function computeWindowsHostKillSet(
   const suspects = withDescendants(undecided, children);
   // The CLI's own branch: itself and everything under it over validated edges.
   // Positively identified, and never the host's - it is this process's scan
-  // and kill subprocesses.
-  const cliBranch = withDescendants(new Set([cliPid]), children);
+  // and kill subprocesses. Minus the root's subtree, which is what the caller
+  // asked to end; plus the excluded processes themselves whatever the table
+  // says.
+  const cliBranch = withDescendants(scope.excludedPids, children);
+  if (scope.placedRoot !== null) {
+    for (const pid of withDescendants(new Set([scope.placedRoot]), children)) {
+      cliBranch.delete(pid);
+    }
+  }
+  for (const pid of scope.excludedPids) cliBranch.add(pid);
   const spared = new Set(cliBranch);
   // The CLI's non-slot ancestors are spared from the kill, and the ones the
   // scan has placed in the host's tree are ALSO reported as lineage to
@@ -1798,7 +1921,12 @@ export function computeWindowsHostKillSet(
   // remembered pid inside a remembered window, is seeded and killed as an
   // ordinary host descendant. A row that is slot-matched THIS round is killed
   // either way, and a reused pid with a different birth matches nothing.
-  const ancestors = new Set<number>(ancestorsOf(cliPid, parents));
+  const ancestors = new Set<number>();
+  for (const excluded of scope.excludedPids) {
+    for (const ancestor of ancestorsOf(excluded, parents)) {
+      ancestors.add(ancestor);
+    }
+  }
   for (const row of table) {
     if (row.created === 0 || cliBranch.has(row.processId)) continue;
     const incarnations = memory.protectedAncestors.get(row.processId);
@@ -2238,7 +2366,49 @@ export async function killLingeringSlotProcesses(
   runner: ProcessRunner | null,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  await killHostProcessTree(label, runner ?? runCommand, deps);
+  await killVerifiedProcessTree(
+    label,
+    runner ?? runCommand,
+    deps,
+    callerOnlyKillScope(),
+  );
+}
+
+/**
+ * The supervisor's lifecycle teardown on Windows (`host/lifecycle-teardown.ts`):
+ * end `rootPid` - the host child THIS process spawned - and everything under
+ * it, through the same verified scan-and-kill loop `stopService` runs, with
+ * this process excluded.
+ *
+ * Why not `stopService`: its `schtasks /End` ends the task instance this
+ * supervisor belongs to, and its CLI-only scope spares everything below the
+ * calling process - which, called from the supervisor, is the entire host
+ * tree. Here the task is left alone (the supervisor's own exit 0 ends the
+ * instance) and the root's subtree is put back in the kill set.
+ *
+ * Every subprocess re-proves `verifyAuthority` first - the caller's hold on
+ * the lifecycle lock - and a lost hold propagates as itself rather than
+ * degrading into a scan failure. Throws, like `stopService`, when the tree
+ * cannot be proved down; nothing about `pid.json` is decided here.
+ */
+export async function killSupervisedHostTree(
+  environment: ServiceLabel["environment"],
+  rootPid: number,
+  verifyAuthority: () => Promise<void>,
+  runner: ProcessRunner | null,
+  deps: WindowsControllerDeps,
+): Promise<void> {
+  const unverifiedRun: ProcessRunner = runner ?? runCommand;
+  const run: ProcessRunner = async (command, args, options) => {
+    await verifyServiceMutationAuthority();
+    return unverifiedRun(command, args, options);
+  };
+  await withServiceMutationAuthority(verifyAuthority, () =>
+    killVerifiedProcessTree(serviceLabelFor(environment), run, deps, {
+      rootPid,
+      excludedPids: new Set([process.pid]),
+    }),
+  );
 }
 
 // The install swap's post-mortem (`SwapLockRecovery.describeLockHolders`):

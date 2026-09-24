@@ -163,4 +163,49 @@ describe("readHostLifecycleSnapshot attribution", () => {
     expect(snapshot.owner).toEqual({ kind: "desktop", pid: 777 });
     expect(describeOwner(snapshot.owner)).toBe("desktop pid=777");
   });
+
+  it.each([
+    [false, { kind: "none" }],
+    [true, { kind: "unknown" }],
+  ] as const)(
+    "a kept run state with NO supervisor.json is stale: run null, owner per hostRunning=%s",
+    async (hostRunning, expectedOwner) => {
+      // What an exit that owed a successor leaves behind (`keep-run-state`),
+      // read before any successor has written its own records.
+      mockSupervisorLiveness("dead");
+      writeSupervisorRunState({
+        supervisorPid: 4242,
+        adopted: true,
+        lastPresencePid: 777,
+      });
+
+      const { readHostLifecycleSnapshot } =
+        await import("../lifecycle-snapshot");
+      const snapshot = await readHostLifecycleSnapshot(
+        ENVIRONMENT,
+        hostRunning,
+      );
+
+      expect(snapshot.run).toBeNull();
+      expect(snapshot.owner).toEqual(expectedOwner);
+    },
+  );
+
+  it("a supervisor.json naming a different pid than the kept run state reads the run as stale", async () => {
+    // An N-1 successor never overwrites the predecessor's kept file; its own
+    // supervisor.json names another pid, so the kept state is not its run.
+    mockSupervisorLiveness("alive-same");
+    writeSupervisorRecord(5151);
+    writeSupervisorRunState({
+      supervisorPid: 4242,
+      adopted: true,
+      lastPresencePid: 777,
+    });
+
+    const { readHostLifecycleSnapshot } = await import("../lifecycle-snapshot");
+    const snapshot = await readHostLifecycleSnapshot(ENVIRONMENT, true);
+
+    expect(snapshot.run).toBeNull();
+    expect(snapshot.owner).toEqual({ kind: "unknown" });
+  });
 });

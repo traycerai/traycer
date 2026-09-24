@@ -239,7 +239,7 @@ describe("writeSupervisorRecords / removeSupervisorRecords", () => {
     expect((await readSupervisorRecord(ENVIRONMENT)).kind).toBe("valid");
     expect((await readSupervisorRunState(ENVIRONMENT)).kind).toBe("valid");
 
-    await removeSupervisorRecords(ENVIRONMENT, process.pid);
+    await removeSupervisorRecords(ENVIRONMENT, process.pid, "all");
 
     expect((await readSupervisorRecord(ENVIRONMENT)).kind).toBe("absent");
     expect((await readSupervisorRunState(ENVIRONMENT)).kind).toBe("absent");
@@ -265,7 +265,7 @@ describe("writeSupervisorRecords / removeSupervisorRecords", () => {
     const recordBefore = await fs.readFile(recordPath, "utf8");
     const runStateBefore = await fs.readFile(runStatePath, "utf8");
 
-    await removeSupervisorRecords(ENVIRONMENT, process.pid);
+    await removeSupervisorRecords(ENVIRONMENT, process.pid, "all");
 
     const recordAfter = await fs.readFile(recordPath, "utf8");
     const runStateAfter = await fs.readFile(runStatePath, "utf8");
@@ -276,7 +276,7 @@ describe("writeSupervisorRecords / removeSupervisorRecords", () => {
   it("does not throw when no supervisor files are present", async () => {
     const { removeSupervisorRecords } = await import("../lifecycle-files");
     await expect(
-      removeSupervisorRecords(ENVIRONMENT, process.pid),
+      removeSupervisorRecords(ENVIRONMENT, process.pid, "all"),
     ).resolves.toBeUndefined();
   });
 });
@@ -439,5 +439,192 @@ describe("probeDesktopPresenceLiveness", () => {
     expect(await probeDesktopPresenceLiveness(presenceFixture())).toBe(
       "indeterminate",
     );
+  });
+});
+
+describe("removeSupervisorRecords keep-run-state", () => {
+  it("removes supervisor.json only and leaves supervisor-run.json byte-identical", async () => {
+    const {
+      writeSupervisorRecords,
+      removeSupervisorRecords,
+      readSupervisorRecord,
+      supervisorRunStatePath,
+    } = await import("../lifecycle-files");
+    await writeSupervisorRecords(ENVIRONMENT, {
+      record: {
+        v: 1,
+        pid: process.pid,
+        cliVersion: "0.0.0-test",
+        capabilities: ["lifecycle-policy-v1"],
+        startedAt: "2026-09-24T00:00:00.000Z",
+      },
+      runState: {
+        v: 1,
+        supervisorPid: process.pid,
+        supervisorStartIdentity: "ident",
+        admission: "unattended",
+        origin: null,
+        adopted: true,
+        lastPresence: null,
+        updatedAt: "2026-09-24T00:00:00.000Z",
+      },
+    });
+    const fs = await import("node:fs/promises");
+    const runStatePath = supervisorRunStatePath(ENVIRONMENT);
+    const before = await fs.readFile(runStatePath, "utf8");
+
+    await removeSupervisorRecords(ENVIRONMENT, process.pid, "keep-run-state");
+
+    expect((await readSupervisorRecord(ENVIRONMENT)).kind).toBe("absent");
+    expect(await fs.readFile(runStatePath, "utf8")).toBe(before);
+  });
+});
+
+describe("readInheritableRunOwnership", () => {
+  const PREDECESSOR_PID = 424_242;
+
+  /** A well-formed token: the schema drops a malformed one to `null`. */
+  async function validIdentity(): Promise<string> {
+    const { readProcessStartIdentity } =
+      await import("../../store/process-identity");
+    const identity = await readProcessStartIdentity(process.pid);
+    if (identity === null) throw new Error("cannot read own start identity");
+    return identity;
+  }
+
+  interface ProbeCall {
+    readonly pid: number;
+    readonly startedAtMs: number | null;
+    readonly startIdentity: string | null;
+  }
+
+  async function writePredecessor(input: {
+    readonly adopted: boolean;
+    readonly identity: string | null;
+  }): Promise<void> {
+    const { writeSupervisorRecords } = await import("../lifecycle-files");
+    await writeSupervisorRecords(ENVIRONMENT, {
+      record: {
+        v: 1,
+        pid: PREDECESSOR_PID,
+        cliVersion: "0.0.0-test",
+        capabilities: ["lifecycle-policy-v1"],
+        startedAt: "2026-09-24T00:00:00.000Z",
+      },
+      runState: {
+        v: 1,
+        supervisorPid: PREDECESSOR_PID,
+        supervisorStartIdentity: input.identity,
+        admission: "unattended",
+        origin: null,
+        adopted: input.adopted,
+        lastPresence: {
+          pid: 777,
+          onExit: "stop",
+          liveness: "alive",
+          observedAt: "2026-09-24T00:00:00.000Z",
+        },
+        updatedAt: "2026-09-24T00:00:00.000Z",
+      },
+    });
+  }
+
+  function mockProbe(
+    calls: ProbeCall[],
+    verdict:
+      | "alive-same"
+      | "alive-different"
+      | "dead"
+      | "indeterminate"
+      | "throw",
+  ): void {
+    vi.doMock("../../store/process-identity", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../store/process-identity")>();
+      return {
+        ...actual,
+        verifyProcessIdentityAsync: async (target: ProbeCall) => {
+          calls.push(target);
+          if (verdict === "throw") throw new Error("probe failed");
+          return verdict;
+        },
+      };
+    });
+  }
+
+  it.each(["dead", "alive-different"] as const)(
+    "inherits ownership when the predecessor is %s, probing its pid and start identity",
+    async (verdict) => {
+      const calls: ProbeCall[] = [];
+      mockProbe(calls, verdict);
+      const identity = await validIdentity();
+      await writePredecessor({ adopted: true, identity });
+      const { readInheritableRunOwnership } =
+        await import("../lifecycle-files");
+      const inherited = await readInheritableRunOwnership(ENVIRONMENT);
+      expect(inherited).toEqual({
+        adopted: true,
+        lastPresence: {
+          pid: 777,
+          onExit: "stop",
+          liveness: "alive",
+          observedAt: "2026-09-24T00:00:00.000Z",
+        },
+      });
+      expect(calls).toEqual([
+        {
+          pid: PREDECESSOR_PID,
+          startedAtMs: null,
+          startIdentity: identity,
+        },
+      ]);
+    },
+  );
+
+  it.each(["alive-same", "indeterminate", "throw"] as const)(
+    "does not inherit when the probe says %s",
+    async (verdict) => {
+      const calls: ProbeCall[] = [];
+      mockProbe(calls, verdict);
+      await writePredecessor({
+        adopted: true,
+        identity: await validIdentity(),
+      });
+      const { readInheritableRunOwnership } =
+        await import("../lifecycle-files");
+      expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
+      expect(calls).toHaveLength(1);
+    },
+  );
+
+  it("does not inherit, and does not probe, when the predecessor was not adopted", async () => {
+    const calls: ProbeCall[] = [];
+    mockProbe(calls, "dead");
+    await writePredecessor({ adopted: false, identity: await validIdentity() });
+    const { readInheritableRunOwnership } = await import("../lifecycle-files");
+    expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not inherit, and does not probe, when the predecessor has no start identity", async () => {
+    const calls: ProbeCall[] = [];
+    mockProbe(calls, "dead");
+    await writePredecessor({ adopted: true, identity: null });
+    const { readInheritableRunOwnership } = await import("../lifecycle-files");
+    expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns null for an absent or invalid run-state file", async () => {
+    const calls: ProbeCall[] = [];
+    mockProbe(calls, "dead");
+    const { readInheritableRunOwnership, supervisorRunStatePath } =
+      await import("../lifecycle-files");
+    expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
+    const path = supervisorRunStatePath(ENVIRONMENT);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "not json {");
+    expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 });

@@ -875,6 +875,7 @@ async function executeAction(
         createServiceController(),
         serviceLabelFor(environment),
         { force: false },
+        "unconditional",
       );
       return;
     }

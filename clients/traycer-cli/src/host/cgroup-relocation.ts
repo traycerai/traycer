@@ -55,7 +55,7 @@ import { isPackagedRun } from "../store/well-known-cli";
  *
  * Command path alone is too coarse. Four of the ten have a documented
  * bytes-only or leave-it-running form whose body provably never reaches
- * `withStopIntent` or `killHostProcessTree`, and relocating those buys nothing
+ * `withStopIntent` or `killVerifiedProcessTree`, and relocating those buys nothing
  * while exposing them to two refusals they cannot deserve: a `$` in a `--from`
  * path, and a machine where a transient scope cannot be started at all.
  *

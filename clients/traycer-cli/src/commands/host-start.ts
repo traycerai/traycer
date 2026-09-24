@@ -68,16 +68,53 @@ import {
   probeDesktopPresenceLiveness,
   readDesktopPresence,
   readHostLifecyclePolicy,
+  readInheritableRunOwnership,
   removeSupervisorRecords,
   writeSupervisorRecords,
+  type InheritedRunOwnership,
   type ObservedDesktopPresence,
+  type SupervisorRecordRemoval,
   type SupervisorRecords,
   type SupervisorRunAdmission,
 } from "../host/lifecycle-files";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
+import {
+  defaultLifecycleObserverRuntime,
+  LIFECYCLE_OBSERVER_POLL_MS,
+  LIFECYCLE_PRESENCE_CRASH_GRACE_MS,
+  startLifecycleObserver,
+  type LifecycleObserverHandle,
+  type LifecycleObserverRuntime,
+} from "../host/lifecycle-observer";
+import {
+  createLifecycleTeardown,
+  LIFECYCLE_TEARDOWN_ADMISSION,
+  LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
+  LIFECYCLE_TEARDOWN_OPERATION,
+  type LifecycleTeardownPlatform,
+  type OwnedHostChild,
+} from "../host/lifecycle-teardown";
+import { readHostPidMetadata } from "../host/pid-metadata";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+  type WithCliUpdateContenderOptions,
+} from "../host/update-contender";
+import {
+  forceStopHostProcessReporting,
+  removeHostPidMetadataIfUnchanged,
+  requestCooperativeShutdown,
+} from "../service/platforms/desktop-agent-shutdown";
+import {
+  epochMicrosNow,
+  killSupervisedHostTree,
+} from "../service/platforms/windows";
 import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
-import { ownProcessStartIdentity } from "../store/process-identity";
+import {
+  getPublishedProcessIdentityVerdict,
+  ownProcessStartIdentity,
+} from "../store/process-identity";
 import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
@@ -490,10 +527,12 @@ export interface HostStartAdoptionHandoff {
 
 /**
  * The supervisor's lifecycle-policy seams: the gate's reads (see
- * `SupervisorLifecycleGateDeps`) plus the two records it publishes about
- * itself once a run is admitted. Injected as ONE dependency so a test harness
- * cannot stub the reads and forget the writes - the defaults write into the
- * real host home.
+ * `SupervisorLifecycleGateDeps`), the two records it publishes about itself
+ * once a run is admitted, and the policy observer's timers plus the teardown
+ * actuator's platform machinery. Injected as ONE dependency so a test harness
+ * cannot stub the reads and forget the writes, the timers or the stop - the
+ * defaults write into the real host home, arm a real interval, and stop a
+ * real host.
  */
 export interface SupervisorLifecycleDeps extends Omit<
   SupervisorLifecycleGateDeps,
@@ -506,9 +545,16 @@ export interface SupervisorLifecycleDeps extends Omit<
   readonly removeRecords: (
     environment: Environment,
     supervisorPid: number,
+    removal: SupervisorRecordRemoval,
   ) => Promise<void>;
+  /** `readInheritableRunOwnership`: a restart-owed predecessor's ownership. */
+  readonly inheritRunOwnership: (
+    environment: Environment,
+  ) => Promise<InheritedRunOwnership | null>;
   readonly ownStartIdentity: () => ProcessStartIdentity | null;
   readonly cliVersion: string;
+  readonly observer: LifecycleObserverRuntime;
+  readonly teardown: LifecycleTeardownPlatform;
 }
 
 function describeHostStartAdmission(
@@ -812,8 +858,42 @@ const defaultRunDeps: RunHostStartDeps = {
       consumeHostStartAdoption(environment, serviceLabel, adoptionNonce),
     writeRecords: writeSupervisorRecords,
     removeRecords: removeSupervisorRecords,
+    inheritRunOwnership: readInheritableRunOwnership,
     ownStartIdentity: () => ownProcessStartIdentity(),
     cliVersion: resolveCliVersion(process.env),
+    observer: defaultLifecycleObserverRuntime,
+    teardown: {
+      platform: process.platform,
+      withLock: (environment, run) => {
+        // ONE options value for acquisition and revalidation, as `host stop`
+        // does. Its own admission: refused inside any active attempt, so the
+        // teardown never interleaves with a swap, but admitted over a park,
+        // which it leaves standing for the next supervisor start to resume.
+        const options: WithCliUpdateContenderOptions = {
+          environment,
+          reason: LIFECYCLE_TEARDOWN_OPERATION,
+          waitMs: LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
+          pollIntervalMs: 100,
+          admission: LIFECYCLE_TEARDOWN_ADMISSION,
+        };
+        return withCliUpdateContender(options, (capability) =>
+          run(() => requireCliUpdateMutationCapability(capability, options)),
+        );
+      },
+      readPidMetadata: (environment) => readHostPidMetadata(environment),
+      requestCooperativeShutdown: (environment, operation, intent) =>
+        requestCooperativeShutdown(environment, operation, intent),
+      forceStopPublishedHost: (environment, operation) =>
+        forceStopHostProcessReporting(environment, operation, null),
+      killHostTree: (environment, rootPid, verify) =>
+        killSupervisedHostTree(environment, rootPid, verify, null, {
+          now: epochMicrosNow,
+        }),
+      verifyPublishedInstance: (pid, startIdentity) =>
+        getPublishedProcessIdentityVerdict(pid, startIdentity),
+      removePidMetadataIfUnchanged: (environment, instance) =>
+        removeHostPidMetadataIfUnchanged(environment, instance),
+    },
   },
 };
 
@@ -1190,7 +1270,22 @@ export async function runHostStart(
   // can never erase the records of the one that is running.
   let pendingAdoption: HostStartAdoptionConsumeResult | null = null;
   let recordsPublished = false;
-  const releaseLifecycleResources = async (): Promise<void> => {
+  // The policy observer, from the first admitted spawn to the exit. See
+  // `host/lifecycle-observer.ts`.
+  let observer: LifecycleObserverHandle | null = null;
+  const releaseLifecycleResources = async (
+    removal: SupervisorRecordRemoval,
+  ): Promise<void> => {
+    // Stopped FIRST and synchronously - before any await here - so a
+    // teardown that has not committed yet sees the supervisor exiting and
+    // stands down (see `exitSupervisor`). Then waited on, so a tick still
+    // rewriting `supervisor-run.json` cannot land after the removal below.
+    const running = observer;
+    observer = null;
+    if (running !== null) {
+      running.stop();
+      await running.idle();
+    }
     const unspent = pendingAdoption;
     pendingAdoption = null;
     if (unspent !== null && unspent.kind === "grant") {
@@ -1199,9 +1294,41 @@ export async function runHostStart(
     if (recordsPublished) {
       recordsPublished = false;
       await deps.lifecycle
-        .removeRecords(opts.environment, supervisorPid)
+        .removeRecords(opts.environment, supervisorPid, removal)
         .catch(() => undefined);
     }
+  };
+
+  // ---- Lifecycle teardown -------------------------------------------------
+  //
+  // The supervisor-owned stop the observer hands over to when the desktop
+  // that owns this run is gone under a `stop` verdict
+  // (`host/lifecycle-teardown.ts`). It acts only on `ownedChild`: the latest
+  // host child THIS supervisor spawned, tracked from the instant of spawn -
+  // not from `currentChild`, which is assigned only after the admission's
+  // remaining awaits, a window a committed teardown must not mistake for "no
+  // host".
+  let ownedChild: OwnedHostChild | null = null;
+  const teardown = createLifecycleTeardown({
+    environment: opts.environment,
+    logger,
+    platform: deps.lifecycle.teardown,
+    ownChild: () => ownedChild,
+    // The same latch a forwarded stop signal sets, and for the same reason:
+    // the child's death that follows is asked for, never a crash to recover.
+    commit: () => {
+      shuttingDown = true;
+      markShutdownRequested();
+    },
+  });
+  // Resolved by the observer once the committed teardown has completed.
+  let teardownComplete = false;
+  let teardownCompleteWaiters: Array<() => void> = [];
+  const markTeardownComplete = (): void => {
+    teardownComplete = true;
+    const waiters = teardownCompleteWaiters;
+    teardownCompleteWaiters = [];
+    for (const resolve of waiters) resolve();
   };
 
   // Every exit below goes through here, so `supervisor.json` never outlives
@@ -1210,10 +1337,40 @@ export async function runHostStart(
   // are removed BEFORE the signal handlers are released, so a stop arriving
   // during the removal is latched rather than killing this process with the
   // record half-removed.
+  //
+  // A COMMITTED lifecycle teardown owns the exit. Whatever path the relaunch
+  // loop reached here by - the child's death it caused, a backoff or an
+  // admission its latch cut short - the supervisor leaves only once the
+  // teardown has confirmed the host gone and handled its `pid.json`, and
+  // always with 0: the policy's stop is the answer, and 0 is what every
+  // service manager reads as "done, do not restart". Waiting here, rather
+  // than exiting from the teardown, is what lets the loop finish the ending
+  // it is in the middle of (its terminal bootstrap marker included).
+  //
+  // The committed check and the observer stop in `releaseLifecycleResources`
+  // run with no await between them, and so do the teardown's own abort check
+  // and commit: either the teardown committed first and this exit waits for
+  // it, or this exit stopped the observer first and the teardown stands down.
   const exitSupervisor = async (code: number): Promise<void> => {
-    await releaseLifecycleResources();
+    const ownedByTeardown = teardown.committed();
+    if (ownedByTeardown && !teardownComplete) {
+      const waiting = new Promise<void>((resolve) => {
+        teardownCompleteWaiters.push(resolve);
+      });
+      // The loop usually arrives here because the child just ended, which is
+      // exactly what the teardown's remaining step was waiting for: resume
+      // it now rather than at the next poll.
+      observer?.nudge();
+      await waiting;
+    }
+    const exitCode = ownedByTeardown ? 0 : code;
+    // An exit that owes a successor is not the end of the run: the successor
+    // continues it, desktop ownership included, from the run state kept here.
+    await releaseLifecycleResources(
+      exitOwesSuccessor(exitCode) ? "keep-run-state" : "all",
+    );
     releaseShutdownHandlers();
-    return deps.exit(code);
+    return deps.exit(exitCode);
   };
 
   // ---- Lifecycle admission ------------------------------------------------
@@ -1422,7 +1579,7 @@ export async function runHostStart(
       // a stale handler set, and every stale handler goes on mutating the
       // `shuttingDown` of the run that installed it. The same goes for the
       // lifecycle records and an unspent grant (see `exitSupervisor`).
-      await releaseLifecycleResources();
+      await releaseLifecycleResources("all");
       releaseShutdownHandlers();
       throw err;
     }
@@ -1852,6 +2009,9 @@ export async function runHostStart(
           spawnedWhileAdmitting.child.once("exit", (code, signal) =>
             recordEnding({ kind: "exit", code, signal }),
           );
+          // For the lifecycle teardown, from this instant rather than from
+          // `currentChild` (see `ownedChild`).
+          ownedChild = trackOwnedHostChild(spawnedWhileAdmitting.child);
           spawnedWhileAdmitting.child.stderr?.on("error", () => {
             stderrErroredEarly = true;
           });
@@ -2290,8 +2450,9 @@ export async function runHostStart(
 
     // The run is admitted: publish `supervisor.json` and the run state once
     // per supervisor, from the admission that first ran. In-process
-    // relaunches are the same run and change nothing here (T04's observer
-    // is what updates the run state from then on).
+    // relaunches are the same run and change nothing here; the policy
+    // observer started right after is what updates the run state from then
+    // on, for the rest of this supervisor's life.
     if (!recordsPublished) {
       // Latched BEFORE the write, and whatever the write's outcome: a
       // publish that failed halfway may still have landed one of the two
@@ -2304,7 +2465,7 @@ export async function runHostStart(
           : serviceStarted
             ? "unattended"
             : "foreground";
-      await publishSupervisorRecords({
+      const published = await publishSupervisorRecords({
         deps,
         logger,
         environment: opts.environment,
@@ -2313,6 +2474,39 @@ export async function runHostStart(
         admission: admittedAs,
         origin: granted.value?.origin ?? null,
         presence: lifecycleGate.presence,
+      });
+      // Whatever mode is in force now: a Background run must notice a later
+      // switch to Linked, and a terminal-started one a Linked desktop
+      // launching beside it, with no host restart (critique round 1, R2).
+      observer = startLifecycleObserver({
+        environment: opts.environment,
+        logger,
+        runtime: deps.lifecycle.observer,
+        reads: deps.lifecycle,
+        nowIso: deps.now,
+        pollMs: LIFECYCLE_OBSERVER_POLL_MS,
+        graceMs: LIFECYCLE_PRESENCE_CRASH_GRACE_MS,
+        initial: {
+          adopted: published.runState.adopted,
+          lastPresence: published.runState.lastPresence,
+        },
+        publishRunState: (facts) =>
+          writeSupervisorRunStateBestEffort({
+            deps,
+            logger,
+            environment: opts.environment,
+            records: {
+              record: published.record,
+              runState: {
+                ...published.runState,
+                adopted: facts.adopted,
+                lastPresence: facts.lastPresence,
+                updatedAt: deps.now(),
+              },
+            },
+          }),
+        teardown,
+        onTeardownComplete: markTeardownComplete,
       });
     }
 
@@ -2661,9 +2855,15 @@ export async function runHostStart(
  * logged at WARN; a reader that then finds no `supervisor.json` treats this
  * supervisor exactly like an old one (nothing is known to be enforced).
  *
- * `adopted` is set here only from what the admission gate itself observed: a
- * presence it probed and found alive. A grant, or a Background start, did not
- * look, and says so (`lastPresence: null`) until the policy observer does.
+ * `adopted` is set here from two sources only: a presence the admission gate
+ * itself probed and found alive, or - for the successor of an exit that owed
+ * one (`continuesPredecessorRun`) - the predecessor's kept ownership, when
+ * that predecessor is provably gone (`readInheritableRunOwnership`). Anything
+ * else did not look, and says so (`lastPresence: null`) until the policy
+ * observer does.
+ *
+ * Returns what it wrote (or tried to), which the observer rewrites with new
+ * ownership facts from then on.
  */
 async function publishSupervisorRecords(input: {
   readonly deps: RunHostStartDeps;
@@ -2674,28 +2874,102 @@ async function publishSupervisorRecords(input: {
   readonly admission: SupervisorRunAdmission;
   readonly origin: HostStartOrigin | null;
   readonly presence: ObservedDesktopPresence | null;
+}): Promise<SupervisorRecords> {
+  // Read BEFORE the write below replaces the predecessor's kept file.
+  const inherited = continuesPredecessorRun(input.admission, input.origin)
+    ? await input.deps.lifecycle
+        .inheritRunOwnership(input.environment)
+        .catch(() => null)
+    : null;
+  if (inherited !== null) {
+    input.logger.info(
+      "Host supervisor continues a desktop-owned run across its relaunch",
+      { reason: "successor-of-owed-exit", admission: input.admission },
+    );
+  }
+  const records: SupervisorRecords = {
+    record: {
+      v: 1,
+      pid: input.supervisorPid,
+      cliVersion: input.deps.lifecycle.cliVersion,
+      capabilities: [SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1],
+      startedAt: input.startedAt,
+    },
+    runState: {
+      v: 1,
+      supervisorPid: input.supervisorPid,
+      supervisorStartIdentity: input.deps.lifecycle.ownStartIdentity(),
+      admission: input.admission,
+      origin: input.origin,
+      adopted: inherited !== null || input.presence?.liveness === "alive",
+      // The gate's own observation is the fresher one when it made one.
+      lastPresence: input.presence ?? inherited?.lastPresence ?? null,
+      updatedAt: input.deps.now(),
+    },
+  };
+  await writeSupervisorRunStateBestEffort({
+    deps: input.deps,
+    logger: input.logger,
+    environment: input.environment,
+    records,
+  });
+  return records;
+}
+
+/**
+ * Does this exit owe the run a successor, so its run state must outlive it?
+ *
+ * - 77 (`RESTART_OWED_EXIT_CODE`) - a restart was promised; the service
+ *   manager or the CLI that promised it brings the run back.
+ * - 76 (`SERVICE_RELAUNCH_BUSY_EXIT_CODE`) - a relaunch refused `busy`
+ *   hands itself back to the service manager to try again.
+ *
+ * Every other exit ends the run: 0 is a stop, a park or the lifecycle
+ * teardown, and the failure codes are a run that could not continue.
+ */
+export function exitOwesSuccessor(exitCode: number): boolean {
+  return (
+    exitCode === RESTART_OWED_EXIT_CODE ||
+    exitCode === SERVICE_RELAUNCH_BUSY_EXIT_CODE
+  );
+}
+
+/**
+ * Is this start the successor an owed exit was waiting for, and so a
+ * continuation of that run rather than a new one?
+ *
+ * - `granted` with origin `maintenance` - the relaunch leg of `host update`
+ *   or `host restart`, which by definition brings back a run that existed.
+ * - `unattended` - the service manager's own relaunch of a 77 or 76 exit,
+ *   which can win the race against the CLI's granted start (launchd's
+ *   `KeepAlive{SuccessfulExit:false}`, systemd's `Restart=on-failure`).
+ *
+ * Never a `foreground` start or a `desktop` / `terminal` / N-1 (`null`
+ * origin) grant: those are new runs, and a person's terminal start must not
+ * inherit a stop it never asked for. A desktop-granted start is adopted by
+ * observing its own live presence anyway.
+ */
+export function continuesPredecessorRun(
+  admission: SupervisorRunAdmission,
+  origin: HostStartOrigin | null,
+): boolean {
+  if (admission === "unattended") return true;
+  return admission === "granted" && origin === "maintenance";
+}
+
+/**
+ * One write of both records, never throwing: the first publish, and every
+ * rewrite of the run state by the policy observer. A host home that refuses
+ * a write must not cost the host (or the observer's tick).
+ */
+async function writeSupervisorRunStateBestEffort(input: {
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly records: SupervisorRecords;
 }): Promise<void> {
-  const now = input.deps.now();
   try {
-    await input.deps.lifecycle.writeRecords(input.environment, {
-      record: {
-        v: 1,
-        pid: input.supervisorPid,
-        cliVersion: input.deps.lifecycle.cliVersion,
-        capabilities: [SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1],
-        startedAt: input.startedAt,
-      },
-      runState: {
-        v: 1,
-        supervisorPid: input.supervisorPid,
-        supervisorStartIdentity: input.deps.lifecycle.ownStartIdentity(),
-        admission: input.admission,
-        origin: input.origin,
-        adopted: input.presence?.liveness === "alive",
-        lastPresence: input.presence,
-        updatedAt: now,
-      },
-    });
+    await input.deps.lifecycle.writeRecords(input.environment, input.records);
   } catch (cause) {
     input.logger.warn(
       "Host supervisor could not publish its lifecycle records",
@@ -2706,6 +2980,58 @@ async function publishSupervisorRecords(input: {
       },
     );
   }
+}
+
+/**
+ * The lifecycle teardown's view of a spawned host child
+ * (`host/lifecycle-teardown.ts`'s `OwnedHostChild`), or `null` when the spawn
+ * produced no pid - a failed spawn, which reports through `error` and has no
+ * process for the teardown to stop.
+ *
+ * Only `exit` ends it. `error` is not an ending here: Node also emits it when
+ * a `kill()` could not be delivered, and a child that refused a signal is the
+ * one case the teardown must not mistake for gone. Signals go through the
+ * `ChildProcess` handle, which Node refuses once the child is reaped, so they
+ * can never reach a pid the OS has handed to someone else.
+ */
+function trackOwnedHostChild(child: ChildProcess): OwnedHostChild | null {
+  const pid = child.pid;
+  if (pid === undefined) return null;
+  let ended = false;
+  let waiters: Array<() => void> = [];
+  child.once("exit", () => {
+    ended = true;
+    const settled = waiters;
+    waiters = [];
+    for (const resolve of settled) resolve();
+  });
+  return {
+    pid,
+    ended: () => ended,
+    waitForEnd: (timeoutMs) =>
+      ended
+        ? Promise.resolve(true)
+        : new Promise<boolean>((resolve) => {
+            // Referenced for the same reason the supervisor's `sleep` is: it
+            // may be the only handle left while a killed child is reaped.
+            const timer = setTimeout(() => {
+              waiters = waiters.filter((waiter) => waiter !== onEnded);
+              resolve(false);
+            }, timeoutMs);
+            const onEnded = (): void => {
+              clearTimeout(timer);
+              resolve(true);
+            };
+            waiters.push(onEnded);
+          }),
+    signal: (signal) => {
+      try {
+        child.kill(signal);
+      } catch {
+        // Already gone; `ended` says so once the exit is observed.
+      }
+    },
+  };
 }
 
 type ChildEnding =
