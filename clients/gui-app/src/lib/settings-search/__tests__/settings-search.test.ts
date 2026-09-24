@@ -136,6 +136,26 @@ describe("settings search", () => {
     expect(results[0].entry.anchor).toBe("appearance-terminal-cursor");
   });
 
+  it("lands each Permissions query on the tab or row it is about", () => {
+    // "judge" is also in Providers' keywords ("auto mode judge"), so this pins
+    // that the Permissions tab still outranks it.
+    expect(landingFor("default permission", DESKTOP)).toBe(
+      "permissions#permissions-default-permission-mode",
+    );
+    expect(landingFor("judge", DESKTOP)).toBe(
+      "permissions#permissions-tab-judge",
+    );
+    expect(landingFor("policy", DESKTOP)).toBe(
+      "permissions#permissions-tab-rules",
+    );
+    expect(landingFor("allow rule", DESKTOP)).toBe(
+      "permissions#permissions-tab-rules",
+    );
+    expect(landingFor("activity", DESKTOP)).toBe(
+      "permissions#permissions-tab-activity",
+    );
+  });
+
   it("still lets a page win on its own name", () => {
     // The kind nudge is small on purpose — it decides near-ties, it does not
     // outrank an exact match on a page's own name.

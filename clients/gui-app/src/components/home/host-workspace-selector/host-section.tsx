@@ -81,7 +81,13 @@ export function WorkspaceHostSwitcher(
               .getState()
               .setScopedHostId(props.activeHostId);
           }
-          openSettings({ section: "host", resetToGeneral: false });
+          openSettings({
+            section: "host",
+            resetToGeneral: false,
+            tab: null,
+            draft: null,
+            hostId: null,
+          });
         },
       }}
       surface={props.surface}

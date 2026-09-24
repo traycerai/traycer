@@ -30,6 +30,7 @@ import {
   deleteArtifactResponseSchema,
   deleteChatRequestSchema,
   deleteChatResponseSchema,
+  deleteChatResponseSchemaV10,
   deleteCommentRequestSchema,
   deleteCommentResponseSchema,
   deleteCommentThreadRequestSchema,
@@ -611,13 +612,29 @@ export const epicCreateV12 = defineRpcContract({
 // The response upgrade is the identity too, and deliberately so: the only
 // difference is the WIDER refusal enum, and every `@1.1` refusal kind is a
 // `@1.2` refusal kind. Nothing to synthesize in either direction.
+//
+// One exception since the `@1.2` initial message grew `sentFromHostId`: a
+// `@1.1` caller's folded chat names no machine, so the upgrade fills the
+// honest `null` on its initial message and leaves everything else as sent.
 export const epicCreateUpgradeV11ToV12 = defineUpgradePath<
   typeof epicCreateV11,
   typeof epicCreateV12
 >({
   from: epicCreateV11.schemaVersion,
   to: epicCreateV12.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({
+    ...request,
+    chat:
+      request.chat === null || request.chat === undefined
+        ? request.chat
+        : {
+            ...request.chat,
+            initialMessage:
+              request.chat.initialMessage === null
+                ? null
+                : { ...request.chat.initialMessage, sentFromHostId: null },
+          },
+  }),
   upgradeResponse: (response) => response,
 });
 
@@ -834,17 +851,25 @@ export const epicCreateChatV12 = defineRpcContract({
   responseSchema: createChatResponseSchemaV12,
 });
 
-// Identity in both directions, for the same reasons as
-// `epicCreateUpgradeV11ToV12`: the two new request fields are additive
-// optionals whose absence already means `false`, and the response only GAINS an
-// optional key a `@1.1` host never set.
+// The response upgrade is the identity, for the same reason as
+// `epicCreateUpgradeV11ToV12`'s: it only GAINS an optional key a `@1.1` host
+// never set. The request upgrade fills the one `@1.2` key that is not an
+// additive optional: a `@1.1` caller's initial message names no machine, so
+// its `sentFromHostId` is the honest `null`. `attachmentsByHash` and
+// `deferWorktreeProvisioning` stay absent, which already means `false`.
 export const epicCreateChatUpgradeV11ToV12 = defineUpgradePath<
   typeof epicCreateChatV11,
   typeof epicCreateChatV12
 >({
   from: epicCreateChatV11.schemaVersion,
   to: epicCreateChatV12.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({
+    ...request,
+    initialMessage:
+      request.initialMessage === null || request.initialMessage === undefined
+        ? request.initialMessage
+        : { ...request.initialMessage, sentFromHostId: null },
+  }),
   upgradeResponse: (response) => response,
 });
 
@@ -903,7 +928,24 @@ export const epicDeleteChatV10 = defineRpcContract({
   method: "epic.deleteChat",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: deleteChatRequestSchema,
+  responseSchema: deleteChatResponseSchemaV10,
+});
+
+export const epicDeleteChatV11 = defineRpcContract({
+  method: "epic.deleteChat",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: deleteChatRequestSchema,
   responseSchema: deleteChatResponseSchema,
+});
+
+export const epicDeleteChatUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicDeleteChatV10,
+  typeof epicDeleteChatV11
+>({
+  from: epicDeleteChatV10.schemaVersion,
+  to: epicDeleteChatV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, publicationChatId: null }),
 });
 
 export const epicReparentChatV10 = defineRpcContract({

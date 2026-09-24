@@ -7,6 +7,7 @@ import {
 } from "@/components/home/data/landing-options";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
+import { useOpenPermissionSettings } from "@/hooks/settings/use-open-permission-settings";
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import { ComposerToolbarRight } from "@/components/home/toolbar/composer-toolbar-right";
 import { DictationRecordingBar } from "@/components/home/toolbar/dictation-recording-bar";
@@ -125,7 +126,15 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   // Traycer's judge entirely. Read off the same store slice the picker shows,
   // so the row and the trigger can never name different providers.
   const runHarnessId = useStore(store, (s) => s.selection.harnessId);
-  const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
+  // And the model it will run: under Automatic's fallback the judge is this
+  // conversation's own harness, on its judge model or else on this one.
+  const runModelSlug = useStore(store, (s) => s.selection.modelSlug);
+  const judgeBilling = useAutoJudgeBilling(
+    runTargetHostId,
+    runHarnessId,
+    runModelSlug,
+  );
+  const openPermissionSettings = useOpenPermissionSettings(runTargetHostId);
 
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
@@ -162,6 +171,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             // `settingsLocked` surfaces cannot flip at all.
             turnActive={activeTurnStatus !== null && !settingsLocked}
             judgeBilling={judgeBilling}
+            onOpenPermissionSettings={openPermissionSettings}
             settingsLocked={settingsLocked}
           />
           <ComposerToolbarRight

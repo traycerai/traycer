@@ -25,7 +25,10 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
-import { autoJudgeUnattendedDenialRowSource } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import {
+  autoJudgeNoticeRowSource,
+  autoJudgeUnattendedDenialRowSource,
+} from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
@@ -96,6 +99,20 @@ function supportsV17(negotiated: SchemaVersion | null): boolean {
 const CHAT_SUBSCRIBE_AUTO_MODE_MINOR = 13;
 
 /**
+ * The minor whose bundled `row-order.ts` first projects an auto-mode judge
+ * notice row ({@link autoJudgeNoticeRowSource}).
+ *
+ * `1.16`, the tier line, rather than `1.13`: the notice's durable event has
+ * been written since the judge shipped, but the ROW arrived with the
+ * permissions redesign that opened `1.16`, so `1.13`-`1.15` peers bundle a
+ * projection that draws nothing for it. A separate constant from
+ * {@link CHAT_SUBSCRIBE_AUTO_MODE_MINOR} for the reason the draft-image cause
+ * above is one: the two floors are different facts that happen to share a
+ * mode.
+ */
+const CHAT_SUBSCRIBE_AUTO_JUDGE_NOTICE_MINOR = 16;
+
+/**
  * Typed against the live enum on purpose: a rename of the mode breaks this
  * compile rather than leaving a string literal that silently matches nothing.
  *
@@ -131,9 +148,9 @@ export function supportsAutoPermissionMode(
 /**
  * The minor a line must have negotiated to DRAW this event's transcript row.
  *
- * Zero for all but one: `auto-judge-unattended-denial`, which `1.13` added to
- * `row-projection.ts`. Every other row kind predates the split and every
- * supported line can materialize it.
+ * Zero for all but two: `auto-judge-unattended-denial`, which `1.13` added to
+ * `row-projection.ts`, and `auto-judge-notice`, which `1.16` added. Every other
+ * row kind predates the split and every supported line can materialize it.
  *
  * ## Why a row needs a floor at all, when the event that backs it does not
  *
@@ -196,6 +213,9 @@ export function supportsAutoPermissionMode(
 export function minimumChatSubscribeMinorForTranscriptEvent(
   event: ChatEvent,
 ): number {
+  if (autoJudgeNoticeRowSource(event) !== null) {
+    return CHAT_SUBSCRIBE_AUTO_JUDGE_NOTICE_MINOR;
+  }
   return autoJudgeUnattendedDenialRowSource(event) === null
     ? 0
     : CHAT_SUBSCRIBE_AUTO_MODE_MINOR;

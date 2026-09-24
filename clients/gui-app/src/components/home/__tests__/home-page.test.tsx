@@ -77,6 +77,9 @@ const homeMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   getActiveHostId: vi.fn(() => "host-home"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-home"),
+  // The directory's LOCAL host id - the machine typing, deliberately distinct
+  // from `getActiveHostId` (the target host the chat is created on).
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
   getActiveHost: vi.fn(() => ({
     hostId: "host-home",
     label: "Local",
@@ -188,6 +191,10 @@ vi.mock("@/lib/host/runtime", () => ({
       getActiveHost: homeMocks.getActiveHost,
       getRequestContextUserId: homeMocks.getRequestContextUserId,
     },
+    // The create stamps `sentFromHostId` from the directory's local host at
+    // submit - see `homeMocks.getLocalHostId` for the default and the
+    // sender-host-placement cases below for the assertions.
+    directory: { getLocalHostId: homeMocks.getLocalHostId },
   }),
 }));
 
@@ -480,6 +487,8 @@ describe("<HomePage />", () => {
     homeMocks.request.mockReset();
     homeMocks.getActiveHostId.mockReset();
     homeMocks.getActiveHostId.mockReturnValue("host-home");
+    homeMocks.getLocalHostId.mockReset();
+    homeMocks.getLocalHostId.mockReturnValue("host-local-typing");
     homeMocks.getActiveHost.mockReset();
     homeMocks.getActiveHost.mockReturnValue({
       hostId: "host-home",
@@ -845,6 +854,77 @@ describe("<HomePage />", () => {
         { workspacePath: "/tmp/gui-app" },
         { workspacePath: "/tmp/host" },
       ],
+    });
+    queryClient.clear();
+  });
+
+  // `sentFromHostId` names the machine the user is TYPING on (the local
+  // host), never the target host the chat is created on. This suite's
+  // default mocks already diverge - `getLocalHostId` answers
+  // "host-local-typing", `getActiveHostId` answers "host-home" - so a reader
+  // quietly replaced by the target host would fail this alongside one
+  // replaced by a constant.
+  it("stamps the initial message's sentFromHostId with the local host id, not the target host", async () => {
+    homeMocks.getActiveHostId.mockReturnValue("host-target-different");
+    homeMocks.request.mockResolvedValue({ roomInfo: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("landing-submit"));
+
+    await waitFor(() => {
+      expect(
+        homeMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = homeMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: {
+        hostId: "host-target-different",
+        initialMessage: { sentFromHostId: "host-local-typing" },
+      },
+    });
+    queryClient.clear();
+  });
+
+  // The null path stays pinned: no local host bound sends no sender host,
+  // rather than falling back to the target host.
+  it("sends a null sentFromHostId when the directory has no local host", async () => {
+    homeMocks.getLocalHostId.mockReturnValue(null);
+    homeMocks.request.mockResolvedValue({ roomInfo: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("landing-submit"));
+
+    await waitFor(() => {
+      expect(
+        homeMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = homeMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: { initialMessage: { sentFromHostId: null } },
     });
     queryClient.clear();
   });

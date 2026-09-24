@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 
 import {
   AUTO_MID_TURN_NOTICE,
@@ -40,6 +40,8 @@ interface ComposerOptionsSheetProps {
   /** See `PermissionsPicker`: which pocket this host's judge spends. */
   readonly judgeBilling: AutoJudgeBilling | null;
   readonly settingsLocked: boolean;
+  /** The trailing "Permission settings…" row - see `PermissionsPicker`. */
+  readonly onOpenPermissionSettings: () => void;
 }
 
 /**
@@ -146,6 +148,24 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                 />
               );
             })}
+          </div>
+          {/* The desktop picker's trailing item, after the same separator.
+              Deliberately not disabled by `settingsLocked`: it changes
+              nothing about this conversation, it only opens Settings. The
+              sheet closes first so the Settings route is not under it. */}
+          <div className="border-t border-border/60 pt-2">
+            <button
+              type="button"
+              data-testid="composer-options-permission-settings"
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-ui-sm text-foreground transition-colors active:bg-accent/60"
+              onClick={() => {
+                props.onOpenChange(false);
+                props.onOpenPermissionSettings();
+              }}
+            >
+              <span className="min-w-0 flex-1">Permission settings…</span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </button>
           </div>
         </div>
       </DrawerContent>

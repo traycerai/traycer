@@ -545,6 +545,8 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onFileEditDecision: () => undefined,
     onApprovalDecision: () => undefined,
     highlightedApprovalId: null,
+    ruleDraftWorkspace: { remote: null, branch: null },
+    onOpenSettings: () => undefined,
   };
   const queue: ChatLowerQueueState = {
     editingItem: null,

@@ -6,6 +6,7 @@ import {
   supportsAutoPermissionMode,
   supportsTranscriptRowsFor,
 } from "../chat-frame-compat";
+import { chatSubscribeV116 } from "../subscribe";
 
 /**
  * `minimumChatSubscribeMinorForTranscriptEvent` and `supportsTranscriptRowsFor`
@@ -137,5 +138,77 @@ describe("supportsTranscriptRowsFor", () => {
     expect(supportsTranscriptRowsFor(belowFloor, events)).toBe(true);
     expect(supportsTranscriptRowsFor(atFloor, events)).toBe(true);
     expect(supportsTranscriptRowsFor(null, events)).toBe(true);
+  });
+});
+
+/**
+ * The judge notices' row arrived with the permissions redesign, which opened
+ * `1.16` - so a `1.13`-`1.15` peer, admitted for the unattended-denial row,
+ * bundles a projection that draws nothing for a notice. Taken from the `1.16`
+ * contract itself rather than restated as a literal.
+ */
+const NOTICE_ROW_FLOOR = chatSubscribeV116.schemaVersion.minor;
+
+function autoJudgeNoticeEvent(
+  marker: string,
+  turnId: string | null,
+): ChatEvent {
+  return {
+    ...makeChatEvent({
+      eventId: `e-notice-${marker}`,
+      type: "permission.blocked",
+      metadata: { autoJudge: marker },
+    }),
+    message: "Traycer's judge couldn't run on Traycer inference.",
+    severity: "warning",
+    turnId,
+    messageId: turnId === null ? null : "user-1",
+  };
+}
+
+describe("the auto-mode judge notice row's floor", () => {
+  it.each(["fallback", "unavailable", "policy-not-applied"])(
+    "floors the %s notice at the 1.16 minor, in a turn or outside one",
+    (marker) => {
+      for (const turnId of ["turn-1", null]) {
+        expect(
+          minimumChatSubscribeMinorForTranscriptEvent(
+            autoJudgeNoticeEvent(marker, turnId),
+          ),
+        ).toBe(NOTICE_ROW_FLOOR);
+      }
+    },
+  );
+
+  it("sits above the unattended-denial floor", () => {
+    expect(NOTICE_ROW_FLOOR).toBeGreaterThan(TRANSCRIPT_ROW_FLOOR);
+  });
+
+  it("returns 0 for a permission.blocked with no notice marker", () => {
+    expect(
+      minimumChatSubscribeMinorForTranscriptEvent(
+        makeChatEvent({
+          eventId: "e-old-blocked",
+          type: "permission.blocked",
+          metadata: null,
+        }),
+      ),
+    ).toBe(0);
+  });
+
+  it("refuses a 1.15 line and admits a 1.16 one for a chat holding a notice", () => {
+    const events = [
+      AUTO_JUDGE_UNATTENDED_DENIAL_EVENT,
+      autoJudgeNoticeEvent("fallback", null),
+    ];
+    expect(
+      supportsTranscriptRowsFor(
+        { major: 1, minor: NOTICE_ROW_FLOOR - 1 },
+        events,
+      ),
+    ).toBe(false);
+    expect(
+      supportsTranscriptRowsFor({ major: 1, minor: NOTICE_ROW_FLOOR }, events),
+    ).toBe(true);
   });
 });

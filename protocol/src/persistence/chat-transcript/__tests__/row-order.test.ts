@@ -4,6 +4,8 @@ import type {
   ChatEventType,
 } from "@traycer/protocol/persistence/epic/chat-events";
 import {
+  AUTO_JUDGE_NOTICE_MARKERS,
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   eventMaterializesTranscriptRow,
@@ -12,6 +14,11 @@ import {
   sortIntoCanonicalRowOrder,
   type CanonicalRowOrderKey,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import {
+  autoJudgeNoticeRowId,
+  isTurnDecoratingEvent,
+  projectTranscriptRows,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 
 /**
  * `row-order.ts` is the one definition the host (numbering rows) and the
@@ -483,6 +490,163 @@ describe("autoJudgeUnattendedDenialRowSource", () => {
     });
 
     expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+});
+
+/**
+ * The host's three auto-mode judge notices, exactly as `emitAutoJudgeNotice`
+ * writes them: a `permission.blocked` event whose `message` is the notice,
+ * severity `warning`, and one of three `metadata.autoJudge` markers. `turnId`
+ * and `messageId` are the active turn's when one is running and `null` when
+ * none is, so both shapes are exercised.
+ */
+const AUTO_JUDGE_NOTICES = [
+  [
+    "fallback",
+    "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.",
+  ],
+  [
+    "unavailable",
+    "Traycer could not resolve an auto-mode judge, so commands are being sent to you for approval. Pick a judge in Settings → Permissions.",
+  ],
+  [
+    "policy-not-applied",
+    "This repository's Auto mode rules can add restrictions but not permissions; only its Ask first and Never allow sections were applied.",
+  ],
+] as const;
+
+function autoJudgeNoticeEvent(fields: {
+  readonly eventId: string;
+  readonly marker: unknown;
+  readonly message: string | null;
+  readonly turnId: string | null;
+}): ChatEvent {
+  return {
+    eventId: fields.eventId,
+    type: "permission.blocked",
+    timestamp: 5,
+    clientActionId: null,
+    actor: null,
+    message: fields.message,
+    turnId: fields.turnId,
+    messageId: fields.turnId === null ? null : "user-1",
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "warning",
+    metadata: { autoJudge: fields.marker },
+  };
+}
+
+describe("auto-judge notices (permission.blocked carrying metadata.autoJudge)", () => {
+  it.each(AUTO_JUDGE_NOTICES)(
+    "the %s notice draws a row of its own, in a turn or outside one",
+    (marker, message) => {
+      for (const turnId of ["turn-1", null]) {
+        const event = autoJudgeNoticeEvent({
+          eventId: `e-${marker}`,
+          marker,
+          message,
+          turnId,
+        });
+        expect({
+          materializes: eventMaterializesTranscriptRow(event),
+          decorates: isTurnDecoratingEvent(event),
+        }).toEqual({ materializes: true, decorates: false });
+        expect(
+          projectTranscriptRows({
+            messages: [],
+            events: [event],
+            activeTurnId: null,
+            chatId: "chat-1",
+          }).map((row) => ({
+            rowId: row.rowId,
+            createdAt: row.createdAt,
+            source: row.source,
+          })),
+        ).toEqual([
+          {
+            rowId: autoJudgeNoticeRowId(`e-${marker}`),
+            createdAt: 5,
+            source: { kind: "auto-judge-notice", eventId: `e-${marker}` },
+          },
+        ]);
+        expect(autoJudgeNoticeRowSource(event)).toEqual({ marker, message });
+      }
+    },
+  );
+
+  it("covers exactly the markers the host writes", () => {
+    expect(AUTO_JUDGE_NOTICE_MARKERS).toEqual([
+      "unavailable",
+      "policy-not-applied",
+      "fallback",
+    ]);
+    expect(AUTO_JUDGE_NOTICES.map(([marker]) => marker).sort()).toEqual(
+      [...AUTO_JUDGE_NOTICE_MARKERS].sort(),
+    );
+  });
+
+  it("draws nothing for the older permission.blocked emitters, which carry no marker", () => {
+    for (const metadata of [null, {}, { reason: "sandbox" }]) {
+      const event: ChatEvent = {
+        ...autoJudgeNoticeEvent({
+          eventId: "e-old-blocked",
+          marker: "fallback",
+          message: "Blocked by the sandbox.",
+          turnId: "turn-1",
+        }),
+        metadata,
+      };
+      expect(autoJudgeNoticeRowSource(event)).toBeNull();
+      expect(eventMaterializesTranscriptRow(event)).toBe(false);
+    }
+  });
+
+  it("draws nothing for a marker the host does not write, or one of another shape", () => {
+    for (const marker of [
+      "judge-fallback",
+      "FALLBACK",
+      "",
+      null,
+      { attendanceReason: "agent-created" },
+    ]) {
+      const event = autoJudgeNoticeEvent({
+        eventId: "e-other-marker",
+        marker,
+        message: "Some notice.",
+        turnId: null,
+      });
+      expect(autoJudgeNoticeRowSource(event)).toBeNull();
+      expect(eventMaterializesTranscriptRow(event)).toBe(false);
+    }
+  });
+
+  it("draws nothing when the notice has no text - the text is the row", () => {
+    for (const message of [null, ""]) {
+      const event = autoJudgeNoticeEvent({
+        eventId: "e-no-text",
+        marker: "fallback",
+        message,
+        turnId: "turn-1",
+      });
+      expect(autoJudgeNoticeRowSource(event)).toBeNull();
+      expect(eventMaterializesTranscriptRow(event)).toBe(false);
+    }
+  });
+
+  it("draws nothing for another event type carrying a notice marker", () => {
+    const event: ChatEvent = {
+      ...autoJudgeNoticeEvent({
+        eventId: "e-denied-with-marker",
+        marker: "fallback",
+        message: "Denied.",
+        turnId: null,
+      }),
+      type: "approval.denied",
+    };
+    expect(autoJudgeNoticeRowSource(event)).toBeNull();
     expect(eventMaterializesTranscriptRow(event)).toBe(false);
   });
 });

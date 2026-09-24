@@ -418,7 +418,13 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
             runApply(false);
           }}
           onDiagnostics={() => {
-            openSettings({ section: "diagnostics", resetToGeneral: false });
+            openSettings({
+              section: "diagnostics",
+              resetToGeneral: false,
+              tab: null,
+              draft: null,
+              hostId: null,
+            });
           }}
           onOperationDismiss={dismissLandingAttempt}
           onTerminalRetry={() => {

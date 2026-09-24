@@ -261,7 +261,12 @@ import {
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useAnySystemOverlayActive } from "@/stores/tabs/use-system-tab-modal";
+import {
+  useAnySystemOverlayActive,
+  useSystemTabModalActions,
+} from "@/stores/tabs/use-system-tab-modal";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
+import { autoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeSnapshotCumulativeBundleDiffTile,
@@ -3416,6 +3421,21 @@ function useChatTileSessionViewModel(
     ],
   );
 
+  // The remote and branch this chat's binding records, which is what an
+  // approval card's "Allow from now on…" narrows its drafted rule by.
+  const ruleDraftWorkspace = useMemo(
+    () => autoModeRuleDraftWorkspace(state.worktreeBinding),
+    [state.worktreeBinding],
+  );
+  const { openSettings } = useSystemTabModalActions();
+  // The card's settings links open on THIS tab's machine: the judge and the
+  // rules it names are the ones this conversation's host applies.
+  const openSettingsOnTabHost = useCallback(
+    (opts: TabHostSettingsOpts) => {
+      openSettings({ ...opts, hostId: viewModelHostId });
+    },
+    [openSettings, viewModelHostId],
+  );
   const lowerApprovals = useMemo(
     () => ({
       pendingFileEditApprovals: state.pendingFileEditApprovals,
@@ -3424,6 +3444,8 @@ function useChatTileSessionViewModel(
       onApprovalDecision: dispatchApprovalDecision,
       highlightedApprovalId: composerHighlightBlockId,
       highlightedGeneration: composerHighlightGeneration,
+      ruleDraftWorkspace,
+      onOpenSettings: openSettingsOnTabHost,
     }),
     [
       composerHighlightBlockId,
@@ -3432,6 +3454,8 @@ function useChatTileSessionViewModel(
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,
       dispatchApprovalDecision,
+      ruleDraftWorkspace,
+      openSettingsOnTabHost,
     ],
   );
 

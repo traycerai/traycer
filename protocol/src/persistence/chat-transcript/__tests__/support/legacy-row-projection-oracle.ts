@@ -10,6 +10,11 @@
  *
  * Only `legacyProjectTranscriptRows` is meant to be called; the rest is
  * exported only because it was exported where it was copied from.
+ *
+ * The one edit since the freeze tracks the pre-fold projector as it stands on
+ * `main`: #2105 added the auto-mode judge notice pass there (after the
+ * unattended-refusal pass), so the oracle carries it too - otherwise the parity
+ * suites would compare the fold against a projector nothing ships.
  */
 import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
@@ -33,6 +38,7 @@ import {
 
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
@@ -223,6 +229,7 @@ export type TranscriptRowSource =
       readonly kind: "auto-judge-unattended-denial";
       readonly eventId: string;
     }
+  | { readonly kind: "auto-judge-notice"; readonly eventId: string }
   | {
       readonly kind: "setup-card";
       readonly windowIndex: number;
@@ -327,6 +334,10 @@ export function importedChatMarkerRowId(eventId: string): string {
 
 export function autoJudgeUnattendedDenialRowId(eventId: string): string {
   return `auto-judge-unattended-denial:${eventId}`;
+}
+
+export function autoJudgeNoticeRowId(eventId: string): string {
+  return `auto-judge-notice:${eventId}`;
 }
 
 export function setupCardRowId(
@@ -1057,8 +1068,8 @@ export function legacyProjectTranscriptRows(
   }
 
   // Event rows are appended in passes - all fork links, then all notification
-  // anchors, then all unattended-refusal lines - because that is the
-  // renderer's `baseRows` order. For two events sharing a timestamp the
+  // anchors, then all unattended-refusal lines, then all judge notices -
+  // because that is the renderer's `baseRows` order. For two events sharing a timestamp the
   // resulting tie order differs from the event log's own order; matching that
   // exactly is the point, so a pass added here must be added there in the same
   // position.
@@ -1089,6 +1100,15 @@ export function legacyProjectTranscriptRows(
         kind: "auto-judge-unattended-denial",
         eventId: event.eventId,
       },
+      context: EMPTY_ROW_CONTEXT,
+    });
+  }
+  for (const event of input.events) {
+    if (autoJudgeNoticeRowSource(event) === null) continue;
+    base.push({
+      rowId: autoJudgeNoticeRowId(event.eventId),
+      createdAt: event.timestamp,
+      source: { kind: "auto-judge-notice", eventId: event.eventId },
       context: EMPTY_ROW_CONTEXT,
     });
   }

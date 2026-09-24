@@ -79,8 +79,10 @@ export const TRANSCRIPT_ROW_PASS = {
   forkedChatLink: 2,
   notificationAnchor: 3,
   autoJudgeUnattendedDenial: 4,
+  /** After the unattended refusals: the renderer's `baseRows` order. */
+  autoJudgeNotice: 5,
   /** Setup cards with no anchor row, in window order. */
-  floatingSetupCard: 5,
+  floatingSetupCard: 6,
 } as const;
 
 /** A card woven above its anchor sorts before the anchor itself. */
@@ -323,8 +325,14 @@ export function transcriptMessageFoldFactsEqual(
  * 2: the checkpoint-overlap set left the state for the store's path table
  * (see {@link TranscriptFoldLoad}'s `checkpoint-turns`), so a version-1 state
  * would carry a field this build no longer maintains.
+ *
+ * 3: the auto-mode judge notice row took pass 5 of
+ * {@link TRANSCRIPT_ROW_PASS} and moved floating setup cards to 6. A pass is
+ * part of every stored row's order key, so rows a version-2 state produced
+ * would sort against this build's rows by a stale pass; the state declines and
+ * the store re-folds.
  */
-export const TRANSCRIPT_FOLD_STATE_VERSION = 2;
+export const TRANSCRIPT_FOLD_STATE_VERSION = 3;
 
 /**
  * Where the record walk the increment re-runs starts.

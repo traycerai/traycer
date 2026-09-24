@@ -1237,6 +1237,9 @@ function AssistantSegment({
       // An auto-mode refusal nobody was asked about: synthesized system row
       // only, like the two above. Listed here so the switch stays exhaustive.
       return null;
+    case "auto-judge-notice":
+      // A judge notice: synthesized system row only, like the refusal above.
+      return null;
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;

@@ -27,6 +27,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
@@ -199,15 +200,23 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     };
   }, [inputOwnerId, releaseForwardedPageKeys]);
 
+  const hostLabel = peekHostLabel(hostEntry, node.hostId);
   const status = useMemo(
     () =>
-      browserPeekStatus(
-        session.lifecycle,
+      browserPeekStatus({
+        lifecycle: session.lifecycle,
         visible,
-        session.details,
-        props.completeMeans,
-      ),
-    [session.details, session.lifecycle, visible, props.completeMeans],
+        details: session.details,
+        completeMeans: props.completeMeans,
+        hostLabel,
+      }),
+    [
+      session.details,
+      session.lifecycle,
+      visible,
+      props.completeMeans,
+      hostLabel,
+    ],
   );
 
   const chrome = useScreencastTileChrome({
@@ -555,12 +564,27 @@ function peekStatusToneClass(tone: BrowserPeekStatus["tone"]): string {
   return "border-border bg-foreground/8 text-muted-foreground";
 }
 
-function browserPeekStatus(
-  lifecycle: ScreencastLifecycle,
-  visible: boolean,
-  details: string | null,
-  completeMeans: BrowserPeekCompleteMeaning,
-): BrowserPeekStatus {
+/**
+ * The directory's name for the machine a tile is bound to, falling back to the
+ * id, exactly as the Start Page names a device. Only the `native-elsewhere`
+ * overlay reads it, and that overlay is the one place a tile has to name a
+ * machine the reader cannot infer from the surface.
+ */
+function peekHostLabel(
+  hostEntry: HostDirectoryEntry | null,
+  hostId: string,
+): string {
+  return hostEntry?.label ?? hostId;
+}
+
+function browserPeekStatus(args: {
+  readonly lifecycle: ScreencastLifecycle;
+  readonly visible: boolean;
+  readonly details: string | null;
+  readonly completeMeans: BrowserPeekCompleteMeaning;
+  readonly hostLabel: string;
+}): BrowserPeekStatus {
+  const { lifecycle, visible, details, completeMeans, hostLabel } = args;
   if (!visible) {
     return {
       label: "Paused off-screen",
@@ -604,11 +628,18 @@ function browserPeekStatus(
     // The same frame, read from a client with no native window of its own to
     // hand off to. Nothing is in flight and nothing will arrive, so it says so
     // rather than spinning on a handoff that is happening on another machine.
+    //
+    // The machine is NAMED rather than called "that host". A tile is bound to
+    // its SESSION's host for life, so the referent was always this tile's own
+    // host - but that host used to be, in practice, the host of the chat the
+    // tab was opened from, which the reader was already looking at. Once an
+    // agent's browser can run on a third machine - neither this viewer's nor
+    // its chat's - "that host" points at something the reader has no way to
+    // resolve from what is on screen.
     if (completeMeans === "native-elsewhere") {
       return {
         label: "Open natively",
-        overlay:
-          "This tab is open in the desktop app on that host, so it can't be streamed here.",
+        overlay: `This tab is open in the Traycer desktop app on ${hostLabel}, so it can't be streamed here.`,
         tone: "muted",
         Icon: Monitor,
       };

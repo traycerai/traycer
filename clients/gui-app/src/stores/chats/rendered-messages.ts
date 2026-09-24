@@ -27,6 +27,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
 import {
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
@@ -48,6 +49,7 @@ import {
   assistantRowTurnKey,
   assistantSliceRowId,
   assistantTurnNeedsTrailingRow,
+  autoJudgeNoticeRowId,
   autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
@@ -1242,6 +1244,11 @@ export function useRenderedMessages(
     [input.events],
   );
 
+  const autoJudgeNoticeMessages = useMemo(
+    () => buildAutoJudgeNoticeMessages(input.events),
+    [input.events],
+  );
+
   const importedChatMarkerMessages = useMemo(
     () => buildImportedChatMarkerMessages(input.events),
     [input.events],
@@ -1559,8 +1566,9 @@ export function useRenderedMessages(
       ...notificationAnchorMessages,
       // After the anchors, because `projectTranscriptRows` appends its passes
       // in this same order and a tie between two events sharing a timestamp is
-      // resolved by that order alone. Moving either list moves ordinals.
+      // resolved by that order alone. Moving any of these lists moves ordinals.
       ...autoJudgeUnattendedDenialMessages,
+      ...autoJudgeNoticeMessages,
       ...trailing,
     ];
 
@@ -1640,6 +1648,7 @@ export function useRenderedMessages(
     importedChatMarkerMessages,
     notificationAnchorMessages,
     autoJudgeUnattendedDenialMessages,
+    autoJudgeNoticeMessages,
     setupCardRows,
     setupCardEntries,
     queuedPromptMessageIds,
@@ -1942,6 +1951,57 @@ function buildAutoJudgeUnattendedDenialMessages(
             kind: "auto-judge-unattended-denial",
             rule: denial.rule,
             reason: denial.reason,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Project an auto-mode judge notice: the line the host owes the user when the
+ * judge could not run, a policy file is not the one deciding, or Automatic
+ * moved the judge's billing to the conversation's own provider.
+ *
+ * The host journals each as a `permission.blocked` event and nothing else, so
+ * without this row the notice reached the chat store and was drawn nowhere.
+ * Filtered and identified THROUGH the projection's own helper, like the
+ * refusal row above - the host numbers this row's ordinal from
+ * `autoJudgeNoticeRowSource`.
+ */
+function buildAutoJudgeNoticeMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    const notice = autoJudgeNoticeRowSource(event);
+    if (notice === null) return [];
+    const id = autoJudgeNoticeRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:notice`,
+            kind: "auto-judge-notice",
+            marker: notice.marker,
+            message: notice.message,
           },
         ],
         structuredContent: null,

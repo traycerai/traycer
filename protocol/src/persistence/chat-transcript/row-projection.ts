@@ -22,6 +22,7 @@ import {
 
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
   eventMaterializesTranscriptRow,
   forkedChatLinkRowSource,
@@ -248,6 +249,7 @@ export type TranscriptRowSource =
       readonly kind: "auto-judge-unattended-denial";
       readonly eventId: string;
     }
+  | { readonly kind: "auto-judge-notice"; readonly eventId: string }
   | {
       readonly kind: "setup-card";
       readonly windowIndex: number;
@@ -352,6 +354,10 @@ export function importedChatMarkerRowId(eventId: string): string {
 
 export function autoJudgeUnattendedDenialRowId(eventId: string): string {
   return `auto-judge-unattended-denial:${eventId}`;
+}
+
+export function autoJudgeNoticeRowId(eventId: string): string {
+  return `auto-judge-notice:${eventId}`;
 }
 
 export function setupCardRowId(
@@ -1221,6 +1227,9 @@ const ROW_RELEVANT_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
   ...SETUP_CARD_INPUT_EVENT_TYPES,
   "send.failed",
   "chat.imported",
+  // The auto-mode judge notice row (`autoJudgeNoticeRowSource`): a rewrite
+  // that adds or drops its marker or its text adds or drops the row.
+  "permission.blocked",
 ]);
 
 /**
@@ -2774,6 +2783,23 @@ function eventUnitRow(positioned: PositionedEvent): TranscriptFoldRow | null {
           kind: "auto-judge-unattended-denial",
           eventId: event.eventId,
         },
+        context: EMPTY_ROW_CONTEXT,
+      },
+      unitState: null,
+    };
+  }
+  if (autoJudgeNoticeRowSource(event) !== null) {
+    return {
+      order: wovenOrder({
+        createdAt: event.timestamp,
+        pass: TRANSCRIPT_ROW_PASS.autoJudgeNotice,
+        position,
+        entry: 0,
+      }),
+      descriptor: {
+        rowId: autoJudgeNoticeRowId(event.eventId),
+        createdAt: event.timestamp,
+        source: { kind: "auto-judge-notice", eventId: event.eventId },
         context: EMPTY_ROW_CONTEXT,
       },
       unitState: null,

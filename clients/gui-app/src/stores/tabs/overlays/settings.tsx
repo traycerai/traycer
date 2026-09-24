@@ -4,6 +4,10 @@ import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
+import {
+  beginRulesEditHandoff,
+  cancelRulesEditHandoff,
+} from "@/components/settings/panels/permissions/rules-edit-store";
 import type { SystemOverlayModule } from "@/stores/tabs/system-overlay-registry";
 
 export const settingsOverlayModule: SystemOverlayModule<"settings"> = {
@@ -25,8 +29,16 @@ export const settingsOverlayModule: SystemOverlayModule<"settings"> = {
     setQuery("");
     return true;
   },
-  // A reveal armed in the modal has to land in the tab the modal becomes.
+  // A reveal armed in the modal has to land in the tab the modal becomes, and
+  // so does an unsaved Rules edit: the modal closing on the way is not a close.
   prepareForPromotion: () => {
     useSettingsSearchStore.getState().beginRevealHandoff();
+    beginRulesEditHandoff();
+  },
+  // A refused promotion keeps the modal open, and no tab will take either
+  // handoff: each ends here, so the modal's real close still resets.
+  abandonPromotion: () => {
+    useSettingsSearchStore.getState().endRevealHandoff();
+    cancelRulesEditHandoff();
   },
 };

@@ -24,6 +24,10 @@ import {
   transcriptPreviewProjection,
 } from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
 import {
+  AUTO_JUDGE_NOTICE_MARKERS,
+  type AutoJudgeNoticeMarker,
+} from "@traycer/protocol/persistence/chat-transcript/row-order";
+import {
   compareTranscriptRowOrder,
   encodeTranscriptRowOrder,
   EMPTY_TRANSCRIPT_FOLD_STATE,
@@ -467,6 +471,65 @@ function turnEvent(
   return ev({ ...EVENT_DEFAULTS, type, ts, turnId, messageId });
 }
 
+/** An `approval.denied` the unattended-refusal pass draws a row for. */
+function unattendedDenialEvent(ts: number): ChatEvent {
+  return ev({
+    ...EVENT_DEFAULTS,
+    type: "approval.denied",
+    ts,
+    metadata: {
+      autoJudge: {
+        attendanceReason: "agent-created",
+        rule: "r1",
+        reason: "no human attending",
+      },
+    },
+  });
+}
+
+/**
+ * An auto-mode judge notice as the host writes it: `permission.blocked` with
+ * the notice as its `message` and a marker under `metadata.autoJudge`, in a
+ * turn or outside one.
+ */
+function autoJudgeNoticeEvent(
+  ts: number,
+  marker: AutoJudgeNoticeMarker,
+  turnId: string | null,
+): ChatEvent {
+  return ev({
+    ...EVENT_DEFAULTS,
+    type: "permission.blocked",
+    ts,
+    turnId,
+    message: `Judge notice (${marker}).`,
+    metadata: { autoJudge: marker },
+  });
+}
+
+/** An older `permission.blocked` emitter's shape: no marker, so no row. */
+function markerlessBlockedEvent(ts: number, turnId: string | null): ChatEvent {
+  return ev({
+    ...EVENT_DEFAULTS,
+    type: "permission.blocked",
+    ts,
+    turnId,
+    message: "Blocked by the sandbox.",
+    metadata: { reason: "sandbox" },
+  });
+}
+
+/** A `send.failed` the notification-anchor pass draws a row for. */
+function notificationAnchorEvent(ts: number): ChatEvent {
+  return ev({
+    ...EVENT_DEFAULTS,
+    type: "send.failed",
+    ts,
+    message: "network error",
+    metadata: { notificationAnchor: true, code: "ECONNRESET" },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Parity assertions
 // ---------------------------------------------------------------------------
@@ -557,6 +620,12 @@ interface Features {
   readonly setupCards: boolean;
   readonly legacyRecords: boolean;
   readonly activeTurnFlips: boolean;
+  /**
+   * Row-materializing events of the passes after the fork links - see
+   * {@link eventRowsOp}. Its branch sits inside the range the pause events
+   * otherwise take, so families without it draw the same ops as before.
+   */
+  readonly eventRows: boolean;
 }
 
 const LIVE_CHAT_FEATURES: Features = {
@@ -569,6 +638,7 @@ const LIVE_CHAT_FEATURES: Features = {
   setupCards: false,
   legacyRecords: false,
   activeTurnFlips: true,
+  eventRows: false,
 };
 
 const HISTORY_EDIT_FEATURES: Features = {
@@ -595,6 +665,9 @@ const ACTIVE_FLIP_FEATURES: Features = {
 };
 
 const BATCH_FEATURES: Features = { ...EVENTS_FEATURES, historyEdits: true };
+
+/** The event-pass mix: notification anchors, unattended refusals, judge notices. */
+const EVENT_ROWS_FEATURES: Features = { ...EVENTS_FEATURES, eventRows: true };
 
 /** P1: the checkpoint-heavy fuzz feature mix. See {@link checkpointHeavyOp}. */
 const CHECKPOINT_HEAVY_FEATURES: Features = {
@@ -881,6 +954,48 @@ function blocksFor(
   return [text];
 }
 
+/**
+ * Row-materializing events of the three passes that follow the fork links: a
+ * notification-anchor `send.failed` (pass 3), an unattended `approval.denied`
+ * (4) and an auto-mode judge notice (5), plus a markerless `permission.blocked`
+ * that must draw nothing. The most common op writes a notice and a denial on
+ * ONE timestamp with the notice first in the log, so the pass order - not the
+ * log order - has to decide the tie, exactly as the projector's passes do.
+ */
+function eventRowsOp(
+  r: () => number,
+  model: ChatModel,
+  events: ChatEvent[],
+): void {
+  const turnId =
+    model.turns.length > 0 && r() < 0.5 ? pick(r, model.turns) : null;
+  const y = r();
+  if (y < 0.4) {
+    events.push(
+      autoJudgeNoticeEvent(
+        model.clock,
+        pick(r, AUTO_JUDGE_NOTICE_MARKERS),
+        turnId,
+      ),
+      unattendedDenialEvent(model.clock),
+    );
+  } else if (y < 0.6) {
+    events.push(
+      autoJudgeNoticeEvent(
+        model.clock,
+        pick(r, AUTO_JUDGE_NOTICE_MARKERS),
+        turnId,
+      ),
+    );
+  } else if (y < 0.75) {
+    events.push(unattendedDenialEvent(model.clock));
+  } else if (y < 0.9) {
+    events.push(notificationAnchorEvent(model.clock));
+  } else {
+    events.push(markerlessBlockedEvent(model.clock, turnId));
+  }
+}
+
 /** One randomized op, applied and checked. */
 function randomOp(
   store: RowFoldStore,
@@ -962,6 +1077,8 @@ function randomOp(
         if (id !== undefined) removes.push(id);
       }
     }
+  } else if (features.eventRows && x < 0.68) {
+    eventRowsOp(r, model, events);
   } else if (features.pauseEvents && x < 0.86 && model.turns.length > 0) {
     const turnId = pick(r, model.turns);
     if (r() < 0.5) {
@@ -1072,9 +1189,38 @@ function runFuzzedFamily(
           store.declines,
           `${name} seed ${seed}: unexpected declines`,
         ).toEqual([]);
+        if (features.eventRows) tallyEventRows(store, eventRowTally);
+      });
+    }
+    if (features.eventRows) {
+      // Without this the family could pass having drawn no notice at all.
+      it("exercised the judge-notice pass, including its tie with the refusals", () => {
+        expect(eventRowTally.notices).toBeGreaterThan(0);
+        expect(eventRowTally.noticeDenialTies).toBeGreaterThan(0);
       });
     }
   });
+}
+
+interface EventRowTally {
+  notices: number;
+  noticeDenialTies: number;
+}
+
+const eventRowTally: EventRowTally = { notices: 0, noticeDenialTies: 0 };
+
+function tallyEventRows(store: RowFoldStore, tally: EventRowTally): void {
+  const rows = store.rowsSorted();
+  const denialTimestamps = new Set(
+    rows
+      .filter((row) => row.source.kind === "auto-judge-unattended-denial")
+      .map((row) => row.createdAt),
+  );
+  for (const row of rows) {
+    if (row.source.kind !== "auto-judge-notice") continue;
+    tally.notices += 1;
+    if (denialTimestamps.has(row.createdAt)) tally.noticeDenialTies += 1;
+  }
 }
 
 runFuzzedFamily("a-live-chat", LIVE_CHAT_FEATURES, 8, 50);
@@ -1083,6 +1229,7 @@ runFuzzedFamily("c-events", EVENTS_FEATURES, 8, 50);
 runFuzzedFamily("d-legacy-scattered", LEGACY_FEATURES, 6, 40);
 runFuzzedFamily("e-active-turn-flips", ACTIVE_FLIP_FEATURES, 6, 40);
 runFuzzedFamily("f-batches", BATCH_FEATURES, 6, 40);
+runFuzzedFamily("g-event-rows", EVENT_ROWS_FEATURES, 8, 50);
 
 // ---------------------------------------------------------------------------
 // P1/P2: the checkpoint-heavy fuzz. `checkpointHeavyOp` supplies the ops;
@@ -2145,6 +2292,63 @@ describe("c. events: row-materializing event kinds", () => {
       "row-materializing events",
     );
   });
+
+  it("an auto-judge notice and an unattended refusal on one timestamp: the refusal's pass wins the tie over log order", () => {
+    const store = new RowFoldStore("chat-judge-notice-tie");
+    applyStep(
+      store,
+      {
+        upserts: [
+          userMessage("u-before", 10, null),
+          assistantMessage("a-1", "t-1", 20, [textBlock(20)], {
+            turnProfile: false,
+            startedAt: 20,
+          }),
+        ],
+        removes: [],
+        events: [turnEvent("turn.started", 20, "t-1", null)],
+        activeTurnId: "t-1",
+      },
+      { mayDecline: false },
+      "a running turn",
+    );
+    // The notice is first in the log and carries the running turn; the
+    // refusal carries none. Both sort on their own timestamp, 50.
+    applyStep(
+      store,
+      {
+        upserts: [],
+        removes: [],
+        events: [
+          autoJudgeNoticeEvent(50, "fallback", "t-1"),
+          unattendedDenialEvent(50),
+          markerlessBlockedEvent(50, "t-1"),
+        ],
+        activeTurnId: "t-1",
+      },
+      { mayDecline: false },
+      "notice, refusal and a markerless block on one timestamp",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u-after", 90, null)],
+        removes: [],
+        events: [autoJudgeNoticeEvent(90, "unavailable", null)],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "a later user row and a turnless notice on its timestamp",
+    );
+    expect(store.rowsSorted().map((row) => row.source.kind)).toEqual([
+      "user",
+      "assistant-slice",
+      "auto-judge-unattended-denial",
+      "auto-judge-notice",
+      "user",
+      "auto-judge-notice",
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2304,6 +2508,34 @@ describe("explicit decline tests", () => {
       NO_LOADS,
     );
     expect(result.continued).toBe(true);
+  });
+
+  it("declines when a markerless permission.blocked is rewritten in place into a judge notice", () => {
+    const original = markerlessBlockedEvent(1000, null);
+    const rewritten = ev({
+      ...EVENT_DEFAULTS,
+      id: original.eventId,
+      type: "permission.blocked",
+      ts: 1000,
+      message: "Judge notice (fallback).",
+      metadata: { autoJudge: "fallback" },
+    });
+    const priorState: TranscriptFoldState = {
+      ...EMPTY_TRANSCRIPT_FOLD_STATE,
+      eventsThrough: 0,
+    };
+    const result = runFold(
+      priorState,
+      {
+        chatId: "c",
+        activeTurnId: null,
+        upsertedMessages: [],
+        removedMessages: [],
+        appendedEvents: [{ position: 0, event: rewritten, previous: original }],
+      },
+      NO_LOADS,
+    );
+    expect(result.continued).toBe(false);
   });
 
   it("continues on a rewrite of a NON-row-relevant event type", () => {

@@ -488,6 +488,9 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
           }),
         ),
       ];
+    case "auto-judge-notice":
+      // The host's notice is the whole painted line.
+      return [normalizeSearchableText(segment.message)];
     case "setup-card":
       return [
         normalizeSearchableText(

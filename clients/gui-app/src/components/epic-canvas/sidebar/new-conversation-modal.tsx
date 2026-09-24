@@ -93,6 +93,7 @@ import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selec
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
   useEpicConnectionStatus,
@@ -1117,6 +1118,11 @@ export function NewConversationModalBody(props: {
               sender: { type: "user" as const, userId },
               settings,
               accountContext,
+              // The machine this modal runs on, NOT `activeHostId` (where the
+              // chat is created): read at submit exactly as a send frame reads
+              // it, so the first turn's browser is placed by the same fact as
+              // every later one.
+              sentFromHostId: readLocalHostIdSnapshot(),
               // Spread rather than a `false` literal, like the opt-in below:
               // absent and `false` read identically on the host, and a request
               // that names the key only when it is asking for something keeps

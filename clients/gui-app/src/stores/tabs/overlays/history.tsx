@@ -25,4 +25,7 @@ export const historyOverlayModule: SystemOverlayModule<"history"> = {
     );
   },
   prepareForPromotion: prepareHistoryScopeForPromotion,
+  // Nothing outlives a refusal: the navigation consumed the handed-over scope
+  // (`consumeHistoryScopeForPromotion`) before it was refused.
+  abandonPromotion: () => undefined,
 };

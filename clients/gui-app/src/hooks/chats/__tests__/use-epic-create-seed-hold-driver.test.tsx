@@ -82,6 +82,7 @@ function promptItem(
     sender: { type: "user", userId: OWNER_ID },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
+    sentFromHostId: null,
     delivery: "next_turn",
     status,
     targetTurnId: null,

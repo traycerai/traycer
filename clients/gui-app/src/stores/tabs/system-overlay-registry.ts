@@ -12,6 +12,7 @@
 import type { ComponentType, ReactNode } from "react";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type {
+  OpenSettingsModalOpts,
   SystemModalActive,
   SystemOverlayKind,
 } from "@/stores/tabs/system-overlay-types";
@@ -67,6 +68,13 @@ export interface SystemOverlayModule<K extends SystemOverlayKind> {
    * unmounting and the tab's body mounting later.
    */
   readonly prepareForPromotion: () => void;
+  /**
+   * Runs when a promotion that `prepareForPromotion` prepared for is refused
+   * (the tab navigation's `onRejected`): the modal stays open, and no tab will
+   * arrive to take what was handed over, so any handoff marked there must end
+   * here - or it would outlive the modal's real close.
+   */
+  readonly abandonPromotion: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +118,11 @@ export function prepareOverlayForPromotion(active: SystemModalActive): void {
   SYSTEM_OVERLAYS[active.kind].prepareForPromotion();
 }
 
+/** Ends what `prepareOverlayForPromotion` handed over, for a refused promotion. */
+export function abandonOverlayPromotion(active: SystemModalActive): void {
+  SYSTEM_OVERLAYS[active.kind].abandonPromotion();
+}
+
 /**
  * Attempts to route a system-tab `intent` through the modal bridge API.
  * Returns `true` when the intent was handled (the API is live and the
@@ -123,12 +136,7 @@ export function routeIntentViaModalBridge(
   intent: TabNavigationIntent,
   api: {
     readonly openHistory: () => void;
-    readonly openSettings: (opts: {
-      readonly section:
-        | import("@/lib/settings-sections").SettingsSectionId
-        | null;
-      readonly resetToGeneral: boolean;
-    }) => void;
+    readonly openSettings: (opts: OpenSettingsModalOpts) => void;
   },
 ): boolean {
   if (intent.kind === "history") {
@@ -136,7 +144,13 @@ export function routeIntentViaModalBridge(
     return true;
   }
   if (intent.kind === "settings") {
-    api.openSettings({ section: intent.section, resetToGeneral: false });
+    api.openSettings({
+      section: intent.section,
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
     return true;
   }
   return false;

@@ -285,11 +285,71 @@ export function autoJudgeUnattendedDenialRowSource(
   };
 }
 
+/**
+ * The markers a host stamps on an auto-mode judge notice, one per kind:
+ * `unavailable` (the judge could not run, so commands go to the user),
+ * `policy-not-applied` (a policy file is not, or not wholly, the one deciding)
+ * and `fallback` (Automatic's judge switched from Traycer inference to the
+ * conversation's own provider, billed there). The host writes exactly these
+ * three and nothing else under `metadata.autoJudge` as a string
+ * (`autoJudgeNoticeMarker` in its session manager).
+ */
+export const AUTO_JUDGE_NOTICE_MARKERS = [
+  "unavailable",
+  "policy-not-applied",
+  "fallback",
+] as const;
+
+export type AutoJudgeNoticeMarker = (typeof AUTO_JUDGE_NOTICE_MARKERS)[number];
+
+const autoJudgeNoticeMetadataSchema = lazySchema(() =>
+  z.object({ autoJudge: z.enum(AUTO_JUDGE_NOTICE_MARKERS) }),
+);
+
+/** What an auto-mode judge notice row renders. */
+export interface AutoJudgeNoticeRowSource {
+  readonly marker: AutoJudgeNoticeMarker;
+  /** The host's notice, verbatim - the row's whole body. */
+  readonly message: string;
+}
+
+/**
+ * The auto-mode judge notice row's content, or `null` when this event draws no
+ * row.
+ *
+ * The host writes each notice as a `permission.blocked` event carrying the
+ * text as its `message` and one of {@link AUTO_JUDGE_NOTICE_MARKERS} under
+ * `metadata.autoJudge` - once per session per kind. Until this existed the
+ * event was journaled and drawn nowhere, so the line promising the user that
+ * Automatic had moved their judge's billing to the conversation's provider
+ * never reached them.
+ *
+ * Gated on the MARKER, never on the event type alone: the host has older
+ * `permission.blocked` emitters that carry no marker and draw no row, and they
+ * must keep drawing none or every transcript holding one would renumber. An
+ * empty or absent message draws nothing either - the notice text is the row -
+ * which is the same empty-string rule {@link renderableMetadataString}
+ * enforces. `turnId` is deliberately not read: a notice emitted with no turn
+ * running carries `null`, and the row sorts on the event's own timestamp.
+ * Shaped like {@link forkedChatLinkRowSource} for the same reason - the
+ * renderer filters on this rather than on a copy of it.
+ */
+export function autoJudgeNoticeRowSource(
+  event: ChatEvent,
+): AutoJudgeNoticeRowSource | null {
+  if (event.type !== "permission.blocked") return null;
+  if (event.message === null || event.message.length === 0) return null;
+  const parsed = autoJudgeNoticeMetadataSchema.safeParse(event.metadata);
+  if (!parsed.success) return null;
+  return { marker: parsed.data.autoJudge, message: event.message };
+}
+
 export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
   return (
     forkedChatLinkRowSource(event) !== null ||
     notificationAnchorRowSource(event) !== null ||
     importedChatMarkerRowSource(event) !== null ||
-    autoJudgeUnattendedDenialRowSource(event) !== null
+    autoJudgeUnattendedDenialRowSource(event) !== null ||
+    autoJudgeNoticeRowSource(event) !== null
   );
 }

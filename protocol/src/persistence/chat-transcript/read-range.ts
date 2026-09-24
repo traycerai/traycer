@@ -245,6 +245,7 @@ export function rowRecordIds(source: TranscriptRowSource): RowRecordIds {
     case "notification-anchor":
     case "imported-chat-marker":
     case "auto-judge-unattended-denial":
+    case "auto-judge-notice":
       return { messageIds: NO_IDS, eventIds: [source.eventId] };
     case "setup-card":
       return { messageIds: NO_IDS, eventIds: source.eventIds };

@@ -29,6 +29,8 @@ interface ComposerToolbarLeftProps {
   readonly turnActive: boolean;
   /** Which pocket the host's judge spends - see `PermissionsPicker`. */
   readonly judgeBilling: AutoJudgeBilling | null;
+  /** The picker's "Permission settings…" item - see `PermissionsPicker`. */
+  readonly onOpenPermissionSettings: () => void;
   settingsLocked: boolean;
 }
 
@@ -43,6 +45,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
     hostKnowsAutoMode,
     turnActive,
     judgeBilling,
+    onOpenPermissionSettings,
     settingsLocked,
   } = props;
 
@@ -60,6 +63,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         turnActive={turnActive}
         judgeBilling={judgeBilling}
         closeFocus="composer"
+        onOpenPermissionSettings={onOpenPermissionSettings}
       />
     </div>
   );

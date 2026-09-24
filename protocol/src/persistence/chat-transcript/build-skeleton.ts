@@ -179,6 +179,7 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
     case "forked-chat-link":
     case "imported-chat-marker":
     case "auto-judge-unattended-denial":
+    case "auto-judge-notice":
     case "setup-card":
       return "system";
   }
@@ -512,6 +513,7 @@ function rowBodyFingerprint(
     case "notification-anchor":
     case "imported-chat-marker":
     case "auto-judge-unattended-denial":
+    case "auto-judge-notice":
       absorbRecord(lookup.eventsById.get(source.eventId));
       break;
     case "setup-card":

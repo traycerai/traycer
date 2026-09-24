@@ -55,6 +55,8 @@ import { PendingInterviewCard } from "@/components/chat/segments/pending-intervi
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
+import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
 import {
@@ -222,6 +224,10 @@ export interface ChatLowerApprovalsState {
   readonly highlightedApprovalId: string | null;
   /** Advances on each jump so a repeat to the same row restarts the pulse. */
   readonly highlightedGeneration?: number;
+  /** Where this chat runs, for the rules an approval card drafts. */
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  /** Opens Settings from an approval card's links. */
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 export interface ChatLowerQueueState {
@@ -1074,6 +1080,8 @@ function RuntimeGatedApprovalSurface(props: {
         onApprovalDecision={model.approvals.onApprovalDecision}
         highlightedApprovalId={model.approvals.highlightedApprovalId}
         highlightedGeneration={model.approvals.highlightedGeneration}
+        ruleDraftWorkspace={model.approvals.ruleDraftWorkspace}
+        onOpenSettings={model.approvals.onOpenSettings}
       />
     </ComposerSlotShell>
   );
@@ -1235,6 +1243,8 @@ function PendingApprovalQueues(props: {
   readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
   readonly highlightedApprovalId: string | null;
   readonly highlightedGeneration?: number;
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -1251,6 +1261,8 @@ function PendingApprovalQueues(props: {
         onDecision={props.onApprovalDecision}
         highlightedApprovalId={props.highlightedApprovalId}
         highlightedGeneration={props.highlightedGeneration}
+        ruleDraftWorkspace={props.ruleDraftWorkspace}
+        onOpenSettings={props.onOpenSettings}
       />
     </div>
   );

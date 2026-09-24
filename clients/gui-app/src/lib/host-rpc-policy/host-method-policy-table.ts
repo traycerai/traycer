@@ -886,7 +886,6 @@ export const HOST_METHOD_POLL_TABLE = {
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
-  "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
   "host.fileCopy.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2134,6 +2133,10 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bounded read of the host's recent-decisions log (Permissions ▸ Activity).
+  // The tab refetches on mount and on its own refresh; a cadence here would
+  // wake the host for a log that grows only while an Auto mode turn runs.
+  "autoJudge.listRecent": { ...LATEST_SCHEDULING, poll: null },
   "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
   // Last-write-wins on the server, so ordering is the client's job: rapid
   // saves must reach the host in the order the user made them. `fifo` is not

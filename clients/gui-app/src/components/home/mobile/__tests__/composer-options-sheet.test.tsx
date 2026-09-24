@@ -31,11 +31,13 @@ function renderSheet(overrides: {
   // the desktop picker's fixture. Stated (not defaulted) so a case that cares
   // overrides it visibly - see the FIX 2 describe block below.
   readonly hostKnowsAutoMode: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onOpenPermissionSettings: () => void;
 }) {
   return render(
     <ComposerOptionsSheet
       open
-      onOpenChange={vi.fn()}
+      onOpenChange={overrides.onOpenChange}
       permission={overrides.permission}
       onPermissionChange={overrides.onPermissionChange}
       supportedPermissionModes={overrides.supportedPermissionModes}
@@ -50,6 +52,7 @@ function renderSheet(overrides: {
       turnActive={overrides.turnActive}
       judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
+      onOpenPermissionSettings={overrides.onOpenPermissionSettings}
     />,
   );
 }
@@ -64,6 +67,8 @@ function defaults(): {
   readonly permission: PermissionMode;
   readonly turnActive: boolean;
   readonly hostKnowsAutoMode: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onOpenPermissionSettings: () => void;
 } {
   return {
     supportedPermissionModes: null,
@@ -72,6 +77,8 @@ function defaults(): {
     permission: "supervised",
     turnActive: false,
     hostKnowsAutoMode: true,
+    onOpenChange: vi.fn(),
+    onOpenPermissionSettings: vi.fn(),
   };
 }
 
@@ -219,5 +226,23 @@ describe("ComposerOptionsSheet - FIX 2 (P1): Auto option gated on hostKnowsAutoM
     expect(auto.hasAttribute("disabled")).toBe(false);
     await userEvent.click(auto);
     expect(props.onPermissionChange).toHaveBeenCalledWith("auto");
+  });
+});
+
+describe("ComposerOptionsSheet - trailing 'Permission settings…' row", () => {
+  it("closes the sheet, then calls the callback, in that order", async () => {
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    const onOpenPermissionSettings = vi.fn<() => void>();
+    renderSheet({ ...defaults(), onOpenChange, onOpenPermissionSettings });
+
+    await userEvent.click(
+      screen.getByTestId("composer-options-permission-settings"),
+    );
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenPermissionSettings).toHaveBeenCalledTimes(1);
+    const closeOrder = onOpenChange.mock.invocationCallOrder[0];
+    const openOrder = onOpenPermissionSettings.mock.invocationCallOrder[0];
+    expect(closeOrder).toBeLessThan(openOrder);
   });
 });
