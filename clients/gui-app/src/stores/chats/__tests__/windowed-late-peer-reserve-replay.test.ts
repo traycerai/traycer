@@ -269,6 +269,12 @@ describe("late windowed peer re-serve (diag4: approval block X)", () => {
         .map((f) => f.i)
         .find((i) => approvalsByFrame.get(i)?.tailHydrated === true);
       expect(firstHydrated, "a frame hydrates the tail").toBeDefined();
+      // Without this the range check below is empty whenever the tail
+      // hydrates after #5, and passes having asserted nothing.
+      expect(
+        firstHydrated,
+        "the tail hydrates on or before #5",
+      ).toBeLessThanOrEqual(5);
       if (firstHydrated !== undefined) {
         for (let i = firstHydrated; i <= 5; i += 1) {
           expect(

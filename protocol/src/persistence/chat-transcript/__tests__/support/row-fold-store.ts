@@ -120,6 +120,8 @@ export class RowFoldStore {
   private activeTurnId: string | null = null;
 
   readonly declines: DeclineRecord[] = [];
+  /** Upserts that rewrote an assistant record this store already held. */
+  assistantRewrites = 0;
 
   constructor(chatId: string) {
     this.chatId = chatId;
@@ -156,6 +158,7 @@ export class RowFoldStore {
         });
         continue;
       }
+      if (message.role === "assistant") this.assistantRewrites += 1;
       this.messagesMap.set(message.messageId, {
         position: held.position,
         message,
@@ -180,10 +183,14 @@ export class RowFoldStore {
       const index = idToIndex.get(appended.eventId);
       if (index !== undefined) {
         const old = nextEvents[index];
+        // The fold skips an identical rewrite before it reports the event's
+        // turn, so the association must survive it, as the host's upsert
+        // leaves `row_turn_key` untouched. A changed row-relevant rewrite
+        // declines and rebuilds anyway.
         nextEvents[index] = {
           position: old.position,
           event: appended,
-          rowTurnKey: null,
+          rowTurnKey: old.rowTurnKey,
         };
         appendedEvents.push({
           position: old.position,

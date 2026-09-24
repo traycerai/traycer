@@ -205,6 +205,45 @@ describe("withHostNodeOptions", () => {
     expect(result).not.toContain("with spaces");
   });
 
+  // The four tests below follow Node's own NODE_OPTIONS tokenizer: only a space
+  // outside double quotes separates tokens, double quotes group and are dropped,
+  // a backslash escapes inside them, and single quotes are ordinary characters.
+  // `assertOnlyFlagTokens` splits on whitespace and cannot read quotes, so they
+  // do not call it.
+  it("leaves a heap flag inside another option's quoted value alone", () => {
+    const result = withHostNodeOptions(
+      '--require="./my --max-old-space-size=4096 module.js" --max-old-space-size=4096',
+    );
+    expect(result).toBe(
+      `--require="./my --max-old-space-size=4096 module.js" ${CANONICAL}`,
+    );
+  });
+
+  it("leaves an owned flag inside a space-separated quoted value alone", () => {
+    const result = withHostNodeOptions(
+      '--require "./dir --report-directory=x mod.js" --trace-warnings',
+    );
+    expect(result).toBe(
+      `--require "./dir --report-directory=x mod.js" --trace-warnings ${CANONICAL}`,
+    );
+  });
+
+  it("passes an escaped quote inside a quoted value through byte for byte", () => {
+    // Node reads the title as: a " --max-heap-size=1 - the escaped quote does
+    // not close the run, so the space after it separates nothing.
+    const input = '--title="a \\" --max-heap-size=1" --trace-warnings';
+    expect(withHostNodeOptions(input)).toBe(`${input} ${CANONICAL}`);
+  });
+
+  it("does not treat single quotes as grouping, as Node does not", () => {
+    // Node's tokens here are `--title='a`, `--max-heap-size=1'` and
+    // `--trace-warnings`, so the owned `--max-heap-size` token is stripped.
+    const result = withHostNodeOptions(
+      "--title='a --max-heap-size=1' --trace-warnings",
+    );
+    expect(result).toBe(`--title='a --trace-warnings ${CANONICAL}`);
+  });
+
   it("does not swallow a following --flag when report-directory has no value", () => {
     // Value-less token must not eat its neighbor.
     const result = withHostNodeOptions("--report-directory --inspect");

@@ -202,6 +202,11 @@ interface WindowPlacementIndex {
   readonly hydrated: Uint8Array;
   /** Unhydrated assistant rows per turn key, in ordinal order. */
   readonly unhydratedByTurnKey: ReadonlyMap<string, ReadonlyArray<SkeletonRow>>;
+  /** Hydrated assistant rows' ordinals per turn key, in ordinal order. */
+  readonly hydratedOrdinalsByTurnKey: ReadonlyMap<
+    string,
+    ReadonlyArray<number>
+  >;
   /** Running maximum of skeleton `createdAt`, per ordinal. */
   readonly createdAtCeiling: Float64Array;
 }
@@ -221,6 +226,7 @@ function buildWindowPlacementIndex(
   }
   const ordinalByRowId = new Map<string, number>();
   const unhydratedByTurnKey = new Map<string, SkeletonRow[]>();
+  const hydratedOrdinalsByTurnKey = new Map<string, number[]>();
   const createdAtCeiling = new Float64Array(window.rowCount);
   let ceiling = Number.NEGATIVE_INFINITY;
   for (let ordinal = 0; ordinal < window.rowCount; ordinal += 1) {
@@ -234,11 +240,24 @@ function buildWindowPlacementIndex(
         const rows = unhydratedByTurnKey.get(turnKey);
         if (rows === undefined) unhydratedByTurnKey.set(turnKey, [row]);
         else rows.push(row);
+      } else if (turnKey !== null) {
+        const ordinals = hydratedOrdinalsByTurnKey.get(turnKey);
+        if (ordinals === undefined) {
+          hydratedOrdinalsByTurnKey.set(turnKey, [ordinal]);
+        } else {
+          ordinals.push(ordinal);
+        }
       }
     }
     createdAtCeiling[ordinal] = ceiling;
   }
-  return { ordinalByRowId, hydrated, unhydratedByTurnKey, createdAtCeiling };
+  return {
+    ordinalByRowId,
+    hydrated,
+    unhydratedByTurnKey,
+    hydratedOrdinalsByTurnKey,
+    createdAtCeiling,
+  };
 }
 
 const placementByWindow = new WeakMap<
@@ -312,15 +331,45 @@ function placeHitInWindow(
   // Held: which of the rows that render it are still placeholders.
   const unhydrated = unhydratedRowsOfRecord(index, record);
   if (unhydrated.length === 0) return { kind: "loaded" };
-  // Nearest the hydrated part first: the held record is held because a later
-  // row of it is hydrated, which is where the reader already is.
-  const nearestFirst = unhydrated.toReversed();
+  const nearestFirst = nearestHydratedFirst(index, record, unhydrated);
   return {
     kind: "unhydrated",
     held: true,
     sortKey: nearestFirst[0].ordinal,
     targets: nearestFirst.map((row) => row.rowId),
   };
+}
+
+/**
+ * `rows` nearest the record's hydrated rows first - where the reader already
+ * is, so the walk hydrates outward from there. The hydrated part can sit on
+ * either side: scrolling up from the tail hydrates a turn's later slices
+ * first, while a jump (or a scroll down from one) hydrates its earlier ones.
+ * Equal distances take the later row first, which is also the whole order for
+ * a record with no hydrated row of its own.
+ */
+function nearestHydratedFirst(
+  index: WindowPlacementIndex,
+  record: Message,
+  rows: ReadonlyArray<SkeletonRow>,
+): ReadonlyArray<SkeletonRow> {
+  const hydrated =
+    record.role === "assistant"
+      ? (index.hydratedOrdinalsByTurnKey.get(assistantTurnKey(record)) ?? [])
+      : [];
+  const distance = (ordinal: number): number => {
+    let nearest = Number.POSITIVE_INFINITY;
+    for (const at of hydrated) {
+      nearest = Math.min(nearest, Math.abs(at - ordinal));
+    }
+    return nearest;
+  };
+  return rows.toSorted((left, right) => {
+    const byDistance = distance(left.ordinal) - distance(right.ordinal);
+    return Number.isNaN(byDistance) || byDistance === 0
+      ? right.ordinal - left.ordinal
+      : byDistance;
+  });
 }
 
 /**

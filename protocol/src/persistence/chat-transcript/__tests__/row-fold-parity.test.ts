@@ -660,9 +660,14 @@ const LEGACY_FEATURES: Features = {
   historyEdits: true,
 };
 
-const ACTIVE_FLIP_FEATURES: Features = {
+/**
+ * The no-flip control. Every other family flips the active turn (it rides in
+ * `LIVE_CHAT_FEATURES`), so this is the one family that isolates the flips:
+ * the event mix of `c-events` with the active turn left alone.
+ */
+const NO_FLIP_FEATURES: Features = {
   ...EVENTS_FEATURES,
-  activeTurnFlips: true,
+  activeTurnFlips: false,
 };
 
 const BATCH_FEATURES: Features = { ...EVENTS_FEATURES, historyEdits: true };
@@ -728,6 +733,11 @@ interface ChatModel {
   readonly users: string[];
   readonly turns: string[];
   readonly messages: string[];
+  /** The live assistant records, and the turn each was written under. */
+  readonly assistants: {
+    readonly id: string;
+    readonly turnId: string | null;
+  }[];
   clock: number;
   /**
    * P1: each turn's last RETAINED checkpoint's changed paths, as this fuzz
@@ -746,6 +756,7 @@ function newModel(): ChatModel {
     users: [],
     turns: [],
     messages: [],
+    assistants: [],
     clock: 1000,
     checkpointPaths: new Map(),
     checkpointStats: newCheckpointFuzzStats(),
@@ -1093,19 +1104,15 @@ function randomOp(
     }
     const blocks = blocksFor(r, model, features);
     const id = freshId("m");
+    const recordTurnId = features.legacyRecords && r() < 0.15 ? null : turnId;
     upserts.push(
-      assistantMessage(
-        id,
-        features.legacyRecords && r() < 0.15 ? null : turnId,
-        model.clock,
-        blocks,
-        {
-          turnProfile: r() < 0.15,
-          startedAt,
-        },
-      ),
+      assistantMessage(id, recordTurnId, model.clock, blocks, {
+        turnProfile: r() < 0.15,
+        startedAt,
+      }),
     );
     model.messages.push(id);
+    model.assistants.push({ id, turnId: recordTurnId });
     if (r() < 0.3) activeTurnId = turnId;
   } else if (features.historyEdits && x < 0.6) {
     kind = "history-edit";
@@ -1116,22 +1123,22 @@ function randomOp(
     }
   } else if (features.historyEdits && x < 0.7) {
     kind = "history-edit";
-    // Rewrite an existing assistant record's blocks (facts change).
-    if (model.turns.length > 0) {
-      const turnId = pick(r, model.turns);
-      const blocks = blocksFor(r, model, features);
-      const id = freshId("m");
+    // Rewrite an existing assistant record's blocks (facts change), in place.
+    if (model.assistants.length > 0) {
+      const picked = pick(r, model.assistants);
       upserts.push(
-        assistantMessage(id, turnId, model.clock, blocks, {
-          turnProfile: r() < 0.2,
-          startedAt: model.clock,
-        }),
+        assistantMessage(
+          picked.id,
+          picked.turnId,
+          model.clock,
+          blocksFor(r, model, features),
+          { turnProfile: r() < 0.2, startedAt: model.clock },
+        ),
       );
-      model.messages.push(id);
     }
   } else if (features.historyEdits && x < 0.8) {
     kind = "history-edit";
-    // Remove one or a few live records, tail-biased, or occasionally re-upsert one.
+    // Remove one or a few live records, tail-biased.
     if (model.messages.length > 0) {
       const count = r() < 0.3 ? 1 + Math.floor(r() * 3) : 1;
       const tail = r() < 0.7;
@@ -1141,6 +1148,13 @@ function randomOp(
           : Math.floor(r() * model.messages.length);
         const id = model.messages[index];
         if (id !== undefined) removes.push(id);
+      }
+      // A removed record is never rewritten afterwards.
+      for (const removedId of removes) {
+        const at = model.assistants.findIndex(
+          (assistant) => assistant.id === removedId,
+        );
+        if (at !== -1) model.assistants.splice(at, 1);
       }
     }
   } else if (features.eventRows && x < 0.68) {
@@ -1250,6 +1264,8 @@ function runFuzzedFamily(
   ops: number,
 ): void {
   describe(`fuzz family: ${name}`, () => {
+    // Per family, never a module global: one family cannot borrow another's count.
+    const rewriteTally = { assistantRewrites: 0 };
     for (let seed = 1; seed <= seeds; seed += 1) {
       it(`seed ${seed}`, () => {
         const store = new RowFoldStore(`chat-${name}-${seed}`);
@@ -1258,11 +1274,18 @@ function runFuzzedFamily(
         for (let op = 0; op < ops; op += 1) {
           randomOp(store, model, r, features, `${name} seed ${seed} op ${op}`);
         }
+        rewriteTally.assistantRewrites += store.assistantRewrites;
         expect(
           store.declines,
           `${name} seed ${seed}: unexpected declines`,
         ).toEqual([]);
         if (features.eventRows) tallyEventRows(store, eventRowTally);
+      });
+    }
+    if (features.historyEdits) {
+      // Without this the family could pass having never rewritten one.
+      it("rewrote an assistant record in place", () => {
+        expect(rewriteTally.assistantRewrites).toBeGreaterThan(0);
       });
     }
     if (features.eventRows) {
@@ -1300,7 +1323,7 @@ runFuzzedFamily("a-live-chat", LIVE_CHAT_FEATURES, 8, 50);
 runFuzzedFamily("b-history-edits", HISTORY_EDIT_FEATURES, 8, 50);
 runFuzzedFamily("c-events", EVENTS_FEATURES, 8, 50);
 runFuzzedFamily("d-legacy-scattered", LEGACY_FEATURES, 6, 40);
-runFuzzedFamily("e-active-turn-flips", ACTIVE_FLIP_FEATURES, 6, 40);
+runFuzzedFamily("e-events-no-flips", NO_FLIP_FEATURES, 6, 40);
 runFuzzedFamily("f-batches", BATCH_FEATURES, 6, 40);
 runFuzzedFamily("g-event-rows", EVENT_ROWS_FEATURES, 8, 50);
 
@@ -1928,6 +1951,71 @@ describe("c. events: pause correlation", () => {
       { upserts: [], removes: [], events: [close], activeTurnId: turnB },
       { mayDecline: false },
       "interview close, different turnId",
+    );
+  });
+
+  it("an identical re-append of a decorating event keeps its turn for a later fold of that turn", () => {
+    const store = new RowFoldStore("chat-identical-reappend");
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u1", 1000, null)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [
+          assistantMessage("a1", "t1", 1001, [textBlock(1001)], {
+            turnProfile: false,
+            startedAt: 1001,
+          }),
+        ],
+        removes: [],
+        events: [turnEvent("turn.started", 1001, "t1", null)],
+        activeTurnId: "t1",
+      },
+      { mayDecline: false },
+      "turn t1",
+    );
+    const open = pauseOpenEvent("approval.requested", 1002, "t1", {
+      approvalId: "appr-1",
+      blockId: null,
+    });
+    applyStep(
+      store,
+      { upserts: [], removes: [], events: [open], activeTurnId: "t1" },
+      { mayDecline: false },
+      "pause open",
+    );
+    // The same event again, byte for byte: the fold skips it, so its turn
+    // association has to survive in the store.
+    applyStep(
+      store,
+      { upserts: [], removes: [], events: [open], activeTurnId: "t1" },
+      { mayDecline: false },
+      "identical re-append",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [
+          assistantMessage("a2", "t1", 1003, [textBlock(1003)], {
+            turnProfile: false,
+            startedAt: 1001,
+          }),
+        ],
+        removes: [],
+        events: [],
+        activeTurnId: "t1",
+      },
+      { mayDecline: false },
+      "a later change to the same turn",
     );
   });
 });

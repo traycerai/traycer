@@ -29,7 +29,10 @@ import {
   importedChatMarkerRowSource,
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
-import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
+import {
+  partitionSetupCardWindows,
+  SETUP_DERIVATION_EVENT_TYPES,
+} from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
 import {
   applySteerLifecycleEvent,
   STEER_LIFECYCLE_EVENT_TYPES,
@@ -1200,16 +1203,14 @@ const TERMINAL_TURN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
  * boundary between lifecycles, and the fork that decides whether window 0 is
  * the genesis card. `partitionSetupCardWindows` skips every other type, so it
  * returns the same windows over this subset as over the whole log.
+ *
+ * The partition's own list, not a copy of it: a setup type added there and
+ * missing here would leave the fold reading a different event set than the
+ * partition, and let a rewrite of that type slip past the in-place-rewrite
+ * decline.
  */
-export const SETUP_CARD_INPUT_EVENT_TYPES: readonly ChatEvent["type"][] = [
-  "setup.creating",
-  "setup.running",
-  "setup.succeeded",
-  "setup.failed",
-  "setup.cancelled",
-  "worktree.missing",
-  "chat.forked",
-];
+export const SETUP_CARD_INPUT_EVENT_TYPES: readonly ChatEvent["type"][] =
+  SETUP_DERIVATION_EVENT_TYPES;
 
 const SETUP_CARD_INPUT_EVENT_TYPE_SET: ReadonlySet<ChatEvent["type"]> = new Set(
   SETUP_CARD_INPUT_EVENT_TYPES,

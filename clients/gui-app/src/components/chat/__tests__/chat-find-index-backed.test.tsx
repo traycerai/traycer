@@ -1329,6 +1329,41 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     );
   }
 
+  it("walks a held turn's placeholders nearest its hydrated slice first when that slice comes BEFORE them", async () => {
+    const partText = (part: number): string =>
+      part === 1 ? "the middle slice has the needle" : `slice ${part}`;
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: "the middle slice has the needle",
+        },
+      ]),
+    );
+    // Slice 0 hydrated, as a jump or a scroll down from one leaves it: the
+    // placeholders sit AFTER the hydrated part, so the nearest is part 1.
+    const find = renderFind({
+      initial: straddledTurn({ hydratedParts: new Set([0]), partText }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+    });
+    const adapter = find.getAdapter();
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot()).toMatchObject({ total: 1 });
+    });
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:1");
+  });
+
   it("counts a held message whose match is in its unhydrated rows, and walks to it by row", async () => {
     const highlights = installMockHighlights();
     const partText = (part: number): string =>
