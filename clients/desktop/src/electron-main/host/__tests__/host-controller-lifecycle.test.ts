@@ -100,6 +100,7 @@ vi.mock("../../app/update-preferences", async (importOriginal) => {
   };
 });
 
+import log from "electron-log";
 import {
   runBundledTraycerCliJson,
   spawnDetachedBundledTraycerCliJson,
@@ -427,6 +428,38 @@ describe("stopHost outcome mapping", () => {
       stopRequest("force", "attached", null),
     );
     expect(outcome.kind).toBe("failed");
+  });
+
+  // OBS-HOST-STOP-FOREGROUND: the running host is a terminal's
+  // `traycer host start`, not the service's - the service stop reached
+  // nothing and the host still runs. This is NOT a failure of this app or
+  // the CLI (never `failed`, and never `stopped`): it gets its own outcome
+  // and a single INFO log, distinct from the WARN `classifyStopHostError`
+  // logs for an unrecognised code.
+  it("maps E_HOST_NOT_SERVICE_RUN to not-service-run, with one INFO log naming the reason and code, and no WARN", async () => {
+    const controller = newReachableController();
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+      new TraycerCliError(
+        "E_HOST_NOT_SERVICE_RUN",
+        "host stop: the running host was started in a terminal (supervisor pid 4242) and is not run by the service; stop it there with Ctrl-C, or pass --force",
+      ),
+    );
+    const outcome = await controller.stopHost(
+      stopRequest("if-idle", "attached", null),
+    );
+    expect(outcome.kind).toBe("not-service-run");
+    // The CLI really was asked; the mapping is not a short-circuit.
+    expect(streamCallsWith("stop")).toBe(1);
+    expect(log.info).toHaveBeenCalledWith(
+      "[host-controller] host stop refused",
+      {
+        mode: "if-idle",
+        reason: "not-service-run",
+        code: "E_HOST_NOT_SERVICE_RUN",
+      },
+    );
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 

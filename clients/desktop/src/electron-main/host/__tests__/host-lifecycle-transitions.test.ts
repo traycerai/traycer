@@ -268,6 +268,12 @@ function reasonOf(result: HostLifecycleSetResult): string | null {
     : null;
 }
 
+function messageOf(result: HostLifecycleSetResult): string | null {
+  return result.kind === "stop-refused" || result.kind === "failed"
+    ? result.message
+    : null;
+}
+
 async function runNone(
   harness: Harness,
   stop: HostLifecycleStopChoice | null,
@@ -503,6 +509,15 @@ describe("setMode: -> none while the lanes run", () => {
   const failures: readonly StopHostOutcome[] = [
     { kind: "failed", message: "cli exploded" },
     { kind: "withdrawn" },
+    // OBS-HOST-STOP-FOREGROUND: the running host is a terminal's
+    // `traycer host start`; the service stop reached nothing, so `none` must
+    // not commit over a host that still runs. Same arm as `failed` in
+    // `stopNotCommitted` - the CLI's message says where the host came from.
+    {
+      kind: "not-service-run",
+      message:
+        "host stop: the running host was started in a terminal (supervisor pid 4242) and is not run by the service; stop it there with Ctrl-C, or pass --force",
+    },
   ];
   for (const outcome of failures) {
     it(`a ${outcome.kind} stop fails with stop-failed and commits nothing`, async () => {
@@ -518,6 +533,27 @@ describe("setMode: -> none while the lanes run", () => {
       expect(harness.controller.releaseCount).toBe(1);
     });
   }
+
+  // OBS-HOST-STOP-FOREGROUND: `stopNotCommitted`'s `not-service-run` arm
+  // carries the CLI's own message through unchanged - it names where the
+  // host came from (a terminal) and how to end it, and nothing here may
+  // paraphrase it.
+  it("a not-service-run stop carries the CLI's message through to the failed result", async () => {
+    const harness = await activeHarness();
+    const outcome: StopHostOutcome = {
+      kind: "not-service-run",
+      message:
+        "host stop: the running host was started in a terminal (supervisor pid 4242) and is not run by the service; stop it there with Ctrl-C, or pass --force",
+    };
+    harness.controller.stopOutcome = outcome;
+    const result = await runNone(harness, "force");
+    expect(result.kind).toBe("failed");
+    expect(reasonOf(result)).toBe("stop-failed");
+    expect(messageOf(result)).toBe(outcome.message);
+    expect((await harness.store.readPolicy()).mode).toBe("ask");
+    expect(await presenceVerdict(harness.store)).toBe("keep");
+    expect(harness.controller.quiesceCount).toBe(0);
+  });
 
   it("is superseded when a newer non-none policy appears during the stop", async () => {
     const harness = await activeHarness();

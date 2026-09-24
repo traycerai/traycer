@@ -80,6 +80,13 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A plain or `--if-idle` stop asked the service manager to stop the host,
+  // and the host running is not the service's: `traycer host start` in a
+  // terminal (a `foreground` run). The service stop reached nothing, so the
+  // command refuses rather than report a stop the host outlived, and names
+  // the two ways that do end it (Ctrl-C there, or `--force`). Expected: it
+  // describes where the host came from, not a broken machine.
+  HOST_NOT_SERVICE_RUN: "E_HOST_NOT_SERVICE_RUN",
 
   // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
   // All three replace what used to be an `exitCode: 0` result carrying a
@@ -211,6 +218,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
     CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,

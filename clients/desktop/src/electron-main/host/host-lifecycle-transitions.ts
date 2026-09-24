@@ -545,6 +545,9 @@ export class HostLifecycleService {
           message: "The host stop was withdrawn before it ran.",
           view,
         };
+      // The host still runs, so `none` is not committed; the CLI's message
+      // says where it came from and how to end it.
+      case "not-service-run":
       case "failed":
         return {
           kind: "failed",

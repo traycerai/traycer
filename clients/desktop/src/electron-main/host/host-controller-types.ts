@@ -310,6 +310,10 @@ export interface StopHostRequest {
  *   wait (`E_CLI_LOCK_BUSY`); nothing ran.
  * - `update-active` - a host update attempt is in flight
  *   (`E_HOST_UPDATE_ATTEMPT_ACTIVE`); nothing ran.
+ * - `not-service-run` - the running host was started by `traycer host start`
+ *   in a terminal, not by the service (`E_HOST_NOT_SERVICE_RUN`), so the
+ *   service stop reached nothing and the host still runs. Never `stopped`,
+ *   and never a reason to escalate to `--force`: that host is the terminal's.
  * - `withdrawn` - the request was withdrawn before the lane reached it.
  * - `failed` - anything else, with the CLI's message.
  */
@@ -318,6 +322,7 @@ export type StopHostOutcome =
   | { readonly kind: "host-busy"; readonly message: string }
   | { readonly kind: "lock-busy"; readonly message: string }
   | { readonly kind: "update-active"; readonly message: string }
+  | { readonly kind: "not-service-run"; readonly message: string }
   | { readonly kind: "withdrawn" }
   | { readonly kind: "failed"; readonly message: string };
 

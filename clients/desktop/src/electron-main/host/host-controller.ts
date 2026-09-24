@@ -173,6 +173,7 @@ export const DESKTOP_LOCK_POLL_INTERVAL_MS = 100;
 const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
+const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
 /** Where a detached CLI child's stdout/stderr files go, under the host home. */
 const DETACHED_CLI_OUTPUT_DIRNAME = "desktop-cli";
@@ -3206,6 +3207,15 @@ export class HostController {
           reason: "update-active",
         });
         return { kind: "update-active", message };
+      case HOST_NOT_SERVICE_RUN_CODE:
+        // Not a failure of this app or the CLI: the host is a terminal's
+        // `traycer host start`, which the service stop cannot reach.
+        log.info("[host-controller] host stop refused", {
+          mode: request.mode,
+          reason: "not-service-run",
+          code,
+        });
+        return { kind: "not-service-run", message };
       default:
         log.warn("[host-controller] host stop failed", {
           mode: request.mode,

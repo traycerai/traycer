@@ -48,6 +48,17 @@ const BUSY: StopHostOutcome = {
   kind: "host-busy",
   message: "2 agents running",
 };
+// OBS-HOST-STOP-FOREGROUND: the running host is a terminal's
+// `traycer host start`, not the service's - the service stop reached
+// nothing, and the host still runs. Never a reason to escalate to --force
+// (that host is the terminal's), never a reason to re-prompt (asking would
+// only be refused again): it settles like `deadline`/`withdrawn` in
+// stop-if-idle, and like any other non-busy outcome everywhere else.
+const NOT_SERVICE_RUN: StopHostOutcome = {
+  kind: "not-service-run",
+  message:
+    "host stop: the running host was started in a terminal (supervisor pid 4242) and is not run by the service; stop it there with Ctrl-C, or pass --force",
+};
 
 /** A scripted answer to one host quit prompt. */
 type PromptScript =
@@ -417,6 +428,25 @@ describe("user quit: linked", () => {
       expect(rig.counts.stayOpen).toBe(0);
     });
   }
+
+  it("not-service-run: verdict stop, no force escalation (that host is the terminal's), authorize anyway", async () => {
+    const rig = buildRig(
+      scenario({ mode: "linked", stops: [NOT_SERVICE_RUN] }),
+    );
+    await quit(rig);
+    expect(rig.events).toEqual([
+      ...USER_START,
+      "verdict:stop",
+      "state:stopping:null:idleOnly=false",
+      "stop:if-idle:detached",
+      ...QUITTING_TAIL,
+      "state:quitting:null",
+      "authorize",
+    ]);
+    // stopHost is called exactly ONCE - if-idle only, never force.
+    expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+    expect(rig.prompts).toEqual([]);
+  });
 });
 
 describe("user quit: ask", () => {
@@ -515,6 +545,25 @@ describe("user quit: ask", () => {
       phase: "stopping",
       idleOnly: true,
     });
+  });
+
+  it("stop decision, not-service-run: no busy-retry re-prompt (only host-busy re-prompts), authorize", async () => {
+    const rig = buildRig(
+      scenario({
+        mode: "ask",
+        stops: [NOT_SERVICE_RUN],
+        prompts: [
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: false, remember: false },
+          },
+        ],
+      }),
+    );
+    await quit(rig);
+    expect(rig.prompts).toEqual([{ mode: "ask", round: "initial" }]);
+    expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
+    expect(rig.counts.authorize).toBe(1);
   });
 
   it("stop{force:false} then host-busy: a busy-retry prompt whose Stop is force even with force:false", async () => {
@@ -721,6 +770,23 @@ describe("user quit: stop-if-idle", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 80));
     await flush();
     expect(rig.stopRequests[0].withdrawal?.aborted).toBe(true);
+    expect(rig.events).toEqual([
+      ...USER_START,
+      "state:stopping:null:idleOnly=true",
+      "stop:if-idle:detached",
+      "verdict:keep",
+      ...QUITTING_TAIL,
+      "state:quitting:null",
+      "authorize",
+    ]);
+    expect(rig.prompts).toEqual([]);
+  });
+
+  it("auto not-service-run: NO prompt (asking would only be refused again), verdict keep, authorize", async () => {
+    const rig = buildRig(
+      scenario({ mode: "stop-if-idle", stops: [NOT_SERVICE_RUN] }),
+    );
+    await quit(rig);
     expect(rig.events).toEqual([
       ...USER_START,
       "state:stopping:null:idleOnly=true",

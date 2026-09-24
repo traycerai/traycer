@@ -480,6 +480,10 @@ class QuitTransaction {
         return;
       case "deadline":
       case "withdrawn":
+      // The running host is a terminal's `traycer host start`: the service
+      // stop cannot reach it, and asking would only be refused again. It is
+      // not stopped, and nothing stops it silently on the way out either.
+      case "not-service-run":
         await this.writeVerdict("keep");
         this.logStopOutcome("stop-if-idle", outcome);
         this.commitQuit();
