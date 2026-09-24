@@ -6,6 +6,7 @@ import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subs
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
+  FRESH_SKELETON_HOLD_IDLE_MS,
   STREAM_COMPLETION_TIMEOUT_MS,
   type ChatSessionState,
   type ChatSessionStoreHandle,
@@ -115,6 +116,11 @@ function windowedSnapshot(input: {
   readonly rowCount: number;
   readonly tailFromOrdinal: number;
   readonly tailMessages: readonly Message[];
+  /**
+   * `null` announces a rebuild - a full replacement skeleton streams behind
+   * it. A live revision is an aux-only or append republish.
+   */
+  readonly indexRevision: number | null;
 }): WindowedSnapshotFrame {
   return {
     kind: "snapshot",
@@ -153,7 +159,7 @@ function windowedSnapshot(input: {
       portForwards: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
-      indexRevision: null,
+      indexRevision: input.indexRevision,
       tail: {
         fromOrdinal: input.tailFromOrdinal,
         messages: [...input.tailMessages],
@@ -182,11 +188,16 @@ function openSnapshot(): WindowedSnapshotFrame {
     rowCount: ROW_COUNT,
     tailFromOrdinal: 10,
     tailMessages: [userMessage("row-10", 10), userMessage("row-11", 11)],
+    indexRevision: null,
   });
 }
 
 /** The skeleton in three chunks, the way the host streams a long one. */
-function skeletonInChunks(): readonly SkeletonChunkFrame[] {
+function skeletonInChunks(): readonly [
+  SkeletonChunkFrame,
+  SkeletonChunkFrame,
+  SkeletonChunkFrame,
+] {
   return [
     skeletonChunk({ epoch: 1, fromOrdinal: 0, count: 4, isFinal: false }),
     skeletonChunk({ epoch: 1, fromOrdinal: 4, count: 4, isFinal: false }),
@@ -332,9 +343,22 @@ describe("coalesced transcript publishes", () => {
   });
 
   it("reaches the same transcript and the same plan as publishing per chunk", () => {
+    // A REBUILD stream, restreaming into a skeleton the client already holds:
+    // the kind that still publishes per chunk under the immediate coordinator
+    // (a fresh stream is held for its final chunk under any coordinator).
     const perFrame = createImmediateHarness();
     const ticked = createTickedHarness();
     try {
+      for (const harness of [perFrame, ticked]) {
+        harness.callbacks().onWindowedSnapshot(openSnapshot());
+        for (const chunk of skeletonInChunks()) {
+          harness.callbacks().onSkeletonChunk(chunk);
+        }
+        harness.tick();
+      }
+      const perFrameBefore = perFrame.windowPublishCount();
+      const tickedBefore = ticked.windowPublishCount();
+
       for (const harness of [perFrame, ticked]) {
         harness.callbacks().onWindowedSnapshot(openSnapshot());
         harness.handle.store
@@ -347,8 +371,8 @@ describe("coalesced transcript publishes", () => {
       }
 
       // One publish per chunk, against one for the whole batch.
-      expect(perFrame.windowPublishCount()).toBeGreaterThan(
-        ticked.windowPublishCount(),
+      expect(perFrame.windowPublishCount() - perFrameBefore).toBeGreaterThan(
+        ticked.windowPublishCount() - tickedBefore,
       );
       expect(transcriptOf(ticked.handle.store.getState())).toEqual(
         transcriptOf(perFrame.handle.store.getState()),
@@ -468,6 +492,7 @@ describe("coalesced transcript publishes", () => {
             rowCount: 2,
             tailFromOrdinal: 0,
             tailMessages: [userMessage("row-0", 0), userMessage("row-1", 1)],
+            indexRevision: null,
           }),
         );
         harness.tick();
@@ -526,6 +551,213 @@ describe("coalesced transcript publishes", () => {
       expect(
         harness.handle.store.getState().transcriptWindow.skeletonComplete,
       ).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * # Holding a fresh skeleton for its final chunk
+ *
+ * A fresh stream describes placeholders whose list keys flip from their
+ * ordinal to their row id when the chunk publishes - and every flip is a
+ * whole-list re-layout. So a fresh stream publishes ONCE, at `isFinal`, under
+ * any coordinator. A rebuild restreams onto described rows (no key flips) and
+ * an index change is never a skeleton stream, so neither is held.
+ */
+describe("fresh skeleton hold", () => {
+  function completeSkeleton(harness: Harness): void {
+    harness.callbacks().onWindowedSnapshot(openSnapshot());
+    for (const chunk of skeletonInChunks()) {
+      harness.callbacks().onSkeletonChunk(chunk);
+    }
+    harness.tick();
+  }
+
+  it("publishes a fresh stream once, at its final chunk, even when every frame flushes on arrival", () => {
+    const harness = createImmediateHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(openSnapshot());
+      const afterSnapshot = harness.windowPublishCount();
+      const [first, second, last] = skeletonInChunks();
+
+      harness.callbacks().onSkeletonChunk(first);
+      harness.callbacks().onSkeletonChunk(second);
+      expect(harness.windowPublishCount()).toBe(afterSnapshot);
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeleton,
+      ).toHaveLength(0);
+
+      harness.callbacks().onSkeletonChunk(last);
+
+      expect(harness.windowPublishCount()).toBe(afterSnapshot + 1);
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeletonComplete,
+      ).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not hold a rebuild restreaming onto rows it already describes", () => {
+    const harness = createImmediateHarness();
+    try {
+      completeSkeleton(harness);
+      // The rebuild boundary: same epoch, `indexRevision: null`.
+      harness.callbacks().onWindowedSnapshot(openSnapshot());
+      const beforeChunk = harness.windowPublishCount();
+
+      const [first] = skeletonInChunks();
+      harness.callbacks().onSkeletonChunk(first);
+
+      expect(harness.windowPublishCount()).toBe(beforeChunk + 1);
+      expect(
+        harness.handle.store.getState().transcriptWindow
+          .skeletonStreamCoveredThrough,
+      ).toBe(4);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not hold the append republish", () => {
+    // The host's append order: the snapshot at the post-append `rowCount`
+    // (declaring the skeleton short) and then the `indexChanged` that fills
+    // it. Neither is a skeleton chunk, so nothing waits.
+    const harness = createImmediateHarness();
+    try {
+      completeSkeleton(harness);
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 1,
+          rowCount: ROW_COUNT + 1,
+          tailFromOrdinal: 10,
+          tailMessages: [userMessage("row-10", 10), userMessage("row-11", 11)],
+          indexRevision: 0,
+        }),
+      );
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeletonComplete,
+      ).toBe(false);
+      const beforeDelta = harness.windowPublishCount();
+
+      harness.callbacks().onIndexChanged(
+        appendedChange({
+          epoch: 1,
+          rowCount: ROW_COUNT + 1,
+          indexRevision: 1,
+        }),
+      );
+
+      expect(harness.windowPublishCount()).toBe(beforeDelta + 1);
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.skeleton[ROW_COUNT]?.rowId).toBe(
+        skeletonEntry(ROW_COUNT).rowId,
+      );
+      expect(window.skeletonComplete).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not keep holding once another frame has forced the held stream out", () => {
+    // The forced flush applied everything that was held, so nothing is left
+    // to wait for: a frame after it publishes on its own tick.
+    const harness = createImmediateHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(openSnapshot());
+      const [first] = skeletonInChunks();
+      harness.callbacks().onSkeletonChunk(first);
+      harness.callbacks().onManagedCommandsChanged({
+        kind: "managedCommandsChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        managedCommands: [],
+      });
+      const beforeChange = harness.windowPublishCount();
+
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 1,
+        rowCount: ROW_COUNT,
+        indexRevision: 1,
+        changes: [
+          {
+            type: "updated",
+            entries: [
+              {
+                ordinal: 0,
+                entry: { ...skeletonEntry(0), bodyDigest: "d0-edited" },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(harness.windowPublishCount()).toBe(beforeChange + 1);
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeleton[0]
+          ?.bodyDigest,
+      ).toBe("d0-edited");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("publishes what arrived when the stream goes quiet", () => {
+    vi.useFakeTimers();
+    const harness = createImmediateHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(openSnapshot());
+      const [first] = skeletonInChunks();
+      harness.callbacks().onSkeletonChunk(first);
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeleton,
+      ).toHaveLength(0);
+
+      vi.advanceTimersByTime(FRESH_SKELETON_HOLD_IDLE_MS);
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.skeletonStreamCoveredThrough).toBe(4);
+      expect(window.skeletonComplete).toBe(false);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a delta waiting on the same tick release the held stream first", () => {
+    // The tick applies the delta, and every frame buffered ahead of it must
+    // land before it does - held or not.
+    const harness = createTickedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(openSnapshot());
+      const [first] = skeletonInChunks();
+      harness.callbacks().onSkeletonChunk(first);
+
+      harness.tick();
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeleton,
+      ).toHaveLength(0);
+
+      harness.callbacks().onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: { type: "text.delta", blockId: "b-1", timestamp: 5, delta: "x" },
+      });
+      harness.tick();
+
+      expect(
+        harness.handle.store.getState().transcriptWindow
+          .skeletonStreamCoveredThrough,
+      ).toBe(4);
     } finally {
       harness.handle.dispose();
     }

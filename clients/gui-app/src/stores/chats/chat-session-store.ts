@@ -428,6 +428,12 @@ type BufferedTranscriptFrame =
   | {
       readonly kind: "skeletonChunk";
       readonly frame: BufferedSkeletonChunkFrame;
+      /**
+       * Whether the stream watchdog already counted this chunk as delivery
+       * progress when it arrived (a held chunk). Folding it later is not new
+       * progress, so it must not restart the stall clock a second time.
+       */
+      readonly progressCounted: boolean;
     }
   | {
       readonly kind: "indexChanged";
@@ -2214,6 +2220,18 @@ export { MAX_OUTSTANDING_HYDRATION_REQUESTS } from "@/stores/chats/recovery-ledg
 export const STREAM_COMPLETION_TIMEOUT_MS = 45_000;
 
 /**
+ * How long a held fresh skeleton stream may go without a chunk before what
+ * has arrived is published anyway.
+ *
+ * The hold exists to publish a fresh skeleton once rather than once per
+ * chunk. A stream that stalls - a slow relay, or a final chunk that never
+ * comes - must not keep the rows it did describe off screen until the
+ * {@link STREAM_COMPLETION_TIMEOUT_MS} watchdog restreams, so a quiet gap
+ * this long releases the hold. A later chunk of the same stream holds again.
+ */
+export const FRESH_SKELETON_HOLD_IDLE_MS = 2_000;
+
+/**
  * How many times a stalled stream may be restarted within one epoch.
  *
  * The recovery restarts the very stream that stalled, so an unbounded retry is
@@ -3715,6 +3733,10 @@ export function createChatSessionStoreWithNotificationDependencies(
     // overtakes it. So every other stream frame, the delta flush, a retry, and
     // a stream replacement flush this buffer first.
     let bufferedTranscriptFrames: BufferedTranscriptFrame[] = [];
+    // A fresh skeleton stream is being held for its final chunk - see
+    // `bufferSkeletonChunk`. Only the coordinator's tick honours it.
+    let holdingFreshSkeleton = false;
+    let freshSkeletonHoldTimer: number | null = null;
 
     // `providers.list` nudge driven by the DURABLE auth-failure signal: an
     // error block tagged `code: "auth"` persisted on the latest assistant row
@@ -3875,21 +3897,105 @@ export function createChatSessionStoreWithNotificationDependencies(
       publishWindowedTranscript(evicted, null);
     }
 
+    /**
+     * Whether the coordinator's tick must leave the transcript buffer alone.
+     *
+     * The tick is the only flush that WAITS. Every flush that exists to keep
+     * arrival order - another stream frame, a delta, a retry - still drains
+     * the whole buffer, held or not.
+     */
+    const transcriptTickHeld = (): boolean =>
+      holdingFreshSkeleton && bufferedDeltas.length === 0;
+
+    // The coordinator's tick. A delta waiting in the buffer releases a held
+    // skeleton: the delta applies at this tick, and the frames buffered ahead
+    // of it have to land first.
+    const flushOnCoordinatorTick = (): void => {
+      if (transcriptTickHeld()) return;
+      applyBufferedDeltas();
+    };
+
     const lease = options.streamFlushCoordinator.register({
-      flush: applyBufferedDeltas,
+      flush: flushOnCoordinatorTick,
       hasPending: () =>
-        bufferedDeltas.length > 0 || bufferedTranscriptFrames.length > 0,
+        bufferedDeltas.length > 0 ||
+        (bufferedTranscriptFrames.length > 0 && !transcriptTickHeld()),
     });
     flushLease = lease;
+
+    const clearFreshSkeletonHoldTimer = (): void => {
+      if (freshSkeletonHoldTimer === null) return;
+      window.clearTimeout(freshSkeletonHoldTimer);
+      freshSkeletonHoldTimer = null;
+    };
+
+    const releaseFreshSkeletonHold = (): void => {
+      holdingFreshSkeleton = false;
+      clearFreshSkeletonHoldTimer();
+    };
 
     const clearBufferedDeltas = (): void => {
       bufferedDeltas = [];
       bufferedTranscriptFrames = [];
+      releaseFreshSkeletonHold();
     };
 
     const bufferTranscriptFrame = (entry: BufferedTranscriptFrame): void => {
       bufferedTranscriptFrames.push(entry);
       lease.requestFlush();
+    };
+
+    /**
+     * Buffer a skeleton chunk, and hold the buffer until the stream's final
+     * chunk when the chunk belongs to a FRESH stream.
+     *
+     * Fresh means the chunk describes ordinals the published skeleton has
+     * nothing at - a first open, or rows a rebuild grew into. Every row it
+     * describes is a placeholder whose list key flips from its ordinal
+     * (`unplacedRowKey`) to its row id when the chunk publishes, and each
+     * flip makes the list re-lay-out every row. Publishing the stream once, at
+     * `isFinal`, makes that one flip per open instead of one per chunk.
+     *
+     * A rebuild restreams into the array the previous stream left, so its
+     * chunks land on described ordinals: nothing flips, and they publish per
+     * tick as before. Index changes (the append republish included) never
+     * start a hold.
+     *
+     * Decided HERE, against the published window, because that is what the
+     * list is keyed from. A held chunk is not in it yet, so the next chunk of
+     * the same stream starts on a hole too and holds as well.
+     */
+    const bufferSkeletonChunk = (frame: BufferedSkeletonChunkFrame): void => {
+      const published = get().transcriptWindow;
+      const fresh =
+        !frame.chunk.isFinal &&
+        frame.chunk.epoch === published.epoch &&
+        published.skeleton[frame.chunk.fromOrdinal] === undefined;
+      if (fresh) {
+        holdingFreshSkeleton = true;
+        clearFreshSkeletonHoldTimer();
+        freshSkeletonHoldTimer = window.setTimeout(() => {
+          freshSkeletonHoldTimer = null;
+          if (disposed) return;
+          holdingFreshSkeleton = false;
+          lease.requestFlush();
+        }, FRESH_SKELETON_HOLD_IDLE_MS);
+        // A held chunk is delivery progress the fold will not see until the
+        // hold releases, so the stall clock restarts on arrival instead.
+        // Completeness is not read: the published window does not have this
+        // chunk yet.
+        armStreamCompletionWatchdog({
+          readCompleteness: false,
+          restartDeadline: true,
+        });
+      } else if (frame.chunk.isFinal) {
+        releaseFreshSkeletonHold();
+      }
+      bufferTranscriptFrame({
+        kind: "skeletonChunk",
+        frame,
+        progressCounted: fresh,
+      });
     };
 
     // Synchronous pre-frame flush used by consuming frames. The coordinator's
@@ -5998,23 +6104,29 @@ export function createChatSessionStoreWithNotificationDependencies(
      * an intermediate window would only have been superseded by the next.
      *
      * With `IMMEDIATE_STREAM_FLUSH_COORDINATOR` every frame flushes on
-     * arrival, so the batch is always one frame and this is the per-frame path
-     * exactly.
+     * arrival, so the batch is one frame and this is the per-frame path -
+     * except a held fresh skeleton stream (`bufferSkeletonChunk`), which
+     * waits for its final chunk under any coordinator.
      */
     const flushTranscriptFrames = (): void => {
       if (bufferedTranscriptFrames.length === 0) return;
       const batch = bufferedTranscriptFrames;
       bufferedTranscriptFrames = [];
+      // Whatever forced this flush, the held frames are out now: the next
+      // tick must not wait on a hold with nothing behind it.
+      releaseFreshSkeletonHold();
       // Same downgrade guard the handlers apply on arrival. Nothing that can
       // flip either flag runs between arrival and here without flushing first,
       // so this only re-states it.
       if (disposed || !windowedLine) return;
       let window = get().transcriptWindow;
       let foldedSkeletonChunk = false;
+      let uncountedProgress = false;
       for (const entry of batch) {
         if (entry.kind === "skeletonChunk") {
           window = foldSkeletonChunk(window, entry.frame);
           foldedSkeletonChunk = true;
+          if (!entry.progressCounted) uncountedProgress = true;
         } else {
           window = foldIndexChange(window, entry.frame);
         }
@@ -6024,9 +6136,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Re-arms while the skeleton is still short, disarms once it covers
         // `rowCount`. A stream that simply stops after a non-final chunk is
         // otherwise indistinguishable from one still in progress.
+        //
+        // Only a chunk the watchdog has not already seen restarts the clock.
+        // A held batch released by its idle timer carries no new delivery:
+        // restarting there would push stall detection back by the hold.
         armStreamCompletionWatchdog({
           readCompleteness: true,
-          restartDeadline: true,
+          restartDeadline: uncountedProgress,
         });
       }
       // Covers the `reindexed` case too: `requestPlannedHydration` sends a
@@ -7632,8 +7748,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         // Folded on the next coordinator tick with any other buffered chunk or
-        // index change - see `flushTranscriptFrames`.
-        bufferTranscriptFrame({ kind: "skeletonChunk", frame });
+        // index change - see `flushTranscriptFrames` - or, for a fresh
+        // stream, held for its final chunk (`bufferSkeletonChunk`).
+        bufferSkeletonChunk(frame);
       },
       onIndexChanged: (frame) => {
         // Same downgrade guard as `onSkeletonChunk`.
