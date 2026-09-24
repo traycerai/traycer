@@ -1812,7 +1812,9 @@ export function accumulateEvent(
       if (existing) {
         const updated = {
           ...existing,
-          progressUpdates: [...existing.progressUpdates, event.update].slice(-50),
+          progressUpdates: [...existing.progressUpdates, event.update].slice(
+            -50,
+          ),
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
         };
