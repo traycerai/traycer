@@ -1168,7 +1168,7 @@ function NotificationsSessionBody(
                 semanticId: row.entryId,
               })),
             );
-            displayCloudSnapshotArrivals(arrivals, {
+            void displayCloudSnapshotArrivals(arrivals, {
               showNotification,
               playChime: playNotificationChime,
               onToastClick: (row) => onToastClickRef.current(row),
@@ -1221,7 +1221,7 @@ function NotificationsSessionBody(
             windowId,
             now: () => Date.now(),
             displayChannelEmission: (entries) => {
-              displayHostChannelEmission(
+              void displayHostChannelEmission(
                 entries,
                 {
                   showNotification,
