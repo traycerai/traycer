@@ -748,6 +748,7 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     controller.setHostLifecyclePresentation({
       line: "Host: running · stops with app",
       offerQuitAndStopHost: false,
+      offerRestartHost: true,
     });
     const row = latestMenuTemplate().find(
       (entry) => entry.label === "Host: running · stops with app",
@@ -765,10 +766,12 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     controller.setHostLifecyclePresentation({
       line: "Host: running · x",
       offerQuitAndStopHost: false,
+      offerRestartHost: true,
     });
     controller.setHostLifecyclePresentation({
       line: null,
       offerQuitAndStopHost: false,
+      offerRestartHost: true,
     });
     expect(labels().some((label) => label?.startsWith("Host:"))).toBe(false);
     expect(mostRecentTray().toolTips.at(-1)).toBe("Traycer (idle)");
@@ -785,6 +788,7 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     controller.setHostLifecyclePresentation({
       line: "Host: running · keeps running after quit",
       offerQuitAndStopHost: true,
+      offerRestartHost: true,
     });
     const all = labels();
     const at = all.indexOf("Quit and Stop Host");
@@ -798,6 +802,7 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     controller.setHostLifecyclePresentation({
       line: "Host: running · stops with app",
       offerQuitAndStopHost: false,
+      offerRestartHost: true,
     });
     expect(labels()).not.toContain("Quit and Stop Host");
   });
@@ -807,12 +812,14 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     controller.setHostLifecyclePresentation({
       line: "Host: a",
       offerQuitAndStopHost: true,
+      offerRestartHost: true,
     });
     const tips = mostRecentTray().toolTips.length;
     const menu = mockMenuState.lastBuiltMenu;
     controller.setHostLifecyclePresentation({
       line: "Host: a",
       offerQuitAndStopHost: true,
+      offerRestartHost: true,
     });
     expect(mostRecentTray().toolTips).toHaveLength(tips);
     expect(mockMenuState.lastBuiltMenu).toBe(menu);
@@ -824,6 +831,7 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     controller.setHostLifecyclePresentation({
       line: "Host: running · stops with app",
       offerQuitAndStopHost: false,
+      offerRestartHost: true,
     });
 
     controller.setQuitStopping(true);
@@ -864,5 +872,66 @@ describe("DesktopTrayController host lifecycle (T06)", () => {
     const tips = tray.toolTips.length;
     controller.setQuitStopping(false);
     expect(tray.toolTips).toHaveLength(tips);
+  });
+
+  // The deliberate fail-open default (OBS-NONE-RESTART-MENU): before any
+  // host-lifecycle presentation has landed, Restart Host must still be
+  // reachable - a policy read that never arrives must not silently remove
+  // the remedy control.
+  it("offers Restart Host by default, before any host-lifecycle presentation is set", () => {
+    newController();
+    expect(labels()).toContain("Restart Host");
+  });
+
+  it("hides Restart Host when offerRestartHost is false, shows and dispatches it when true", () => {
+    const commands: string[] = [];
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: (command) => {
+        commands.push(command);
+      },
+    });
+
+    controller.setHostLifecyclePresentation({
+      line: "No local host",
+      offerQuitAndStopHost: false,
+      offerRestartHost: false,
+    });
+    expect(labels()).not.toContain("Restart Host");
+
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · stops with app",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    expect(labels()).toContain("Restart Host");
+
+    latestMenuTemplate()
+      .find((entry) => entry.label === "Restart Host")
+      ?.click?.();
+    expect(commands).toEqual(["host.restart"]);
+  });
+
+  // The no-change check must compare `offerRestartHost` too, not just
+  // `line` and `offerQuitAndStopHost` - otherwise a presentation that only
+  // flips this field early-returns and the menu is never rebuilt.
+  it("rebuilds the menu when only offerRestartHost changes between presentations", () => {
+    const controller = newController();
+    controller.setHostLifecyclePresentation({
+      line: "Host: a",
+      offerQuitAndStopHost: true,
+      offerRestartHost: true,
+    });
+    expect(labels()).toContain("Restart Host");
+    const menu = mockMenuState.lastBuiltMenu;
+
+    controller.setHostLifecyclePresentation({
+      line: "Host: a",
+      offerQuitAndStopHost: true,
+      offerRestartHost: false,
+    });
+
+    expect(mockMenuState.lastBuiltMenu).not.toBe(menu);
+    expect(labels()).not.toContain("Restart Host");
   });
 });

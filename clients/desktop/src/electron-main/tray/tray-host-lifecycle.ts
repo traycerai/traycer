@@ -20,7 +20,9 @@ const MODE_PROMISE: Readonly<Record<HostLifecycleMode, string>> = {
  * The tray's host lifecycle presentation.
  *
  * "Quit and Stop Host" is offered while this instance runs a local host and
- * the mode is not Linked, whose plain Quit already stops it.
+ * the mode is not Linked, whose plain Quit already stops it. "Restart Host"
+ * is offered while this instance runs a local host at all - the same fact
+ * the app menu reads (`MenuState.offerRestartHost`).
  */
 export function trayHostLifecyclePresentation(input: {
   /** Whether this instance runs the local-host lanes. */
@@ -31,11 +33,16 @@ export function trayHostLifecyclePresentation(input: {
   readonly hostRunning: boolean;
 }): DesktopTrayHostLifecyclePresentation {
   if (!input.lanesActive) {
-    return { line: "No local host", offerQuitAndStopHost: false };
+    return {
+      line: "No local host",
+      offerQuitAndStopHost: false,
+      offerRestartHost: false,
+    };
   }
   const state = input.hostRunning ? "running" : "not running";
   return {
     line: `Host: ${state} · ${MODE_PROMISE[input.mode]}`,
     offerQuitAndStopHost: input.mode !== "linked" && input.mode !== "none",
+    offerRestartHost: true,
   };
 }

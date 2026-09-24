@@ -60,7 +60,27 @@ function buildState(platform: NodeJS.Platform): MenuState {
     canCheckForUpdates: true,
     canOpenDevTools: true,
     hostUpdateAvailableVersion: null,
+    offerRestartHost: true,
   };
+}
+
+/**
+ * Flattens every reachable label in the built menu template, recursing into
+ * submenus. Used to assert Restart Host's absence/presence across the WHOLE
+ * tree (macOS app menu, Help menu, and anywhere a future item might move it)
+ * rather than pinning the assertion to one submenu.
+ */
+function collectLabels(items: readonly CapturedMenuItem[]): string[] {
+  const labels: string[] = [];
+  for (const item of items) {
+    if (item.label !== undefined) {
+      labels.push(item.label);
+    }
+    if (item.submenu !== undefined) {
+      labels.push(...collectLabels(item.submenu));
+    }
+  }
+  return labels;
 }
 
 function template(menu: Electron.Menu): readonly CapturedMenuItem[] {
@@ -680,5 +700,57 @@ describe("buildApplicationMenu", () => {
         false,
       );
     }
+  });
+
+  describe("Restart Host (offerRestartHost)", () => {
+    it("omits Restart Host everywhere in the tree when offerRestartHost is false, on every platform", () => {
+      for (const platform of ["darwin", "win32", "linux"] as const) {
+        const items = template(
+          buildApplicationMenu(
+            { ...buildState(platform), offerRestartHost: false },
+            {
+              command: () => undefined,
+              focusWindow: () => undefined,
+              openExternal: () => undefined,
+              toggleAppDevTools: () => undefined,
+            },
+          ),
+        );
+        expect(collectLabels(items)).not.toContain("Restart Host");
+      }
+    });
+
+    it("shows Restart Host in Help (and the app menu on darwin) when offerRestartHost is true, and dispatches host.restart", () => {
+      for (const platform of ["darwin", "win32", "linux"] as const) {
+        const commands: MenuCommandId[] = [];
+        const items = template(
+          buildApplicationMenu(
+            { ...buildState(platform), offerRestartHost: true },
+            {
+              command: (command) => {
+                commands.push(command);
+              },
+              focusWindow: () => undefined,
+              openExternal: () => undefined,
+              toggleAppDevTools: () => undefined,
+            },
+          ),
+        );
+
+        const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+        const helpRestart = menuByLabel(helpMenu, "Restart Host");
+        helpRestart.click?.(null, null);
+        expect(commands).toEqual(["host.restart"]);
+
+        if (platform === "darwin") {
+          const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
+          expect(appMenu.some((item) => item.label === "Restart Host")).toBe(
+            true,
+          );
+        } else {
+          expect(items.some((item) => item.label === "Traycer")).toBe(false);
+        }
+      }
+    });
   });
 });

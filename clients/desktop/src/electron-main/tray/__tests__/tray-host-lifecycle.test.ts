@@ -20,7 +20,11 @@ describe("trayHostLifecyclePresentation", () => {
             mode,
             hostRunning,
           }),
-        ).toEqual({ line: "No local host", offerQuitAndStopHost: false });
+        ).toEqual({
+          line: "No local host",
+          offerQuitAndStopHost: false,
+          offerRestartHost: false,
+        });
       }
     }
   });
@@ -46,6 +50,11 @@ describe("trayHostLifecyclePresentation", () => {
           line: `Host: ${state} · ${promises[mode]}`,
           // Linked's plain Quit already stops; none has nothing to stop.
           offerQuitAndStopHost: mode !== "linked" && mode !== "none",
+          // Restart Host is offered whenever lanes are active, regardless of
+          // mode - "off from next launch" `none` still runs a local host
+          // THIS session, and restarting it is exactly what recovers a stuck
+          // one before the pending switch takes effect.
+          offerRestartHost: true,
         });
       });
     }

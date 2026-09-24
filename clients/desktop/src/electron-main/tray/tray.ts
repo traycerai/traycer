@@ -151,12 +151,19 @@ export interface DesktopTrayPresentation {
 /**
  * The host lifecycle part of the tray (host-lifecycle-modes T06): the mode
  * line ("Host: running · stops with app") shown in the tooltip and as a
- * disabled menu row, and whether to offer "Quit and Stop Host".
+ * disabled menu row, and whether to offer "Quit and Stop Host" and "Restart
+ * Host".
  */
 export interface DesktopTrayHostLifecyclePresentation {
   /** `null` hides the row and leaves the tooltip as the indicator alone. */
   readonly line: string | null;
   readonly offerQuitAndStopHost: boolean;
+  /**
+   * Whether this instance runs a local host to restart. Off in `none`, where
+   * the restart would only be refused: offering a destructive confirm for an
+   * action the app has already ruled out is a dead control.
+   */
+  readonly offerRestartHost: boolean;
 }
 
 /** A one-off notice from the tray icon (the close-to-tray explainer). */
@@ -196,9 +203,13 @@ export class DesktopTrayController {
   private onCommand:
     | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
     | null;
+  // Restart Host is offered until the first presentation says otherwise: it
+  // is the remedy for a broken host, so a policy read that never lands must
+  // not take it away. The `none` refusal in the host IPC is the backstop.
   private hostLifecycle: DesktopTrayHostLifecyclePresentation = {
     line: null,
     offerQuitAndStopHost: false,
+    offerRestartHost: true,
   };
   private onQuitAndStopHost: (() => void) | null = null;
   /** A quit is stopping the host: the mode line reads "Stopping host…". */
@@ -262,7 +273,8 @@ export class DesktopTrayController {
     if (
       this.hostLifecycle.line === presentation.line &&
       this.hostLifecycle.offerQuitAndStopHost ===
-        presentation.offerQuitAndStopHost
+        presentation.offerQuitAndStopHost &&
+      this.hostLifecycle.offerRestartHost === presentation.offerRestartHost
     ) {
       return;
     }
@@ -480,10 +492,14 @@ export class DesktopTrayController {
         click: () => this.runCommand("app.checkForUpdates", null),
       },
       ...lifecycleLineItems,
-      {
-        label: "Restart Host",
-        click: () => this.runCommand("host.restart", null),
-      },
+      ...(this.hostLifecycle.offerRestartHost
+        ? [
+            {
+              label: "Restart Host",
+              click: () => this.runCommand("host.restart", null),
+            },
+          ]
+        : []),
       {
         label: "Open Logs",
         click: () => this.runCommand("app.openLogs", null),

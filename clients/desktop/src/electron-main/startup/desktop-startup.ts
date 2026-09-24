@@ -842,6 +842,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
       bridge.dispatchMenuCommand(command) ?? false,
     checkForUpdates: () =>
       checkForUpdatesNow(config.isDev, "manual").then(() => undefined),
+    localHostLanes: hostLifecycle,
   });
   menu.install();
 

@@ -73,6 +73,15 @@ export interface MenuControllerOptions {
     hostUpdateVersion: string | null,
   ) => boolean;
   readonly checkForUpdates: () => Promise<void>;
+  // Whether this instance runs the local-host lanes, and when that may have
+  // changed (`none` committed this session). Feeds `MenuState.offerRestartHost`.
+  readonly localHostLanes: MenuLocalHostLanes;
+}
+
+/** The slice of `HostLifecycleService` the menu reads. */
+export interface MenuLocalHostLanes {
+  localHostLanesActive(): boolean;
+  onChange(listener: () => void): () => void;
 }
 
 export class MenuController {
@@ -116,6 +125,11 @@ export class MenuController {
     this.disposers.push(() => {
       this.options.perWindowState.off("change", onPerWindowStateChange);
     });
+    this.disposers.push(
+      this.options.localHostLanes.onChange(() => {
+        this.rebuild();
+      }),
+    );
     this.rebuild();
   }
 
@@ -203,6 +217,7 @@ export class MenuController {
       canCheckForUpdates: !isDevBuild,
       canOpenDevTools,
       hostUpdateAvailableVersion: this.hostUpdateAvailableVersion,
+      offerRestartHost: this.options.localHostLanes.localHostLanesActive(),
     };
   }
 
