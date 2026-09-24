@@ -129,9 +129,10 @@ describe("a cautious file-edit card in the queue", () => {
       ],
       onDecision,
     );
-    expect(
-      screen.getByRole("button", { name: /Approve all/ }),
-    ).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /Approve all/ })).toHaveProperty(
+      "disabled",
+      true,
+    );
     screen.getByRole("button", { name: /Deny all/ }).click();
     expect(onDecision.mock.calls).toEqual([
       ["a", false],

@@ -732,17 +732,13 @@ export function BackgroundItemsPanel(props: {
     chatId: props.chatId,
     hostId,
   });
-  const {
-    scheduledJobCount,
-    harnessStopAllReady,
-    showStopAll,
-    stopAllLabel,
-  } = cronStopControlState(
-    items,
-    managedCommands.length,
-    stoppable,
-    props.stopAllPending,
-  );
+  const { scheduledJobCount, harnessStopAllReady, showStopAll, stopAllLabel } =
+    cronStopControlState(
+      items,
+      managedCommands.length,
+      stoppable,
+      props.stopAllPending,
+    );
   const heldManagedCommands = useHeldManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,

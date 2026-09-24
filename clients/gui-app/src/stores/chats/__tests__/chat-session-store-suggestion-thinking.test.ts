@@ -3,9 +3,7 @@ import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import type {
-  ChatLoadRangeRequest,
-} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   createChatSessionStore,
@@ -183,7 +181,9 @@ function userMessage(messageId: string, timestamp: number): Message {
       kind: "user",
       content: {
         type: "doc",
-        content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "hi" }] },
+        ],
       },
       browserAnnotations: [],
     },
@@ -215,9 +215,7 @@ function completeTail(harness: Harness): void {
 }
 
 function shownEstimate(harness: Harness): number | null {
-  return selectActiveThinkingTokensEstimate(
-    harness.handle.store.getState(),
-  );
+  return selectActiveThinkingTokensEstimate(harness.handle.store.getState());
 }
 
 const WINDOWED_DERIVED: ChatTranscriptDerived = {
@@ -383,7 +381,12 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
     const harness = createHarness();
     try {
       const callbacks = harness.callbacks();
-      emitSnapshot(callbacks, activeTurn("turn-1", "running"), undefined, undefined);
+      emitSnapshot(
+        callbacks,
+        activeTurn("turn-1", "running"),
+        undefined,
+        undefined,
+      );
       expect(shownEstimate(harness)).toBe(null);
 
       emitThinking(callbacks, "turn-1", 100);
@@ -417,7 +420,12 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
     const harness = createHarness();
     try {
       const callbacks = harness.callbacks();
-      emitSnapshot(callbacks, activeTurn("turn-1", "running"), undefined, undefined);
+      emitSnapshot(
+        callbacks,
+        activeTurn("turn-1", "running"),
+        undefined,
+        undefined,
+      );
       emitThinking(callbacks, "turn-1", 100);
 
       emitTurnState(callbacks, activeTurn("turn-1", "running"), undefined);
@@ -426,7 +434,12 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
       emitTurnState(callbacks, activeTurn("turn-1", "completed"), undefined);
       expect(harness.handle.store.getState().thinkingTokens).toBe(null);
 
-      emitSnapshot(callbacks, activeTurn("turn-2", "running"), undefined, undefined);
+      emitSnapshot(
+        callbacks,
+        activeTurn("turn-2", "running"),
+        undefined,
+        undefined,
+      );
       emitThinking(callbacks, "turn-2", 40);
       emitTurnState(callbacks, null, undefined);
       expect(harness.handle.store.getState().thinkingTokens).toBe(null);
@@ -439,7 +452,12 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
     const harness = createHarness();
     try {
       const callbacks = harness.callbacks();
-      emitSnapshot(callbacks, activeTurn("turn-1", "running"), undefined, undefined);
+      emitSnapshot(
+        callbacks,
+        activeTurn("turn-1", "running"),
+        undefined,
+        undefined,
+      );
       emitThinking(callbacks, "turn-1", 100);
       emitTurnState(callbacks, activeTurn("turn-2", "running"), undefined);
       expect(harness.handle.store.getState().thinkingTokens).toBe(null);
@@ -459,10 +477,18 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
       expect(cleared.thinkingTokens).toBe(null);
 
       callbacks.onConnectionStatus("reconnecting", null, null);
-      emitSnapshot(callbacks, activeTurn("turn-3", "running"), "chip again", 250);
+      emitSnapshot(
+        callbacks,
+        activeTurn("turn-3", "running"),
+        "chip again",
+        250,
+      );
       const restored = harness.handle.store.getState();
       expect(restored.suggestedPrompt).toBe("chip again");
-      expect(restored.thinkingTokens).toEqual({ turnId: "turn-3", estimate: 250 });
+      expect(restored.thinkingTokens).toEqual({
+        turnId: "turn-3",
+        estimate: 250,
+      });
     } finally {
       harness.handle.dispose();
     }
@@ -474,7 +500,12 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
       const callbacks = harness.callbacks();
       emitSnapshot(callbacks, activeTurn("turn-1", "running"), "chip", 10);
       callbacks.onConnectionStatus("reconnecting", null, null);
-      emitSnapshot(callbacks, activeTurn("turn-1", "running"), undefined, undefined);
+      emitSnapshot(
+        callbacks,
+        activeTurn("turn-1", "running"),
+        undefined,
+        undefined,
+      );
       const state = harness.handle.store.getState();
       expect(state.suggestedPrompt).toBeUndefined();
       expect(state.thinkingTokens).toBe(null);

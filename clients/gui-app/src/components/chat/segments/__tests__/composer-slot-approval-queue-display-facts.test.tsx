@@ -192,7 +192,11 @@ describe("individual approval on cautious rows", () => {
     const onDecision = vi.fn();
     renderQueue(
       [
-        approval({ approvalId: "judging", reviewing: "checking", cautious: true }),
+        approval({
+          approvalId: "judging",
+          reviewing: "checking",
+          cautious: true,
+        }),
         approval({ approvalId: "plain" }),
         approval({ approvalId: "careful", cautious: true }),
         approval({ approvalId: "plain-2" }),
@@ -214,7 +218,11 @@ describe("individual approval on cautious rows", () => {
       [
         approval({
           cautious: true,
-          reason: { rule: "Force Push", text: "Rewrites history.", tier: "hard" },
+          reason: {
+            rule: "Force Push",
+            text: "Rewrites history.",
+            tier: "hard",
+          },
           displayFacts: [{ label: "Reason", value: "why" }],
         }),
       ],

@@ -43,7 +43,10 @@ interface FakeSource extends ThinkingTokensSource {
 
 // Copied from `chat/__tests__/thinking-tokens-estimate.test.tsx` verbatim -
 // same `ChatActiveTurn` fixture and the same minimal store fake.
-function turn(turnId: string, status: ChatActiveTurn["status"]): ChatActiveTurn {
+function turn(
+  turnId: string,
+  status: ChatActiveTurn["status"],
+): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
@@ -120,7 +123,10 @@ const SOLE_REASONING_GROUP: ActivityGroupModel = {
   activeStartedAt: null,
 };
 
-function renderActivityGroup(group: ActivityGroupModel, source: FakeSource | null) {
+function renderActivityGroup(
+  group: ActivityGroupModel,
+  source: FakeSource | null,
+) {
   const body: ReactNode = (
     <ChatExpansionTestProviders tileInstanceId="activity-group-thinking-tokens-test-tile">
       <ActivityGroupSegment group={group} />

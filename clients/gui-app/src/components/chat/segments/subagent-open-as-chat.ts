@@ -1,10 +1,4 @@
-import {
-  createContext,
-  use,
-  useCallback,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, use, useCallback, useMemo, useState } from "react";
 
 /**
  * Opens one subagent card's conversation as a full-height, read-only view

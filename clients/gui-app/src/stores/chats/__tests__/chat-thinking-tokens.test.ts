@@ -7,7 +7,10 @@ import {
   thinkingTokensFromSnapshot,
 } from "@/stores/chats/chat-thinking-tokens";
 
-function turn(turnId: string, status: ChatActiveTurn["status"]): ChatActiveTurn {
+function turn(
+  turnId: string,
+  status: ChatActiveTurn["status"],
+): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
@@ -103,9 +106,9 @@ describe("thinkingTokensAfterFrame", () => {
 
   it("ignores a frame for another turn, a terminal turn, or no turn", () => {
     const frame = { turnId: "t2", estimate: 99 };
-    expect(thinkingTokensAfterFrame(current, turn("t1", "running"), frame)).toBe(
-      current,
-    );
+    expect(
+      thinkingTokensAfterFrame(current, turn("t1", "running"), frame),
+    ).toBe(current);
     expect(
       thinkingTokensAfterFrame(current, turn("t2", "completed"), frame),
     ).toBe(current);

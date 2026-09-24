@@ -3881,32 +3881,32 @@ function ChatSessionMessagesSurface(
           <ThinkingTokensSourceContext.Provider
             value={props.thinkingTokensSource}
           >
-          <ChatMarkdownLinkProvider
-            tabId={props.viewTabId}
-            workspaceRoots={props.workspaceRoots}
-          >
-            <ChatMessages
-              taskTitle={props.taskTitle}
-              taskId={props.node.id}
-              epicId={props.epicId}
-              hostId={props.tabHostId}
-              messages={props.messages}
-              transcriptWindow={props.transcriptWindow}
-              onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
-              baselineEpoch={props.baselineEpoch}
-              hydrationSequence={props.hydrationSequence}
-              coldRewrittenMessageIds={props.coldRewrittenMessageIds}
-              backgroundItems={props.backgroundItems}
-              scrollRequest={props.scrollRequest}
-              onScrollRequestSettled={props.onScrollRequestSettled}
-              getMessageActions={props.getMessageActions}
-              nextStepActions={props.nextStepActions}
-              instanceId={props.node.instanceId}
-              visible={props.surfaceVisible}
-              systemOverlayActive={props.systemOverlayActive}
-              composerOverlayHeight={props.composerOverlayHeight}
-            />
-          </ChatMarkdownLinkProvider>
+            <ChatMarkdownLinkProvider
+              tabId={props.viewTabId}
+              workspaceRoots={props.workspaceRoots}
+            >
+              <ChatMessages
+                taskTitle={props.taskTitle}
+                taskId={props.node.id}
+                epicId={props.epicId}
+                hostId={props.tabHostId}
+                messages={props.messages}
+                transcriptWindow={props.transcriptWindow}
+                onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
+                baselineEpoch={props.baselineEpoch}
+                hydrationSequence={props.hydrationSequence}
+                coldRewrittenMessageIds={props.coldRewrittenMessageIds}
+                backgroundItems={props.backgroundItems}
+                scrollRequest={props.scrollRequest}
+                onScrollRequestSettled={props.onScrollRequestSettled}
+                getMessageActions={props.getMessageActions}
+                nextStepActions={props.nextStepActions}
+                instanceId={props.node.instanceId}
+                visible={props.surfaceVisible}
+                systemOverlayActive={props.systemOverlayActive}
+                composerOverlayHeight={props.composerOverlayHeight}
+              />
+            </ChatMarkdownLinkProvider>
           </ThinkingTokensSourceContext.Provider>
         </WorkingVerbContext.Provider>
       </ChatPlanActionsContext.Provider>

@@ -6831,7 +6831,10 @@ describe("assistant turn render cache invalidation", () => {
 });
 
 describe("useRenderedMessages: a subagent's own conversation nests under its card", () => {
-  type AssistantBlock = Extract<Message, { role: "assistant" }>["blocks"][number];
+  type AssistantBlock = Extract<
+    Message,
+    { role: "assistant" }
+  >["blocks"][number];
 
   function subagentBlock(
     blockId: string,
@@ -6862,7 +6865,10 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
     return { ...plainTextBlock(blockId, 2002, text), parentBlockId };
   }
 
-  function childReasoning(blockId: string, parentBlockId: string): AssistantBlock {
+  function childReasoning(
+    blockId: string,
+    parentBlockId: string,
+  ): AssistantBlock {
     return {
       type: "reasoning",
       blockId,
@@ -6947,9 +6953,7 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
     return renderRenderedMessages({ messages: [assistant] }).result.current;
   }
 
-  function onlyCard(
-    segments: ReadonlyArray<MessageSegment>,
-  ): SubagentSegment {
+  function onlyCard(segments: ReadonlyArray<MessageSegment>): SubagentSegment {
     const card = segments.find((segment) => segment.kind === "subagent");
     if (card === undefined) {
       throw new Error("expected a subagent card");
@@ -6990,9 +6994,9 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
       "reasoning",
       "text",
     ]);
-    expect(segments.some((s) => s.kind === "text" || s.kind === "reasoning")).toBe(
-      false,
-    );
+    expect(
+      segments.some((s) => s.kind === "text" || s.kind === "reasoning"),
+    ).toBe(false);
   });
 
   it("nests an OpenCode import's parented text and error under the card", () => {
@@ -7067,9 +7071,9 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
       childText("t1", "agent-1", "prose"),
     ]);
     const segments = rows[0]?.segments ?? [];
-    expect(
-      segments.some((s) => s.kind === "tool" && s.id === "toolu_1"),
-    ).toBe(false);
+    expect(segments.some((s) => s.kind === "tool" && s.id === "toolu_1")).toBe(
+      false,
+    );
     expect(onlyCard(segments).children.map((c) => c.id)).toEqual(["t1"]);
   });
 
@@ -7084,7 +7088,9 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
     if (group === undefined) {
       throw new Error("expected a file change group");
     }
-    expect(group.files.map((file) => file.filePath)).toEqual(["/repo/src/a.ts"]);
+    expect(group.files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+    ]);
   });
 
   it("still merges two same-path file changes inside a card into one row", () => {
@@ -7177,7 +7183,8 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
     expect(last?.id).toBe(withoutAssistants[2]?.id);
     expect(
       (last?.segments ?? []).some(
-        (segment) => segment.kind === "text" && segment.markdown === "final answer",
+        (segment) =>
+          segment.kind === "text" && segment.markdown === "final answer",
       ),
     ).toBe(true);
   });

@@ -1,9 +1,4 @@
-import {
-  createContext,
-  use,
-  useCallback,
-  useSyncExternalStore,
-} from "react";
+import { createContext, use, useCallback, useSyncExternalStore } from "react";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { formatTokens } from "@/components/chat/context-usage";
 import {

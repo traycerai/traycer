@@ -83,7 +83,9 @@ describe("<ComposerPromptSuggestion />", () => {
 
   it("draws nothing for an undefined suggestion", () => {
     renderChip(undefined, true, vi.fn());
-    expect(screen.queryByRole("group", { name: "Suggested prompt" })).toBeNull();
+    expect(
+      screen.queryByRole("group", { name: "Suggested prompt" }),
+    ).toBeNull();
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 

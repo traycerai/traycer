@@ -21,7 +21,10 @@ interface FakeSource extends ThinkingTokensSource {
   readonly set: (next: SourceState) => void;
 }
 
-function turn(turnId: string, status: ChatActiveTurn["status"]): ChatActiveTurn {
+function turn(
+  turnId: string,
+  status: ChatActiveTurn["status"],
+): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
@@ -58,7 +61,9 @@ function makeSource(initial: SourceState): FakeSource {
 
 function withSource(source: FakeSource | null, ui: ReactNode): ReactNode {
   return (
-    <ThinkingTokensSourceContext value={source}>{ui}</ThinkingTokensSourceContext>
+    <ThinkingTokensSourceContext value={source}>
+      {ui}
+    </ThinkingTokensSourceContext>
   );
 }
 

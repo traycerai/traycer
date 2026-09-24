@@ -2015,7 +2015,9 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
     // composer's missing-worktree error + send gate. `[]` when the binding is null
     // or every bound directory exists. Never persisted - see worktree-schemas.ts.
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     // Cumulative file changes for the whole chat (first-snapshot → current),
     // computed host-side from checkpoint manifests + current disk content.
     // Drives the pinned accumulated-changes panel above the composer.
@@ -3745,7 +3747,9 @@ const chatSnapshotSchemaV10 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   }),
 );
@@ -4065,7 +4069,9 @@ const chatSnapshotSchemaV11 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV11).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4132,7 +4138,9 @@ const chatSnapshotSchemaV12 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV12).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4197,7 +4205,9 @@ const chatSnapshotSchemaV13 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV13).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4267,7 +4277,9 @@ const chatSnapshotSchemaV14 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4339,7 +4351,9 @@ const chatSnapshotSchemaV15 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4501,7 +4515,9 @@ const chatSnapshotSchemaV16 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     // The shipped command shape - see the `V16` managedCommandsChanged frame.
@@ -4810,7 +4826,9 @@ const chatWindowedSnapshotSchemaV18 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     /**
      * How many files the chat has touched. The SUMMARIES arrive on their own
      * chunked frames, for the reason the skeleton never joined the snapshot:
@@ -4899,7 +4917,9 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
     // Pre-cron: `1.10` through `1.16` inherit this binding, and only the live
     // snapshot (`1.17`) re-widens it.
@@ -5265,7 +5285,9 @@ const chatWindowedSnapshotSchemaV19 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),

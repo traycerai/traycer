@@ -24,8 +24,12 @@ function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
 
 describe("approvalNeedsIndividualDecision", () => {
   it("is true only for cautious: true", () => {
-    expect(approvalNeedsIndividualDecision(approval({ cautious: true }))).toBe(true);
-    expect(approvalNeedsIndividualDecision(approval({ cautious: false }))).toBe(false);
+    expect(approvalNeedsIndividualDecision(approval({ cautious: true }))).toBe(
+      true,
+    );
+    expect(approvalNeedsIndividualDecision(approval({ cautious: false }))).toBe(
+      false,
+    );
     expect(approvalNeedsIndividualDecision(approval({}))).toBe(false);
   });
 });
@@ -48,8 +52,6 @@ describe("bulkApprovableApprovals", () => {
   });
 
   it("is empty when every answerable row is cautious", () => {
-    expect(
-      bulkApprovableApprovals([approval({ cautious: true })]),
-    ).toEqual([]);
+    expect(bulkApprovableApprovals([approval({ cautious: true })])).toEqual([]);
   });
 });

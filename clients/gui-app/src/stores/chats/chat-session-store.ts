@@ -8520,14 +8520,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           suggestedPrompt: frame.suggestedPrompt,
           // Kept only while the held snapshot's turn is still this frame's
           // live turn; a turn end or a new turn drops the held number.
-          thinkingTokensEstimate:
-            thinkingTokensAfterTurnState(
-              thinkingTokensFromSnapshot(
-                held.activeTurn,
-                held.thinkingTokensEstimate,
-              ),
-              frame.activeTurn,
-            )?.estimate,
+          thinkingTokensEstimate: thinkingTokensAfterTurnState(
+            thinkingTokensFromSnapshot(
+              held.activeTurn,
+              held.thinkingTokensEstimate,
+            ),
+            frame.activeTurn,
+          )?.estimate,
         }));
       },
       onBlockDelta: (frame) => {

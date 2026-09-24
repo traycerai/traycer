@@ -3335,8 +3335,7 @@ function sliceBlockIndicesHomedToCards(
     const own = sliceByIndex.get(index);
     if (own === undefined) continue;
     const home =
-      sliceByIndex.get(rootCardBlockIndex(blocks, cardIndexById, index)) ??
-      own;
+      sliceByIndex.get(rootCardBlockIndex(blocks, cardIndexById, index)) ?? own;
     if (home !== own) moved = true;
     homed.get(home)?.push(index);
   }
