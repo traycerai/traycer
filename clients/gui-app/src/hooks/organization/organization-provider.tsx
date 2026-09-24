@@ -47,7 +47,6 @@ import { DEFAULT_TAB_CUSTOMIZATION } from "@/stores/tabs/tab-groups";
 const EMPTY_TASK_IDS: string[] = [];
 
 interface OrganizationLifecycle {
-  openedTasks: Set<string>;
   readonly seenFailures: Set<string>;
   confirmedView: OrganizationView | null;
 }
@@ -200,9 +199,29 @@ export function OrganizationProvider({
     [mutateAsync, client, userId, hostId],
   );
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
+  // Opening is a local tab transition, independent of the selected host's
+  // organization projection. Switching that host must not reopen closed siblings.
+  const openedTasks = useRef(new Set<string>());
   useEffect(() => {
     lifecycle.current = createLifecycle();
   }, [scope]);
+  const refresh = useCallback(async () => {
+    const auth = useAuthStore.getState();
+    if (
+      !supported ||
+      hostId === null ||
+      client.getActiveHostId() !== hostId ||
+      client.getRequestContextUserId() !== userId ||
+      auth.contextMetadata?.userId !== userId ||
+      !authorizesCloudCapability(auth.status)
+    )
+      return;
+    await queryClient.refetchQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, "organization.refresh"),
+      predicate: (entry) => entry.queryKey.at(-1) === userId,
+      type: "active",
+    });
+  }, [supported, hostId, client, userId, queryClient]);
   useEffect(() => {
     const current = lifecycle.current;
     if (current === null) return;
@@ -255,9 +274,9 @@ export function OrganizationProvider({
     if (!supported || current === null || query.data === undefined) return;
     if (!query.data.ready) return;
     // Only opening a task opens its saved siblings. A remote edit never opens or closes local tabs.
-    const newlyOpened = openIds.filter((id) => !current.openedTasks.has(id));
+    const newlyOpened = openIds.filter((id) => !openedTasks.current.has(id));
     const openTaskIds = new Set(openIds);
-    current.openedTasks = openTaskIds;
+    openedTasks.current = openTaskIds;
     const taskGroups = new Map(
       query.data.groups.memberships.map((member) => [
         member.taskId,
@@ -301,9 +320,19 @@ export function OrganizationProvider({
       view: supported ? query.data : undefined,
       register,
       command,
+      refresh,
       openDialog,
     }),
-    [supported, client, userId, query.data, register, command, openDialog],
+    [
+      supported,
+      client,
+      userId,
+      query.data,
+      register,
+      command,
+      refresh,
+      openDialog,
+    ],
   );
   return (
     <OrganizationContext value={value}>
@@ -479,7 +508,6 @@ function consumeDraftGroupIntents(
 
 function createLifecycle(): OrganizationLifecycle {
   return {
-    openedTasks: new Set(),
     seenFailures: new Set(),
     confirmedView: null,
   };

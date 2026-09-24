@@ -1,10 +1,24 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import { useOrganization } from "@/hooks/organization/organization-context";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -53,20 +67,29 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 
 vi.mock("@/stores/auth/auth-store", () => ({
   authorizesCloudCapability: () => true,
-  useAuthStore: <T,>(
-    selector: (auth: {
-      readonly status: "signed-in";
-      readonly contextMetadata: { readonly userId: string } | null;
-    }) => T,
-  ): T =>
-    selector({
-      status: "signed-in",
-      contextMetadata:
-        state.identity.authUserId === null
-          ? null
-          : { userId: state.identity.authUserId },
-    }),
+  useAuthStore: Object.assign(
+    <T,>(
+      selector: (auth: {
+        readonly status: "signed-in";
+        readonly contextMetadata: { readonly userId: string } | null;
+      }) => T,
+    ): T => selector(authSnapshot()),
+    { getState: authSnapshot },
+  ),
 }));
+
+function authSnapshot(): {
+  readonly status: "signed-in";
+  readonly contextMetadata: { readonly userId: string } | null;
+} {
+  return {
+    status: "signed-in",
+    contextMetadata:
+      state.identity.authUserId === null
+        ? null
+        : { userId: state.identity.authUserId },
+  };
+}
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
   useSurfaceHostStreamBinding: () => null,
@@ -151,6 +174,40 @@ function OrganizationStateProbe() {
   );
 }
 
+function OrganizationRefreshProbe() {
+  const organization = useOrganization();
+  return (
+    <button type="button" onClick={() => void organization?.refresh()}>
+      Refresh organization
+    </button>
+  );
+}
+
+function ActiveOrganizationRefreshQuery(props: {
+  readonly hostId: string;
+  readonly userId: string;
+  readonly taskId: string;
+  readonly fetch: () => void;
+}) {
+  useQuery(
+    queryOptions({
+      queryKey: [
+        ...hostQueryKeys.method<HostRpcRegistry, "organization.refresh">(
+          props.hostId,
+          "organization.refresh",
+          { taskIds: [props.taskId] },
+        ),
+        props.userId,
+      ],
+      queryFn: () => {
+        props.fetch();
+        return Promise.resolve(emptyView());
+      },
+    }),
+  );
+  return null;
+}
+
 function openTask(taskId: string): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab(taskId, taskId);
   const refs = useEpicCanvasStore.getState().openTabOrder.map((id) => ({
@@ -204,6 +261,145 @@ describe("OrganizationProvider lifecycle projection", () => {
       ).toEqual(["task-1", "task-2"]);
     });
     expect(tabGroupId(taskOneTabId)).toBe("group-1");
+  });
+
+  it("preserves a locally closed sibling across host scope changes until a task is explicitly reopened", async () => {
+    const taskOneTabId = openTask("task-1");
+    const taskTwoTabId = openTask("task-2");
+    state.view = viewWithGroup([
+      { taskId: "task-1", groupId: "group-1", position: 0 },
+      { taskId: "task-2", groupId: "group-1", position: 1 },
+    ]);
+    const queryClient = new QueryClient();
+    const rendered = renderProvider(queryClient, null);
+
+    await waitFor(() => expect(tabGroupId(taskOneTabId)).toBe("group-1"));
+    act(() => useEpicCanvasStore.getState().closeTab(taskTwoTabId));
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(
+      taskTwoTabId,
+    );
+
+    state.identity.hostId = "host-2";
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(
+        taskTwoTabId,
+      ),
+    );
+
+    act(() => useEpicCanvasStore.getState().closeTab(taskOneTabId));
+    act(() => {
+      void useEpicCanvasStore.getState().openEpicTab("task-1", "task-1");
+    });
+    await waitFor(() =>
+      expect(
+        useEpicCanvasStore
+          .getState()
+          .openTabOrder.map(
+            (tabId) => useEpicCanvasStore.getState().tabsById[tabId]?.epicId,
+          ),
+      ).toEqual(["task-1", "task-2"]),
+    );
+  });
+
+  it("refreshes only the active organization scope and refuses stale live identities", async () => {
+    const matchingTaskOne = vi.fn();
+    const matchingTaskTwo = vi.fn();
+    const otherHost = vi.fn();
+    const otherUser = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    renderProvider(
+      queryClient,
+      <>
+        <OrganizationRefreshProbe />
+        <ActiveOrganizationRefreshQuery
+          hostId="host-1"
+          userId="user-1"
+          taskId="task-1"
+          fetch={matchingTaskOne}
+        />
+        <ActiveOrganizationRefreshQuery
+          hostId="host-1"
+          userId="user-1"
+          taskId="task-2"
+          fetch={matchingTaskTwo}
+        />
+        <ActiveOrganizationRefreshQuery
+          hostId="host-2"
+          userId="user-1"
+          taskId="task-1"
+          fetch={otherHost}
+        />
+        <ActiveOrganizationRefreshQuery
+          hostId="host-1"
+          userId="user-2"
+          taskId="task-1"
+          fetch={otherUser}
+        />
+      </>,
+    );
+    await waitFor(() => {
+      expect(matchingTaskOne).toHaveBeenCalledTimes(1);
+      expect(matchingTaskTwo).toHaveBeenCalledTimes(1);
+      expect(otherHost).toHaveBeenCalledTimes(1);
+      expect(otherUser).toHaveBeenCalledTimes(1);
+    });
+    matchingTaskOne.mockClear();
+    matchingTaskTwo.mockClear();
+    otherHost.mockClear();
+    otherUser.mockClear();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh organization" }),
+    );
+    await waitFor(() => {
+      expect(matchingTaskOne).toHaveBeenCalledTimes(1);
+      expect(matchingTaskTwo).toHaveBeenCalledTimes(1);
+    });
+    expect(otherHost).not.toHaveBeenCalled();
+    expect(otherUser).not.toHaveBeenCalled();
+
+    matchingTaskOne.mockClear();
+    matchingTaskTwo.mockClear();
+    state.identity.hostId = "host-2";
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Refresh organization" }),
+      );
+      await Promise.resolve();
+    });
+    expect(matchingTaskOne).not.toHaveBeenCalled();
+    expect(matchingTaskTwo).not.toHaveBeenCalled();
+
+    state.identity.hostId = "host-1";
+    state.identity.userId = "user-2";
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Refresh organization" }),
+      );
+      await Promise.resolve();
+    });
+    expect(matchingTaskOne).not.toHaveBeenCalled();
+    expect(matchingTaskTwo).not.toHaveBeenCalled();
+
+    state.identity.userId = "user-1";
+    state.identity.authUserId = "user-2";
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Refresh organization" }),
+      );
+      await Promise.resolve();
+    });
+    expect(matchingTaskOne).not.toHaveBeenCalled();
+    expect(matchingTaskTwo).not.toHaveBeenCalled();
   });
 
   it("keeps an open task visible and ungroups it after remote membership removal", async () => {

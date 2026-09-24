@@ -17,6 +17,7 @@ export interface OrganizationContextValue {
   readonly register: (key: string, taskIds: readonly string[]) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;
   readonly command: (action: OrganizationAction) => Promise<void>;
+  readonly refresh: () => Promise<void>;
 }
 export const OrganizationContext =
   createContext<OrganizationContextValue | null>(null);

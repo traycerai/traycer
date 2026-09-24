@@ -60,6 +60,7 @@ const state = vi.hoisted(() => {
     ),
     openDialog: vi.fn(),
     command,
+    refresh: () => Promise.resolve(),
   };
   const collaboratorRows: Array<{
     readonly userId: string;

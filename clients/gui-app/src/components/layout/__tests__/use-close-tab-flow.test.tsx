@@ -62,6 +62,7 @@ const organizationState = vi.hoisted(() => {
     register: () => () => undefined,
     openDialog: () => undefined,
     command,
+    refresh: () => Promise.resolve(),
   };
   return {
     command,

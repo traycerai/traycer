@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
     register: () => () => undefined,
     openDialog: () => undefined,
     command: () => Promise.resolve(),
+    refresh: () => Promise.resolve(),
   },
 }));
 

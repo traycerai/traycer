@@ -37,6 +37,7 @@ const state = vi.hoisted(() => {
       ),
       openDialog: vi.fn(),
       command: vi.fn(() => Promise.resolve()),
+      refresh: vi.fn(() => Promise.resolve()),
     },
     facets: {
       organizationFacets: {

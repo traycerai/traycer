@@ -412,7 +412,13 @@ export function useHistoryQuery(
     worktreesByEpicId,
   ]);
 
-  const refetch = useCallback(() => refetchCloudTasks(), [refetchCloudTasks]);
+  const refetch = useCallback(async () => {
+    const [tasks] = await Promise.all([
+      refetchCloudTasks(),
+      organization?.refresh(),
+    ]);
+    return tasks;
+  }, [refetchCloudTasks, organization]);
   const isHydratingSearchMatches =
     (isPullRequestNumberQuery && activityIndex.isFetching) ||
     taskContexts.isFetching;

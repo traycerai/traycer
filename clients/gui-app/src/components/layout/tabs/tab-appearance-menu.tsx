@@ -1,8 +1,18 @@
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
+import { useQueryClient } from "@tanstack/react-query";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { TaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { Label } from "@/components/ui/label";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
 import { useId } from "react";
 import { Check, Group, Palette, Pipette } from "lucide-react";
@@ -154,7 +164,15 @@ function EpicOrganizationMenu(props: {
     organization?.supported &&
     !contexts.localHomedTaskIds.has(props.tab.epicId)
   ) {
-    if (task?.epic === undefined || task.epic === null) return null;
+    if (task === undefined && contexts.error !== null)
+      return (
+        <OrganizationContextRetryMenu
+          organization={organization}
+          taskId={props.tab.epicId}
+          isFetching={contexts.isFetching}
+        />
+      );
+    if (!task?.epic) return null;
     return (
       <TaskOrganizationMenu
         taskId={props.tab.epicId}
@@ -167,6 +185,48 @@ function EpicOrganizationMenu(props: {
     );
   }
   return <LocalTabAppearanceMenu tab={props.tab} />;
+}
+function OrganizationContextRetryMenu(props: {
+  readonly organization: OrganizationContextValue;
+  readonly taskId: string;
+  readonly isFetching: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const { client, userId } = props.organization;
+  const hostId = client.getActiveHostId();
+  return (
+    <ContextMenuItem
+      disabled={props.isFetching}
+      onSelect={() => {
+        const auth = useAuthStore.getState();
+        if (
+          userId === null ||
+          hostId === null ||
+          client.getActiveHostId() !== hostId ||
+          client.getRequestContextUserId() !== userId ||
+          auth.contextMetadata?.userId !== userId ||
+          !authorizesCloudCapability(auth.status)
+        )
+          return;
+        void queryClient.refetchQueries({
+          queryKey: hostQueryKeys.epicTaskContexts(hostId, userId, [
+            props.taskId,
+          ]),
+          exact: true,
+          type: "active",
+        });
+      }}
+    >
+      {props.isFetching ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant="dots"
+        />
+      ) : null}
+      Couldn't load task organization. Retry
+    </ContextMenuItem>
+  );
 }
 function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
   const key = tabRefKey(props.tab);
