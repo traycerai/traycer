@@ -36,6 +36,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { appLogger } from "@/lib/logger";
 import { useOpenLink } from "@/lib/links/open-link";
+import { usePinchZoom } from "@/hooks/ui/use-pinch-zoom";
 import type { DocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
 import { DocumentSearchBar } from "@/components/epic-canvas/document-preview/document-search-bar";
 import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-preview/document-preview-toolbar";
@@ -62,6 +63,19 @@ const MAX_CANVAS_PIXELS = 2 ** 24;
 const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
+/**
+ * How long after the last finger move pdf.js waits before re-rendering the
+ * pages at the new scale. Until then it scales the existing bitmaps with
+ * CSS, which is what keeps a pinch smooth on a long document - the value
+ * pdf.js's own viewer uses for its touch pinch.
+ */
+const PINCH_REDRAW_DELAY_MS = 400;
+/** pdf.js rounds a scale to two decimals, so a smaller change would be a no-op anyway. */
+const PINCH_SCALE_EPSILON = 0.005;
+
+function clampScale(scale: number): number {
+  return Math.min(Math.max(scale, MIN_SCALE), MAX_SCALE);
+}
 
 /** `"page-width"` while the automatic fit is in force, `null` once the user has zoomed by hand. */
 type ScaleMode = "page-width" | null;
@@ -295,14 +309,60 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
       const binding = bindingRef.current;
       if (binding === null) return;
       setScaleMode(null);
-      const next = Math.min(
-        Math.max(binding.viewer.currentScale * factor, MIN_SCALE),
-        MAX_SCALE,
+      binding.viewer.currentScale = clampScale(
+        binding.viewer.currentScale * factor,
       );
-      binding.viewer.currentScale = next;
     },
     [setScaleMode],
   );
+
+  // Touch pinch, the way pdf.js's own viewer does it: every finger move asks
+  // the viewer for the scale that keeps the zoom one to one with the fingers,
+  // anchored where they meet, and the drawing delay has it stretch the page
+  // bitmaps with CSS at once while the real re-render waits for the fingers
+  // to rest. The readout follows through the viewer's own `scalechanging`.
+  const pinchStartScaleRef = useRef<number | null>(null);
+  usePinchZoom(containerRef, {
+    onPinchStart: () => {
+      const binding = bindingRef.current;
+      if (binding === null) return;
+      pinchStartScaleRef.current = binding.viewer.currentScale;
+      setScaleMode(null);
+    },
+    onPinchMove: (update) => {
+      const binding = bindingRef.current;
+      const container = containerRef.current;
+      const startScale = pinchStartScaleRef.current;
+      if (binding === null || container === null || startScale === null) {
+        return;
+      }
+      // Two fingers drag the document the way one does.
+      container.scrollLeft -= update.focalDeltaX;
+      container.scrollTop -= update.focalDeltaY;
+      const target = clampScale(startScale * update.ratio);
+      const current = binding.viewer.currentScale;
+      if (Math.abs(target - current) < PINCH_SCALE_EPSILON) return;
+      // A scale change re-anchors on the location pdf.js last recorded from
+      // a scroll event, and the drag above has not raised one yet - so it
+      // would put the document back where it was before the drag. Recording
+      // the location now is what the scroll event would have done.
+      binding.viewer.update();
+      // pdf.js reads `origin` against the container's own offset position,
+      // so the focal is expressed relative to the container's offset parent.
+      const rect = container.getBoundingClientRect();
+      binding.viewer.updateScale({
+        scaleFactor: target / current,
+        origin: [
+          update.focal.clientX - rect.left + container.offsetLeft,
+          update.focal.clientY - rect.top + container.offsetTop,
+        ],
+        drawingDelay: PINCH_REDRAW_DELAY_MS,
+      });
+    },
+    onPinchEnd: () => {
+      pinchStartScaleRef.current = null;
+    },
+  });
 
   const handleFitWidth = useCallback(() => {
     const binding = bindingRef.current;
@@ -410,9 +470,8 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
     });
   }, []);
 
-  // Desktop zoom affordance beyond the buttons; touch pinch is the mobile
-  // verification pass's follow-up, not silently assumed working. A NATIVE
-  // non-passive listener, because React registers `wheel` passively - its
+  // Desktop zoom affordance beyond the buttons (touch has the pinch above).
+  // A NATIVE non-passive listener, because React registers `wheel` passively - its
   // preventDefault is a no-op there, letting the browser's own ctrl+wheel
   // page zoom run alongside the viewer's.
   const wheelZoneRef = useRef<HTMLDivElement | null>(null);
