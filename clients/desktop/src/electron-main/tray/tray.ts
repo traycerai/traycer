@@ -18,6 +18,12 @@ const TRAY_GUID = "9b1d3a7e-4c52-4f8a-bd62-3e7f1a8c5d09";
 const TRAY_EPIC_PRIMARY_LIMIT = 5;
 
 /**
+ * How long `showNotice` waits for the platform to confirm a notice was
+ * displayed before treating it as not shown.
+ */
+export const TRAY_NOTICE_CONFIRM_TIMEOUT_MS = 5_000;
+
+/**
  * Inputs to `resolveTrayIconPath`. Kept as plain data so the helper is
  * unit-testable without spinning up an Electron process. The `trayDir`
  * field is the absolute directory that contains the tray asset PNGs -
@@ -289,19 +295,58 @@ export class DesktopTrayController {
    * notification on Linux (Electron has no tray balloon there), nothing on
    * macOS, where no caller needs one - a closed window never hides the app
    * there.
+   *
+   * Resolves `true` only when the platform confirms the notice was DISPLAYED
+   * (`balloon-show`, the notification's `show`) within
+   * `TRAY_NOTICE_CONFIRM_TIMEOUT_MS`. A Linux session with no notification
+   * daemon fails the show (libnotify cannot reach
+   * `org.freedesktop.Notifications`), so "asked to show" is not "shown", and
+   * the caller must not record it as such.
    */
-  showNotice(notice: DesktopTrayNotice): void {
+  showNotice(notice: DesktopTrayNotice): Promise<boolean> {
     if (nodePlatform === "win32") {
-      this.tray.displayBalloon({
-        title: notice.title,
-        content: notice.content,
-        iconType: "info",
+      return new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          this.tray.removeListener("balloon-show", onShown);
+          resolve(false);
+        }, TRAY_NOTICE_CONFIRM_TIMEOUT_MS);
+        const onShown = (): void => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+        this.tray.once("balloon-show", onShown);
+        this.tray.displayBalloon({
+          title: notice.title,
+          content: notice.content,
+          iconType: "info",
+        });
       });
-      return;
     }
     if (nodePlatform === "linux" && Notification.isSupported()) {
-      new Notification({ title: notice.title, body: notice.content }).show();
+      return new Promise<boolean>((resolve) => {
+        const notification = new Notification({
+          title: notice.title,
+          body: notice.content,
+        });
+        const settle = (shown: boolean): void => {
+          clearTimeout(timer);
+          notification.removeAllListeners("show");
+          notification.removeAllListeners("failed");
+          resolve(shown);
+        };
+        const timer = setTimeout(() => {
+          settle(false);
+        }, TRAY_NOTICE_CONFIRM_TIMEOUT_MS);
+        notification.once("show", () => {
+          settle(true);
+        });
+        notification.once("failed", () => {
+          settle(false);
+        });
+        notification.show();
+      });
     }
+    return Promise.resolve(false);
   }
 
   setSummonAccelerator(accelerator: string | null): void {

@@ -18,6 +18,10 @@ import type { RegistryManagedWindow, WindowRegistry } from "./window-registry";
 //   linked / ask / stop-if-idle, tray      hide; the window stays registered
 //                                          for the tray's Show; a one-time
 //                                          notice says where the app went.
+//                                          "Tray" is one that can be SEEN,
+//                                          asked at close time: on Linux a
+//                                          constructed `Tray` is not enough
+//                                          (see `tray/linux-tray-host.ts`).
 //   linked / ask / stop-if-idle, no tray   quit WITH the window alive, so the
 //                                          quit modal and the stopping state
 //                                          render in it and Cancel leaves it
@@ -122,7 +126,12 @@ export function registryCloseToTrayWindows<
 
 export interface CloseToTrayDeps {
   readonly platform: NodeJS.Platform;
-  readonly hasTray: () => boolean;
+  /**
+   * Whether a tray the user can see exists right now. Asked at close time,
+   * not at boot: a Linux panel extension can come or go mid-session. A
+   * rejection reads as no tray.
+   */
+  readonly hasTray: () => Promise<boolean>;
   readonly isQuitting: () => boolean;
   /** `HostLifecycleService.readQuitPolicy` - `none` once the lanes are off. */
   readonly readQuitMode: () => Promise<HostLifecycleMode>;
@@ -167,12 +176,18 @@ export class CloseToTray {
       // An unreadable policy is Background by contract.
       mode = "background";
     }
+    // Only a mode that would hide to the tray needs the answer, and it is
+    // read before the checks below so a quit that begins while it runs still
+    // wins.
+    const hasTray = CLOSE_TO_TRAY_MODES.has(mode)
+      ? await this.deps.hasTray().catch(() => false)
+      : false;
     this.pending.delete(windowId);
     // A quit that began meanwhile closes the window itself.
     if (!this.deps.windows.isLive(windowId) || this.deps.isQuitting()) return;
     const action = lastWindowCloseAction({
       mode,
-      hasTray: this.deps.hasTray(),
+      hasTray,
       otherHiddenWindowCount:
         this.deps.windows.otherHiddenWindowCount(windowId),
     });
@@ -211,32 +226,50 @@ export function parseCloseToTrayNoticeState(
 }
 
 /**
- * The one-time "still running in the tray" notice: at most once per process,
- * and never again once the store says it was shown. The store lives in
- * `userData`, which `main-process.ts` already scopes per app identity - the
- * environment's stamped app name, plus `<appName>-<slot>` for a dev slot - so
- * a dev slot and production never share the flag.
+ * The one-time "still running in the tray" notice: shown until the platform
+ * CONFIRMS it was displayed, then never again. `show` resolves `true` only on
+ * that confirmation (a Linux notification's `show`, a Windows balloon's
+ * `balloon-show`); anything else - no notification daemon, a failure, no
+ * confirmation within its bound - leaves the flag unset, so the next
+ * close-to-tray tries again. At most one attempt is in flight per process.
+ *
+ * The store lives in `userData`, which `main-process.ts` already scopes per
+ * app identity - the environment's stamped app name, plus `<appName>-<slot>`
+ * for a dev slot - so a dev slot and production never share the flag.
  */
 export function createCloseToTrayNoticeOnce(options: {
   readonly store: JsonFileStore<CloseToTrayNoticeState>;
-  readonly show: () => void;
+  readonly show: () => Promise<boolean>;
 }): () => void {
-  let requested = false;
+  let settled = false;
+  let inFlight = false;
   return () => {
-    if (requested) return;
-    requested = true;
+    if (settled || inFlight) return;
+    inFlight = true;
     void options.store
       .load()
       .then(async (state) => {
-        if (state.shown) return;
-        options.show();
+        if (state.shown) {
+          settled = true;
+          return;
+        }
+        if (!(await options.show())) {
+          log.info("[close-to-tray] notice not shown", {
+            reason: "not-confirmed",
+          });
+          return;
+        }
         await options.store.save({ shown: true });
+        settled = true;
       })
       .catch((error: unknown) => {
         log.warn("[close-to-tray] notice failed", {
           reason: "notice-failed",
           errorName: error instanceof Error ? error.name : typeof error,
         });
+      })
+      .finally(() => {
+        inFlight = false;
       });
   };
 }

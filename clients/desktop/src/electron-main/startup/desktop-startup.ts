@@ -87,6 +87,10 @@ import {
 import { createJsonFileStore } from "../app/json-file-store";
 import { trayHostLifecyclePresentation } from "../tray/tray-host-lifecycle";
 import {
+  probeLinuxTrayHost,
+  trayVisibleAtClose,
+} from "../tray/linux-tray-host";
+import {
   applyHostUpdateMenuState,
   armLocalHostBootOnSignIn,
   refreshHostRegistryIfNotRemoved,
@@ -753,7 +757,15 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const registryForClose = windowRegistry;
   closeToTray = new CloseToTray({
     platform: process.platform,
-    hasTray: () => tray !== null,
+    // A constructed tray is enough on Windows (the notification area always
+    // exists); on Linux the icon is seen only when a StatusNotifier host is
+    // registered right now.
+    hasTray: () =>
+      trayVisibleAtClose({
+        platform: process.platform,
+        trayConstructed: tray !== null,
+        probe: () => probeLinuxTrayHost(null),
+      }),
     isQuitting: () => shellQuitState.isQuitting(),
     readQuitMode: async () => (await hostLifecycle.readQuitPolicy()).mode,
     windows: registryCloseToTrayWindows(registryForClose),
@@ -766,13 +778,14 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
         { shown: false },
         parseCloseToTrayNoticeState,
       ),
-      show: () => {
-        tray?.showNotice({
-          title: "Traycer is still running",
-          content:
-            "Traycer is still running in the tray. Quit from the tray to stop the host.",
-        });
-      },
+      show: () =>
+        tray === null
+          ? Promise.resolve(false)
+          : tray.showNotice({
+              title: "Traycer is still running",
+              content:
+                "Traycer is still running in the tray. Quit from the tray to stop the host.",
+            }),
     }),
   });
 

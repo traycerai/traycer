@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
 import type { JsonFileStore } from "../../app/json-file-store";
 import type { HostLifecycleView } from "../../../ipc-contracts/host-lifecycle-types";
+import { log } from "../../app/logger";
 import { ensureReachableAfterStayOpen } from "../../startup/quit-stay-open";
 import { QuitTransactions } from "../../startup/quit-transaction";
 import {
@@ -105,7 +106,7 @@ function rigFor(platform: NodeJS.Platform, hold: boolean): Rig {
     : Promise.resolve();
   const closer = new CloseToTray({
     platform,
-    hasTray: () => flags.tray,
+    hasTray: () => Promise.resolve(flags.tray),
     isQuitting: () => flags.quitting,
     readQuitMode: async () => {
       counts.modeReads += 1;
@@ -256,7 +257,7 @@ describe("CloseToTray.interceptClose", () => {
     const windows = fakeWindows();
     const closer = new CloseToTray({
       platform: "linux",
-      hasTray: () => true,
+      hasTray: () => Promise.resolve(true),
       isQuitting: () => false,
       readQuitMode: () => Promise.reject(new Error("unreadable")),
       windows,
@@ -266,6 +267,141 @@ describe("CloseToTray.interceptClose", () => {
     closer.interceptClose("w1", closeEvent());
     await flush();
     expect(windows.calls).toEqual(["close:w1"]);
+  });
+});
+
+// ---- hasTray: asked only for modes whose quit acts on the host, and only at
+// settle time, so a quit that starts while it is pending still wins ---------------
+
+describe("CloseToTray.interceptClose - hasTray", () => {
+  const HOST_ACTING_MODES: readonly HostLifecycleMode[] = [
+    "linked",
+    "ask",
+    "stop-if-idle",
+  ];
+
+  for (const mode of HOST_ACTING_MODES) {
+    it(`${mode}: hasTray resolving false -> quit-with-window (window stays, no notice)`, async () => {
+      const windows = fakeWindows();
+      let quitCount = 0;
+      let noticeCount = 0;
+      const closer = new CloseToTray({
+        platform: "linux",
+        hasTray: () => Promise.resolve(false),
+        isQuitting: () => false,
+        readQuitMode: async () => mode,
+        windows,
+        requestQuit: () => {
+          quitCount += 1;
+        },
+        showNoticeOnce: () => {
+          noticeCount += 1;
+        },
+      });
+      closer.interceptClose("w1", closeEvent());
+      await flush();
+      expect(quitCount).toBe(1);
+      expect(windows.calls).toEqual([]);
+      expect(noticeCount).toBe(0);
+    });
+
+    it(`${mode}: hasTray resolving true -> hide-to-tray, notice requested`, async () => {
+      const windows = fakeWindows();
+      let quitCount = 0;
+      let noticeCount = 0;
+      const closer = new CloseToTray({
+        platform: "linux",
+        hasTray: () => Promise.resolve(true),
+        isQuitting: () => false,
+        readQuitMode: async () => mode,
+        windows,
+        requestQuit: () => {
+          quitCount += 1;
+        },
+        showNoticeOnce: () => {
+          noticeCount += 1;
+        },
+      });
+      closer.interceptClose("w1", closeEvent());
+      await flush();
+      expect(windows.calls).toEqual(["hide:w1"]);
+      expect(noticeCount).toBe(1);
+      expect(quitCount).toBe(0);
+    });
+  }
+
+  it("hasTray rejecting: quit-with-window (a rejection reads as false)", async () => {
+    const windows = fakeWindows();
+    let quitCount = 0;
+    const closer = new CloseToTray({
+      platform: "linux",
+      hasTray: () => Promise.reject(new Error("dbus unreachable")),
+      isQuitting: () => false,
+      readQuitMode: async () => "linked",
+      windows,
+      requestQuit: () => {
+        quitCount += 1;
+      },
+      showNoticeOnce: () => undefined,
+    });
+    closer.interceptClose("w1", closeEvent());
+    await flush();
+    expect(quitCount).toBe(1);
+    expect(windows.calls).toEqual([]);
+  });
+
+  it("background and none: hasTray is never called", async () => {
+    for (const mode of ["background", "none"] as const) {
+      const windows = fakeWindows();
+      let hasTrayCalls = 0;
+      const closer = new CloseToTray({
+        platform: "linux",
+        hasTray: () => {
+          hasTrayCalls += 1;
+          return Promise.resolve(true);
+        },
+        isQuitting: () => false,
+        readQuitMode: async () => mode,
+        windows,
+        requestQuit: () => undefined,
+        showNoticeOnce: () => undefined,
+      });
+      closer.interceptClose("w1", closeEvent());
+      await flush();
+      expect(hasTrayCalls).toBe(0);
+    }
+  });
+
+  it("a quit that starts while hasTray is pending: neither hide nor quit (the isQuitting check after the await)", async () => {
+    const windows = fakeWindows();
+    let resolveHasTray: (value: boolean) => void = () => undefined;
+    let quitting = false;
+    let quitCount = 0;
+    let noticeCount = 0;
+    const closer = new CloseToTray({
+      platform: "linux",
+      hasTray: () =>
+        new Promise<boolean>((resolve) => {
+          resolveHasTray = resolve;
+        }),
+      isQuitting: () => quitting,
+      readQuitMode: async () => "linked",
+      windows,
+      requestQuit: () => {
+        quitCount += 1;
+      },
+      showNoticeOnce: () => {
+        noticeCount += 1;
+      },
+    });
+    closer.interceptClose("w1", closeEvent());
+    await flush();
+    quitting = true;
+    resolveHasTray(true);
+    await flush();
+    expect(windows.calls).toEqual([]);
+    expect(quitCount).toBe(0);
+    expect(noticeCount).toBe(0);
   });
 });
 
@@ -292,13 +428,14 @@ function memoryStore(initial: CloseToTrayNoticeState): {
 }
 
 describe("createCloseToTrayNoticeOnce", () => {
-  it("shows once per process and saves {shown:true}", async () => {
+  it("show -> true: saved once, and a later call never calls show again", async () => {
     const { store, saves } = memoryStore({ shown: false });
     let shown = 0;
     const once = createCloseToTrayNoticeOnce({
       store,
       show: () => {
         shown += 1;
+        return Promise.resolve(true);
       },
     });
     once();
@@ -307,15 +444,43 @@ describe("createCloseToTrayNoticeOnce", () => {
     await flush();
     expect(shown).toBe(1);
     expect(saves).toEqual([{ shown: true }]);
+
+    once();
+    await flush();
+    expect(shown).toBe(1);
   });
 
-  it("never shows when the store says it was shown", async () => {
+  it("show -> false: not saved, and the next call calls show again, which then succeeds and saves", async () => {
+    const { store, saves } = memoryStore({ shown: false });
+    let shown = 0;
+    let result = false;
+    const once = createCloseToTrayNoticeOnce({
+      store,
+      show: () => {
+        shown += 1;
+        return Promise.resolve(result);
+      },
+    });
+    once();
+    await flush();
+    expect(shown).toBe(1);
+    expect(saves).toEqual([]);
+
+    result = true;
+    once();
+    await flush();
+    expect(shown).toBe(2);
+    expect(saves).toEqual([{ shown: true }]);
+  });
+
+  it("store already {shown:true}: show never called", async () => {
     const { store, saves } = memoryStore({ shown: true });
     let shown = 0;
     const once = createCloseToTrayNoticeOnce({
       store,
       show: () => {
         shown += 1;
+        return Promise.resolve(true);
       },
     });
     once();
@@ -324,11 +489,67 @@ describe("createCloseToTrayNoticeOnce", () => {
     expect(saves).toEqual([]);
   });
 
+  it("two calls while the first show is still pending: show is called once", async () => {
+    const { store, saves } = memoryStore({ shown: false });
+    let shown = 0;
+    let resolveShow: (value: boolean) => void = () => undefined;
+    const once = createCloseToTrayNoticeOnce({
+      store,
+      show: () => {
+        shown += 1;
+        return new Promise<boolean>((resolve) => {
+          resolveShow = resolve;
+        });
+      },
+    });
+    once();
+    once();
+    await flush();
+    expect(shown).toBe(1);
+    resolveShow(true);
+    await flush();
+    expect(saves).toEqual([{ shown: true }]);
+  });
+
+  it("show rejects: not saved, WARN logged, and the next call retries", async () => {
+    vi.mocked(log.warn).mockClear();
+    const { store, saves } = memoryStore({ shown: false });
+    let shown = 0;
+    let shouldReject = true;
+    const once = createCloseToTrayNoticeOnce({
+      store,
+      show: () => {
+        shown += 1;
+        return shouldReject
+          ? Promise.reject(new Error("no notification daemon"))
+          : Promise.resolve(true);
+      },
+    });
+    once();
+    await flush();
+    expect(shown).toBe(1);
+    expect(saves).toEqual([]);
+    expect(
+      vi
+        .mocked(log.warn)
+        .mock.calls.filter(
+          ([message]) => message === "[close-to-tray] notice failed",
+        ),
+    ).toHaveLength(1);
+
+    shouldReject = false;
+    once();
+    await flush();
+    expect(shown).toBe(2);
+    expect(saves).toEqual([{ shown: true }]);
+  });
+
   it("a fresh process (new closure) over a saved flag stays quiet", async () => {
     const { store } = memoryStore({ shown: false });
     let shown = 0;
-    const show = (): void => {
+    const show = (): Promise<boolean> => {
       shown += 1;
+      return Promise.resolve(true);
     };
     createCloseToTrayNoticeOnce({ store, show })();
     await flush();
@@ -412,7 +633,7 @@ describe("window-creation count (real WindowRegistry)", () => {
     });
     const closer = new CloseToTray({
       platform: "linux",
-      hasTray: () => false,
+      hasTray: () => Promise.resolve(false),
       isQuitting: () => quitting,
       readQuitMode: async () => "ask",
       windows: registryCloseToTrayWindows(registry),
@@ -451,7 +672,7 @@ describe("window-creation count (real WindowRegistry)", () => {
     const window = created[0];
     const closer = new CloseToTray({
       platform: "linux",
-      hasTray: () => false,
+      hasTray: () => Promise.resolve(false),
       isQuitting: () => false,
       readQuitMode: async () => "background",
       windows: registryCloseToTrayWindows(registry),
@@ -477,7 +698,7 @@ describe("window-creation count (real WindowRegistry)", () => {
     const window = created[0];
     const closer = new CloseToTray({
       platform: "win32",
-      hasTray: () => true,
+      hasTray: () => Promise.resolve(true),
       isQuitting: () => false,
       readQuitMode: async () => "linked",
       windows: registryCloseToTrayWindows(registry),
@@ -519,7 +740,7 @@ describe("registryCloseToTrayWindows (real WindowRegistry)", () => {
   ): CloseToTray {
     return new CloseToTray({
       platform: "linux",
-      hasTray: () => true,
+      hasTray: () => Promise.resolve(true),
       isQuitting: () => false,
       readQuitMode: async () => mode,
       windows: registryCloseToTrayWindows(registry),
