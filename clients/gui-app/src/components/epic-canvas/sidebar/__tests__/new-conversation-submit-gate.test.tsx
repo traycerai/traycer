@@ -132,7 +132,12 @@ vi.mock("@/lib/host", () => ({
   // nobody has verified. What is asserted here is the `null`, not the reader.
   useHostBinding: () => null,
 }));
-vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => stubHostClient,
+  // No local host in this harness: the create's `sentFromHostId` is `null`,
+  // as it is from a shell with no local host.
+  getHostBindingSnapshot: () => null,
+}));
 
 // P1.2: the body resolves its placement through this hook and refuses to
 // create when it is unusable. This suite is about the SUBMIT GATE, not

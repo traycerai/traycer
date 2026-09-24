@@ -109,7 +109,7 @@ import type {
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
@@ -290,19 +290,9 @@ type ChatOwnerActionFrame = Exclude<
   { readonly kind: "ping" }
 >;
 
-/**
- * The host id of THIS machine, read at send time the way `accountContext` is
- * read: the directory's durable local identity (the imperative twin of
- * `useReactiveLocalHostId`), which survives the local host restarting. `null`
- * on a shell with no local host (browser, mobile) and before the runtime has
- * resolved a binding.
- *
- * NOT the tab's `hostId`. The tab is bound to the machine the chat runs on;
- * this names the machine the user is typing on, which is what the host places
- * a routed browser realm by.
- */
+/** See `readLocalHostIdSnapshot`: stamped beside `accountContext` at send time. */
 function sentFromHostIdSnapshot(): string | null {
-  return getHostBindingSnapshot()?.directory.getLocalHostId() ?? null;
+  return readLocalHostIdSnapshot();
 }
 type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
 

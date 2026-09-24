@@ -138,6 +138,9 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/lib/host/runtime", () => ({
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
+    // The create stamps `sentFromHostId` from the directory's local host at
+    // submit; this harness has no local host, so the stamp is `null`.
+    directory: { getLocalHostId: (): string | null => null },
   }),
 }));
 

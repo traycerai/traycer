@@ -715,6 +715,21 @@ export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
 export const createChatInitialMessageSchemaV12 = lazySchema(() =>
   createChatInitialMessageSchema.extend({
     attachmentsByHash: z.boolean().optional(),
+    /**
+     * The host id of the machine the creating app runs on - its LOCAL host,
+     * never the chat's `hostId` - stamped at create time exactly as the
+     * `chat.subscribe` `send` frame stamps its `sentFromHostId`, and read for
+     * the same one purpose: a routed browser realm born on the first turn is
+     * placed on the machine the message was sent from. `null` from web and
+     * mobile and from an app with no local host; filled `null` for a `@1.1`
+     * caller by the upgrade path, since it names no machine.
+     *
+     * Grown on the `@1.2` leaf in place: `epic.create@1.2` and
+     * `epic.createChat@1.2` are unreleased (`host-v1.3.1` registers `@1.0`
+     * and `@1.1`), and the released `@1.0`/`@1.1` initial message above is
+     * untouched.
+     */
+    sentFromHostId: z.string().nullable().default(null),
   }),
 );
 export type CreateChatInitialMessageV12 = z.infer<

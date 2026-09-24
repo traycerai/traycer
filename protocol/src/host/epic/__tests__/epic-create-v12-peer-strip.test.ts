@@ -43,6 +43,7 @@ const initialMessageV12 = {
   settings,
   accountContext: { type: "PERSONAL" as const },
   attachmentsByHash: true,
+  sentFromHostId: "host-2",
 };
 
 const epicLight = {
@@ -95,6 +96,7 @@ describe("epic.create@1.2 request strips to an older minor's own schema", () => 
     expect(stripped.chat?.initialMessage).not.toHaveProperty(
       "attachmentsByHash",
     );
+    expect(stripped.chat?.initialMessage).not.toHaveProperty("sentFromHostId");
     expect(stripped).toMatchObject({
       epic: epicLight,
       repoIdentifiers: [],
@@ -132,6 +134,7 @@ describe("epic.createChat@1.2 request strips to an older minor's own schema", ()
       epicCreateChatV11.requestSchema.parse(createChatV12Request);
     expect(stripped).not.toHaveProperty("deferWorktreeProvisioning");
     expect(stripped.initialMessage).not.toHaveProperty("attachmentsByHash");
+    expect(stripped.initialMessage).not.toHaveProperty("sentFromHostId");
     expect(stripped).toMatchObject({
       epicId: "epic-1",
       parentId: null,

@@ -194,7 +194,12 @@ const stubHostClient = {
   getRequestContextUserId: () => null,
 };
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
-vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => stubHostClient,
+  // No local host in this harness: the create's `sentFromHostId` is `null`,
+  // as it is from a shell with no local host.
+  getHostBindingSnapshot: () => null,
+}));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
