@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Project checks for pre-commit: lint, format, compile, build.
+# Project checks for pre-commit: lint, format, compile; CI also builds.
 # Uses `nx affected` against a base ref for speed; falls back to full checks
 # when no base ref exists (e.g. first commit). Tests run in their own workflow.
 set -euo pipefail
 
+# Resolved before the pushd: BASH_SOURCE may be relative to the caller's cwd.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 gitroot="$(git rev-parse --show-toplevel)"
 pushd "$gitroot" >/dev/null
 
@@ -40,6 +42,9 @@ workspace_check_lane="${WORKSPACE_CHECK_LANE:-all}"
 #   2. Lint covers only the files this branch changed
 #      (scripts/lint-changed-files.mjs); CI lints every affected project.
 #   3. No `build`: bundling verifies packaging, not types, and CI runs it.
+#      The exception is @traycer/protocol, whose build is a declaration emit
+#      plus registry validation, errors `compile` (--noEmit) cannot see. It
+#      builds locally when affected (~1.35 GB, no bundler).
 #
 # The compile targets themselves are incremental and single-threaded in every
 # lane, so a warm local re-check costs seconds and ~2 GB.
@@ -65,6 +70,17 @@ run_compile_checks() {
 
 run_build_checks() {
   bun x nx affected --target=build "$@" --parallel="${nx_compile_parallel}"
+}
+
+# `nx affected` has no project filter (it forwards --projects to every
+# affected target), so ask which projects are affected and run one target.
+run_local_protocol_build() {
+  local affected
+  affected="$(bun x nx show projects --affected --base="$1" \
+    --projects=@traycer/protocol --json)"
+  case "${affected}" in
+    *'"@traycer/protocol"'*) bun x nx run @traycer/protocol:build --tui=false ;;
+  esac
 }
 
 run_full_checks() {
@@ -111,6 +127,7 @@ run_local_affected() {
     all)
       run_local_static_checks "${base}"
       run_compile_checks --base="${base}" "$@"
+      run_local_protocol_build "${base}"
       ;;
     *) echo "Unknown WORKSPACE_CHECK_LANE: ${workspace_check_lane}" >&2; exit 2 ;;
   esac
@@ -122,7 +139,7 @@ if [ -n "${CI:-}" ] && [ -n "${NX_BASE:-}" ] && [ -n "${NX_HEAD:-}" ]; then
 else
   # The hook runs shellcheck without -x, so it cannot follow this file.
   # shellcheck disable=SC1091
-  . "$(dirname "${BASH_SOURCE[0]}")/machine-slot.sh"
+  . "${script_dir}/machine-slot.sh"
   if [ -z "${CI:-}" ]; then
     machine_slot_acquire commit-checks auto
   fi

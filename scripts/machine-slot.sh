@@ -35,8 +35,10 @@
 # On timeout the command runs anyway with a warning. That is the behaviour
 # before this lock existed, and it beats a wedged commit.
 #
-# No fcntl (native Windows python) or no python3: run unserialized, silently
-# on Windows because the lock has no implementation there.
+# No python3, or a python3 without fcntl: run unserialized, without a
+# message. pre-commit is itself a python tool, so on a machine that runs these
+# hooks that means native Windows python, where the lock has no
+# implementation.
 #
 # Written for bash 3.2 (macOS /bin/bash): no coproc, no {fd} redirections.
 
@@ -77,14 +79,24 @@ machine_slot__count() {
     esac
 }
 
+# The directory is a per-USER key, never $TMPDIR: a shell or harness that
+# overrides TMPDIR (nix-shell, an agent sandbox) would otherwise take locks in
+# a private directory and stop queueing behind everyone else, silently.
+# macOS: the user's confstr temp dir (what TMPDIR normally is, but read from
+# the OS). Elsewhere: XDG_RUNTIME_DIR, then ~/.cache - never a world-writable
+# /tmp.
 machine_slot__dir() {
+    local darwin_temp=""
     if [ -n "${TRAYCER_MACHINE_SLOT_DIR:-}" ]; then
         printf '%s' "$TRAYCER_MACHINE_SLOT_DIR"
-    elif [ -n "${TMPDIR:-}" ]; then
-        # Per-user on macOS, and the same value for every agent session.
-        printf '%s' "${TMPDIR%/}"
-    elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
-        # Linux without TMPDIR: never fall back to a world-writable /tmp.
+        return
+    fi
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+        darwin_temp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+    fi
+    if [ -n "$darwin_temp" ] && [ -d "$darwin_temp" ]; then
+        printf '%s' "${darwin_temp%/}"
+    elif [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ]; then
         printf '%s' "$XDG_RUNTIME_DIR"
     else
         mkdir -p "$HOME/.cache" && printf '%s' "$HOME/.cache"
@@ -119,13 +131,17 @@ machine_slot_acquire() {
     fi
 
     # The holder's parent must be THIS shell, so it is started directly rather
-    # than from a subshell or a command substitution.
+    # than from a subshell or a command substitution, and it is TOLD that
+    # parent ($$) rather than reading os.getppid() at startup: a shell killed
+    # while python is still starting has already reparented it to pid 1, and a
+    # holder that adopted 1 as its parent would hold the slot until reboot.
     python3 -c '
 import errno, fcntl, os, sys, time
 
-directory, name, slots, timeout, status_file = sys.argv[1:6]
-slots, timeout = int(slots), int(timeout)
-parent = os.getppid()
+directory, name, slots, timeout, status_file, parent = sys.argv[1:7]
+slots, timeout, parent = int(slots), int(timeout), int(parent)
+if os.getppid() != parent:
+    sys.exit(0)
 
 def report(message):
     staging = status_file + ".tmp"
@@ -137,7 +153,11 @@ descriptors = []
 for index in range(slots):
     path = os.path.join(directory, "traycer-slot-%s.%d.lock" % (name, index))
     # Append, no truncation, no symlink following: the path may be predictable.
-    descriptors.append(os.open(path, os.O_CREAT | os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW, 0o600))
+    try:
+        descriptors.append(os.open(path, os.O_CREAT | os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW, 0o600))
+    except OSError as error:
+        report("error cannot open %s: %s" % (path, error.strerror))
+        sys.exit(0)
 
 deadline = time.monotonic() + timeout
 announced = False
@@ -178,7 +198,7 @@ report("held")
 # Hold until the shell that asked for the slot is gone.
 while os.getppid() == parent:
     time.sleep(0.2)
-' "$dir" "$name" "$slots" "$timeout" "$status_file" </dev/null >/dev/null &
+' "$dir" "$name" "$slots" "$timeout" "$status_file" "$$" </dev/null >/dev/null &
     holder=$!
 
     # Poll rather than block on a pipe: a holder that dies before reporting
@@ -204,6 +224,9 @@ while os.getppid() == parent:
         timeout)
             echo "machine-slot: waited ${timeout}s for a '${name}' slot; running without one." >&2
             echo "machine-slot: another run on this machine is still holding it (a hung type-check?)." >&2
+            ;;
+        error\ *)
+            echo "machine-slot: ${status#error }; running without a slot." >&2
             ;;
         *)
             echo "machine-slot: the slot holder exited unexpectedly; running without a slot." >&2

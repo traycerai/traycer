@@ -16,6 +16,11 @@ const paths = process.argv.length > 2 ? process.argv.slice(2) : ["."];
 
 function run(args, env) {
   const result = spawnSync("bun", ["x", ...args], { stdio: "inherit", env });
+  if (result.error !== undefined) {
+    console.error(
+      `lint-files: cannot run bun x ${args[0]}: ${result.error.message}`,
+    );
+  }
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }

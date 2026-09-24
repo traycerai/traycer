@@ -115,6 +115,9 @@ function git(root, args) {
 function run(command, args, cwd) {
   console.log(`$ ${[command, ...args].join(" ")}`);
   const result = spawnSync(command, args, { cwd, stdio: "inherit" });
+  if (result.error !== undefined) {
+    console.error(`lint: cannot run ${command}: ${result.error.message}`);
+  }
   return result.status === 0;
 }
 
@@ -134,7 +137,7 @@ function main(baseRef) {
     "diff",
     "--name-status",
     "--no-renames",
-    "--diff-filter=ACMD",
+    "--diff-filter=ACMDT",
     "-z",
     mergeBase,
   ])
@@ -200,8 +203,12 @@ function main(baseRef) {
   let passed = true;
   for (const { project, files, reason } of plan.runs) {
     console.log(`lint: ${project} (${reason})`);
+    // `./` so a file named like a flag (`-x.ts`) reaches the linters as a
+    // path.
     const args =
-      files === null ? ["run", "lint"] : ["run", "lint:files", ...files];
+      files === null
+        ? ["run", "lint"]
+        : ["run", "lint:files", ...files.map((file) => `./${file}`)];
     passed = run("bun", args, join(root, project)) && passed;
   }
   return passed;

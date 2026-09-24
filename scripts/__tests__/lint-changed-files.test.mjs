@@ -3,7 +3,21 @@
 // plain map lookup supplied by each test, exactly as the real CLI wrapper
 // (main()) supplies one backed by package.json scans.
 
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_FILES_PER_PROJECT, planLint } from "../lint-changed-files.mjs";
 
 /** Every path is still on disk unless a test says otherwise. */
@@ -368,5 +382,198 @@ describe("planLint", () => {
         },
       ]);
     });
+  });
+});
+
+// End-to-end coverage against a real fixture git repo, driving the script's
+// main() (not just the pure planLint()) so the git plumbing, project
+// discovery via package.json, and the actual `bun` invocations are exercised
+// together. A fake `bun` on PATH stands in for the real linters so these
+// tests stay fast and never depend on lint actually being configured.
+
+const SCRIPT_PATH = fileURLToPath(
+  new URL("../lint-changed-files.mjs", import.meta.url),
+);
+
+function git(cwd, args) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  }
+  return result.stdout;
+}
+
+/** A fake `bun` that appends `$PWD|$*` as one line to the file named by
+ * FAKE_BUN_LOG, and exits 1 instead of 0 when FAKE_BUN_FAIL is set - so a
+ * test can assert exactly what the real script invoked it with, without any
+ * real linter running. */
+function writeFakeBun(binDir) {
+  const bunPath = join(binDir, "bun");
+  writeFileSync(
+    bunPath,
+    [
+      "#!/bin/bash",
+      'printf "%s|%s\\n" "$PWD" "$*" >> "$FAKE_BUN_LOG"',
+      'if [ -n "${FAKE_BUN_FAIL:-}" ]; then exit 1; fi',
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(bunPath, 0o755);
+}
+
+function initFixtureRepo(dir) {
+  git(dir, ["init", "-q"]);
+  git(dir, ["config", "user.name", "Test"]);
+  git(dir, ["config", "user.email", "test@example.com"]);
+  git(dir, ["config", "commit.gpgsign", "false"]);
+
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name: "fixture-root", private: true }, null, 2) + "\n",
+  );
+
+  mkdirSync(join(dir, "packages/a/src"), { recursive: true });
+  writeFileSync(
+    join(dir, "packages/a/package.json"),
+    JSON.stringify(
+      {
+        name: "fixture-a",
+        scripts: { lint: "lint-a .", "lint:files": "lint-a" },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  writeFileSync(join(dir, "packages/a/src/x.ts"), "export const x = 1;\n");
+
+  mkdirSync(join(dir, "packages/b/src"), { recursive: true });
+  writeFileSync(
+    join(dir, "packages/b/package.json"),
+    JSON.stringify(
+      { name: "fixture-b", scripts: { lint: "lint-b ." } },
+      null,
+      2,
+    ) + "\n",
+  );
+  writeFileSync(join(dir, "packages/b/src/y.ts"), "export const y = 1;\n");
+
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "base"]);
+  return git(dir, ["rev-parse", "HEAD"]).trim();
+}
+
+describe("lint-changed-files.mjs end-to-end against a fixture git repo", () => {
+  let repoDir;
+  let binDir;
+  let baseSha;
+
+  beforeEach(() => {
+    repoDir = realpathSync(
+      mkdtempSync(join(tmpdir(), "lint-changed-files-repo-")),
+    );
+    binDir = realpathSync(
+      mkdtempSync(join(tmpdir(), "lint-changed-files-bin-")),
+    );
+    writeFakeBun(binDir);
+    baseSha = initFixtureRepo(repoDir);
+  });
+
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  });
+
+  function runScript(baseRef, { fail = false } = {}) {
+    const logFile = join(repoDir, ".fake-bun.log");
+    const result = spawnSync("node", [SCRIPT_PATH, baseRef], {
+      cwd: repoDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        FAKE_BUN_LOG: logFile,
+        ...(fail ? { FAKE_BUN_FAIL: "1" } : {}),
+      },
+    });
+    const calls = existsSync(logFile)
+      ? readFileSync(logFile, "utf8")
+          .split("\n")
+          .filter((line) => line !== "")
+      : [];
+    return { ...result, calls };
+  }
+
+  it("lints changed and untracked-but-staged files in a project with lint:files, path-prefixed and sorted", () => {
+    writeFileSync(
+      join(repoDir, "packages/a/src/x.ts"),
+      "export const x = 2;\n",
+    );
+    // A leading-dash filename must reach the linter as `./`-prefixed so it
+    // is never mistaken for a flag.
+    writeFileSync(
+      join(repoDir, "packages/a/src/-flag.ts"),
+      "export const y = 1;\n",
+    );
+    git(repoDir, ["add", "-A"]);
+
+    const { status, stdout, calls } = runScript(baseSha);
+
+    expect(status, stdout).toBe(0);
+    expect(calls).toHaveLength(1);
+    const [cwdUsed, argsUsed] = calls[0].split("|");
+    expect(cwdUsed).toBe(join(repoDir, "packages/a"));
+    expect(argsUsed).toBe("run lint:files ./src/-flag.ts ./src/x.ts");
+  });
+
+  it("lints a project without lint:files whole", () => {
+    writeFileSync(
+      join(repoDir, "packages/b/src/y.ts"),
+      "export const y = 2;\n",
+    );
+
+    const { status, stdout, calls } = runScript(baseSha);
+
+    expect(status, stdout).toBe(0);
+    expect(calls).toHaveLength(1);
+    const [cwdUsed, argsUsed] = calls[0].split("|");
+    expect(cwdUsed).toBe(join(repoDir, "packages/b"));
+    expect(argsUsed).toBe("run lint");
+  });
+
+  it("reports nothing to lint when the only change is a deleted source file", () => {
+    git(repoDir, ["rm", "-q", "packages/a/src/x.ts"]);
+
+    const { status, stdout, calls } = runScript(baseSha);
+
+    expect(status, stdout).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(stdout).toContain("no lintable files changed");
+  });
+
+  it("switches to whole-project nx affected from the repo root when a repo-level config changes", () => {
+    writeFileSync(join(repoDir, "nx.json"), JSON.stringify({}, null, 2) + "\n");
+    git(repoDir, ["add", "-A"]);
+
+    const { status, stdout, calls } = runScript(baseSha);
+
+    expect(status, stdout).toBe(0);
+    expect(calls).toHaveLength(1);
+    const [cwdUsed, argsUsed] = calls[0].split("|");
+    expect(cwdUsed).toBe(repoDir);
+    expect(argsUsed).toBe(
+      `x nx affected --target=lint --base=${baseSha} --parallel=3 --tui=false`,
+    );
+  });
+
+  it("propagates a failing bun invocation as a non-zero exit", () => {
+    writeFileSync(
+      join(repoDir, "packages/a/src/x.ts"),
+      "export const x = 3;\n",
+    );
+
+    const { status } = runScript(baseSha, { fail: true });
+
+    expect(status).toBe(1);
   });
 });

@@ -40,6 +40,8 @@ const BASH_PRELUDE = [
   '  case "${1-}" in run|x|*.mjs) ;; *) return 97 ;; esac',
   '  printf "%s\\0" "$#" >> "$WORKSPACE_CHECK_CALLS"',
   '  for argument do printf "%s\\0" "$argument" >> "$WORKSPACE_CHECK_CALLS"; done',
+  // `nx show projects --affected` answers from WORKSPACE_CHECK_AFFECTED.
+  '  if [ "${2-}" = "nx" ] && [ "${3-}" = "show" ]; then printf "%s" "${WORKSPACE_CHECK_AFFECTED:-[]}"; fi',
   "}",
   "git() {",
   '  if [ "$#" -eq 2 ] && [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then',
@@ -68,7 +70,7 @@ function createStub(name, body) {
   return { directory, file };
 }
 
-function runHook({ ci, base, head }) {
+function runHook({ ci, base, head, affected }) {
   const fixture = mkdtempSync(join(tmpdir(), "oss-workspace-checks-root-"));
   const slotDir = mkdtempSync(join(tmpdir(), "oss-workspace-checks-slot-"));
   const callsFile = join(fixture, "calls.bin");
@@ -82,6 +84,8 @@ function runHook({ ci, base, head }) {
     WORKSPACE_CHECK_ROOT: fixture,
     TRAYCER_MACHINE_SLOT_DIR: slotDir,
   };
+  if (affected !== undefined) env.WORKSPACE_CHECK_AFFECTED = affected;
+  else delete env.WORKSPACE_CHECK_AFFECTED;
   if (ci) env.CI = "true";
   else delete env.CI;
   if (base === undefined) delete env.NX_BASE;
@@ -133,7 +137,7 @@ function anyArgvContains(calls, substring) {
 }
 
 describe("pre_commit_workspace_checks.sh (OSS, local lane)", () => {
-  it("runs lint-changed-files, format, and an nx affected compile - never build", () => {
+  it("runs lint-changed-files, format, and an nx affected compile - no build when protocol is unaffected", () => {
     const { result, calls, slotLockFiles } = runHook({ ci: false });
 
     expect(result.status, result.stderr).toBe(0);
@@ -155,14 +159,41 @@ describe("pre_commit_workspace_checks.sh (OSS, local lane)", () => {
     );
     expect(compileCall).toBeDefined();
 
-    // No build target anywhere, in any call - the whole point of the local
-    // lane change under test.
-    expect(anyArgvContains(calls, "--target=build")).toBe(false);
+    // The affected set was asked for protocol only, and with protocol not
+    // in it nothing builds.
+    expect(
+      hasArgs(
+        calls,
+        "show",
+        "projects",
+        "--affected",
+        "--base=origin/main",
+        "--projects=@traycer/protocol",
+      ),
+    ).toBe(true);
+    expect(anyArgvContains(calls, "build")).toBe(false);
     expect(anyArgvContains(calls, "--targets=compile,build")).toBe(false);
     expect(hasArgs(calls, "run", "build")).toBe(false);
 
     // The machine-wide slot was actually acquired: its lock file exists.
     expect(slotLockFiles).toContain("traycer-slot-commit-checks.0.lock");
+  });
+
+  it("builds only @traycer/protocol, by name, when it is affected", () => {
+    const { result, calls } = runHook({
+      ci: false,
+      affected: '["@traycer/protocol"]',
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const buildCalls = calls.filter((args) =>
+      args.some((arg) => arg.includes("build")),
+    );
+    // `nx run <project>:<target>`, never `nx affected --target=build`: the
+    // latter builds every affected project, desktop's vite bundle included.
+    expect(buildCalls).toEqual([
+      ["x", "nx", "run", "@traycer/protocol:build", "--tui=false"],
+    ]);
   });
 
   it("CI lane runs nx affected lint + compile,build and never touches the slot", () => {
