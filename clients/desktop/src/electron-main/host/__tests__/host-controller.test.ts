@@ -918,10 +918,10 @@ describe("mutation lane: wait-never-reject", () => {
       data: { activated: true },
     });
 
-    const first = await controller.respawn({ kind: "background" });
+    const first = await controller.respawn({ kind: "background" }, "force");
     expect(first.kind).toBe("failed");
 
-    const second = await controller.respawn({ kind: "background" });
+    const second = await controller.respawn({ kind: "background" }, "force");
     expect(second.kind).toBe("ok");
   });
 
@@ -950,9 +950,9 @@ describe("mutation lane: wait-never-reject", () => {
     });
 
     await Promise.all([
-      controller.respawn({ kind: "background" }),
+      controller.respawn({ kind: "background" }, "force"),
       controller.applyStaged("manual", false),
-      controller.respawn({ kind: "background" }),
+      controller.respawn({ kind: "background" }, "force"),
     ]);
 
     expect(maxConcurrentHolders).toBe(1);
@@ -1472,8 +1472,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
     });
 
     const [first, second] = await Promise.all([
-      controller.respawn({ kind: "background" }),
-      controller.respawn({ kind: "background" }),
+      controller.respawn({ kind: "background" }, "force"),
+      controller.respawn({ kind: "background" }, "force"),
     ]);
 
     expect(restartCalls).toBe(1);
@@ -1535,8 +1535,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
       return { data: { activated: true } };
     });
 
-    await controller.respawn({ kind: "background" });
-    await controller.respawn({ kind: "background" });
+    await controller.respawn({ kind: "background" }, "force");
+    await controller.respawn({ kind: "background" }, "force");
 
     expect(restartCalls).toBe(2);
   });
@@ -1571,7 +1571,7 @@ describe("two lanes: mutation vs download independence", () => {
       return {};
     });
 
-    const respawnPromise = controller.respawn({ kind: "background" });
+    const respawnPromise = controller.respawn({ kind: "background" }, "force");
     await flushMicrotasks();
 
     const stageLatestPromise = controller.stageLatest();
@@ -1638,7 +1638,7 @@ describe("two lanes: mutation vs download independence", () => {
 
     // A mutation starts WHILE the probe above is still pending, and stays
     // active (gated on restartGate).
-    const respawnPromise = controller.respawn({ kind: "background" });
+    const respawnPromise = controller.respawn({ kind: "background" }, "force");
     await flushMicrotasks();
 
     probeGate.resolve(undefined);
@@ -3664,7 +3664,7 @@ describe("yank/apply ordering", () => {
       return { data: {} };
     });
 
-    const restart = controller.respawn({ kind: "background" });
+    const restart = controller.respawn({ kind: "background" }, "force");
     await vi.waitFor(() => {
       // `--force` distinguishes respawn (the explicit force path - the
       // Settings Force-restart offer, tray restart) from the cooperative
@@ -5277,14 +5277,17 @@ describe("platform matrix", () => {
     );
 
     let guardAsked = false;
-    const restart = controller.respawn({
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => {
-        guardAsked = true;
-        return Promise.resolve({ kind: "abandon", message: "host changed" });
+    const restart = controller.respawn(
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          guardAsked = true;
+          return Promise.resolve({ kind: "abandon", message: "host changed" });
+        },
       },
-    });
+      "force",
+    );
 
     await vi.waitFor(() => {
       expect(streamBundledTraycerCliJson).toHaveBeenCalled();
@@ -5322,12 +5325,15 @@ describe("platform matrix", () => {
       await restartGate.promise;
       return { data: { activated: true } };
     });
-    const watched = controller.respawn({
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
-    const background = controller.respawn({ kind: "background" });
+    const watched = controller.respawn(
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "force",
+    );
+    const background = controller.respawn({ kind: "background" }, "force");
 
     restartGate.resolve();
     await expect(watched).resolves.toEqual({
@@ -5355,12 +5361,15 @@ describe("platform matrix", () => {
     vi.mocked(streamBundledTraycerCliJson)
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce({ data: { activated: true } });
-    const first = controller.respawn({
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
-    const second = controller.respawn({ kind: "background" });
+    const first = controller.respawn(
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "force",
+    );
+    const second = controller.respawn({ kind: "background" }, "force");
 
     await expect(first).resolves.toEqual({
       kind: "failed",
@@ -7091,7 +7100,7 @@ describe("respawn (fixup B14)", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     await markHostRemovedByUser();
 
-    const outcome = await controller.respawn({ kind: "background" });
+    const outcome = await controller.respawn({ kind: "background" }, "force");
 
     expect(outcome).toEqual({
       kind: "deferred",
@@ -7122,7 +7131,7 @@ describe("respawn (fixup B14)", () => {
       new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
     );
 
-    const outcome = await controller.respawn({ kind: "background" });
+    const outcome = await controller.respawn({ kind: "background" }, "force");
 
     expect(outcome.kind).toBe("deferred");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
@@ -8229,7 +8238,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "2.0.0" },
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8246,7 +8255,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "2.0.0" },
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8279,7 +8288,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
           data: { restarted: true, version: "2.0.0" },
         });
         try {
-          const outcome = await controller.respawn({ kind: "background" });
+          const outcome = await controller.respawn(
+            { kind: "background" },
+            "force",
+          );
           expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
         } finally {
           chmodSync(recordPath, 0o600);
@@ -8303,7 +8315,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "2.0.0" },
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8326,7 +8338,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
           data: { restarted: true, version: "2.0.0" },
         });
 
-        const outcome = await controller.respawn({ kind: "background" });
+        const outcome = await controller.respawn(
+          { kind: "background" },
+          "force",
+        );
 
         expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
         expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8381,7 +8396,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "2.0.0" },
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8436,7 +8451,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       );
       expect(await currentAttemptPhase()).toBe("waiting-to-activate");
 
-      await controller.respawn({ kind: "background" });
+      await controller.respawn({ kind: "background" }, "force");
 
       // The INVARIANT, not the mechanism: the adopted attempt was carried
       // forward rather than refused. Asserting "the cohort gate was skipped"
@@ -8466,7 +8481,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         { restarted: false, deferredForParkedActivation: true },
       );
 
-      await controller.respawn({ kind: "background" });
+      await controller.respawn({ kind: "background" }, "force");
 
       expect(await currentAttemptPhase()).toBe("applying");
     });
@@ -8519,7 +8534,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         },
       );
 
-      await controller.respawn({ kind: "background" });
+      await controller.respawn({ kind: "background" }, "force");
 
       // The INVARIANT: the adopted attempt was carried forward. Asserting a
       // specific phase would be wrong - a resume lands back in `preparing`, so
@@ -8560,7 +8575,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         { restarted: false, deferredForParkedActivation: true },
       );
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       const after = await readUpdateAttemptRecord(
         getHostFsLayout("production").rootDir,
@@ -8606,7 +8621,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       // The whole point: the continuation satisfied the restart request by
@@ -8684,7 +8699,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         writeOwnedSmAppServiceSubstrate();
         await seedParkedActivationAttempt("2.0.0");
 
-        const outcome = await controller.respawn({ kind: "background" });
+        const outcome = await controller.respawn(
+          { kind: "background" },
+          "force",
+        );
 
         // Verification WAS dispatched - this is about consuming its answer.
         expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8725,7 +8743,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       writeOwnedSmAppServiceSubstrate();
       await seedParkedActivationAttempt("2.0.0");
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({ args: RESTART_FORCE_ARGV }),
@@ -8759,7 +8777,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         },
       );
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({ args: RESTART_FORCE_ARGV }),
@@ -8783,7 +8801,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       // test would fail on the phase assertion below.
       vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       // `{ok, activated:true}` alone proves NOTHING here - it is also exactly
@@ -8843,7 +8861,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(held.kind).toBe("acquired");
 
       try {
-        const outcome = await controller.respawn({ kind: "background" });
+        const outcome = await controller.respawn(
+          { kind: "background" },
+          "force",
+        );
         expect(outcome.kind).toBe("deferred");
       } finally {
         if (held.kind === "acquired") await held.handle.release();
@@ -8869,7 +8890,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "2.0.0" },
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8897,7 +8918,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "2.0.0" },
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -8943,7 +8964,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(held.kind).toBe("acquired");
 
       try {
-        await controller.respawn({ kind: "background" });
+        await controller.respawn({ kind: "background" }, "force");
       } finally {
         if (held.kind === "acquired") await held.handle.release();
       }
@@ -9011,7 +9032,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(held.kind).toBe("acquired");
 
       try {
-        const outcome = await controller.respawn({ kind: "background" });
+        const outcome = await controller.respawn(
+          { kind: "background" },
+          "force",
+        );
         expect(outcome).toEqual({
           kind: "deferred",
           message: "Another Traycer process is managing the host.",
@@ -9057,7 +9081,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       // which is the only path that reaches `withMintedAdoption`.
       vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       const argv = takeoverCallArgv();
@@ -9098,7 +9122,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         status: "not-found",
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
       const argv = takeoverCallArgv();
@@ -9151,7 +9175,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
           data: { restarted: true, version: "2.0.0" },
         });
 
-        const outcome = await controller.respawn({ kind: "background" });
+        const outcome = await controller.respawn(
+          { kind: "background" },
+          "force",
+        );
 
         // #4: the route does NOT report `deferred` - it falls through to
         // the byte-identical plain restart (the honest close for a segment
@@ -9210,7 +9237,10 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
           },
         );
 
-        const outcome = await controller.respawn({ kind: "background" });
+        const outcome = await controller.respawn(
+          { kind: "background" },
+          "force",
+        );
 
         // #4: not `deferred` here either.
         expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
@@ -9305,6 +9335,202 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       expect(writeAdoptionProofMock.write).not.toHaveBeenCalled();
     });
   });
+
+  // MIX-OLD-SUPERVISOR: `if-idle` mode never even calls
+  // `routeForceRestartContinuation` - it is gated on `mode === "if-idle"`
+  // BEFORE that call in `respawn()`'s body. Proven against the richest F3
+  // fixture available (an owned SMAppService substrate with a genuinely
+  // parked, legally-resumable `waiting-to-activate` attempt) rather than a
+  // bare no-record case, so this cannot pass merely because there was
+  // nothing to continue.
+  it("if-idle never reaches the F3 continuation route: no notifyRespawning, no update-verify CLI call, and the parked record is untouched", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => true);
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+    });
+    writePidMetadata("production", { version: "2.0.0", pid: process.pid });
+    writeOwnedSmAppServiceSubstrate();
+    await seedParkedActivationAttempt("2.0.0");
+    expect(await currentAttemptPhase()).toBe("waiting-to-activate");
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { activated: true },
+    });
+
+    const outcome = await controller.respawn({ kind: "background" }, "if-idle");
+
+    expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(lifecycle.notifyRespawningCalls).toEqual([]);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "host",
+          "restart",
+          "--if-idle",
+          "--defer-if-parked",
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
+    );
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["update-verify"]),
+      }),
+    );
+    // The routing layer never touched the parked record - if-idle short-
+    // circuits before `routeForceRestartContinuation` reads it at all, so
+    // the seeded park is exactly where it started.
+    expect(await currentAttemptPhase()).toBe("waiting-to-activate");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MIX-OLD-SUPERVISOR: the lifecycle card's idle-gated service cycle
+// (`respawn(intent, "if-idle")`), as distinct from the pre-existing forced
+// path covered throughout the rest of this file. `--lifecycle-origin
+// desktop` is `streamBundled`'s own addition (see the platform-matrix tests
+// above), so every expected argv below carries it.
+// ---------------------------------------------------------------------------
+describe("respawn: if-idle mode (MIX-OLD-SUPERVISOR)", () => {
+  const RESTART_IF_IDLE_ARGV = [
+    "host",
+    "restart",
+    "--if-idle",
+    "--defer-if-parked",
+    "--lifecycle-origin",
+    "desktop",
+  ];
+  const RESTART_FORCE_ARGV = [
+    "host",
+    "restart",
+    "--force",
+    "--defer-if-parked",
+    "--lifecycle-origin",
+    "desktop",
+  ];
+
+  it('spawns exactly "host restart --if-idle --defer-if-parked" once', async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { activated: true },
+    });
+
+    const outcome = await controller.respawn({ kind: "background" }, "if-idle");
+
+    expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: RESTART_IF_IDLE_ARGV }),
+    );
+  });
+
+  it("force mode still runs host restart --force --defer-if-parked", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { activated: true },
+    });
+
+    const outcome = await controller.respawn({ kind: "background" }, "force");
+
+    expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: RESTART_FORCE_ARGV }),
+    );
+  });
+
+  it("an E_HOST_BUSY CLI error classifies as busy, reloads the snapshot, and does not short-circuit a later force respawn's generation check", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => true);
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson)
+      .mockRejectedValueOnce(new TraycerCliError("E_HOST_BUSY", "host busy"))
+      .mockResolvedValueOnce({ data: { activated: true } });
+
+    const busyOutcome = await controller.respawn(
+      { kind: "background" },
+      "if-idle",
+    );
+
+    expect(busyOutcome).toEqual({
+      kind: "busy",
+      continuation: "retry-with-force",
+      message: expect.stringContaining("work in progress"),
+    });
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
+
+    // The busy cycle never activated, so it never bumped `respawnGeneration`
+    // - a later force respawn must still run its OWN CLI restart rather than
+    // being told the busy job already satisfied it.
+    const forceOutcome = await controller.respawn(
+      { kind: "background" },
+      "force",
+    );
+
+    expect(forceOutcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(2);
+    expect(streamBundledTraycerCliJson).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ args: RESTART_FORCE_ARGV }),
+    );
+  });
+
+  it("an if-idle respawn submitted while a force respawn for the same intent is in flight is NOT coalesced into it - two CLI runs, the second with the if-idle's own argv", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const forceGate = deferred<void>();
+    const seenArgv: (readonly string[])[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      seenArgv.push(opts.args);
+      if (opts.args.includes("--force")) {
+        await forceGate.promise;
+        throw new TraycerCliError("E_HOST_BUSY", "host busy");
+      }
+      return { data: { activated: true } };
+    });
+
+    // Different coalesce keys (`respawn:force:...` vs `respawn:if-idle:...`)
+    // - a background force and a background if-idle for the SAME intent must
+    // not join one another's promise the way two identical-mode respawns do
+    // (see "two simultaneous respawn() calls execute the restart once"
+    // above). The lane is still FIFO, so if-idle's body will not run its own
+    // CLI call until force's job settles - which is exactly what the second
+    // captured argv below proves happened, rather than a silent join.
+    const force = controller.respawn({ kind: "background" }, "force");
+    const ifIdle = controller.respawn({ kind: "background" }, "if-idle");
+    await vi.waitFor(() => {
+      expect(seenArgv).toHaveLength(1);
+    });
+    forceGate.resolve(undefined);
+
+    const [forceOutcome, ifIdleOutcome] = await Promise.all([force, ifIdle]);
+
+    expect(forceOutcome).toEqual({
+      kind: "busy",
+      continuation: "retry-with-force",
+      message: expect.stringContaining("work in progress"),
+    });
+    expect(ifIdleOutcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(seenArgv).toEqual([RESTART_FORCE_ARGV, RESTART_IF_IDLE_ARGV]);
+  });
 });
 
 // Packaged macOS recovery must use the same attempt-aware CLI restart lane as
@@ -9322,7 +9548,9 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
       data: { restarted: false },
     });
 
-    await expect(controller.respawn({ kind: "background" })).resolves.toEqual({
+    await expect(
+      controller.respawn({ kind: "background" }, "force"),
+    ).resolves.toEqual({
       kind: "ok",
       value: { activated: false },
     });
@@ -9431,7 +9659,7 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
         "--lifecycle-origin",
         "desktop",
       ],
-      async (c: HostController) => c.respawn({ kind: "background" }),
+      async (c: HostController) => c.respawn({ kind: "background" }, "force"),
       true,
     ],
     [
@@ -9501,7 +9729,9 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
       data: { restarted: false, deferredForParkedActivation: false },
     });
 
-    await expect(controller.respawn({ kind: "background" })).resolves.toEqual({
+    await expect(
+      controller.respawn({ kind: "background" }, "force"),
+    ).resolves.toEqual({
       kind: "ok",
       value: { activated: false },
     });
@@ -9522,7 +9752,7 @@ describe("recoverIfDown", () => {
     const gate = deferred<{ data: unknown }>();
     vi.mocked(streamBundledTraycerCliJson).mockReturnValueOnce(gate.promise);
 
-    const respawnPromise = controller.respawn({ kind: "background" });
+    const respawnPromise = controller.respawn({ kind: "background" }, "force");
     await flushMicrotasks();
 
     const recovered = await controller.recoverIfDown();
@@ -10067,7 +10297,10 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValueOnce({
       data: { activated: true },
     });
-    const respawnOutcome = await controller.respawn({ kind: "background" });
+    const respawnOutcome = await controller.respawn(
+      { kind: "background" },
+      "force",
+    );
     expect(respawnOutcome.kind).toBe("ok");
 
     // Fixup C2: the title's own claim - "no durable pending-pin state" -
@@ -10211,7 +10444,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         : "enabled",
     );
 
-    const outcome = await controller.respawn({ kind: "background" });
+    const outcome = await controller.respawn({ kind: "background" }, "force");
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -10495,7 +10728,7 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
     // A completely unrelated mutation starts while the out-of-lane takeover
     // call above is still in flight - `respawn`'s own restart call is gated
     // too, so its mutation stays active for the assertion below.
-    const respawnPromise = controller.respawn({ kind: "background" });
+    const respawnPromise = controller.respawn({ kind: "background" }, "force");
     await flushMicrotasks();
 
     if (takeoverEvents.onEvent === null) {
@@ -10547,7 +10780,7 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
       return { data: { activated: true } };
     });
 
-    const outcome = await controller.respawn({ kind: "background" });
+    const outcome = await controller.respawn({ kind: "background" }, "force");
     unsubscribe();
 
     expect(outcome.kind).toBe("ok");

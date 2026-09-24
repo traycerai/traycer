@@ -334,6 +334,10 @@ export const RunnerHostInvoke = {
   // semantics for the tray/menu; a Settings restart refuses instead of
   // firing a kill against state the person never saw.
   traycerHostRestartIfIdle: "runnerHost:traycer:host:restartIfIdle",
+  // The lifecycle card's idle-gated SERVICE restart: fenced and refusing like
+  // the one above, but the host's busy veto stands (no `--force`).
+  traycerHostServiceRestartIfHostIdle:
+    "runnerHost:traycer:host:serviceRestartIfHostIdle",
   traycerDoctorRepairIfIdle: "runnerHost:traycer:doctor:repairIfIdle",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",

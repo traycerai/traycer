@@ -202,6 +202,9 @@ describe("local-plane admission for the removal-sentinel read", () => {
       ),
       maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
       restartHostIfIdle: notImplemented("restartHostIfIdle"),
+      restartHostServiceIfHostIdle: notImplemented(
+        "restartHostServiceIfHostIdle",
+      ),
       runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
       getHostName: () =>
         Promise.resolve({

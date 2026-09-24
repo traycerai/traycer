@@ -706,6 +706,9 @@ function buildFakeBridge(
       restartHostIfIdle: async () => {
         throw new Error("restartHostIfIdle not used in test");
       },
+      restartHostServiceIfHostIdle: async () => {
+        throw new Error("restartHostServiceIfHostIdle not used in test");
+      },
       runDoctorRepairIfIdle: async () => {
         throw new Error("runDoctorRepairIfIdle not used in test");
       },

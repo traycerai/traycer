@@ -210,6 +210,9 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     restartHostIfIdle: vi.fn(() =>
       Promise.reject(new Error("restartHostIfIdle not implemented")),
     ),
+    restartHostServiceIfHostIdle: vi.fn(() =>
+      Promise.reject(new Error("restartHostServiceIfHostIdle not implemented")),
+    ),
     runDoctorRepairIfIdle: vi.fn(() =>
       Promise.reject(new Error("runDoctorRepairIfIdle not implemented")),
     ),

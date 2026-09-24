@@ -11,6 +11,7 @@ import type {
 import type {
   ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
+  HostRespawnMode,
   LifecycleAdmissionBlock,
   LocalHostMutationIntent,
 } from "../../host/host-controller-types";
@@ -244,6 +245,7 @@ interface HandlerBridge {
       ) => Promise<MutationOutcome<InstallVersionOk>>;
       respawn: (
         intent: LocalHostMutationIntent,
+        mode: HostRespawnMode,
       ) => Promise<GuardedMutationOutcome<{ readonly activated: boolean }>>;
       convergeReady: (
         force: boolean,
@@ -2576,6 +2578,137 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       (call) => call.join(" ") === "host service refresh",
     );
     expect(refreshCalls).toHaveLength(1);
+  });
+
+  // MIX-OLD-SUPERVISOR: the lifecycle card's new idle-gated SERVICE channel
+  // (`traycerHostServiceRestartIfHostIdle`), which shares
+  // `respawnWatchedLocalHost`'s identity fence and admission block with the
+  // pre-existing `traycerHostRestartIfIdle` above - mirrored here rather than
+  // re-proving the fence/admission mechanics (already covered by the
+  // mismatch/admission-block tests above) - plus the ONE way it differs: the
+  // mode it passes to `respawn()` and how it renders a busy outcome.
+  describe("traycerHostServiceRestartIfHostIdle IPC", () => {
+    it("an identity mismatch declines without calling respawn", async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const respawn = vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: OTHER_HOST_ID }),
+      ).resolves.toEqual({ kind: "declined", message: HOST_CHANGED_MESSAGE });
+      expect(respawn).not.toHaveBeenCalled();
+    });
+
+    it("an admission block declines without calling respawn", async () => {
+      const respawn = vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.lifecycleAdmissionBlock = {
+        kind: "login-item-refresh",
+      };
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({
+        kind: "declined",
+        message: LOGIN_ITEM_REFRESH_MESSAGE,
+      });
+      expect(respawn).not.toHaveBeenCalled();
+    });
+
+    it('otherwise respawn runs once with a user-repair intent fenced to expectedHostId and mode "if-idle"', async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const calls: Array<{
+        readonly intent: LocalHostMutationIntent;
+        readonly mode: HostRespawnMode;
+      }> = [];
+      const respawn = vi.fn(
+        (intent: LocalHostMutationIntent, mode: HostRespawnMode) => {
+          calls.push({ intent, mode });
+          return Promise.resolve({
+            kind: "ok" as const,
+            value: { activated: true },
+          });
+        },
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({ kind: "restarted" });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].mode).toBe("if-idle");
+      if (calls[0].intent.kind !== "user-repair") {
+        throw new Error("expected a user-repair intent");
+      }
+      expect(calls[0].intent.targetHostId).toBe(LIVE_HOST_ID);
+    });
+
+    it("a busy outcome maps to host-busy, not declined - the host's own refusal text is dropped", async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const respawn = vi.fn(() =>
+        Promise.resolve({
+          kind: "busy" as const,
+          continuation: "retry-with-force" as const,
+          message:
+            "The host has work in progress; refusing to restart it and lose that work.",
+        }),
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({ kind: "host-busy" });
+    });
+
+    it('traycerHostRestartIfIdle (the cooperative-fallback channel) still calls respawn with "force"', async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const modes: HostRespawnMode[] = [];
+      const respawn = vi.fn(
+        (_intent: LocalHostMutationIntent, mode: HostRespawnMode) => {
+          modes.push(mode);
+          return Promise.resolve({
+            kind: "ok" as const,
+            value: { activated: true },
+          });
+        },
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostRestartIfIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({ kind: "restarted" });
+      expect(modes).toEqual(["force"]);
+    });
   });
 });
 

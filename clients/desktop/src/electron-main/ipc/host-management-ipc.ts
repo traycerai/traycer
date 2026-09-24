@@ -25,6 +25,7 @@ import type {
   QueuedDoctorRepair,
   QueuedDoctorRepairResult,
   HostRestartRequestResult,
+  HostServiceRestartResult,
   MutationKind,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
@@ -43,6 +44,7 @@ import {
   backgroundMutationOutcome,
   type ConvergeReadyVersionPolicy,
   type GuardedMutationOutcome,
+  type HostRespawnMode,
   type LifecycleAdmissionBlock,
   type MutationOutcome,
   type LocalHostMutationIntent,
@@ -63,7 +65,10 @@ import {
   writeHostNameSettings,
 } from "../host/host-display-name";
 import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
-import { restartRequestResultFromOutcome } from "./host-ipc";
+import {
+  restartRequestResultFromOutcome,
+  serviceRestartResultFromOutcome,
+} from "./host-ipc";
 import { classifyLocalHostIdentity } from "../host/local-host-identity";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
@@ -812,6 +817,57 @@ function userRepairIntent(
   };
 }
 
+/**
+ * A watched respawn's admission, shared by the forced and the idle-gated
+ * channel: the identity fence, then the lane refusal, then the fenced intent.
+ *
+ * `respawn()` goes through the same exclusive lane as every other intent and
+ * queues behind it rather than being refused, so a Settings restart submitted
+ * while an install, apply or service cycle is running would fire after that
+ * finished — against a host in a state the person never saw, and typically
+ * one the update just restarted anyway. So a watched restart is refused
+ * instead.
+ *
+ * Same atomicity rule as `maintenance:installVersion`: test admission and
+ * submit with NO await in between, because a read that crosses an await is
+ * already history. `respawn()` registers on the tail synchronously, and
+ * building the intent is synchronous too - only its guard runs later, at the
+ * head of the lane.
+ *
+ * `user-repair` even though an admitted job runs at the head of an EMPTY
+ * lane: admission to execution still crosses a microtask boundary, and these
+ * channels name a specific host, so the guard re-asks the identity question
+ * there. `abandoned` renders as the same `declined` the checks here resolve.
+ */
+async function respawnWatchedLocalHost(
+  bridge: RunnerIpcBridge,
+  raw: unknown,
+  mode: HostRespawnMode,
+): Promise<
+  | { readonly kind: "refused"; readonly message: string }
+  | {
+      readonly kind: "ran";
+      readonly outcome: GuardedMutationOutcome<unknown>;
+    }
+> {
+  const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+  const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+  if (!identity.ok) {
+    return { kind: "refused", message: identity.message };
+  }
+  const block = bridge.options.hostController.lifecycleAdmissionBlock;
+  if (block !== null) {
+    return { kind: "refused", message: admissionBlockRestartMessage(block) };
+  }
+  return {
+    kind: "ran",
+    outcome: await bridge.options.hostController.respawn(
+      userRepairIntent(bridge, expectedHostId),
+      mode,
+    ),
+  };
+}
+
 const HOST_CHANGED_MESSAGE =
   "This computer's host changed while that was open. Reopen Settings and try again.";
 
@@ -1226,48 +1282,35 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   // the local host as a role, whatever currently fills it.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostRestart, async () => {
     return restartRequestResultFromOutcome(
-      await bridge.options.hostController.respawn({ kind: "background" }),
+      await bridge.options.hostController.respawn(
+        { kind: "background" },
+        "force",
+      ),
     );
   });
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostRestartIfIdle,
     async (_event, raw: unknown): Promise<HostRestartRequestResult> => {
-      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      if (!identity.ok) {
-        return { kind: "declined", message: identity.message };
-      }
       // The refusing twin of the handler above, for a restart someone is
-      // WATCHING. `respawn()` goes through the same exclusive lane as every
-      // other intent and queues behind it rather than being refused, so a
-      // Settings restart submitted while an install, apply or service cycle
-      // is running would fire its kill after that finished — against a host in
-      // a state the person never saw, and typically one the update just
-      // restarted anyway.
-      //
-      // Same atomicity rule as `maintenance:installVersion`: test admission
-      // and submit with NO await in between, because a read that crosses an
-      // await is already history. `respawn()` registers on the tail
-      // synchronously, and building the intent is synchronous too - only its
-      // guard runs later, at the head of the lane.
-      const block = bridge.options.hostController.lifecycleAdmissionBlock;
-      if (block !== null) {
-        return {
-          kind: "declined",
-          message: admissionBlockRestartMessage(block),
-        };
-      }
-      // `user-repair` even though an admitted job runs at the head of an
-      // EMPTY lane: admission to execution still crosses a microtask
-      // boundary, and this channel names a specific host, so the guard
-      // re-asks the identity question there. `abandoned` renders as the
-      // same `declined` the check above resolves.
-      return restartRequestResultFromOutcome(
-        await bridge.options.hostController.respawn(
-          userRepairIntent(bridge, expectedHostId),
-        ),
-      );
+      // WATCHING - forced, because its callers are Settings' Force restart
+      // and the fallback confirm.
+      const run = await respawnWatchedLocalHost(bridge, raw, "force");
+      return run.kind === "refused"
+        ? { kind: "declined", message: run.message }
+        : restartRequestResultFromOutcome(run.outcome);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+    async (_event, raw: unknown): Promise<HostServiceRestartResult> => {
+      // The lifecycle card's restart for an old supervisor: the same fenced,
+      // refusing admission, with the host's busy veto left standing.
+      const run = await respawnWatchedLocalHost(bridge, raw, "if-idle");
+      return run.kind === "refused"
+        ? { kind: "declined", message: run.message }
+        : serviceRestartResultFromOutcome(run.outcome);
     },
   );
 
@@ -1600,6 +1643,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         const result = restartRequestResultFromOutcome(
           await bridge.options.hostController.respawn(
             userRepairIntent(bridge, expectedHostId),
+            "force",
           ),
         );
         return result.kind === "declined"

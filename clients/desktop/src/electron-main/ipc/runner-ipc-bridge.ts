@@ -135,6 +135,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  HostRespawnMode,
   LocalHostMutationIntent,
   ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
@@ -501,6 +502,7 @@ export interface IpcHostController {
   >;
   respawn(
     intent: LocalHostMutationIntent,
+    mode: HostRespawnMode,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }

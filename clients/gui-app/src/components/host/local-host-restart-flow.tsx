@@ -7,7 +7,10 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostRestartRequestResult,
+  HostServiceRestartResult,
+} from "@traycer-clients/shared/platform/runner-host";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import {
   looksDialable,
@@ -17,6 +20,8 @@ import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defe
 import {
   busyRestartMessage,
   HOST_CHANGED_DESCRIPTION,
+  SERVICE_RESTART_BUSY_MESSAGE,
+  SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE,
 } from "@/components/host/host-restart-copy";
 import { useHostRestart } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
@@ -93,9 +98,24 @@ function isOfferStale(
   return offer !== null && offer.hostId !== localHostId;
 }
 
+/**
+ * What the confirm dispatches first. Force is never first: it is always the
+ * disclosed second step.
+ *
+ * - `cooperative`: the claim-gated `host.restart` RPC. The host exits for a
+ *   restart its SUPERVISOR performs in-process, so the supervisor survives.
+ * - `service`: the idle-gated service cycle (`host restart --if-idle`), which
+ *   replaces the supervisor too. The lifecycle card's choice while an old
+ *   supervisor is running: that supervisor would only respawn its child, and
+ *   the card would keep asking for the restart it just did
+ *   (MIX-OLD-SUPERVISOR).
+ */
+export type LocalHostRestartFirstLeg = "cooperative" | "service";
+
 interface LocalHostRestartFlowProps {
   /** The surface's "Restart Host was invoked" state; the flow owns the rest. */
   readonly requested: boolean;
+  readonly firstLeg: LocalHostRestartFirstLeg;
   /** Clears that state. Every path out of the flow funnels through this. */
   readonly onClose: () => void;
 }
@@ -200,6 +220,35 @@ function useForceHostRespawn(
 }
 
 /**
+ * The idle-gated service restart, fenced to the host id it is given. Under
+ * the SAME mutation key as the forced respawn, so every cache-derived restart
+ * gate sees it: it is a restart of this machine's host too.
+ */
+function useServiceHostRestart(): UseMutationResult<
+  HostServiceRestartResult,
+  Error,
+  { readonly hostId: string }
+> {
+  const runnerHost = useRunnerHost();
+  return useMutation<
+    HostServiceRestartResult,
+    Error,
+    { readonly hostId: string }
+  >({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: ({ hostId }) => {
+      const management = runnerHost.hostManagement;
+      if (management === null) {
+        return Promise.reject(new Error("No local host bridge is available."));
+      }
+      return management.restartHostServiceIfHostIdle({
+        expectedHostId: hostId,
+      });
+    },
+  });
+}
+
+/**
  * The menu/tray "Restart Host" flow: cooperative first, force only by explicit
  * choice.
  *
@@ -227,8 +276,37 @@ export function LocalHostRestartFlow(
   props: LocalHostRestartFlowProps,
 ): ReactNode {
   const binding = useHostBinding();
-  if (binding === null) return <ForceOnlyRestartFlow {...props} />;
+  if (binding === null) {
+    // The service leg is fenced to this machine's host id, and without a
+    // binding there is none to read - and a force straight from the confirm
+    // is exactly what that leg exists not to do.
+    return props.firstLeg === "service" ? (
+      <UnboundServiceRestartFlow {...props} />
+    ) : (
+      <ForceOnlyRestartFlow {...props} />
+    );
+  }
   return <CooperativeFirstRestartFlow {...props} />;
+}
+
+/** The service leg with no host id to fence it to: confirm, then refuse. */
+function UnboundServiceRestartFlow(
+  props: LocalHostRestartFlowProps,
+): ReactNode {
+  return (
+    <RestartHostConfirmDialog
+      hostId={null}
+      open={props.requested}
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+      isPending={false}
+      onConfirm={() => {
+        props.onClose();
+        toastHostRestartDeclined(SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE);
+      }}
+    />
+  );
 }
 
 /**
@@ -393,6 +471,38 @@ function CooperativeFirstRestartFlow(
   // its own dispatches.
   const respawnInFlight =
     useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
+  const serviceRestart = useServiceHostRestart();
+
+  // The service leg, against THIS machine's host id and no other: main
+  // refuses it if that is no longer the local host, and a busy host keeps
+  // running and comes back as the same force offer the cooperative leg's
+  // busy verdict opens.
+  const dispatchService = (hostId: string): void => {
+    serviceRestart.mutate(
+      { hostId },
+      {
+        onSuccess: (result) => {
+          switch (result.kind) {
+            case "host-busy":
+              setForceOffer({ hostId, message: SERVICE_RESTART_BUSY_MESSAGE });
+              return;
+            case "declined":
+              close();
+              toastHostRestartDeclined(result.message);
+              return;
+            case "restarted":
+              close();
+              announceRestartRequested();
+              return;
+          }
+        },
+        onError: (err) => {
+          close();
+          toastFromRunnerError(err, "Couldn't restart host");
+        },
+      },
+    );
+  };
 
   const dispatchCooperative = (hostId: string): void => {
     // Adopt the armed id only when it was minted against THIS host; a
@@ -444,7 +554,11 @@ function CooperativeFirstRestartFlow(
         onOpenChange={(open) => {
           if (!open) close();
         }}
-        isPending={restart.isPending || forceRestart.isPending}
+        isPending={
+          restart.isPending ||
+          forceRestart.isPending ||
+          serviceRestart.isPending
+        }
         onConfirm={() => {
           const action = decideConfirmAction(
             liveHostIdNow(),
@@ -454,6 +568,17 @@ function CooperativeFirstRestartFlow(
           );
           if (action === "host-changed") {
             refuseForHostChange();
+            return;
+          }
+          if (props.firstLeg === "service") {
+            // Never the force fallback below: with no id to fence to, the
+            // service leg refuses rather than kill an unasked host.
+            if (localHostId === null) {
+              close();
+              toastHostRestartDeclined(SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE);
+              return;
+            }
+            dispatchService(localHostId);
             return;
           }
           if (action === "cooperative" && localHostId !== null) {

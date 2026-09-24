@@ -3,7 +3,10 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
-import type { HostRestartRequestResult } from "../../ipc-contracts/host-management-types";
+import type {
+  HostRestartRequestResult,
+  HostServiceRestartResult,
+} from "../../ipc-contracts/host-management-types";
 import type { GuardedMutationOutcome } from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
 import { appliedLocalHostCapability } from "../host/local-host-capability";
@@ -32,6 +35,19 @@ export function restartRequestResultFromOutcome<TOk>(
     return { kind: "declined", message: outcome.message };
   }
   throw new Error(outcome.message);
+}
+
+// The idle-gated service restart's wire result. The one difference from
+// `restartRequestResultFromOutcome`: the host's own busy refusal is
+// `host-busy`, not `declined`, because its caller answers it with a Force
+// offer over the listed work - a lane refusal, a removal or a replaced host
+// offers nothing to force. The CLI's refusal text is dropped here: it tells
+// its own caller to re-run with `--force`.
+export function serviceRestartResultFromOutcome<TOk>(
+  outcome: GuardedMutationOutcome<TOk>,
+): HostServiceRestartResult {
+  if (outcome.kind === "busy") return { kind: "host-busy" };
+  return restartRequestResultFromOutcome(outcome);
 }
 
 export function registerHostIpc(bridge: RunnerIpcBridge): void {
@@ -64,9 +80,10 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
       // channel restarts THE local host as a role, whatever currently fills
       // it, so there is no expected host id for a lane-head guard to hold
       // the job to. Only the Doctor repairs name a specific host.
-      const outcome = await bridge.options.hostController.respawn({
-        kind: "background",
-      });
+      const outcome = await bridge.options.hostController.respawn(
+        { kind: "background" },
+        "force",
+      );
       return restartRequestResultFromOutcome(outcome);
     },
   );

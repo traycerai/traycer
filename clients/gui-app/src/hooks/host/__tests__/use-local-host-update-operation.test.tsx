@@ -138,6 +138,9 @@ function notImplementedManagement(
       notImplemented("maintenanceInstallVersion"),
     ),
     restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
     runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({

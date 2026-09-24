@@ -111,6 +111,7 @@ import {
   type DownloadLaneStatus,
   type GuardedMutationOutcome,
   type HostControllerIntent,
+  type HostRespawnMode,
   type HostControllerStatus,
   type LocalAttemptFacts,
   type LocalAttemptLiveness,
@@ -4737,17 +4738,25 @@ export class HostController {
 
   // ---- respawn / recoverIfDown --------------------------------------------
 
-  // `respawn` is always force=true (`host restart --force` / a
-  // force-activation cycle, never `--if-idle`): it is the explicit "restart
-  // the host now" intent - Settings → Force restart on a busy denial, a
-  // doctor-recommended restart, the health monitor's recovery hook. The
-  // caller deliberately asked for an immediate restart; silently downgrading
-  // to "only if idle" would make the action a no-op exactly when the user is
+  // `respawn` takes its mode from the caller, never from a default.
+  //
+  // `force` (`host restart --force` / a force-activation cycle) is the
+  // explicit "restart the host now" intent - Settings → Force restart on a
+  // busy denial, a doctor-recommended restart, the tray and menu. The caller
+  // deliberately asked for an immediate restart; silently downgrading to
+  // "only if idle" would make the action a no-op exactly when the user is
   // trying to recover from a stuck host, which is the case it exists for.
   // `--force` on the CLI leg is load-bearing for the same reason: without it
   // `host restart` runs the cooperative shutdown claim, and the busy host
   // that made the user reach for Force restart denies it - the forced
   // restart would report the very declined outcome it exists to override.
+  //
+  // `if-idle` (`host restart --if-idle`) is the lifecycle card's restart for
+  // an old supervisor (MIX-OLD-SUPERVISOR): the host's cooperative
+  // `host.restart` is an in-process CHILD respawn by whatever supervisor is
+  // running, so only a service cycle puts this CLI in the supervisor's place.
+  // It must not end work nobody disclosed, so it refuses busy, and the card
+  // offers Force - this route's `force` mode - only after showing that work.
   // Bumped when a respawn lane job completes an actual restart. Coalescing
   // dedupes identical submissions (same key, still in flight), but the key is
   // intent- and target-discriminated, so a watched user repair and a
@@ -5202,6 +5211,7 @@ export class HostController {
 
   async respawn(
     intent: LocalHostMutationIntent,
+    mode: HostRespawnMode,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
     // Sampled at SUBMISSION, synchronously: a restart completed after this
     // point satisfies this request; one completed before it does not.
@@ -5212,8 +5222,11 @@ export class HostController {
       // background respawns still collapse to one restart; a user repair is
       // its own job so it cannot join a background restart and skip the
       // guard question below. The cross-key dedupe that this key split gave
-      // up is `respawnGeneration`'s job above.
-      `respawn:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      // up is `respawnGeneration`'s job above. The mode is part of the key:
+      // an idle-only restart joining a forced one would end work it promised
+      // to leave alone, and a forced one joining an idle-only one would be
+      // refused on the host's word after the person chose to override it.
+      `respawn:${mode}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         // Guard only - NOT `admitReprovision`. A restart is not a
         // reprovision: it must keep the removed-by-user deferral below and
@@ -5239,6 +5252,30 @@ export class HostController {
         // resurrect them instead of respecting the removal.
         if (await isHostRemovedByUser()) {
           return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
+        }
+        if (mode === "if-idle") {
+          // No F3 continuation: it overrides the drain on the strength of a
+          // Force confirmation this mode never had. `--defer-if-parked`
+          // leaves a parked activation to the command, under its own lock.
+          //
+          // No `notifyRespawning` either: a busy host refuses and keeps
+          // running, and a refused restart must leave no trace it was tried.
+          // A completed cycle publishes the NEW host itself
+          // (`completeServiceStart`), and the identity verdict cache is keyed
+          // by pid, so the replacement is judged on its own evidence - the
+          // same shape `activateAroundParkedRegistration`'s idle cycle has.
+          const prePid =
+            (await readRunningHostIdentity(this.layout))?.pid ?? null;
+          const recovery = await this.runCliRecoveryServiceCycle(
+            ["host", "restart", "--if-idle", "--defer-if-parked"],
+            prePid,
+          );
+          if (recovery.kind === "ok" && recovery.value.activated) {
+            this.respawnGeneration += 1;
+          } else if (recovery.kind !== "ok") {
+            await this.hostLifecycle.reloadSnapshotFromDisk();
+          }
+          return recovery;
         }
         // F3. Runs AFTER the removed-by-user deferral (a removed host is not
         // one to continue activating) and BEFORE `notifyRespawning`, because a

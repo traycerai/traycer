@@ -223,6 +223,7 @@ export function HostTrayCommandListener() {
     <>
       <LocalHostRestartFlow
         requested={pendingRestart}
+        firstLeg="cooperative"
         onClose={() => setPendingRestart(false)}
       />
       <ConfirmDestructiveDialog

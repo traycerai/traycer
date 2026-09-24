@@ -25,6 +25,7 @@ import type {
   HostTrayCommand,
   HostUninstallResult,
   HostRestartRequestResult,
+  HostServiceRestartResult,
   InstallVersionOk,
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
@@ -376,6 +377,9 @@ export interface DesktopHostManagementBridge {
   restartHostIfIdle(input: {
     readonly expectedHostId: string;
   }): Promise<HostRestartRequestResult>;
+  restartHostServiceIfHostIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostServiceRestartResult>;
   runDoctorRepairQueued(input: {
     readonly repair: QueuedDoctorRepair;
     readonly expectedHostId: string;
@@ -1225,6 +1229,8 @@ function buildDesktopHostManagement(
     maintenanceInstallVersion: (input) =>
       managementBridge.maintenanceInstallVersion(input),
     restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+    restartHostServiceIfHostIdle: (input) =>
+      managementBridge.restartHostServiceIfHostIdle(input),
     runDoctorRepairQueued: (input) =>
       managementBridge.runDoctorRepairQueued(input),
     runDoctorRepairIfIdle: (input) =>

@@ -270,6 +270,14 @@ export type GuardedMutationOutcome<TOk> =
 export type StopHostMode = "if-idle" | "force";
 
 /**
+ * A respawn's service cycle: `host restart --if-idle` (the CLI refuses with
+ * `E_HOST_BUSY`, and stops nothing, while the host has work in progress) or
+ * `host restart --force`. Both replace the SUPERVISOR - a service cycle is
+ * the one restart an old supervisor cannot turn into a child respawn.
+ */
+export type HostRespawnMode = "if-idle" | "force";
+
+/**
  * How the CLI child is spawned.
  *
  * - `attached` - piped stdio, like every other lane call. For a stop the app

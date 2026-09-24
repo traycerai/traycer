@@ -63,6 +63,9 @@ function makeManagementWithRunDoctorRepairQueued(
       notImplemented("maintenanceInstallVersion"),
     ),
     restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
     runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(notImplemented("getHostName")),
     setHostName: vi.fn(notImplemented("setHostName")),

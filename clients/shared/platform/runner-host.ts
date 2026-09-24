@@ -2186,6 +2186,16 @@ export type HostRestartRequestResult =
   | { readonly kind: "restarted" }
   | { readonly kind: "declined"; readonly message: string };
 
+// Result of the lifecycle card's idle-gated SERVICE restart
+// (`IHostManagement.restartHostServiceIfHostIdle`). `restarted` and
+// `declined` mean what they mean above. `host-busy` is the host's own
+// refusal: it has work in progress and nothing was stopped, so the caller
+// shows that work with Force as the explicit choice. It carries no text - the
+// CLI's refusal is an instruction to its own caller, not to the person.
+export type HostServiceRestartResult =
+  | HostRestartRequestResult
+  | { readonly kind: "host-busy" };
+
 // Per-intent result. Every mutation intent resolves ONE of these - the
 // lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
 // outcome is a normal resolved value the calling surface renders.
@@ -2649,6 +2659,22 @@ export interface IHostManagement {
   readonly restartHostIfIdle: (input: {
     readonly expectedHostId: string;
   }) => Promise<HostRestartRequestResult>;
+  /**
+   * The lifecycle card's "Restart host" while the running supervisor predates
+   * lifecycle enforcement: `host restart --if-idle --defer-if-parked`, a
+   * SERVICE cycle, so the supervisor itself is replaced. The cooperative
+   * `host.restart` cannot do that: it exits the host for an in-process child
+   * respawn by whatever supervisor is running, and an old one respawns only
+   * its child.
+   *
+   * Fenced on `expectedHostId` and refused when the mutation lane is occupied,
+   * exactly like {@link restartHostIfIdle} - someone is watching this one too.
+   * Unlike it, the HOST's veto stands: a busy host resolves `host-busy` and
+   * keeps running, and Force is the caller's separate, disclosed choice.
+   */
+  readonly restartHostServiceIfHostIdle: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostServiceRestartResult>;
   /**
    * The down-host recovery console's four lifecycle repairs, identity-fenced
    * and QUEUEING. See {@link QueuedDoctorRepair} for why those two properties

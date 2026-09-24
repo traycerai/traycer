@@ -951,7 +951,7 @@ describe("--lifecycle-origin desktop over the controller's real spawns", () => {
     await controller.installVersion("1.8.0", false);
     await controller.installVersion("1.8.0", true);
     await controller.registerService(BACKGROUND);
-    await controller.respawn(BACKGROUND);
+    await controller.respawn(BACKGROUND, "force");
     await controller.deregisterService();
     await controller.uninstallHost(false);
     await controller.uninstallHost(true);

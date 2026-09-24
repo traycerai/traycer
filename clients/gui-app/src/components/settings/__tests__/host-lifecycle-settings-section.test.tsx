@@ -3,7 +3,9 @@
 // stays intact), so the `→ none` confirm dialog's `NoneConfirmBody` can take
 // its bound or unbound branch without standing up a real host runtime.
 interface HostBindingFixture {
-  readonly directory: { readonly getLocalEntry: () => null };
+  readonly directory: {
+    readonly getLocalEntry: () => HostDirectoryEntry | null;
+  };
 }
 const hostBindingMock = vi.hoisted(
   (): { current: HostBindingFixture | null } => ({ current: null }),
@@ -12,6 +14,38 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
+
+// Same boundary as `local-host-restart-flow.test.tsx`, needed only for the
+// MIX-OLD-SUPERVISOR service-restart tests below: those are the first tests
+// in this file to render `LocalHostRestartFlow`'s BOUND arm
+// (`CooperativeFirstRestartFlow`), which calls both hooks unconditionally.
+// Neither is mocked anywhere else in this file (every earlier test either
+// leaves `hostBindingMock.current` null or only cares about the `→ none`
+// dialog's unbound branch), so left real they would throw
+// "Host runtime hooks must be used inside a <HostRuntimeProvider>" - this
+// suite never mounts one.
+interface DirectoryListMockState {
+  readonly data: readonly HostDirectoryEntry[] | undefined;
+}
+const directoryListMock = vi.hoisted(
+  (): { current: DirectoryListMockState } => ({
+    current: { data: undefined },
+  }),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => directoryListMock.current,
+}));
+
+type HostClientResolver = (
+  hostId: string | null,
+) => HostClient<HostRpcRegistry> | null;
+const clientForHostIdMock = vi.hoisted((): { current: HostClientResolver } => ({
+  current: () => null,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    clientForHostIdMock.current(hostId),
+}));
 
 // `useLocalHostQuitStatus` is the `→ none` confirm dialog's read-verdict
 // source (`host-lifecycle-none-confirm-dialog.tsx` -> `BoundNoneConfirm`).
@@ -72,6 +106,8 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   HostLifecycleSetRequest,
   HostLifecycleSetResult,
@@ -80,7 +116,12 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { LocalHostQuitStatus } from "@/components/host/use-local-host-quit-status";
+import type { HostRpcRegistry } from "@/lib/host";
 import { HostLifecycleSettingsSection } from "@/components/settings/host-lifecycle-settings-section";
+import {
+  buildOverviewHostFixture,
+  buildOverviewManagement,
+} from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   HOST_LIFECYCLE_NONE_PLAN_REASON,
@@ -99,6 +140,17 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const MACHINE = hostMachineNoun();
 const OPTION_COPY = hostLifecycleOptionCopy(MACHINE);
+
+function localEntry(hostId: string): HostDirectoryEntry {
+  return {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+}
 
 function view(overrides: Partial<HostLifecycleView>): HostLifecycleView {
   return {
@@ -222,6 +274,8 @@ function busyVerdict(hostId: string): LocalHostQuitStatus {
 afterEach(() => {
   cleanup();
   hostBindingMock.current = null;
+  directoryListMock.current = { data: undefined };
+  clientForHostIdMock.current = () => null;
   localHostQuitStatusMock.current = null;
   setMobileApp(false);
   useAuthStore.getState().setSubscriptionStatus(null);
@@ -397,6 +451,116 @@ describe("<HostLifecycleSettingsSection /> - desired/applied status line", () =>
 
     await waitForReady();
     expect(screen.queryByTestId("host-lifecycle-applied-line")).toBeNull();
+  });
+});
+
+// MIX-OLD-SUPERVISOR: the restart-host line's button runs
+// `LocalHostRestartFlow` with `firstLeg="service"` - the lifecycle card's
+// idle-gated SERVICE restart, never the cooperative `host.restart` RPC these
+// other cards use. These tests mount the BOUND arm
+// (`CooperativeFirstRestartFlow`), so they are the ones in this file that
+// need `directoryListMock`/`clientForHostIdMock` set up.
+describe("<HostLifecycleSettingsSection /> - restart-host line dispatches the SERVICE restart", () => {
+  function restartHostLifecycleFixture() {
+    return buildLifecycleHost(
+      view({
+        desired: { mode: "linked", rev: 2, updatedBy: null, updatedAt: null },
+        pending: "restart-host",
+      }),
+      () => Promise.resolve({ kind: "applied", view: view({}) }),
+    );
+  }
+
+  it("Restart host -> confirm calls restartHostServiceIfHostIdle with the local host's id, never the cooperative host.restart RPC", async () => {
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    // A working cooperative client IS resolvable here, deliberately - the
+    // point is that the service leg never even tries it.
+    const cooperativeFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? cooperativeFixture.client : null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const lifecycle = restartHostLifecycleFixture();
+    renderSection(
+      createFakeRunnerHost({
+        hostLifecycle: lifecycle.host,
+        hostManagement: buildOverviewManagement({
+          restartHostServiceIfHostIdle,
+        }),
+      }),
+    );
+
+    await screen.findByTestId("host-lifecycle-applied-line");
+    fireEvent.click(screen.getByTestId("host-lifecycle-restart-host"));
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(restartHostServiceIfHostIdle).toHaveBeenCalledWith({
+        expectedHostId: "host-a",
+      });
+    });
+    expect(cooperativeFixture.restartCalls()).toBe(0);
+  });
+
+  it('after the service restart resolves and the lifecycle view flips to pending:"none" via the host\'s own onChange, the applied line disappears without a remount', async () => {
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    clientForHostIdMock.current = () => null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const lifecycle = restartHostLifecycleFixture();
+    renderSection(
+      createFakeRunnerHost({
+        hostLifecycle: lifecycle.host,
+        hostManagement: buildOverviewManagement({
+          restartHostServiceIfHostIdle,
+        }),
+      }),
+    );
+
+    await screen.findByTestId("host-lifecycle-applied-line");
+    // Reference identity, not just presence: a remount would swap this DOM
+    // node for a new one, and `toBe` below would then fail even though a
+    // fresh "host-lifecycle-card" still exists.
+    const cardBeforeChange = screen.getByTestId("host-lifecycle-card");
+
+    fireEvent.click(screen.getByTestId("host-lifecycle-restart-host"));
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(restartHostServiceIfHostIdle).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+
+    // The lifecycle view's own transition to pending:"none" is a SEPARATE
+    // event from the restart mutation settling - it arrives however the real
+    // host later reports its supervisor as caught up, which this harness
+    // models as an explicit onChange push.
+    lifecycle.pushChange(
+      view({
+        desired: { mode: "linked", rev: 2, updatedBy: null, updatedAt: null },
+        pending: "none",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-lifecycle-applied-line")).toBeNull();
+    });
+    expect(screen.getByTestId("host-lifecycle-card")).toBe(cardBeforeChange);
   });
 });
 

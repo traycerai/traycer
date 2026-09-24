@@ -280,6 +280,7 @@ export function MenuCommandListener() {
       {closeTabFlow.unsyncedDialog}
       <LocalHostRestartFlow
         requested={pendingHostRestart}
+        firstLeg="cooperative"
         onClose={() => setPendingHostRestart(false)}
       />
       <HostBusyForceDeferDialog
