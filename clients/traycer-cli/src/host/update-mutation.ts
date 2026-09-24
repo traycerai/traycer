@@ -10,7 +10,27 @@ import {
   type CommitHostInstallSourceResult,
 } from "../installer/install";
 import type { WithCliUpdateContenderOptions } from "./update-contender";
-import { requireCliUpdateMutationCapability } from "./update-contender";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+} from "./update-contender";
+import {
+  LIFECYCLE_TEARDOWN_ADMISSION,
+  LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
+  LIFECYCLE_TEARDOWN_OPERATION,
+  type LifecycleTeardownPlatform,
+} from "./lifecycle-teardown";
+import { readHostPidMetadata } from "./pid-metadata";
+import {
+  forceStopHostProcessReporting,
+  removeHostPidMetadataIfUnchanged,
+  requestCooperativeShutdown,
+} from "../service/platforms/desktop-agent-shutdown";
+import {
+  epochMicrosNow,
+  killSupervisedHostTree,
+} from "../service/platforms/windows";
+import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
@@ -388,4 +408,45 @@ export async function startHostServiceLegacy(
   label: ServiceLabel,
 ): Promise<void> {
   await controller.start(label);
+}
+
+/**
+ * Final-actuator facade for the supervisor's own lifecycle teardown
+ * (`host/lifecycle-teardown.ts`): the lock it runs under and the platform
+ * stop machinery it drives. The actuator re-proves the hold through the
+ * `verify` it is handed before each destructive step.
+ */
+export function createLifecycleTeardownPlatform(): LifecycleTeardownPlatform {
+  return {
+    platform: process.platform,
+    withLock: (environment, run) => {
+      // ONE options value for acquisition and revalidation, as `host stop`
+      // does. Its own admission: refused inside any active attempt, so the
+      // teardown never interleaves with a swap, but admitted over a park,
+      // which it leaves standing for the next supervisor start to resume.
+      const options: WithCliUpdateContenderOptions = {
+        environment,
+        reason: LIFECYCLE_TEARDOWN_OPERATION,
+        waitMs: LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
+        pollIntervalMs: 100,
+        admission: LIFECYCLE_TEARDOWN_ADMISSION,
+      };
+      return withCliUpdateContender(options, (capability) =>
+        run(() => requireCliUpdateMutationCapability(capability, options)),
+      );
+    },
+    readPidMetadata: (environment) => readHostPidMetadata(environment),
+    requestCooperativeShutdown: (environment, operation, intent) =>
+      requestCooperativeShutdown(environment, operation, intent),
+    forceStopPublishedHost: (environment, operation) =>
+      forceStopHostProcessReporting(environment, operation, null),
+    killHostTree: (environment, rootPid, verify) =>
+      killSupervisedHostTree(environment, rootPid, verify, null, {
+        now: epochMicrosNow,
+      }),
+    verifyPublishedInstance: (pid, startIdentity) =>
+      getPublishedProcessIdentityVerdict(pid, startIdentity),
+    removePidMetadataIfUnchanged: (environment, instance) =>
+      removeHostPidMetadataIfUnchanged(environment, instance),
+  };
 }

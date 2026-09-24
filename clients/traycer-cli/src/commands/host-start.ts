@@ -88,33 +88,13 @@ import {
 } from "../host/lifecycle-observer";
 import {
   createLifecycleTeardown,
-  LIFECYCLE_TEARDOWN_ADMISSION,
-  LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
-  LIFECYCLE_TEARDOWN_OPERATION,
   type LifecycleTeardownPlatform,
   type OwnedHostChild,
 } from "../host/lifecycle-teardown";
-import { readHostPidMetadata } from "../host/pid-metadata";
-import {
-  requireCliUpdateMutationCapability,
-  withCliUpdateContender,
-  type WithCliUpdateContenderOptions,
-} from "../host/update-contender";
-import {
-  forceStopHostProcessReporting,
-  removeHostPidMetadataIfUnchanged,
-  requestCooperativeShutdown,
-} from "../service/platforms/desktop-agent-shutdown";
-import {
-  epochMicrosNow,
-  killSupervisedHostTree,
-} from "../service/platforms/windows";
+import { createLifecycleTeardownPlatform } from "../host/update-mutation";
 import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
-import {
-  getPublishedProcessIdentityVerdict,
-  ownProcessStartIdentity,
-} from "../store/process-identity";
+import { ownProcessStartIdentity } from "../store/process-identity";
 import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
@@ -862,38 +842,9 @@ const defaultRunDeps: RunHostStartDeps = {
     ownStartIdentity: () => ownProcessStartIdentity(),
     cliVersion: resolveCliVersion(process.env),
     observer: defaultLifecycleObserverRuntime,
-    teardown: {
-      platform: process.platform,
-      withLock: (environment, run) => {
-        // ONE options value for acquisition and revalidation, as `host stop`
-        // does. Its own admission: refused inside any active attempt, so the
-        // teardown never interleaves with a swap, but admitted over a park,
-        // which it leaves standing for the next supervisor start to resume.
-        const options: WithCliUpdateContenderOptions = {
-          environment,
-          reason: LIFECYCLE_TEARDOWN_OPERATION,
-          waitMs: LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
-          pollIntervalMs: 100,
-          admission: LIFECYCLE_TEARDOWN_ADMISSION,
-        };
-        return withCliUpdateContender(options, (capability) =>
-          run(() => requireCliUpdateMutationCapability(capability, options)),
-        );
-      },
-      readPidMetadata: (environment) => readHostPidMetadata(environment),
-      requestCooperativeShutdown: (environment, operation, intent) =>
-        requestCooperativeShutdown(environment, operation, intent),
-      forceStopPublishedHost: (environment, operation) =>
-        forceStopHostProcessReporting(environment, operation, null),
-      killHostTree: (environment, rootPid, verify) =>
-        killSupervisedHostTree(environment, rootPid, verify, null, {
-          now: epochMicrosNow,
-        }),
-      verifyPublishedInstance: (pid, startIdentity) =>
-        getPublishedProcessIdentityVerdict(pid, startIdentity),
-      removePidMetadataIfUnchanged: (environment, instance) =>
-        removeHostPidMetadataIfUnchanged(environment, instance),
-    },
+    // Behind the named facade, like every other service and host actuator
+    // (the contender architecture gate).
+    teardown: createLifecycleTeardownPlatform(),
   },
 };
 
