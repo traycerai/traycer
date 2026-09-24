@@ -61,6 +61,13 @@ import {
   invalidateBindingListingsExceptHeld,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
+import {
+  beginCloudChatDeletion,
+  confirmCloudChatDeletion,
+  settleCloudChatDeletion,
+} from "@/lib/chats/cloud-chat-deletions";
+import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
+import { readCachedChatPublicationId } from "@/hooks/chats/use-chat-publication-targets";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
@@ -121,12 +128,16 @@ interface ChatRecordMutationContext {
   readonly viewerUserId: string | null;
 }
 
+interface DeleteChatMutationContext extends ChatRecordMutationContext {
+  readonly cloudDeletionToken: string | null;
+}
+
 export type DeleteChatMutationOptions = Omit<
   UseMutationOptions<
     DeleteChatResponse,
     HostRpcError,
     DeleteChatMutationInput,
-    ChatRecordMutationContext
+    DeleteChatMutationContext
   >,
   "mutationFn"
 >;
@@ -785,7 +796,7 @@ export function useEpicDeleteChat(): UseMutationResult<
   DeleteChatResponse,
   HostRpcError,
   DeleteChatMutationInput,
-  ChatRecordMutationContext
+  DeleteChatMutationContext
 > {
   const client = useEpicRecordMutationClient();
   const sessionClient = useEpicSessionHostClient();
@@ -793,7 +804,7 @@ export function useEpicDeleteChat(): UseMutationResult<
   return useHostMutation<
     HostRpcRegistry,
     "epic.deleteChat",
-    ChatRecordMutationContext,
+    DeleteChatMutationContext,
     DeleteChatMutationInput
   >({
     client,
@@ -806,12 +817,55 @@ export function useEpicDeleteChat(): UseMutationResult<
       // repo's host-swap convention) rather than re-read in `onSuccess`, so a
       // host swap while the delete is in flight cannot make us dispose a
       // same-id chat session belonging to a different machine.
-      onMutate: ({ hostId }) => ({
-        hostId,
-        viewerHostId: sessionClient?.getActiveHostId() ?? null,
-        viewerUserId: currentProfileUserId(),
-      }),
-      onSuccess: (_data, variables, ctx) => {
+      onMutate: ({ hostId, epicId, chatId }) => {
+        const viewerHostId = sessionClient?.getActiveHostId() ?? null;
+        const viewerUserId = currentProfileUserId();
+        const cachedPublicationChatId =
+          readCachedChatPublicationId(queryClient, hostId, epicId, chatId) ??
+          readCachedChatPublicationId(
+            queryClient,
+            viewerHostId,
+            epicId,
+            chatId,
+          );
+        // Cache evidence is only for pending feedback and older hosts. The
+        // success response supplies the authoritative publication identity.
+        const publicationChatId = cachedPublicationChatId ?? chatId;
+        return {
+          hostId,
+          viewerHostId,
+          viewerUserId,
+          cloudDeletionToken:
+            hostId === null || viewerUserId === null
+              ? null
+              : beginCloudChatDeletion({
+                  taskId: epicId,
+                  ownerUserId: viewerUserId,
+                  ownerHostId: hostId,
+                  chatId: publicationChatId,
+                }),
+        };
+      },
+      onSuccess: (data, variables, ctx) => {
+        // Confirm BEFORE removing local records: otherwise their stale cloud
+        // copy becomes an unfolded row. The host's identity also replaces an
+        // incorrect provisional mapping, rather than confirming both rows.
+        if (
+          data.publicationChatId !== null &&
+          ctx.hostId !== null &&
+          ctx.viewerUserId !== null
+        ) {
+          confirmCloudChatDeletion(ctx.cloudDeletionToken, {
+            taskId: variables.epicId,
+            ownerUserId: ctx.viewerUserId,
+            ownerHostId: ctx.hostId,
+            chatId: data.publicationChatId,
+          });
+        } else {
+          // A v1.0 peer, or a host without a composed publisher, cannot
+          // report its publication identity.
+          settleCloudChatDeletion(ctx.cloudDeletionToken, true);
+        }
         // No active host at mutate time means nothing could have acquired a
         // session under this chat's identity either, so there is nothing to
         // force-release - and guessing a host here is exactly the
@@ -878,9 +932,39 @@ export function useEpicDeleteChat(): UseMutationResult<
           handle?.hostId ?? null,
         ])) {
           invalidateEpicChatRecords(queryClient, hostId);
+          if (hostId !== null && ctx.viewerUserId !== null) {
+            void queryClient.invalidateQueries({
+              queryKey: cloudChatListQueryKey({
+                hostId,
+                viewerUserId: ctx.viewerUserId,
+                taskId: variables.epicId,
+              }),
+            });
+          }
         }
       },
-      onError: (error, variables) => {
+      onError: (error, variables, ctx) => {
+        settleCloudChatDeletion(ctx?.cloudDeletionToken ?? null, false);
+        // Cleanup can reject after the host committed the tombstone. Release
+        // the provisional hide for genuine refusals, but also refresh so a
+        // committed deletion does not leave the old cloud answer visible.
+        if (ctx !== undefined && ctx.viewerUserId !== null) {
+          const handle = getOpenEpicRegistry().peek(variables.epicId);
+          for (const hostId of new Set([
+            ctx.hostId,
+            ctx.viewerHostId,
+            handle?.hostId ?? null,
+          ])) {
+            if (hostId === null) continue;
+            void queryClient.invalidateQueries({
+              queryKey: cloudChatListQueryKey({
+                hostId,
+                viewerUserId: ctx.viewerUserId,
+                taskId: variables.epicId,
+              }),
+            });
+          }
+        }
         // The optimistic sidebar row may already be unmounted, so its
         // per-call error callback is not a reliable rollback owner either.
         useEpicCanvasStore
