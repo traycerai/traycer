@@ -91,13 +91,26 @@ export function judgeWaitDisclosure(
  * There are three of these because the machine strings describe three
  * different things, and one sentence for all of them is FALSE for two: a card
  * carrying `auto: judge returned no verdict` sits directly under 37 s of the
- * judge's own reasoning about the action, so "Traycer couldn't run the judge"
+ * judge's own reasoning about the action, so "the judge couldn't run"
  * contradicts the paragraph above it. What the user is deciding is how much to
  * trust that paragraph, and that turns on whether the judge never ran, ran and
  * could not decide, or ran out of time.
+ *
+ * The never-ran sentence names its cause when the machine string carries one
+ * (see {@link judgeUnavailableCause}) and points at the setting that fixes it.
  */
-export const JUDGE_DID_NOT_RUN_HUMAN_LINE =
-  "Traycer couldn't run the judge, so it's asking you instead.";
+export function judgeCouldNotRunSentence(cause: string | null): string {
+  return cause === null
+    ? "The judge couldn't run."
+    : `The judge couldn't run: ${cause}.`;
+}
+
+/**
+ * The link after a couldn't-run sentence. Every cause in that family is fixed
+ * on the Judge tab: a provider that is off, signed out or not installed is
+ * chosen there, and so is a judge that can run.
+ */
+export const JUDGE_FIX_IN_SETTINGS_LABEL = "Fix in Permissions ▸ Judge";
 
 /** The judge answered, but not with a verdict this build could read. */
 export const JUDGE_NO_VERDICT_HUMAN_LINE =
@@ -187,26 +200,124 @@ export function isJudgeUnavailableReason(text: string): boolean {
  */
 export function judgeFailureFamily(text: string): JudgeFailureFamily | null {
   if (!isJudgeUnavailableReason(text)) return null;
-  const exact = JUDGE_FAILURE_FAMILY_BY_REASON.get(text);
+  const head = judgeMachineReasonHead(text);
+  const exact = JUDGE_FAILURE_FAMILY_BY_REASON.get(head);
   if (exact !== undefined) return exact;
   for (const [prefix, family] of JUDGE_FAILURE_FAMILY_BY_PREFIX) {
-    if (text.startsWith(prefix)) return family;
+    if (head.startsWith(prefix)) return family;
   }
   return null;
+}
+
+const JUDGE_UNAVAILABLE_PREFIX = "auto: judge unavailable (";
+
+/**
+ * The host's own constant, without the stage-1 explanation it appends when a
+ * DEEP review fails.
+ *
+ * A stage-2 ending that is not a verdict keeps stage 1's reasoning so the card
+ * is never blank, and the host writes it into the same string:
+ * `${reason} (${stage1Reason})` (`AutoJudgeService.unavailable`). So
+ * `auto: judge timed out (This rewrites remote history.)` is the timed-out
+ * constant, and `auto: judge unavailable (not signed in) (This rewrites…)` is
+ * the unavailable one with its own detail group first. The head ends at the
+ * constant's own balanced group when it has one, otherwise before the first
+ * ` (`: none of the fixed constants contains one.
+ */
+function judgeMachineReasonHead(text: string): string {
+  if (text.startsWith(JUDGE_UNAVAILABLE_PREFIX)) {
+    const close = closingParenIndex(text, JUDGE_UNAVAILABLE_PREFIX.length - 1);
+    return close === null ? text : text.slice(0, close + 1);
+  }
+  const appended = text.indexOf(" (");
+  return appended === -1 ? text : text.slice(0, appended);
+}
+
+/**
+ * The index of the `)` that closes the `(` at `open`, counting nested pairs,
+ * or `null` when the group never closes.
+ */
+function closingParenIndex(text: string, open: number): number | null {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text.charAt(index);
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return null;
+}
+
+/** The human half of a machine string, and whether the Judge tab fixes it. */
+export interface JudgeUnavailableHumanLine {
+  readonly sentence: string;
+  /**
+   * Whether {@link JUDGE_FIX_IN_SETTINGS_LABEL} follows the sentence. Only
+   * for the `did-not-run` family, whose every cause is a setting on the Judge
+   * tab. A judge that ran and could not decide, or ran out of time, is not a
+   * setting to fix - and neither is a stopped turn, an unreadable account
+   * policy (that is the Rules tab's), or a constant this build does not
+   * recognise. The link is a claim about WHERE the fix is, so the fallback
+   * sentence carries none: the sentence alone is the claim this build can back.
+   */
+  readonly fixInJudgeSettings: boolean;
+}
+
+/**
+ * The cause inside `auto: judge unavailable (…)`, or `null` for any other
+ * string.
+ *
+ * The host interpolates its `detail` there: a fixed clause it authored ("the
+ * judge provider is not signed in") or a provider's own error, filtered before
+ * it was ever put on the wire. Every other machine string carries no cause,
+ * and the sentence says only that the judge could not run.
+ *
+ * The FIRST BALANCED group, not everything up to the last `)`: after a failed
+ * deep review the host appends stage 1's explanation as a second group
+ * (`judgeMachineReasonHead`), which is the judge's reasoning about the action,
+ * not why the judge could not run. Nested pairs inside the detail are kept
+ * ("rate limited (429)"). A group that never closes has no cause to quote.
+ */
+export function judgeUnavailableCause(text: string): string | null {
+  if (!text.startsWith(JUDGE_UNAVAILABLE_PREFIX)) return null;
+  const open = JUDGE_UNAVAILABLE_PREFIX.length - 1;
+  const close = closingParenIndex(text, open);
+  if (close === null) return null;
+  const cause = text
+    .slice(open + 1, close)
+    .trim()
+    .replace(/\.+$/u, "");
+  return cause.length > 0 ? cause : null;
 }
 
 /**
  * The sentence that goes beneath a machine string, for every machine string.
  *
- * Total on purpose: an unknown `auto: ` constant still gets the sentence the
- * card printed before this function existed, so a host that grows a new
- * failure mode degrades to today's copy rather than to a blank line.
+ * Total on purpose: an unknown `auto: ` constant still gets the couldn't-run
+ * sentence, so a host that grows a new failure mode degrades to a true line
+ * rather than to a blank one. The LINK is not total: it goes only with the
+ * `did-not-run` family, the one whose causes the Judge tab fixes (see
+ * {@link JudgeUnavailableHumanLine.fixInJudgeSettings}).
  */
-export function judgeUnavailableHumanLine(text: string): string {
+export function judgeUnavailableHumanLine(
+  text: string,
+): JudgeUnavailableHumanLine {
   const family = judgeFailureFamily(text);
-  if (family === "no-verdict") return JUDGE_NO_VERDICT_HUMAN_LINE;
-  if (family === "out-of-time") return JUDGE_OUT_OF_TIME_HUMAN_LINE;
-  return JUDGE_DID_NOT_RUN_HUMAN_LINE;
+  if (family === "no-verdict") {
+    return { sentence: JUDGE_NO_VERDICT_HUMAN_LINE, fixInJudgeSettings: false };
+  }
+  if (family === "out-of-time") {
+    return {
+      sentence: JUDGE_OUT_OF_TIME_HUMAN_LINE,
+      fixInJudgeSettings: false,
+    };
+  }
+  return {
+    sentence: judgeCouldNotRunSentence(judgeUnavailableCause(text)),
+    fixInJudgeSettings: family === "did-not-run",
+  };
 }
 
 /** The wait line's companion, true for as long as the card is unanswered. */

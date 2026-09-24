@@ -61,7 +61,12 @@ vi.mock(
       useStatusBarRateLimitSegments: () => ({
         cluster: rateLimitCluster,
         mountTargets: [],
-        refresh: { queueTargets: [], httpRefetches: [], httpFetching: false },
+        refresh: {
+          ephemeralTargets: [],
+          ephemeralFetching: false,
+          httpRefetches: [],
+          httpFetching: false,
+        },
       }),
     };
   },
@@ -74,12 +79,8 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
   }),
 }));
 
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
-  useRateLimitQueueScope: () => null,
-}));
-
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
-  useAnyRateLimitQueueTargetFetching: () => false,
+vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
+  useProviderRateLimitFetchScope: () => null,
 }));
 
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({

@@ -456,7 +456,7 @@ import {
   verifyBudgetFor,
   type HostUpdateRunArgs,
 } from "../update-run";
-import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../../service/platforms/macos";
+import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../../service/spawn-edge-bounds";
 import { buildHostUpdateCommand } from "../../commands/host-update";
 import { buildProgram } from "../../index";
 import { verifyHostUpdateAttempt } from "../update-verify";

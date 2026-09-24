@@ -1657,13 +1657,19 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     });
     fireEvent.click(checkAgain);
 
-    await waitFor(() => {
-      expect(
-        screen
-          .getByRole("switch", { name: "Route automatically" })
-          .getAttribute("aria-checked"),
-      ).toBe("true");
-    });
+    // A failed save, a standing notice and a read-back settle inside this one
+    // wait; it has missed the default 1 s twice on a loaded 20-shard runner
+    // (#2014, #2105) while passing in isolation, so it gets a real budget.
+    await waitFor(
+      () => {
+        expect(
+          screen
+            .getByRole("switch", { name: "Route automatically" })
+            .getAttribute("aria-checked"),
+        ).toBe("true");
+      },
+      { timeout: 5_000 },
+    );
     expect(screen.queryByTestId("fallback-host-error")).toBeNull();
   });
 

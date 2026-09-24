@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ProcessRunError,
   ProcessSpawnError,
+  ProcessTimeoutError,
   runCommand,
 } from "../process-runner";
 
@@ -42,6 +43,7 @@ describe("runCommand spawn-failure classification", () => {
     );
     expect(error).toBeInstanceOf(ProcessRunError);
     expect(error).not.toBeInstanceOf(ProcessSpawnError);
+    expect(error).not.toBeInstanceOf(ProcessTimeoutError);
     expect((error as ProcessRunError).exitCode).toBe(3);
   });
 
@@ -60,5 +62,25 @@ describe("runCommand spawn-failure classification", () => {
     );
     expect(error).toBeInstanceOf(ProcessRunError);
     expect(error).not.toBeInstanceOf(ProcessSpawnError);
+    expect(error).not.toBeInstanceOf(ProcessTimeoutError);
+  });
+
+  // The recycle-timeout fix's own discriminator: a child the RUNNER killed
+  // for outliving `timeoutMs` must be distinguishable from every other run
+  // failure, because `launchctl kickstart -k` / `systemctl restart` callers
+  // report this shape as "unconfirmed", never as "failed" - killing the CLI
+  // process withdraws nothing the service manager already accepted.
+  it("a child that outlives timeoutMs is killed and reported as a ProcessTimeoutError", async () => {
+    const error = await rejection(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+        ...options,
+        timeoutMs: 200,
+      }),
+    );
+    expect(error).toBeInstanceOf(ProcessTimeoutError);
+    expect(error).toBeInstanceOf(ProcessRunError);
+    expect(error).not.toBeInstanceOf(ProcessSpawnError);
+    expect((error as ProcessTimeoutError).timeoutMs).toBe(200);
+    expect((error as Error).message).toContain("timed out after 200ms");
   });
 });

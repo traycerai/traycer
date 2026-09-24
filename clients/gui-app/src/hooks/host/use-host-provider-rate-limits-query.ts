@@ -31,7 +31,7 @@ import {
  * it outright. `provider-rate-limit-query-options.ts`'s `httpFetch` branch is
  * the ONLY lane that actually issues its own fetch through this hook
  * (`ephemeralProcess` providers stay a disabled, passive observer of whatever
- * `ephemeral-fetch-queue.ts` writes) - both routes fold their response through
+ * `provider-rate-limit-fetch.ts` writes) - both routes fold their response through
  * the exact same `mapResponseToProviderRateLimitEnvelope` wrapper, so the two
  * write lanes can never disagree on the cached shape.
  *

@@ -118,6 +118,7 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
     ackFailedSendRestoration: () => undefined,
     ackAcceptedAction: () => undefined,
     takeSetupFailedRestoration: () => null,
+    messageDeliveryRestored: () => null,
     ...overrides,
   };
 }

@@ -473,10 +473,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
-  // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
-  // queue requests with this extended response budget so a slow-but-successful
-  // probe is not discarded client-side while the host finishes it; the value
-  // is declared once in `rate-limit-timing.ts` and must match exactly.
+  // Claude refresh-safe probe alone is budgeted 90s). `fetchProviderRateLimits`
+  // requests with this extended response budget so a slow-but-successful probe
+  // is not discarded client-side while the host finishes it; the value is
+  // declared once in `rate-limit-timing.ts` and must match exactly.
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
@@ -919,6 +919,37 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.oneOffShell.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only lease verbs: one host calls these on another, never the
+  // renderer. Here because this table is exhaustive over the registry. `fifo`
+  // because each acquires, releases or ends a lease and must never coalesce.
+  "host.portForward.acquireLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.releaseLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.leaseEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The host-level forwards listing: only the newest answer means anything.
+  "portForward.listForHost": { ...LATEST_SCHEDULING, poll: null },
+  // Stopping a forward and cutting a lease both tear down live sockets.
+  "portForward.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "portForward.cutLease": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2103,6 +2134,10 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bounded read of the host's recent-decisions log (Permissions ▸ Activity).
+  // The tab refetches on mount and on its own refresh; a cadence here would
+  // wake the host for a log that grows only while an Auto mode turn runs.
+  "autoJudge.listRecent": { ...LATEST_SCHEDULING, poll: null },
   "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
   // Last-write-wins on the server, so ordering is the client's job: rapid
   // saves must reach the host in the order the user made them. `fifo` is not

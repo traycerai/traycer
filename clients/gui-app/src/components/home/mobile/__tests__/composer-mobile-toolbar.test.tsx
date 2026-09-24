@@ -1,7 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
@@ -20,8 +20,29 @@ vi.mock("@/components/home/pickers/harness-model-picker", () => ({
 vi.mock("@/hooks/auto-mode/use-auto-judge-billing", () => ({
   useAutoJudgeBilling: () => null,
 }));
+// Same reason as the billing hook above: `useOpenPermissionSettings` reads
+// `useSystemTabModalActions()`, which resolves through the router - this test
+// renders without one, so the hook is mocked rather than pulling in a router.
+const openPermissionSettingsMock = vi.hoisted(() => vi.fn());
+const useOpenPermissionSettingsMock = vi.hoisted(() =>
+  vi.fn<(hostId: string | null) => () => void>(),
+);
+vi.mock("@/hooks/settings/use-open-permission-settings", () => ({
+  useOpenPermissionSettings: (hostId: string | null) =>
+    useOpenPermissionSettingsMock(hostId),
+}));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  openPermissionSettingsMock.mockClear();
+  useOpenPermissionSettingsMock.mockReset();
+});
+
+beforeEach(() => {
+  useOpenPermissionSettingsMock.mockImplementation(
+    () => openPermissionSettingsMock,
+  );
+});
 
 function makeStore(modelSlug: string) {
   return createComposerToolbarStore({
@@ -39,7 +60,11 @@ function makeStore(modelSlug: string) {
   });
 }
 
-function renderToolbar(modelSlug: string, onSubmit: () => void) {
+function renderToolbar(
+  modelSlug: string,
+  onSubmit: () => void,
+  runTargetHostId: string | null,
+) {
   return render(
     <ComposerMobileToolbar
       store={makeStore(modelSlug)}
@@ -55,7 +80,7 @@ function renderToolbar(modelSlug: string, onSubmit: () => void) {
       dictationPreparing={null}
       settingsLocked={false}
       createProfileHostId={null}
-      runTargetHostId={null}
+      runTargetHostId={runTargetHostId}
       terminalLoginSurface={null}
       chatLineCarriesAutoMode={null}
     />,
@@ -64,7 +89,7 @@ function renderToolbar(modelSlug: string, onSubmit: () => void) {
 
 describe("ComposerMobileToolbar", () => {
   it("keeps the desktop arrangement: attach, permission, model, send", () => {
-    renderToolbar("claude-opus-5", vi.fn());
+    renderToolbar("claude-opus-5", vi.fn(), null);
     expect(screen.getByRole("button", { name: "Attach image" })).not.toBeNull();
     expect(screen.getByTestId("mock-model-picker")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
@@ -73,7 +98,7 @@ describe("ComposerMobileToolbar", () => {
   });
 
   it("renders the permission as an icon, naming it only for assistive tech", () => {
-    renderToolbar("claude-opus-5", vi.fn());
+    renderToolbar("claude-opus-5", vi.fn(), null);
     expect(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
     ).not.toBeNull();
@@ -83,7 +108,7 @@ describe("ComposerMobileToolbar", () => {
   });
 
   it("opens the options sheet from the permission pill", async () => {
-    renderToolbar("claude-opus-5", vi.fn());
+    renderToolbar("claude-opus-5", vi.fn(), null);
     expect(screen.queryByTestId("composer-options-sheet")).toBeNull();
     await userEvent.click(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
@@ -93,7 +118,7 @@ describe("ComposerMobileToolbar", () => {
 
   it("blocks send while the model slug is still empty", () => {
     const onSubmit = vi.fn();
-    renderToolbar("", onSubmit);
+    renderToolbar("", onSubmit, null);
     expect(
       screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -101,8 +126,32 @@ describe("ComposerMobileToolbar", () => {
 
   it("allows send once the model slug resolves", async () => {
     const onSubmit = vi.fn();
-    renderToolbar("claude-opus-5", onSubmit);
+    renderToolbar("claude-opus-5", onSubmit, null);
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onSubmit).toHaveBeenCalled();
+  });
+
+  it("wires the sheet's trailing row to useOpenPermissionSettings", async () => {
+    renderToolbar("claude-opus-5", vi.fn(), null);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Permissions: Supervised" }),
+    );
+    await userEvent.click(
+      screen.getByTestId("composer-options-permission-settings"),
+    );
+
+    expect(openPermissionSettingsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands useOpenPermissionSettings the toolbar's run-target host", () => {
+    renderToolbar("claude-opus-5", vi.fn(), "host-b");
+
+    expect(useOpenPermissionSettingsMock).toHaveBeenCalledWith("host-b");
+  });
+
+  it("hands it null when no run target has resolved", () => {
+    renderToolbar("claude-opus-5", vi.fn(), null);
+
+    expect(useOpenPermissionSettingsMock).toHaveBeenLastCalledWith(null);
   });
 });

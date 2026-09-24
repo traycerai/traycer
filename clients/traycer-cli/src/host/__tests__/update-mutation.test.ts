@@ -42,6 +42,7 @@ import type {
 } from "../../installer/install";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { ungatedStoreFormatFloorEvidence } from "../store-format-floor";
+import { atServiceSpawnEdge } from "../../service/spawn-edge";
 
 const roots: string[] = [];
 
@@ -93,7 +94,7 @@ afterEach(async () => {
 });
 
 describe("CLI capability-consuming mutation facades", () => {
-  it("publishes the Desktop-owned agent label before the service actuator", async () => {
+  it("publishes the Desktop-owned agent label at the controller's spawn edge, not before the call", async () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;
     const events: string[] = [];
@@ -107,7 +108,16 @@ describe("CLI capability-consuming mutation facades", () => {
         return lease;
       },
     );
+    // Models the real controller: entry into the call happens BEFORE the
+    // spawn edge, which is the whole distinction this test exists to pin.
+    // Publish-before-the-call (the old arrangement) and publish-at-the-edge
+    // (the new one) both yield `label -> publish -> install` if the fake
+    // only records entry and exit - the "controller-entered" marker is what
+    // separates them: it can only land ahead of "publish" when the edge, not
+    // the call itself, is what triggers the publication.
     const install = vi.fn(async () => {
+      events.push("controller-entered");
+      await atServiceSpawnEdge();
       events.push("install");
     });
     const hostStartAdoptionLabel = vi.fn(async () => {
@@ -142,11 +152,55 @@ describe("CLI capability-consuming mutation facades", () => {
     );
     expect(events).toEqual([
       "label",
+      "controller-entered",
       "publish:ai.traycer.host.agent",
       "install",
     ]);
     expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
     expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a controller call that throws before reaching any spawn edge never publishes, waits, or cancels", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    adoptionMock.publish.mockResolvedValue(lease);
+    const preEdgeError = new Error("ownership probe failed before any edge");
+    const install = vi.fn(async () => {
+      // No `atServiceSpawnEdge()` call at all - models a controller that
+      // fails during its pre-edge work (an ownership probe, a Desktop
+      // stand-down) and never reaches the point where a grant would matter.
+      throw preEdgeError;
+    });
+    const hostStartAdoptionLabel = vi.fn(
+      async (label: { id: string }) => label.id,
+    );
+
+    await expect(
+      withUpdateContender(
+        {
+          hostHomeDir,
+          reason: contenderOptions.reason,
+          waitMs: 0,
+          pollIntervalMs: 10,
+          admission: contenderOptions.admission,
+        },
+        async (capability) =>
+          installHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            { install, hostStartAdoptionLabel },
+            serviceOptions,
+          ),
+      ),
+    ).rejects.toBe(preEdgeError);
+
+    expect(adoptionMock.publish).not.toHaveBeenCalled();
+    expect(lease.waitForSpawn).not.toHaveBeenCalled();
+    expect(lease.cancel).not.toHaveBeenCalled();
   });
 
   // Change 7 (fixup ticket): the adoption cleanup used to `await
@@ -164,7 +218,9 @@ describe("CLI capability-consuming mutation facades", () => {
       }),
     };
     adoptionMock.publish.mockResolvedValue(lease);
-    const install = vi.fn(async () => undefined);
+    const install = vi.fn(async () => {
+      await atServiceSpawnEdge();
+    });
     const hostStartAdoptionLabel = vi.fn(
       async (label: { id: string }) => label.id,
     );
@@ -211,6 +267,10 @@ describe("CLI capability-consuming mutation facades", () => {
       exitCode: 1,
     });
     const install = vi.fn(async () => {
+      // The lease is only published once the actuator reaches its spawn
+      // edge, so the edge has to be reached before the record-step failure
+      // that follows it.
+      await atServiceSpawnEdge();
       throw committedError;
     });
     const hostStartAdoptionLabel = vi.fn(
@@ -254,6 +314,9 @@ describe("CLI capability-consuming mutation facades", () => {
     adoptionMock.publish.mockResolvedValue(lease);
     const osError = new Error("os-failed");
     const install = vi.fn(async () => {
+      // The edge is reached (the lease is published) before the OS actuator
+      // itself fails, ordinarily, with no registration commit involved.
+      await atServiceSpawnEdge();
       throw osError;
     });
     const hostStartAdoptionLabel = vi.fn(
@@ -304,6 +367,7 @@ describe("CLI capability-consuming mutation facades", () => {
       exitCode: 1,
     });
     const install = vi.fn(async () => {
+      await atServiceSpawnEdge();
       throw committedError;
     });
     const hostStartAdoptionLabel = vi.fn(

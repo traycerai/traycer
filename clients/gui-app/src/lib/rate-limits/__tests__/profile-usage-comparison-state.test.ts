@@ -200,57 +200,20 @@ describe("deriveProfileUsageDetailState", () => {
 });
 
 describe("deriveProfileUsageRefreshStatus", () => {
-  it("is refreshing whenever this profile's own query is fetching, regardless of lane", () => {
+  // The queued phase is gone with the shared serial queue: every read of a
+  // profile's own key now runs through TanStack directly (the fetch function,
+  // a direct refetch, an invalidation), so that key's own `isFetching` is the
+  // whole signal - no other profile's work can hold this one back on the
+  // client, and there is no third "queued" state left to report.
+  it("is refreshing when this profile's own query is fetching", () => {
     expect(
-      deriveProfileUsageRefreshStatus({
-        isFetchingThisProfile: true,
-        queueDraining: false,
-        lane: "httpFetch",
-      }),
-    ).toBe("refreshing");
-    expect(
-      deriveProfileUsageRefreshStatus({
-        isFetchingThisProfile: true,
-        queueDraining: false,
-        lane: "ephemeralProcess",
-      }),
+      deriveProfileUsageRefreshStatus({ isFetchingThisProfile: true }),
     ).toBe("refreshing");
   });
 
-  it("is queued for the ephemeralProcess lane when the shared queue is draining but this profile's own fetch has not started", () => {
+  it("is idle when this profile's own query is not fetching", () => {
     expect(
-      deriveProfileUsageRefreshStatus({
-        isFetchingThisProfile: false,
-        queueDraining: true,
-        lane: "ephemeralProcess",
-      }),
-    ).toBe("queued");
-  });
-
-  it("is never queued for the httpFetch lane, which has no shared queue", () => {
-    expect(
-      deriveProfileUsageRefreshStatus({
-        isFetchingThisProfile: false,
-        queueDraining: true,
-        lane: "httpFetch",
-      }),
-    ).toBe("idle");
-  });
-
-  it("is idle when nothing is fetching or draining", () => {
-    expect(
-      deriveProfileUsageRefreshStatus({
-        isFetchingThisProfile: false,
-        queueDraining: false,
-        lane: "ephemeralProcess",
-      }),
-    ).toBe("idle");
-    expect(
-      deriveProfileUsageRefreshStatus({
-        isFetchingThisProfile: false,
-        queueDraining: false,
-        lane: null,
-      }),
+      deriveProfileUsageRefreshStatus({ isFetchingThisProfile: false }),
     ).toBe("idle");
   });
 });

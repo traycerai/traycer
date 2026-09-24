@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Check, Gavel, ShieldAlert, X } from "lucide-react";
+import { Check, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
@@ -7,18 +7,33 @@ import {
   useRestartHighlightPulse,
 } from "@/components/chat/chat-navigation-highlight";
 import { deriveToolInputSummary } from "@/lib/segment-summary";
+import { approvalCardText } from "@/components/chat/segments/approval-text";
 import { humanActionableApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import {
   APPROVAL_PAUSED_LINE,
+  JUDGE_FIX_IN_SETTINGS_LABEL,
   approvalWaitLine,
   isJudgeUnavailableReason,
   judgeUnavailableHumanLine,
   judgeWaitDisclosure,
 } from "@/components/chat/segments/approval-card-disclosure";
+import {
+  AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
+  autoJudgeTierLine,
+  autoModeRuleDisplayName,
+  autoModeRuleDraftAction,
+  autoModeRuleDraftText,
+  type AutoModeRuleDraftWorkspace,
+} from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatApprovalReason,
+  ChatApprovalState,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 
 interface ComposerSlotApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatApprovalState>;
@@ -26,21 +41,30 @@ interface ComposerSlotApprovalQueueProps {
   readonly onDecision: (approvalId: string, approved: boolean) => void;
   readonly highlightedApprovalId: string | null;
   readonly highlightedGeneration?: number;
+  /**
+   * What this chat's workspace binding says about where it runs, for the rule
+   * "Allow from now on…" drafts. Either part is `null` when unknown.
+   */
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  /** Opens Settings; the card's two links land on Permissions tabs. */
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 /**
  * Copy for each judge stage, keyed by `ChatApprovalState.reviewing`.
  *
  * Two stages, two very different waits: the fast pass answers within seconds,
- * the deep one reads the transcript and may run for minutes, so the row says
- * which one is running rather than showing one generic "Reviewing…" for both.
+ * the deep one reads the conversation and may run for minutes, so the line
+ * says which one is running rather than one generic "Reviewing…" for both.
+ * "Auto mode" rather than "the judge": this is the mode the user chose, and the
+ * same shield as its icon, so the wait is recognisably that mode at work.
  */
 const JUDGE_REVIEWING_LABEL: Record<
   NonNullable<ChatApprovalState["reviewing"]>,
   string
 > = {
-  checking: "Checking…",
-  reviewing: "Judge reviewing the transcript…",
+  checking: "Auto mode is checking",
+  reviewing: "Auto mode is reading the conversation",
 };
 
 /**
@@ -70,7 +94,14 @@ export function ComposerSlotApprovalQueue(
   // moment one row is actually answerable - including the same card's other
   // rows, which is the common case in a queue of several calls.
   const awaitingJudgeOnly = actionable.length === 0;
-  const HeaderIcon = awaitingJudgeOnly ? Gavel : ShieldAlert;
+  // While every row is with the judge the HEADER is the wait line: the quiet
+  // card is one line naming the stage, then the commands. It describes the
+  // first judged row, which is the one running - the judge's per-chat queue
+  // admits one call at a time - and that row does not repeat it.
+  const headerApproval = awaitingJudgeOnly
+    ? (approvals.find((approval) => approval.reviewing !== null) ?? null)
+    : null;
+  const headerStage = headerApproval?.reviewing ?? null;
   return (
     // The chrome follows the same flag as the heading, and that is the whole
     // fix for the post-retirement flicker: once an allowed command retires its
@@ -93,65 +124,61 @@ export function ComposerSlotApprovalQueue(
       data-testid="approval-prompt"
       data-chrome={awaitingJudgeOnly ? "quiet" : "alert"}
     >
-      <div className="flex items-center gap-2">
-        <HeaderIcon
-          className={cn(
-            "size-3.5 shrink-0",
-            awaitingJudgeOnly ? "text-muted-foreground" : "text-primary",
-          )}
-          aria-hidden
+      {headerApproval !== null && headerStage !== null ? (
+        <JudgeReviewingLine
+          stage={headerStage}
+          startedAt={headerApproval.requestedAt}
+          placement="header"
         />
-        <span
-          className={cn(
-            "select-none",
-            awaitingJudgeOnly
-              ? "text-ui-xs text-muted-foreground"
-              : "font-medium uppercase text-overline text-primary",
-          )}
-        >
-          {awaitingJudgeOnly ? "Judge review" : "Approval needed"}
-        </span>
-        {showBulk ? (
-          <>
-            <span aria-hidden className="text-muted-foreground/40">
-              ·
-            </span>
-            <span className="text-ui-xs text-muted-foreground">
-              {actionable.length} pending
-            </span>
-            <div className="ml-auto flex items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={!canAct}
-                onClick={() => {
-                  for (const approval of actionable) {
-                    onDecision(approval.approvalId, false);
-                  }
-                }}
-              >
-                <X className="size-3.5" aria-hidden />
-                Deny all
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                disabled={!canAct}
-                onClick={() => {
-                  for (const approval of actionable) {
-                    onDecision(approval.approvalId, true);
-                  }
-                }}
-              >
-                <Check className="size-3.5" aria-hidden />
-                Approve all
-              </Button>
-            </div>
-          </>
-        ) : null}
-      </div>
+      ) : null}
+      {awaitingJudgeOnly ? null : (
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="size-3.5 shrink-0 text-primary" aria-hidden />
+          <span className="select-none font-medium uppercase text-overline text-primary">
+            Approval needed
+          </span>
+          {showBulk ? (
+            <>
+              <span aria-hidden className="text-muted-foreground/40">
+                ·
+              </span>
+              <span className="text-ui-xs text-muted-foreground">
+                {actionable.length} pending
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!canAct}
+                  onClick={() => {
+                    for (const approval of actionable) {
+                      onDecision(approval.approvalId, false);
+                    }
+                  }}
+                >
+                  <X className="size-3.5" aria-hidden />
+                  Deny all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="default"
+                  disabled={!canAct}
+                  onClick={() => {
+                    for (const approval of actionable) {
+                      onDecision(approval.approvalId, true);
+                    }
+                  }}
+                >
+                  <Check className="size-3.5" aria-hidden />
+                  Approve all
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
       <div className="flex flex-col divide-y divide-border/30">
         {approvals.map((approval) => (
           <ApprovalRow
@@ -163,6 +190,9 @@ export function ComposerSlotApprovalQueue(
               props.highlightedApprovalId === approval.approvalId
             }
             highlightGeneration={props.highlightedGeneration ?? 0}
+            stageInHeader={approval === headerApproval}
+            ruleDraftWorkspace={props.ruleDraftWorkspace}
+            onOpenSettings={props.onOpenSettings}
           />
         ))}
       </div>
@@ -176,6 +206,10 @@ interface ApprovalRowProps {
   readonly onDecision: (approvalId: string, approved: boolean) => void;
   readonly navigationHighlighted: boolean;
   readonly highlightGeneration: number;
+  /** The card's header already shows this row's judge stage. */
+  readonly stageInHeader: boolean;
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 function ApprovalRow(props: ApprovalRowProps) {
@@ -186,13 +220,23 @@ function ApprovalRow(props: ApprovalRowProps) {
     props.highlightGeneration,
     rowRef,
   );
-  const inputSummary = deriveToolInputSummary(
+  // The derived summary is the action a rule draft narrows to; what the card
+  // SHOWS is a display choice made below it (`approvalCardText` drops the cut
+  // summary when the headline is the whole command), so the two are kept apart.
+  const derivedSummary = deriveToolInputSummary(
     approval.toolName,
     approval.input,
   );
-  const headline =
-    approval.description.length > 0 ? approval.description : approval.toolName;
+  const { inputSummary, headline } = approvalCardText(
+    approval.toolName,
+    derivedSummary,
+    approval.description,
+    deriveToolInputDetail(approval.toolName, approval.input),
+  );
   const reviewing = approval.reviewing;
+  // The stage line this row shows itself: none while the card's header is
+  // already showing it, and none once the judge has handed the row over.
+  const rowStage = props.stageInHeader ? null : reviewing;
   return (
     <div
       ref={rowRef}
@@ -227,21 +271,37 @@ function ApprovalRow(props: ApprovalRowProps) {
           </>
         ) : null}
       </div>
-      <p className="m-0 text-foreground/85">{headline}</p>
+      {headline === null ? null : (
+        // The headline can be the whole command in place of the cut summary,
+        // so it wraps a long unbroken token and keeps the command's lines.
+        <p className="m-0 min-w-0 whitespace-pre-wrap break-words text-foreground/85">
+          {headline}
+        </p>
+      )}
       {approval.reason !== null ? (
-        <JudgeReason rule={approval.reason.rule} text={approval.reason.text} />
+        <JudgeReason
+          reason={approval.reason}
+          ruleDraftAction={autoModeRuleDraftAction({
+            inputSummary: derivedSummary,
+            toolName: approval.toolName,
+          })}
+          ruleDraftWorkspace={props.ruleDraftWorkspace}
+          onOpenSettings={props.onOpenSettings}
+        />
       ) : null}
-      {reviewing !== null ? (
+      {rowStage !== null ? (
         // No buttons and no override while a judge is deciding (plan decision
         // 19). The state rides the subscribe frame only, and the host retires
         // the row with its own resolution frame on every exit that announced
         // one - the allow, a Stop during stage 2, a failed journal write and
         // the agents-only denial alike.
         <JudgeReviewingLine
-          stage={reviewing}
+          stage={rowStage}
           startedAt={approval.requestedAt}
+          placement="row"
         />
-      ) : (
+      ) : null}
+      {reviewing === null ? (
         <div className="flex items-center justify-end gap-2">
           <Button
             type="button"
@@ -268,7 +328,7 @@ function ApprovalRow(props: ApprovalRowProps) {
             Approve
           </Button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -327,6 +387,11 @@ function ApprovalWaitLine(props: { readonly requestedAt: number }) {
 function JudgeReviewingLine(props: {
   readonly stage: NonNullable<ChatApprovalState["reviewing"]>;
   readonly startedAt: number;
+  /**
+   * `header` is the quiet card's own header: the Auto mode shield leads it.
+   * `row` is a row still with the judge on a card that is otherwise asking.
+   */
+  readonly placement: "header" | "row";
 }) {
   const elapsedSeconds = useElapsedSeconds(props.startedAt, 0, null);
   const disclosure = judgeWaitDisclosure(elapsedSeconds);
@@ -334,17 +399,25 @@ function JudgeReviewingLine(props: {
     <div
       className="flex min-w-0 flex-col gap-1"
       data-testid="approval-reviewing"
+      data-placement={props.placement}
     >
       <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+        {props.placement === "header" ? (
+          <ShieldCheck
+            className="size-3.5 shrink-0 text-muted-foreground"
+            aria-hidden
+            data-testid="approval-reviewing-shield"
+          />
+        ) : null}
+        <span role="status" data-testid="approval-reviewing-stage">
+          {JUDGE_REVIEWING_LABEL[props.stage]}
+        </span>
         <AgentSpinningDots
           className={undefined}
           testId={undefined}
           variant={undefined}
           tone="muted"
         />
-        <span role="status" data-testid="approval-reviewing-stage">
-          {JUDGE_REVIEWING_LABEL[props.stage]}
-        </span>
         {disclosure.elapsedLabel !== null ? (
           <>
             <span aria-hidden className="text-muted-foreground/40">
@@ -371,12 +444,18 @@ function JudgeReviewingLine(props: {
 
 /**
  * The judge's verdict on a call it escalated: the rule it matched as a chip,
- * its own reasoning underneath.
+ * its own reasoning underneath, and one line saying why that sent it to a
+ * person.
  *
  * A card that said only "approve this?" after a judge already refused it is
  * strictly worse than one that never ran a judge, because the user cannot tell
  * why they are being asked - so this renders wherever the reason is present,
  * including on a row that is no longer reviewing.
+ *
+ * The rule is shown in sentence case; the wire keeps the host's exact name.
+ * The line under the reason is keyed by the `tier` the host sends, never by a
+ * client copy of the rule lists, so a rule that changes tier on a newer host
+ * reads correctly here. An older host sends no tier and gets no line.
  *
  * When the reason is an UNAVAILABILITY string rather than the judge's prose,
  * the machine string is kept verbatim and in mono - it is a greppable constant,
@@ -386,13 +465,25 @@ function JudgeReviewingLine(props: {
  * leaves its reasoning right above this line, so the "couldn't run" sentence
  * would contradict the paragraph the user is reading.
  */
-function JudgeReason(props: { readonly rule: string; readonly text: string }) {
-  const unavailable = isJudgeUnavailableReason(props.text);
+function JudgeReason(props: {
+  readonly reason: ChatApprovalReason;
+  /**
+   * What a drafted "allow" rule is narrowed to, or `null` when the approval
+   * names no action at all - and then no rule is offered, since one naming
+   * only the category would allow everything in it.
+   */
+  readonly ruleDraftAction: string | null;
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
+}) {
+  const { reason, onOpenSettings, ruleDraftAction } = props;
+  const unavailable = isJudgeUnavailableReason(reason.text);
+  const ruleName = autoModeRuleDisplayName(reason.rule);
+  const tierLine = autoJudgeTierLine(reason.tier);
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <span className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full border border-border/60 bg-foreground/5 px-2 py-0.5 text-ui-xs text-foreground/85">
-        <Gavel className="size-3 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="min-w-0 truncate">{props.rule}</span>
+      <span className="inline-flex w-fit max-w-full items-center rounded-full border border-border/60 bg-foreground/5 px-2 py-0.5 text-ui-xs text-foreground/85">
+        <span className="min-w-0 truncate">{ruleName}</span>
       </span>
       <p
         className={cn(
@@ -400,16 +491,91 @@ function JudgeReason(props: { readonly rule: string; readonly text: string }) {
           unavailable && "font-mono",
         )}
       >
-        {props.text}
+        {reason.text}
       </p>
       {unavailable ? (
+        <JudgeUnavailableLine
+          text={reason.text}
+          onOpenSettings={onOpenSettings}
+        />
+      ) : null}
+      {tierLine !== null ? (
         <p
           className="m-0 text-ui-xs text-muted-foreground"
-          data-testid="approval-judge-unavailable-line"
+          data-testid="approval-judge-tier-line"
         >
-          {judgeUnavailableHumanLine(props.text)}
+          {tierLine}
+          {reason.tier === "soft" && ruleDraftAction !== null ? (
+            <>
+              {" "}
+              <Button
+                type="button"
+                variant="link"
+                size="inline-xs"
+                data-testid="approval-allow-from-now-on"
+                onClick={() => {
+                  onOpenSettings({
+                    section: "permissions",
+                    tab: "rules",
+                    draft: {
+                      section: "allow",
+                      text: autoModeRuleDraftText({
+                        workspace: props.ruleDraftWorkspace,
+                        ruleName,
+                        action: ruleDraftAction,
+                      }),
+                    },
+                    resetToGeneral: false,
+                  });
+                }}
+              >
+                {AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL}
+              </Button>
+            </>
+          ) : null}
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The human sentence under a machine string, with the Judge tab link when a
+ * setting is what fixes it.
+ */
+function JudgeUnavailableLine(props: {
+  readonly text: string;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
+}) {
+  const line = judgeUnavailableHumanLine(props.text);
+  return (
+    <p
+      className="m-0 text-ui-xs text-muted-foreground"
+      data-testid="approval-judge-unavailable-line"
+    >
+      {line.sentence}
+      {line.fixInJudgeSettings ? (
+        <>
+          {" "}
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            data-testid="approval-fix-in-judge-settings"
+            onClick={() => {
+              props.onOpenSettings({
+                section: "permissions",
+                tab: "judge",
+                draft: null,
+                resetToGeneral: false,
+              });
+            }}
+          >
+            {JUDGE_FIX_IN_SETTINGS_LABEL}
+          </Button>
+          .
+        </>
+      ) : null}
+    </p>
   );
 }

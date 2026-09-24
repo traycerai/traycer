@@ -244,6 +244,7 @@ function chatActionsStub(): ChatActions {
     ackFailedSendRestoration: vi.fn(),
     ackAcceptedAction: vi.fn(),
     takeSetupFailedRestoration: vi.fn(),
+    messageDeliveryRestored: vi.fn(),
   };
 }
 
@@ -256,6 +257,7 @@ function inputFor(
     activeInlineEdit,
     canModifyMessages: true,
     canAct: true,
+    messageDelivery: null,
     interviewDeliveryRetryProtocolSupported: true,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,

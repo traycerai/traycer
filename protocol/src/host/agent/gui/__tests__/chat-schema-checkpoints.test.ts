@@ -19,6 +19,9 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
+  chatSubscribeV114,
+  chatSubscribeV115,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -73,6 +76,25 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // runtime-event schemas by reference (the two `**.grokPromptIndex` entries in
 // `compat-exceptions.json` record why that is tolerated), and 1.9 onward carry
 // the field live.
+//
+// 1.13 is captured ON TIME, the way the rule asks: taken from the tree at OSS
+// commit c18aba718, before the port-forward surface took 1.14 above it, and
+// re-taken after the freeze to confirm the two agree. It is the first entry
+// since 1.10 that proves the freeze rather than merely starting one. Then
+// re-captured with 1.7–1.12 above when the grok anchor gained
+// `grokPromptIndex`: main made that change on its live line, which is 1.13,
+// so the frozen copy here (which reaches the anchor by reference) moved with
+// it. The values below are main's own live-1.13 digests at that merge, and
+// the frozen copy on the merged tree reproduces them exactly.
+//
+// 1.14 is captured LATE, like 1.11/1.12: the rule asks for a capture when the
+// next minor opens over it, and that did not happen here either - 1.15
+// (main's message-delivery line) opened over 1.14 without a capture, so this
+// is our own render, not the bytes the port-forward line shipped with.
+//
+// 1.15 is captured ON TIME, from the tree before 1.16 opened above it for the
+// approval card's judge-reason tier, and re-verified after that freeze:
+// identical.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -126,6 +148,18 @@ const SERVER_FRAME_DIGESTS = {
     "1de46aa26aebc0b902d91cf0b108e9b34cb0906bbd8a03dee5a60627c9e135d3",
     "882f4af25ef15550956d59c48c622c0c592f3c313b15b44b337e4a5b398bb809",
   ],
+  13: [
+    "0b21bf15572d520c23bc7d78428b1b5abf4b78970f07bea3accae6295082c1e4",
+    "4b319e48d65e2493146748cb326a652cdb204d78f647cf8c41defbfef503de6b",
+  ],
+  14: [
+    "728c4ca15b52ea128e6509f24f37ad44248d4f0056054db96ab832faf78cf3ab",
+    "05098db0e4bf4d54d8ef7503440b9b5f43aea1c1c744263f99802c687edd3e12",
+  ],
+  15: [
+    "9aca2d28d1d127a05921e532e779a43c929645bdf50a117b9953a64b3a3b35f0",
+    "1f5c285666d7c8a100624291edafaae223ee22220a8787a68cdb41df701016b3",
+  ],
 } as const;
 
 const contracts = [
@@ -142,10 +176,13 @@ const contracts = [
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
+  chatSubscribeV114,
+  chatSubscribeV115,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.12 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.15 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

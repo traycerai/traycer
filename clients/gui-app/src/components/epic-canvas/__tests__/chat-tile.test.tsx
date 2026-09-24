@@ -738,6 +738,7 @@ function emitChatSnapshotWithMessages(input: {
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -5005,6 +5006,104 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     expect(retryFromUser).toHaveBeenCalledTimes(1);
+  });
+
+  describe("turn-completed announcement title", () => {
+    const REF_NAME = "Untitled agent";
+
+    function seedDocWithChatTitle(title: string) {
+      return (doc: Y.Doc): void => {
+        seedDocWithChat(doc);
+        const chat = doc.getMap("epic").get("chats");
+        if (!(chat instanceof Y.Map)) throw new Error("expected chats map");
+        const record: unknown = chat.get(CHAT_ARTIFACT.id);
+        if (!(record instanceof Y.Map)) throw new Error("expected chat record");
+        record.set("title", title);
+      };
+    }
+
+    function liveRegionText(): string {
+      const region = document.querySelector(
+        '[role="status"][aria-live="polite"][aria-atomic="true"]',
+      );
+      return region === null ? "" : region.textContent;
+    }
+
+    async function announcedAfterCompletedTurn(input: {
+      readonly liveTitle: string;
+      readonly stateTitle: string;
+    }): Promise<string> {
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seedDocWithChatTitle(input.liveTitle), "editor");
+      chatHarness.install("owner", []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      // The tile ref keeps its opening-name snapshot, as a chat opened before
+      // its title was generated does.
+      render(
+        chatTileTestTree(queryClient, true, {
+          ...CHAT_ARTIFACT,
+          name: REF_NAME,
+        }),
+      );
+      await waitForChatTileLoaded();
+
+      const callbacks = chatHarness.callbacks();
+      const withStateTitle: ChatStreamCallbacks = {
+        ...callbacks,
+        onSnapshot: (frame) => {
+          callbacks.onSnapshot({
+            ...frame,
+            snapshot: {
+              ...frame.snapshot,
+              chat: { ...frame.snapshot.chat, title: input.stateTitle },
+            },
+          });
+        },
+      };
+      const assistant = nextStepsAssistantMessage();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: withStateTitle,
+          access: "owner",
+          queueItems: [],
+          settings: null,
+          messages: [hostUserMessage(), assistant],
+          activeTurn: null,
+        });
+      });
+      await settleLegendList();
+      return liveRegionText();
+    }
+
+    it("announces the projected live title, not the ref's opening-name snapshot", async () => {
+      // Restoring `taskTitle={props.node.name}` announces "Untitled agent
+      // finished responding." here: the ref name is REF_NAME while the store
+      // holds "Real Title", so the exact-text assertion goes red.
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "Real Title",
+        stateTitle: "State Title",
+      });
+      expect(text).toBe("Real Title finished responding.");
+    });
+
+    it("falls back to the chat state title when the live title is empty", async () => {
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "",
+        stateTitle: "State Title",
+      });
+      expect(text).toBe("State Title finished responding.");
+    });
+
+    it("falls back to the ref name when both titles are empty", async () => {
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "",
+        stateTitle: "",
+      });
+      expect(text).toBe("Untitled agent finished responding.");
+    });
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

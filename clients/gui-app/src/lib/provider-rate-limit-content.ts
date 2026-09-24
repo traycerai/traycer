@@ -86,13 +86,12 @@ export function resolveProviderRateLimitViewState(
     };
   }
   if (props.isError) return { kind: "error" };
-  // No reading and no failure to report, but work is in flight - which now
-  // includes a read whose failure was SUPPRESSED because the queue scheduled a
-  // delayed collection for it (callers fold that window into `isFetching`).
-  // Without this the section fell through to `empty` and rendered a blank card
-  // for the whole recovery window, then popped to data - the silent half of
-  // the visible-failure-then-silent-success pair. `empty` still covers the
-  // genuinely-nothing case, where nothing is fetching.
+  // No reading and no failure to report, but work is in flight - which
+  // includes a read still collecting an answer the host kept after we stopped
+  // waiting for it (`fetchProviderRateLimits` holds the fetch open for that
+  // window). Without this the section fell through to `empty` and rendered a
+  // blank card for the whole recovery window, then popped to data. `empty`
+  // still covers the genuinely-nothing case, where nothing is fetching.
   if (props.isFetching) return { kind: "loading" };
   return { kind: "empty" };
 }
@@ -137,8 +136,8 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
   // Transient - the CLI's own usage-HTTP fetch failed (timeout, a 401 with a
   // failed refresh, an unseeded 429, an empty body), NOT an account/auth
   // capability problem like `rate_limits_not_available`. Distinct wording is
-  // the point: this recovers on its own (the queue's post-failure cool-down
-  // plus the next poll), so it must never read like a permanent account issue.
+  // the point: this recovers on its own (the host's post-failure floor plus
+  // the next poll), so it must never read like a permanent account issue.
   usage_fetch_failed: "failed to fetch usage",
 };
 
@@ -193,22 +192,20 @@ export function resolvePopoverProviderRateLimitState(
 ): PopoverProviderRateLimitState {
   const envelope = props.envelope ?? null;
   if (envelope === null || envelope.latest === null) {
-    // Nothing usable yet. `ephemeralProcess` queries are queue-owned and
-    // therefore disabled as query observers; before the queue starts, they can
-    // be pending-but-not-fetching without that representing a failed read.
-    // Once a queued fetch actually fails, TanStack moves the observer out of
-    // `isPending` and into `isError`, revealing retryable error content instead
-    // of staying hidden in Overview.
+    // Nothing usable yet. `ephemeralProcess` queries are read only by
+    // `fetchProviderRateLimits` and are therefore disabled as query observers;
+    // before the first fetch starts, they can be pending-but-not-fetching
+    // without that representing a failed read. Once a fetch actually fails,
+    // TanStack moves the observer out of `isPending` and into `isError`,
+    // revealing retryable error content instead of staying hidden in Overview.
     //
-    // `isError` is consulted rather than inferred from "idle with no data".
-    // Callers pass the SUPPRESSED value (`isRateLimitQueryFailure`), which is
-    // false while a read we stopped waiting for still has its delayed
-    // collection coming. On a COLD read there is no envelope to fall back on,
-    // so inferring the failure from idleness reported one anyway - and then
-    // silently succeeded when the collection landed, which is the exact
-    // visible-failure-then-silent-success transition the suppression exists to
-    // remove. A read that genuinely failed still arrives here with `isError`
-    // true (including once the follow-up budget is spent) and still reports.
+    // `isError` is consulted rather than inferred from "idle with no data". A
+    // read we stopped waiting for is not an error yet: the fetch stays open
+    // through its one delayed collection, so the observer reads as fetching
+    // for that window. Inferring a failure from idleness would report one
+    // anyway on a COLD read, and then silently succeed when the collection
+    // landed. A read that genuinely failed - including one whose collection
+    // also went unheard - arrives here with `isError` true and reports.
     return props.isFetching || props.isPending || !props.isError
       ? { kind: "cold" }
       : { kind: "error" };

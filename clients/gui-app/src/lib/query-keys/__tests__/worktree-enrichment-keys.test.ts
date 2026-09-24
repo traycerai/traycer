@@ -4,6 +4,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
+  enrichmentQueryPaths,
   isPerPathEnrichmentQueryKey,
   perPathEnrichmentQueryPath,
 } from "@/lib/query-keys/worktree-enrichment-keys";
@@ -59,6 +60,31 @@ describe("isPerPathEnrichmentQueryKey", () => {
       forceRefresh: false,
     });
     expect(isPerPathEnrichmentQueryKey(key)).toBe(false);
+  });
+});
+
+describe("enrichmentQueryPaths", () => {
+  it("returns null for the base list (activityPaths: null)", () => {
+    const key = hostQueryKeys.method(HOST_ID, "worktree.listAllForHost", {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    });
+    expect(enrichmentQueryPaths(key)).toBeNull();
+  });
+
+  it("returns the single path for a single-path enrichment key", () => {
+    expect(enrichmentQueryPaths(enrichmentKey(["/wt/app"]))).toEqual([
+      "/wt/app",
+    ]);
+  });
+
+  it("returns every path for a multi-path enrichment key", () => {
+    expect(
+      enrichmentQueryPaths(enrichmentKey(["/wt/a", "/wt/b", "/wt/c"])),
+    ).toEqual(["/wt/a", "/wt/b", "/wt/c"]);
   });
 });
 

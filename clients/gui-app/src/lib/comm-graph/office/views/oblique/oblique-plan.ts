@@ -750,7 +750,7 @@ function sign(geometry: Geometry, value: ObliqueSign): void {
  * it carries the room's id so that a counter can be read off the room under the
  * cursor instead of being baked into the text at plan time.
  *
- * Each of the four rooms hangs its plate at its own top-left corner and takes
+ * Each of the three rooms hangs its plate at its own top-left corner and takes
  * its own width, which is what keeps the four off each other on the one storey
  * they share: the ward's is the only plate on the plaza's top row, and the
  * other three sit on the front walk, columns apart.
@@ -946,7 +946,6 @@ const BED_WIDTH_TILES = 2;
 /** Beds on the bay's first and third rows, so each row has a clear one under it. */
 const PLAZA_BED_ROWS: ReadonlyArray<number> = [0, 2];
 /** Where the chair run starts: one clear tile past the pingpong's right spot. */
-const PLAZA_LOUNGE_COL = 14;
 /** The plaza's aisle row, which is also its street. */
 const PLAZA_ROAD_ROW = 4;
 
@@ -1086,11 +1085,11 @@ interface PlazaCivic {
 }
 
 /**
- * The plaza's four civic rooms, their furniture and the street they face.
+ * The plaza's civic rooms, their furniture and the street they face.
  *
- * Two of the four are places that were already standing here and are given
+ * Two are places that were already standing here and are given
  * their record now: the help desk IS the reception (C7), and the archive is a
- * door in the outer wall. Only the ward and the chair run are new furniture.
+ * door in the outer wall. The ward adds beds; waiting agents keep their desks.
  */
 function buildPlazaCivic(
   geometry: Geometry,
@@ -1137,25 +1136,6 @@ function buildPlazaCivic(
     hostId,
   });
 
-  // The chair run waits along the plaza's front, between the pingpong and the
-  // ward, facing the lane the way the reception queue does.
-  const loungeCol = building.col + PLAZA_LOUNGE_COL;
-  const loungeId = civicRoomIdOf(hostId, "waiting-room");
-  const chairCount = Math.min(
-    capacity.chairs,
-    Math.max(0, bay.col - loungeCol),
-  );
-  const chairs = civicSeatRun({
-    civicRoomId: loungeId,
-    kind: "lounge",
-    tiles: Array.from({ length: chairCount }, (_unused, i) => ({
-      col: loungeCol + i,
-      row: walkRow,
-    })),
-    floorIndex,
-    hostId,
-  });
-
   // The counter's own end, where the bell is and where the queue forms. NOT the
   // building's entrance, which stands on the lane itself: a door that is a road
   // tile is a door a vehicle drives through.
@@ -1198,26 +1178,9 @@ function buildPlazaCivic(
       // PARTITIONS laid above - a screen, stopping short of the door row - and
       // the beds start a column further in, on tiles that stay walkable because
       // a bed is lain on. Nothing here shells its civic rooms, which is why all
-      // four say the same thing.
+      // rooms say the same thing.
       enclosure: "open",
       kerbTile: kerbBelow(road, wardDoor.col),
-    },
-    {
-      civicRoomId: loungeId,
-      kind: "waiting-room",
-      bounds: { col: loungeCol, row: walkRow, cols: chairCount, rows: 1 },
-      // A one-row room's way in is its own first tile, the way the archive's is.
-      doorTile: { col: loungeCol, row: walkRow },
-      signTile: { col: loungeCol, row: walkRow },
-      name: "Waiting room",
-      seatIds: chairs.map((seat) => seat.seatId),
-      floorIndex,
-      hostId,
-      hostScope: "host",
-      // OPEN: a single row of chairs on the walk row, 0 of 16 blocked.
-      enclosure: "open",
-      // Nothing drives to the waiting room (C6), so it names no kerb.
-      kerbTile: null,
     },
     {
       civicRoomId: civicRoomIdOf(hostId, "help-desk"),
@@ -1277,7 +1240,7 @@ function buildPlazaCivic(
       kerbTile: null,
     },
   ];
-  return { rooms, seats: [...beds, ...chairs], road };
+  return { rooms, seats: beds, road };
 }
 
 interface FloorRequest {
@@ -1285,7 +1248,7 @@ interface FloorRequest {
   readonly bounds: OfficeTileRect;
   readonly corridorTiles: OfficeTilePos[];
   readonly errandSpots: OfficeErrandSpot[];
-  /** The plaza storey's four rooms; every other storey's is empty (ruling 1b). */
+  /** The plaza storey's three rooms; every other storey's is empty (ruling 1b). */
   readonly civic: ReadonlyArray<OfficeCivicRoom>;
   readonly road: OfficeRoad | null;
 }
@@ -1721,7 +1684,7 @@ function materializeStorey(context: PlanContext, storey: Storey): void {
   const spots = paintStoreySpots(context, storey, location);
   materializeSeats(context, storey, location);
   materializeRooms(context, storey, location);
-  // The four rooms are the HOST's, sized from everyone it is running, and they
+  // The three rooms are the HOST's, sized from everyone it is running, and they
   // stand on its plaza alone. Every other storey reaches them by the stairwell.
   const civic = plaza
     ? buildPlazaCivic(

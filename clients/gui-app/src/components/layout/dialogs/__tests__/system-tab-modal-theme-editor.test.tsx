@@ -160,6 +160,9 @@ describe("SystemTabModalHost theme editor integration", () => {
     modalProbe.current?.openSettings({
       section: "appearance",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
 
     const settings = await screen.findByRole("dialog", { name: "Settings" });

@@ -53,12 +53,25 @@ function findBlockOfType<T extends ContentBlock["type"]>(
   );
 }
 
+/**
+ * Replaces the block of `updated`'s TYPE under `blockId`, and no other.
+ *
+ * Every caller found its `existing` block by id AND type, and the type is part
+ * of the match here for the same reason: one id can name two blocks. An ACP
+ * permission is named after the call it gates and arrives after that call's
+ * frame; Codex falls back to a command's `itemId` for its approval. Matching on
+ * the id alone let resolving the approval overwrite the tool row (and a
+ * command's completion overwrite its approval), drawing one block twice and
+ * losing the other.
+ */
 function replaceBlock(
   blocks: ContentBlock[],
   blockId: string,
   updated: ContentBlock,
 ): ContentBlock[] {
-  return blocks.map((b) => (b.blockId === blockId ? updated : b));
+  return blocks.map((b) =>
+    b.blockId === blockId && b.type === updated.type ? updated : b,
+  );
 }
 
 /**

@@ -23,15 +23,17 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
-  CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
-  STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_HEAD_MAX_BYTES,
   STDERR_TAIL_MAX_BYTES,
   StderrCaptureBuffer,
   type CrashReportMatch,
   type StderrTee,
 } from "../../host/crash-diagnostics";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+} from "../../service/spawn-edge-bounds";
 import {
   RESTART_EXIT_CODE,
   SHUTDOWN_FORCE_EXIT_MS,
@@ -853,8 +855,10 @@ describe("runHostStart - installed-record launch path", () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const previousUnsetValue = process.env.TRAYCER_TEST_UNSET;
     const previousStagingToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
+    const previousMallocLargeCache = process.env.MallocLargeCache;
     process.env.TRAYCER_TEST_UNSET = "inherited";
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "parent-secret";
+    delete process.env.MallocLargeCache;
 
     const invoke = () =>
       runHostStart(
@@ -876,6 +880,11 @@ describe("runHostStart - installed-record launch path", () => {
         delete process.env.TRAYCER_STAGING_RELEASE_TOKEN;
       } else {
         process.env.TRAYCER_STAGING_RELEASE_TOKEN = previousStagingToken;
+      }
+      if (previousMallocLargeCache === undefined) {
+        delete process.env.MallocLargeCache;
+      } else {
+        process.env.MallocLargeCache = previousMallocLargeCache;
       }
     }
 
@@ -908,6 +917,9 @@ describe("runHostStart - installed-record launch path", () => {
     expect(call?.env.EXTRA_FROM_OVERRIDE).toBe("1");
     expect(call?.env.TRAYCER_TEST_UNSET).toBeUndefined();
     expect(call?.env.TERM_PROGRAM).toBe("traycer");
+    expect(call?.env.MallocLargeCache).toBe(
+      process.platform === "darwin" ? "0" : undefined,
+    );
     expect(call?.windowsHide).toBe(process.platform === "win32");
     // Production launch must NOT route through a shell - the spawn
     // command must be the executable itself.

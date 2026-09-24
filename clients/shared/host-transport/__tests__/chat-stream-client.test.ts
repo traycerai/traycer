@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import { supportsAutoPermissionMode } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -472,6 +473,7 @@ function makeNoopCallbacks(
     onSnapshot,
     onActionAck: () => undefined,
     onMessageAccepted: () => undefined,
+    onMessageDeliveryChanged: () => undefined,
     onQueueChanged: () => undefined,
     onTurnStateChanged: () => undefined,
     onBlockDelta: () => undefined,
@@ -490,6 +492,7 @@ function makeNoopCallbacks(
     onWorktreeStateChanged: () => undefined,
     onManagedCommandsChanged: () => undefined,
     onHeldUpdatesChanged: () => undefined,
+    onPortForwardsChanged: () => undefined,
     onConnectionStatus: () => undefined,
   };
 }
@@ -555,6 +558,7 @@ describe("ChatStreamClient", () => {
     // is no per-command delta to accumulate.
     const managedCommandSets: string[][] = [];
     const heldUpdateSets: string[][] = [];
+    const portForwardSets: string[][] = [];
     const callbacks: ChatStreamCallbacks = {
       ...NOOP_WINDOWED_CALLBACKS,
       onSnapshot: (frame) => {
@@ -562,6 +566,7 @@ describe("ChatStreamClient", () => {
       },
       onActionAck: () => undefined,
       onMessageAccepted: () => undefined,
+      onMessageDeliveryChanged: () => undefined,
       onQueueChanged: () => undefined,
       onTurnStateChanged: () => undefined,
       onBlockDelta: () => undefined,
@@ -612,6 +617,11 @@ describe("ChatStreamClient", () => {
       },
       onHeldUpdatesChanged: (frame) => {
         heldUpdateSets.push(frame.heldUpdates.map((held) => held.commandId));
+      },
+      onPortForwardsChanged: (frame) => {
+        portForwardSets.push(
+          frame.portForwards.map((forward) => forward.forwardId),
+        );
       },
       onConnectionStatus: () => undefined,
     };
@@ -752,6 +762,31 @@ describe("ChatStreamClient", () => {
       ],
     });
 
+    // Routed to `onPortForwardsChanged` and to nothing else - same whole-set
+    // shape and same reason as `managedCommandsChanged`/`heldUpdatesChanged`
+    // above. Proven by `portForwardSets` below staying the only array this
+    // frame moves: `managedCommandSets`/`heldUpdateSets` are asserted right
+    // beside it and would gain a spurious entry if this frame were misrouted
+    // to either sibling callback.
+    sockets[0].fireText({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      portForwards: [
+        {
+          forwardId: "forward-1",
+          description: "8080 → laptop:8080",
+          target: { hostId: "host-b", port: 8080 },
+          listen: { hostId: "host-a", requestedPort: 8080, boundPort: 8080 },
+          state: "active",
+          stateReason: null,
+          createdAtMs: 10,
+          recentEvents: [],
+        },
+      ],
+    });
+
     sockets[0].fireText({
       kind: "fileEditApprovalRequested",
       hasBinaryPayload: false,
@@ -866,6 +901,7 @@ describe("ChatStreamClient", () => {
     ]);
     expect(managedCommandSets).toEqual([["cmd-1"], []]);
     expect(heldUpdateSets).toEqual([["cmd-held-1"]]);
+    expect(portForwardSets).toEqual([["forward-1"]]);
     expect(parseText(sockets[0].textSent[2])).toEqual(frame);
 
     client.close();
@@ -1196,6 +1232,7 @@ interface RecordedWindowedFrames {
   readonly accumulatedChanges: unknown[];
   readonly legacySnapshots: unknown[];
   readonly blockDeltas: unknown[];
+  readonly portForwardSets: string[][];
 }
 
 function recordingCallbacks(): {
@@ -1210,6 +1247,7 @@ function recordingCallbacks(): {
     accumulatedChanges: [],
     legacySnapshots: [],
     blockDeltas: [],
+    portForwardSets: [],
   };
   const callbacks: ChatStreamCallbacks = {
     onSnapshot: (frame) => {
@@ -1232,6 +1270,7 @@ function recordingCallbacks(): {
     },
     onActionAck: () => undefined,
     onMessageAccepted: () => undefined,
+    onMessageDeliveryChanged: () => undefined,
     onQueueChanged: () => undefined,
     onTurnStateChanged: () => undefined,
     onBlockDelta: (frame) => {
@@ -1252,6 +1291,11 @@ function recordingCallbacks(): {
     onWorktreeStateChanged: () => undefined,
     onManagedCommandsChanged: () => undefined,
     onHeldUpdatesChanged: () => undefined,
+    onPortForwardsChanged: (frame) => {
+      recorded.portForwardSets.push(
+        frame.portForwards.map((forward) => forward.forwardId),
+      );
+    },
     onConnectionStatus: () => undefined,
   };
   return { callbacks, recorded };
@@ -1402,6 +1446,29 @@ describe("ChatStreamClient windowed line", () => {
         delta: "hi",
       },
     });
+    // Another shared frame (`chat.subscribe@1.14`): same schema on both
+    // lines, whole-set shape like `managedCommandsChanged`/
+    // `heldUpdatesChanged` above it. Routed to `onPortForwardsChanged` and to
+    // nothing else - proven below by every OTHER recorded array staying
+    // exactly what it was before this delivery.
+    session.deliver({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      portForwards: [
+        {
+          forwardId: "forward-1",
+          description: "8080 → laptop:8080",
+          target: { hostId: "host-b", port: 8080 },
+          listen: { hostId: "host-a", requestedPort: 8080, boundPort: 8080 },
+          state: "active",
+          stateReason: null,
+          createdAtMs: 10,
+          recentEvents: [],
+        },
+      ],
+    });
 
     expect(recorded.snapshots).toEqual([3]);
     expect(recorded.skeletonChunks).toEqual([12]);
@@ -1409,6 +1476,7 @@ describe("ChatStreamClient windowed line", () => {
     expect(recorded.ranges).toEqual(["req-7"]);
     expect(recorded.accumulatedChanges).toEqual([5]);
     expect(recorded.blockDeltas).toEqual(["text.delta"]);
+    expect(recorded.portForwardSets).toEqual([["forward-1"]]);
     // The windowed snapshot went to its OWN callback. Routing it to
     // `onSnapshot` would hand a consumer typed for `chat.messages` a record
     // that has no such key.
@@ -1743,12 +1811,22 @@ describe("ChatStreamClient pre-1.7 browser payload neutralization", () => {
   });
 });
 
-// Read off the registry rather than restated as a literal - the same lesson
+// Derived rather than restated as a literal - the same lesson
 // `chat-subscribe-auto-mode-lines.test.ts` documents: the auto-mode minor has
-// been renumbered twice mid-PR, and `latestMinor` cannot be redirected by a
-// rename because nothing about it is a name.
+// been renumbered mid-PR more than once. Derived from the predicate's own
+// cliff and NOT from the registry's `latestMinor`, which was the same number
+// only until a later line (`1.14`, port forwards) was minted above the auto
+// line; read off the ceiling, "one minor below" would be the auto line itself.
+function smallestMinorWhereAutoPermissionModeIsSupported(): number {
+  for (let minor = 0; minor <= 50; minor += 1) {
+    if (supportsAutoPermissionMode({ major: 1, minor })) return minor;
+  }
+  throw new Error(
+    "supportsAutoPermissionMode never turned true within the scanned range",
+  );
+}
 const CHAT_SUBSCRIBE_AUTO_MINOR =
-  hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
+  smallestMinorWhereAutoPermissionModeIsSupported();
 
 describe("ChatStreamClient.autoPermissionModeProtocolSupported", () => {
   it("answers true when this session negotiated the auto-mode minor", () => {

@@ -842,7 +842,9 @@ describe("useStatusBarRateLimitSegments", () => {
         { providerId: "codex", profileId: null },
       ]);
       expect(
-        result.current.refresh.queueTargets.map((target) => target.profileId),
+        result.current.refresh.ephemeralTargets.map(
+          (target) => target.profileId,
+        ),
       ).toEqual(["work", null]);
       expect(
         result.current.mountTargets.map((target) => target.profileId),

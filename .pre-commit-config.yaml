@@ -2,6 +2,9 @@
 # Install once:  pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg
 # Run on demand: pre-commit run --all-files
 default_stages: [pre-commit]
+# Service emitter goldens are byte-for-byte emitter OUTPUT (a CRLF VBS, a
+# non-executable launcher script body): no hook may rewrite or lint them.
+exclude: ^clients/traycer-cli/src/service/platforms/__tests__/emitter-goldens/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

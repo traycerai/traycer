@@ -32,7 +32,12 @@ interface MockState {
 
 const mocks = vi.hoisted<MockState>(() => ({
   cluster: { kind: "no-providers" },
-  refresh: { queueTargets: [], httpRefetches: [], httpFetching: false },
+  refresh: {
+    ephemeralTargets: [],
+    ephemeralFetching: false,
+    httpRefetches: [],
+    httpFetching: false,
+  },
 }));
 
 vi.mock(
@@ -53,12 +58,8 @@ vi.mock(
   },
 );
 
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
-  useRateLimitQueueScope: () => null,
-}));
-
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
-  useAnyRateLimitQueueTargetFetching: () => false,
+vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
+  useProviderRateLimitFetchScope: () => null,
 }));
 
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
@@ -141,7 +142,12 @@ afterEach(() => {
     revealProfile: null,
   });
   mocks.cluster = { kind: "no-providers" };
-  mocks.refresh = { queueTargets: [], httpRefetches: [], httpFetching: false };
+  mocks.refresh = {
+    ephemeralTargets: [],
+    ephemeralFetching: false,
+    httpRefetches: [],
+    httpFetching: false,
+  };
   useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
 });
 
@@ -211,7 +217,8 @@ describe("<StatusBarRateLimitCluster />", () => {
         segments: [segmentFixture("codex", null)],
       };
       mocks.refresh = {
-        queueTargets: [{ providerId: "codex", profileId: null }],
+        ephemeralTargets: [{ providerId: "codex", profileId: null }],
+        ephemeralFetching: false,
         httpRefetches: [],
         httpFetching: false,
       };

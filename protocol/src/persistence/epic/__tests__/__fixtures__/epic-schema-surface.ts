@@ -3078,6 +3078,10 @@ export const epicSchemaSurfaceBaseline = {
                             "type": "null"
                           }
                         ]
+                      },
+                      "providerHistory": {
+                        "type": "string",
+                        "const": "excluded"
                       }
                     },
                     "required": [
@@ -11861,6 +11865,10 @@ export const epicSchemaSurfaceBaseline = {
                             "type": "null"
                           }
                         ]
+                      },
+                      "providerHistory": {
+                        "type": "string",
+                        "const": "excluded"
                       }
                     },
                     "required": [

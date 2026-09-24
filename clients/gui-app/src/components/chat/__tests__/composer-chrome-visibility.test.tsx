@@ -219,6 +219,7 @@ function renderPermissionsPicker() {
       turnActive={false}
       judgeBilling={null}
       closeFocus="composer"
+      onOpenPermissionSettings={null}
     />,
   );
 }

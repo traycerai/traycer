@@ -1,0 +1,386 @@
+import { describe, expect, it } from "vitest";
+import type {
+  WorktreeBinding,
+  WorktreeBindingEntry,
+} from "@traycer/protocol/host/worktree-schemas";
+import {
+  ACP_TOOL_KINDS,
+  AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL,
+  GENERIC_TOOL_NAMES,
+  autoJudgeTierLine,
+  autoModeRuleDisplayName,
+  autoModeRuleDraftAction,
+  autoModeRuleDraftText,
+  autoModeRuleDraftWorkspace,
+  type AutoModeRuleDraftWorkspace,
+} from "@/lib/auto-mode/auto-mode-rule-copy";
+
+describe("autoModeRuleDisplayName", () => {
+  it("lowercases title-cased words after the first, keeping the first letter raised", () => {
+    expect(autoModeRuleDisplayName("Force Push")).toBe("Force push");
+  });
+
+  it("lowercases every title-cased word but the first across a longer name", () => {
+    expect(autoModeRuleDisplayName("Disabling A Security Control")).toBe(
+      "Disabling a security control",
+    );
+  });
+
+  it("keeps an acronym or mixed-case word as-is", () => {
+    expect(autoModeRuleDisplayName("Calling The API")).toBe("Calling the API");
+    expect(autoModeRuleDisplayName("Pushing To GitHub")).toBe(
+      "Pushing to GitHub",
+    );
+  });
+
+  it("raises the first letter of a name that arrived lower-case", () => {
+    expect(autoModeRuleDisplayName("force push")).toBe("Force push");
+  });
+
+  it("keeps a hyphen and lowers both halves after the first word", () => {
+    expect(autoModeRuleDisplayName("Read-Only Inspection")).toBe(
+      "Read-only inspection",
+    );
+  });
+
+  it("returns an empty string unchanged", () => {
+    expect(autoModeRuleDisplayName("")).toBe("");
+  });
+});
+
+describe("autoJudgeTierLine", () => {
+  it("returns the soft-tier sentence", () => {
+    expect(autoJudgeTierLine("soft")).toBe(
+      "Sent to you because you didn't ask for this exact action.",
+    );
+  });
+
+  it("returns the hard-tier sentence", () => {
+    expect(autoJudgeTierLine("hard")).toBe("Always sent to you.");
+  });
+
+  it("returns the policy-tier sentence", () => {
+    expect(autoJudgeTierLine("policy")).toBe(
+      "Sent to you by one of your rules.",
+    );
+  });
+
+  it("returns the unsure-tier sentence", () => {
+    expect(autoJudgeTierLine("unsure")).toBe("The judge wasn't sure.");
+  });
+
+  it("returns null for a null tier", () => {
+    expect(autoJudgeTierLine(null)).toBeNull();
+  });
+});
+
+describe("AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL", () => {
+  it("is the exact link label", () => {
+    expect(AUTO_JUDGE_ALLOW_FROM_NOW_ON_LABEL).toBe("Allow from now on…");
+  });
+});
+
+function bindingEntry(
+  overrides: Partial<WorktreeBindingEntry>,
+): WorktreeBindingEntry {
+  return {
+    workspacePath: "/workspace",
+    mode: "worktree",
+    repoIdentifier: null,
+    worktreePath: null,
+    branch: null,
+    isPrimary: false,
+    isImported: false,
+    setupState: "not_required",
+    setupTerminalSessionId: null,
+    setupExitCode: null,
+    setupFailedAt: null,
+    createdAt: 0,
+    ...overrides,
+  };
+}
+
+function binding(
+  entries: ReadonlyArray<Partial<WorktreeBindingEntry>>,
+): WorktreeBinding {
+  return { entries: entries.map(bindingEntry) };
+}
+
+describe("autoModeRuleDraftWorkspace", () => {
+  it("returns both null when the binding is null", () => {
+    expect(autoModeRuleDraftWorkspace(null)).toEqual({
+      remote: null,
+      branch: null,
+    });
+  });
+
+  it("reads the remote and branch off the primary entry", () => {
+    const result = autoModeRuleDraftWorkspace(
+      binding([
+        {
+          isPrimary: false,
+          repoIdentifier: { owner: "wrong", repo: "entry" },
+          branch: "wrong-branch",
+        },
+        {
+          isPrimary: true,
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          branch: "feature/x",
+        },
+      ]),
+    );
+    expect(result).toEqual({
+      remote: "traycerai/traycer",
+      branch: "feature/x",
+    });
+  });
+
+  it("falls back to the first entry when none is marked primary", () => {
+    const result = autoModeRuleDraftWorkspace(
+      binding([
+        {
+          isPrimary: false,
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          branch: "main",
+        },
+      ]),
+    );
+    expect(result).toEqual({ remote: "traycerai/traycer", branch: "main" });
+  });
+
+  it("leaves the branch null for a folder used in place (no branch on its binding)", () => {
+    const result = autoModeRuleDraftWorkspace(
+      binding([
+        {
+          isPrimary: true,
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          branch: null,
+        },
+      ]),
+    );
+    expect(result).toEqual({ remote: "traycerai/traycer", branch: null });
+  });
+
+  it("returns both null when the binding has no entries", () => {
+    expect(autoModeRuleDraftWorkspace(binding([]))).toEqual({
+      remote: null,
+      branch: null,
+    });
+  });
+});
+
+describe("autoModeRuleDraftText", () => {
+  const FULL_WORKSPACE: AutoModeRuleDraftWorkspace = {
+    remote: "traycerai/traycer",
+    branch: "feature/x",
+  };
+  const UNKNOWN_WORKSPACE: AutoModeRuleDraftWorkspace = {
+    remote: null,
+    branch: null,
+  };
+
+  it("builds the full narrowing template with remote, branch and action", () => {
+    expect(
+      autoModeRuleDraftText({
+        workspace: FULL_WORKSPACE,
+        ruleName: "Force push",
+        action: "git push --force",
+      }),
+    ).toBe(
+      "In traycerai/traycer: Force push for `git push --force` on branch feature/x",
+    );
+  });
+
+  it("drops the remote/branch clauses entirely when the workspace is unknown - minimum is 'rule for action'", () => {
+    expect(
+      autoModeRuleDraftText({
+        workspace: UNKNOWN_WORKSPACE,
+        ruleName: "Force push",
+        action: "git push --force",
+      }),
+    ).toBe("Force push for `git push --force`");
+  });
+
+  // Replaces the old "bare rule name" case: `action` is now REQUIRED and
+  // non-empty (callers derive it with `autoModeRuleDraftAction` first), so a
+  // draft with no for-clause at all no longer exists - even when the action
+  // came from the tool name rather than an input summary.
+  it("always includes a for-clause, now that action is mandatory - there is no bare rule name draft", () => {
+    expect(
+      autoModeRuleDraftText({
+        workspace: UNKNOWN_WORKSPACE,
+        ruleName: "Force push",
+        action: "Run the migration",
+      }),
+    ).toBe("Force push for `Run the migration`");
+  });
+
+  it("includes the remote clause alone when only the remote is known", () => {
+    expect(
+      autoModeRuleDraftText({
+        workspace: { remote: "traycerai/traycer", branch: null },
+        ruleName: "Force push",
+        action: "git push --force",
+      }),
+    ).toBe("In traycerai/traycer: Force push for `git push --force`");
+  });
+
+  it("includes the branch clause alone when only the branch is known", () => {
+    expect(
+      autoModeRuleDraftText({
+        workspace: { remote: null, branch: "feature/x" },
+        ruleName: "Force push",
+        action: "git push --force",
+      }),
+    ).toBe("Force push for `git push --force` on branch feature/x");
+  });
+
+  it("uses a longer backtick fence when the action itself contains backticks", () => {
+    const text = autoModeRuleDraftText({
+      workspace: UNKNOWN_WORKSPACE,
+      ruleName: "Run a script",
+      action: "echo `date`",
+    });
+    expect(text).toBe("Run a script for `` echo `date` ``");
+  });
+});
+
+/**
+ * Finding: when the approval has no input summary, the "Allow from now on…"
+ * draft must still name an action. The action is `inputSummary ?? toolName`;
+ * only when BOTH are missing (null or whitespace-only) does no action exist.
+ */
+describe("autoModeRuleDraftAction", () => {
+  it("returns the input summary, with whitespace collapsed, when one is present", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "git   push\n--force",
+        toolName: "bash",
+      }),
+    ).toBe("git push --force");
+  });
+
+  it("falls back to the tool name, trimmed, when there is no input summary", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: null,
+        toolName: "  Run the migration  ",
+      }),
+    ).toBe("Run the migration");
+  });
+
+  it("falls back to the tool name when the input summary is whitespace-only", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "   ",
+        toolName: "Run the migration",
+      }),
+    ).toBe("Run the migration");
+  });
+
+  it("returns null when both the input summary and the tool name are missing", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: null,
+        toolName: "  ",
+      }),
+    ).toBeNull();
+  });
+  // A name that says which tool ran, not what it did: "Force push for `Bash`"
+  // would allow the category through that tool everywhere. Driven from the
+  // exported set, so a name added there is covered here without a second list.
+  it.each([...GENERIC_TOOL_NAMES])(
+    "returns null for the generic tool name %s when there is no input summary",
+    (toolName) => {
+      expect(
+        autoModeRuleDraftAction({ inputSummary: null, toolName }),
+      ).toBeNull();
+    },
+  );
+
+  // An untitled ACP request is named by its bare kind (`title ?? kind`), and a
+  // kind is a class of operation even where its word is a verb: "Force push
+  // for `other`" names no command and no target. Driven from the exported
+  // vocabulary, which the describe below pins, so a kind missing from the
+  // generic set fails here by name.
+  it.each([...ACP_TOOL_KINDS])(
+    "returns null for the bare ACP kind %s when there is no input summary",
+    (kind) => {
+      expect(
+        autoModeRuleDraftAction({ inputSummary: null, toolName: kind }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    "Fetch https://example.com/data",
+    "Move report.csv to archive/",
+    "Search the repo for TODO",
+  ])(
+    "still drafts from a descriptive ACP title that starts with a kind's word: %s",
+    (title) => {
+      expect(
+        autoModeRuleDraftAction({ inputSummary: null, toolName: title }),
+      ).toBe(title);
+    },
+  );
+
+  it("still returns the input summary when the tool name is a bare ACP kind", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "curl https://example.com/data",
+        toolName: "fetch",
+      }),
+    ).toBe("curl https://example.com/data");
+  });
+
+  it("recognises a generic tool name whatever its case and surrounding whitespace", () => {
+    expect(
+      autoModeRuleDraftAction({ inputSummary: null, toolName: "Bash" }),
+    ).toBeNull();
+    expect(
+      autoModeRuleDraftAction({ inputSummary: null, toolName: "  EXECUTE " }),
+    ).toBeNull();
+    expect(
+      autoModeRuleDraftAction({ inputSummary: null, toolName: "Apply_Patch" }),
+    ).toBeNull();
+  });
+
+  it("still returns the input summary when the tool name is generic", () => {
+    expect(
+      autoModeRuleDraftAction({
+        inputSummary: "git push --force",
+        toolName: "Bash",
+      }),
+    ).toBe("git push --force");
+  });
+});
+
+describe("ACP_TOOL_KINDS", () => {
+  // The one place the vocabulary is spelled independently of the constant:
+  // every other test here is driven FROM the constant, so a kind dropped from
+  // it could only be caught by a list that does not come from it. These are
+  // ACP's ten `ToolKind`s, as the host's `acp-turn.ts` classifies them.
+  it("is ACP's complete ToolKind vocabulary", () => {
+    expect([...ACP_TOOL_KINDS].sort()).toEqual(
+      [
+        "delete",
+        "edit",
+        "execute",
+        "fetch",
+        "move",
+        "other",
+        "read",
+        "search",
+        "switch_mode",
+        "think",
+      ].sort(),
+    );
+  });
+
+  it("is wholly inside the generic tool names", () => {
+    expect(
+      ACP_TOOL_KINDS.filter((kind) => !GENERIC_TOOL_NAMES.has(kind)),
+    ).toEqual([]);
+  });
+});

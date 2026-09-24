@@ -531,14 +531,7 @@ export interface CommGraphTileCamera {
   readonly zoom: number;
 }
 
-/**
- * Which office view this tile draws, as the USER chose it - re-exported from
- * the vocabulary module that owns it.
- *
- * `"auto"` is a choice like any other, not the absence of one: it means "pick
- * for me, by what fits", and its measured outcome is remembered separately in
- * `officeAutoView` so a remount cannot re-decide it.
- */
+/** Explicit office choices, re-exported from their vocabulary. */
 export type { OfficeViewChoice };
 
 export interface CommGraphTileViewState extends CommGraphTileCamera {
@@ -549,30 +542,9 @@ export interface CommGraphTileViewState extends CommGraphTileCamera {
    * moves this tile.
    */
   readonly officeView: OfficeViewChoice | null;
-  /**
-   * What Auto last MEASURED for this tile, or `null` before it has run.
-   *
-   * Persisted rather than recomputed, because a re-measure is free to answer
-   * differently and the saved camera addresses whichever view was on screen
-   * when it was saved. Re-picking Auto clears it, and a Settings-default change
-   * invalidates it through {@link officeAutoGeneration} - a mounted tile also
-   * clears it when it witnesses the change, but the generation is what catches a
-   * tile that was closed while the default moved.
-   */
+  /** Legacy persisted metadata; no longer used to select or render a view. */
   readonly officeAutoView: OfficeViewId | null;
-  /**
-   * The Settings-default GENERATION {@link officeAutoView} was measured under,
-   * or `null` when nothing has been measured.
-   *
-   * A mounted tile witnesses a default change and clears its dormant Auto
-   * outcome, but an LRU-evicted tile cannot - a default that leaves Auto and
-   * returns while the tile is closed would otherwise leave the stale outcome in
-   * place, so the guarded re-measure never runs and the tile reopens on a pick
-   * taken against an epic that may have changed shape (and a view that no longer
-   * fits it). Stamped when Auto writes its outcome and compared on the next
-   * mount: Auto re-decides only when the generation differs, so a quiet remount
-   * or restart still re-reads the saved outcome rather than re-measuring.
-   */
+  /** Legacy Auto metadata retained for record compatibility. */
   readonly officeAutoGeneration: number | null;
   /**
    * WHICH VIEW the saved camera was framed under, or `null` for a camera
@@ -600,8 +572,7 @@ export interface CommGraphTileViewState extends CommGraphTileCamera {
    *
    * `null` is what the office canvas reads as "fit yourself", so it is also
    * what every writer that invalidates a framing stores - a view pick that
-   * lands somewhere new, Auto's first measurement away from the Floor, a
-   * Settings default that moves under a tile. The tile PROJECTS this into
+   * lands somewhere new, or a Settings default that moves under a tile. The tile PROJECTS this into
    * `x`, `y`, `zoom` before building the office canvas, which is why that
    * canvas still reads a plain camera and knows nothing about this field.
    */

@@ -8,6 +8,10 @@ import {
 } from "../agent/profiles.js";
 import { listGuiHarnessesResponseSchema } from "../agent/gui/unary-schemas.js";
 import { listAgentsResponseSchema } from "../agent/shared.js";
+import {
+  autoJudgeGetResponseSchema,
+  autoJudgeSetResponseSchema,
+} from "../auto-mode/contracts.js";
 import { getChatRunSettingsResponseSchema } from "../epic/chat-records.js";
 import { providersListResponseSchema } from "../provider-schemas.js";
 import { providersRefreshProfileStatusResponseSchema } from "../rate-limit/schemas.js";
@@ -83,6 +87,8 @@ const HEAD_NAMES_ITS_CANONICAL_ALIAS: readonly [
     "providersRefreshProfileStatusResponseSchema",
     providersRefreshProfileStatusResponseSchema,
   ],
+  ["autoJudge.get", "autoJudgeGetResponseSchema", autoJudgeGetResponseSchema],
+  ["autoJudge.set", "autoJudgeSetResponseSchema", autoJudgeSetResponseSchema],
 ];
 
 describe("the head contract names the canonical live response schema", () => {
@@ -101,7 +107,7 @@ describe("the head contract names the canonical live response schema", () => {
     // A row silently deleted from the table would make this file pass while
     // checking less, so pin the count too. Raise it deliberately when a new
     // head major is opened - never lower it to make a red row go away.
-    expect(HEAD_NAMES_ITS_CANONICAL_ALIAS).toHaveLength(7);
+    expect(HEAD_NAMES_ITS_CANONICAL_ALIAS).toHaveLength(9);
     const methods = HEAD_NAMES_ITS_CANONICAL_ALIAS.map(([method]) => method);
     expect(new Set(methods).size).toBe(methods.length);
     for (const method of methods) {

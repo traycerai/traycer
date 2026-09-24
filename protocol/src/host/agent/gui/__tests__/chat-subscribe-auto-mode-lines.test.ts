@@ -15,7 +15,11 @@ import {
   chatSubscribeV111,
   chatSubscribeV112,
   chatSubscribeV113,
+  chatSubscribeV114,
+  chatSubscribeV115,
+  chatSubscribeV116,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { supportsAutoPermissionMode } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import {
   sessionImportRunV10,
   sessionImportRunV11,
@@ -177,21 +181,41 @@ const CHAT_SUBSCRIBE_LINES = [
   { label: "1.11", contract: chatSubscribeV111 },
   { label: "1.12", contract: chatSubscribeV112 },
   { label: "1.13", contract: chatSubscribeV113 },
+  { label: "1.14", contract: chatSubscribeV114 },
+  { label: "1.15", contract: chatSubscribeV115 },
+  { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-// The boundary is read off the live line, never restated as a literal - that
-// minor has now been renumbered FOUR times (see `chatSubscribeV113`'s doc
-// comment).
+// The boundary is never restated as a literal - that minor has been renumbered
+// FOUR times (see `chatSubscribeV113`'s doc comment).
 //
-// Read from the REGISTRY rather than from a `chatSubscribeV1NN` symbol, and
-// that distinction is the whole lesson of the second renumber. This line used
-// to say `chatSubscribeV111.schemaVersion.minor`, which looks derived and is
-// not: when main took `1.11` for the shell host and the auto line moved to
-// `1.12`, that symbol kept resolving - to a DIFFERENT contract - so the
-// boundary silently became `11` again and 25 assertions in this file and its
-// sibling went red pointing at the wrong line. `latestMinor` cannot be
-// redirected by a rename, because nothing about it is a name.
+// Nor is it read from a `chatSubscribeV1NN` symbol, and that distinction is the
+// whole lesson of the second renumber. This line used to say
+// `chatSubscribeV111.schemaVersion.minor`, which looks derived and is not: when
+// main took `1.11` for the shell host and the auto line moved to `1.12`, that
+// symbol kept resolving - to a DIFFERENT contract - so the boundary silently
+// became `11` again and 25 assertions in this file and its sibling went red
+// pointing at the wrong line.
+//
+// Nor, any longer, from the registry's `latestMinor`. That held only while the
+// auto line WAS the newest line; the port-forward line took `1.14` above it,
+// and a boundary read off the ceiling would have slid up with it and asserted
+// that `1.13` refuses `auto`. What cannot be redirected by a rename OR by a
+// later line is the production predicate's own cliff: the smallest minor at
+// which `supportsAutoPermissionMode` turns true. The schemas below are then
+// checked AGAINST that predicate, which is the agreement that matters - the
+// client offers `auto` by the predicate and the host parses by the schema.
+function smallestMinorWhereAutoPermissionModeIsSupported(): number {
+  for (let minor = 0; minor <= 50; minor += 1) {
+    if (supportsAutoPermissionMode({ major: 1, minor })) return minor;
+  }
+  throw new Error(
+    "supportsAutoPermissionMode never turned true within the scanned range",
+  );
+}
 const CHAT_SUBSCRIBE_AUTO_MINOR =
+  smallestMinorWhereAutoPermissionModeIsSupported();
+const CHAT_SUBSCRIBE_LATEST_MINOR =
   hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
 
 // Deriving the boundary is only half of it: the TABLE above is still a hand
@@ -210,12 +234,18 @@ describe("chat.subscribe: the auto line is in the table under test", () => {
     expect(atAutoMinor.map((line) => line.label)).toHaveLength(1);
   });
 
-  it("covers every minor from 1.0 up to the auto line with no gaps", () => {
+  it("covers every minor from 1.0 up to the registry's latest with no gaps", () => {
+    // Up to the CEILING, not up to the auto line: a line minted above the auto
+    // line must accept `auto` too, and a table that stopped at the boundary
+    // would never ask it.
+    expect(CHAT_SUBSCRIBE_LATEST_MINOR).toBeGreaterThanOrEqual(
+      CHAT_SUBSCRIBE_AUTO_MINOR,
+    );
     expect(
       CHAT_SUBSCRIBE_LINES.map((line) => line.contract.schemaVersion.minor),
     ).toEqual(
       Array.from(
-        { length: CHAT_SUBSCRIBE_AUTO_MINOR + 1 },
+        { length: CHAT_SUBSCRIBE_LATEST_MINOR + 1 },
         (_, minor) => minor,
       ),
     );
@@ -225,7 +255,7 @@ describe("chat.subscribe: the auto line is in the table under test", () => {
 describe("chat.subscribe: the auto permission mode is pinned below the auto line, everywhere it can ride", () => {
   for (const line of CHAT_SUBSCRIBE_LINES) {
     const acceptsAuto =
-      line.contract.schemaVersion.minor === CHAT_SUBSCRIBE_AUTO_MINOR;
+      line.contract.schemaVersion.minor >= CHAT_SUBSCRIBE_AUTO_MINOR;
 
     describe(`chat.subscribe@${line.label}`, () => {
       for (const frameKind of MODE_BEARING_FRAME_KINDS) {
