@@ -68,6 +68,17 @@ export class PriorityScheduler {
   private paused = false;
   private paceResumeTimer: TimerHandle | null = null;
   private paceResumeAtMs: number | null = null;
+  /**
+   * Invoked after each frame's write settles, with that frame's stream id.
+   * Assigned after construction by the owning session (the same shape as
+   * `OutboundChunkSource.onDrained`); `null` when nobody is watching.
+   *
+   * It runs BETWEEN pump iterations - after `write` resolved and before the
+   * next `next()` - never inside a queue scan, so a listener that enqueues
+   * (a tunnel releasing the bytes it held back) appends to a queue nobody is
+   * iterating, and its nested `pump()` call returns at once on `pumping`.
+   */
+  onFrameWritten: ((streamId: number) => void) | null = null;
 
   constructor(options: PrioritySchedulerOptions) {
     this.options = options;
@@ -157,6 +168,32 @@ export class PriorityScheduler {
     }
     this.paused = false;
     void this.pump();
+  }
+
+  /**
+   * Remaining body bytes this stream has queued or mid-transfer - the client
+   * twin of the host scheduler's `queuedBytesForStream`. A pure read.
+   *
+   * A scan rather than tracked accounting, deliberately. Its one caller is a
+   * tunnel endpoint, which bounds what it queues here by FRAME COUNT as well
+   * as bytes: at most `TUNNEL_STREAM_WINDOW_FRAMES` data frames plus three
+   * control frames (one coalesced credit, one end, one finished) per stream,
+   * whatever the slice size. So the scan costs O(tunnels x 35) entries, not
+   * O(bytes), and that holds only because the caller counts frames - a
+   * byte-only bound would let one-byte writes queue tens of thousands of
+   * entries and make this quadratic. A running total would be a second copy
+   * of the truth for `dropStreamOutbound` and `stop` to keep in step.
+   */
+  queuedBytesForStream(streamId: number): number {
+    let total = 0;
+    for (const queue of [this.interactive, this.bulk]) {
+      for (const item of queue) {
+        if (item.source.streamId === streamId) {
+          total += item.source.remainingBytes;
+        }
+      }
+    }
+    return total;
   }
 
   /** Queued MESSAGES (a mid-transfer chunk source still counts as one). */
@@ -298,6 +335,12 @@ export class PriorityScheduler {
           return;
         }
         await this.options.write(frame);
+        try {
+          this.onFrameWritten?.(frame.streamId);
+        } catch {
+          // A listener's failure is not a write failure: letting it reach the
+          // catch below would tear the whole connection down for it.
+        }
       }
     } catch (error) {
       try {

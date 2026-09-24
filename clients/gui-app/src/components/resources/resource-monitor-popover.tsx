@@ -1015,7 +1015,13 @@ function ResourceMonitorHostPickerRow(props: {
           onSelect: () => {
             props.onClose();
             carryViewedHostIntoSettingsScope(scope.hostId);
-            openSettings({ section: "host", resetToGeneral: false });
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: null,
+              draft: null,
+              hostId: null,
+            });
           },
         }}
         surface="panel-header"

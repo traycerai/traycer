@@ -23,15 +23,13 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
  *   plain HTTP call (openrouter, kilocode, huggingface, opencode, cursor).
- *   Cheap and safe to
- *   run concurrently, so
- *   their observers opt into the table-owned fixed cadence and never enter the
- *   serial queue.
+ *   Cheap, so their observers opt into the table-owned fixed cadence and fetch
+ *   for themselves.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
- *   (codex, claude-code). Expensive; these are funnelled through a shared
- *   queue so background and single-profile triggers cannot overlap. The
- *   deliberate exception is the popover's "Refresh all" queue item, which fans
- *   out its configured profiles together before the next item begins.
+ *   (codex, claude-code, grok). Expensive, so their observers never fetch:
+ *   every read goes through `fetchProviderRateLimits`, which tells the host
+ *   whether the read is forced and so lets it answer an automatic one from its
+ *   gauge. How many probes run at once is bounded on the host, per provider.
  */
 export type RateLimitFetchLane = "httpFetch" | "ephemeralProcess";
 
@@ -48,14 +46,14 @@ export interface RateLimitFetchEligibility {
 /**
  * Shared "how fresh is fresh enough" floor for provider rate-limit reads: the
  * `staleTime` on the provider rate-limit query, the minimum spacing the
- * turn-completion refresh hook enforces, and the queue's own automatic-trigger
- * cooldown. Unlike the aperture read (a cheap cloud call), an
- * `ephemeralProcess` pull spawns a real CLI subprocess, so a burst of triggers
- * (a queued run finishing, an interval tick landing next to a turn completion)
- * must not each spawn their own.
+ * turn-completion refresh hook enforces, and the freshness check
+ * `fetchProviderRateLimits` applies to automatic triggers. Unlike the aperture
+ * read (a cheap cloud call), an `ephemeralProcess` pull spawns a real CLI
+ * subprocess, so a burst of triggers (a queued run finishing, an interval tick
+ * landing next to a turn completion) must not each spawn their own.
  *
  * Homed here - alongside the lane classifier it is conceptually paired with -
- * rather than in the turn-completion hook, so the queue module, the query
+ * rather than in the turn-completion hook, so the fetch module, the query
  * options, and that hook can all read it without an import cycle.
  */
 export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 5 * 60 * 1000;
@@ -69,7 +67,7 @@ export function isRateLimitCapableProvider(
 /**
  * The one named home for the provider -> lane mapping. Load-bearing in the
  * query options (which lane enables the table-owned fixed cadence), the turn-completion
- * refresh hook (which trigger routes through the serial queue), and the
+ * refresh hook (which trigger goes through `fetchProviderRateLimits`), and the
  * interval timer (which providers it walks) - so it lives here once rather
  * than being re-derived at each of those three sites.
  */
@@ -84,7 +82,7 @@ export function rateLimitFetchLane(
     case "cursor":
       // Two round trips (the API key mints a dashboard session before the
       // usage read), but still credential-and-fetch - no subprocess - so it
-      // keeps the table-owned fixed cadence rather than the serial queue.
+      // keeps the table-owned fixed cadence.
       return "httpFetch";
     case "codex":
     case "claude-code":
@@ -99,7 +97,7 @@ export function rateLimitFetchLane(
 
 /**
  * Whether the terminal/ambient credential is currently valid for a rate-limit
- * pull. This gates the persistent ambient app-shell queue; managed profiles
+ * pull. This gates the persistent ambient app-shell poll; managed profiles
  * instead use `resolveRateLimitFetchEligibility` plus their own profile auth.
  *
  * - `availabilityPending`: provider availability has not settled, so no target
@@ -172,7 +170,7 @@ export function isRateLimitProfileFetchEligible(
   );
 }
 
-/** Backward-compatible ambient/legacy alias for the app-shell queue. */
+/** Backward-compatible ambient/legacy alias for the app-shell poll. */
 export function isRateLimitProviderConfigured(
   state: ProviderCliState,
 ): boolean {

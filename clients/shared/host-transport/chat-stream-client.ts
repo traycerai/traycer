@@ -44,6 +44,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "messageAccepted" }
     >,
   ) => void;
+  readonly onMessageDeliveryChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "messageDeliveryChanged" }
+    >,
+  ) => void;
   readonly onQueueChanged: (
     frame: Extract<ChatSubscribeServerFrame, { readonly kind: "queueChanged" }>,
   ) => void;
@@ -135,6 +141,17 @@ export interface ChatStreamCallbacks {
     frame: Extract<
       ChatSubscribeServerFrame,
       { readonly kind: "managedCommandsChanged" }
+    >,
+  ) => void;
+  /**
+   * The agent's port forwards changed (`chat.subscribe@1.14`): the whole set.
+   * A host below that line never sends it, so against an older host this is
+   * simply never called and the snapshot's `portForwards` stays `[]`.
+   */
+  readonly onPortForwardsChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "portForwardsChanged" }
     >,
   ) => void;
   readonly onHeldUpdatesChanged: (
@@ -469,6 +486,10 @@ export class ChatStreamClient {
         this.callbacks.onMessageAccepted(frame);
         return;
       }
+      case "messageDeliveryChanged": {
+        this.callbacks.onMessageDeliveryChanged(frame);
+        return;
+      }
       case "queueChanged": {
         this.callbacks.onQueueChanged(frame);
         return;
@@ -535,6 +556,10 @@ export class ChatStreamClient {
       }
       case "managedCommandsChanged": {
         this.callbacks.onManagedCommandsChanged(frame);
+        return;
+      }
+      case "portForwardsChanged": {
+        this.callbacks.onPortForwardsChanged(frame);
         return;
       }
       case "heldUpdatesChanged": {
@@ -717,6 +742,10 @@ export class ChatStreamClient {
         this.callbacks.onMessageAccepted(frame);
         return;
       }
+      case "messageDeliveryChanged": {
+        this.callbacks.onMessageDeliveryChanged(frame);
+        return;
+      }
       case "queueChanged": {
         this.callbacks.onQueueChanged(frame);
         return;
@@ -783,6 +812,10 @@ export class ChatStreamClient {
       }
       case "managedCommandsChanged": {
         this.callbacks.onManagedCommandsChanged(frame);
+        return;
+      }
+      case "portForwardsChanged": {
+        this.callbacks.onPortForwardsChanged(frame);
         return;
       }
       case "heldUpdatesChanged": {

@@ -61,7 +61,7 @@ export const guiHarnessOptionSchema = lazySchema(() =>
     enabled: z.boolean().default(true),
     available: z.boolean(),
     error: z.string().nullable(),
-    // Added to the unreleased 9.1 head only. Older hosts carry no reason; their
+    // Added on 9.1. Older hosts carry no reason; their
     // 9.0 -> 9.1 bridge fills null without guessing from free-text `error`.
     // Optional for pre-field 9.1 hosts; unknown future reasons degrade to
     // `other` instead of rejecting the entire catalog. `other` is an explicit
@@ -100,6 +100,18 @@ export const guiHarnessOptionSchema = lazySchema(() =>
     // no-verdict cases genuinely differ. Rides the same minor as `auto` itself,
     // so a peer that can see this field can also spell the mode it describes.
     nativeAutoJudge: z.boolean().default(false),
+    // The model Traycer's judge runs on when Automatic falls back to this
+    // harness: the adapter's cheapest model that can run a tool-less judge.
+    // Absent (or `null`) means "use this row's default model"; an adapter with
+    // no cheaper tier leaves it absent, so the conversation's own model judges
+    // it and no new pocket opens.
+    //
+    // A new KEY on `agent.gui.listHarnesses@9.2`. The frozen 9.1 row strips it
+    // on the within-major re-parse, so no emission gate is needed (the
+    // `providers.list@9.2` precedent). `.optional()` rather than defaulted:
+    // absent must stay absent so it is not required on OUTPUT, which keeps it
+    // out of every row construction site that has no judge model to name.
+    judgeDefaultModel: z.string().nullable().optional(),
     // True while the host's availability probe for this harness is still running
     // in the background (e.g. the cold interactive-shell PATH probe). The client
     // re-fetches until it flips false.
@@ -563,7 +575,7 @@ export type ListGuiHarnessesResponseV80 = z.infer<
 // rides, so narrowing it would undo the very addition that opened this major.
 //
 // Do NOT add fields or modes here; add them to `guiHarnessOptionSchema` above,
-// which only 9.1 (the head line) binds.
+// which only the head line (9.2 today) binds.
 export const guiHarnessOptionSchemaV90 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchema,
@@ -577,6 +589,53 @@ export const listGuiHarnessesResponseSchemaV90 = lazySchema(() =>
 );
 export type ListGuiHarnessesResponseV90 = z.infer<
   typeof listGuiHarnessesResponseSchemaV90
+>;
+
+// ── Frozen protocol-v9.1 catalog row + response (pre-`judgeDefaultModel`) ──
+// 9.1 is the `auto` line, and it is RELEASED: `host-v1.3.2-staging.39` and
+// every staging build since advertise it. 9.2 opens above it for the row's
+// `judgeDefaultModel`, so 9.1 stops binding the live row here, the way 9.0
+// did when 9.1 opened.
+//
+// A field-for-field hand copy of the live row at the cut, in the live key
+// order, so the committed `frozen-catalog-lines` snapshot for 9.1 does not
+// move with the freeze. It is deliberately not `guiHarnessOptionSchema.omit(...)`:
+// a derived row keeps reading every live leaf, which is the half-freeze the V70
+// note describes. The enums it reaches (the id, the permission modes, the
+// unavailable reason, the auth status) are the same objects 9.1 bound before
+// the freeze, which is exactly what 9.1 shipped.
+//
+// Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
+// only 9.2 (the head line) binds.
+export const guiHarnessOptionSchemaV91 = lazySchema(() =>
+  z.object({
+    id: guiHarnessIdSchema,
+    label: z.string(),
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    unavailableReason: guiHarnessUnavailableReasonSchema
+      .nullable()
+      .optional()
+      .catch("other"),
+    modes: z.array(harnessSurfaceSchema),
+    requiresApiKey: z.boolean(),
+    supportedPermissionModes: z
+      .array(permissionModeSchema)
+      .default([...ALL_PERMISSION_MODES]),
+    nativeAutoJudge: z.boolean().default(false),
+    availabilityPending: z.boolean().catch(false),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+  }),
+);
+export type GuiHarnessOptionV91 = z.infer<typeof guiHarnessOptionSchemaV91>;
+export const listGuiHarnessesResponseSchemaV91 = lazySchema(() =>
+  z.object({
+    harnesses: z.array(guiHarnessOptionSchemaV91),
+  }),
+);
+export type ListGuiHarnessesResponseV91 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV91
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

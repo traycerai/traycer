@@ -16,6 +16,7 @@ import { GeneralSettingsPanel } from "@/components/settings/panels/general-setti
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
+import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
@@ -41,6 +42,32 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
     hasExplicitPick: false,
   }),
 }));
+
+// Permissions is the one executor panel that reads a host scope: its tab bar
+// and Modes row sit outside `HostScopeGate`, so the contract mounts it under a
+// `connecting` scope - the state where every gated body is withheld - and the
+// fixture's `hostScope` says which state to serve. The ref is set per test.
+const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
+  current: null,
+}));
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const { hostScopeFixture: fixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      ...(await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >()),
+      useHostScope: () =>
+        fixture(
+          hostScopeState.current === "connecting"
+            ? { status: "connecting" }
+            : {},
+        ),
+    };
+  },
+);
 
 // General's replay button and Sounds' host link navigate; nothing here clicks
 // them, but both hooks need a router to be CALLED.
@@ -68,6 +95,7 @@ const MOUNTS: {
   appearance: <AppearanceSettingsPanel />,
   layout: <LayoutSettingsPanel />,
   "opening-behavior": <OpeningBehaviorPanel />,
+  permissions: <PermissionsSettingsPanel />,
   browser: <BrowserSettingsPanel />,
   "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
@@ -77,6 +105,7 @@ const executed = new Set<string>();
 
 afterEach(() => {
   cleanup();
+  hostScopeState.current = null;
   setMobileApp(false);
   setFeatureSettingsBridge(null);
   setMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
@@ -86,6 +115,7 @@ describe("settings search fixtures", () => {
   for (const fixture of SETTINGS_SEARCH_FIXTURES) {
     for (const shell of fixture.shells) {
       it(`${fixture.section} lands every result with ${shell.name}`, () => {
+        hostScopeState.current = fixture.hostScope;
         let mounted: SettingsAvailabilityContext | null = null;
         const container = mountInShell(
           shell.context,

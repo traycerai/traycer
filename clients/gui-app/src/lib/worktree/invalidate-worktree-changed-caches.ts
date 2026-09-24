@@ -1,11 +1,16 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { perPathEnrichmentQueryPath } from "@/lib/query-keys/worktree-enrichment-keys";
+import {
+  enrichmentQueryPaths,
+  isPerPathEnrichmentQueryKey,
+  perPathEnrichmentQueryPath,
+} from "@/lib/query-keys/worktree-enrichment-keys";
 import {
   bindingsQueryEpicId,
   isEpicCreateSeedPending,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import type { WorktreeChangedAccumulatedScopes } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
+import { worktreePathMatcher } from "@/lib/worktree/worktree-path-match";
 
 /**
  * Drops the host's worktree listing and binding caches for one accumulated
@@ -13,16 +18,36 @@ import type { WorktreeChangedAccumulatedScopes } from "@/lib/worktree/worktree-c
  * Listings read the host's own cache and bindings re-stat their folders;
  * neither forces a git resolve.
  *
- * Scope-aware on purpose. A `worktreePath` event says exactly one row moved,
- * so only that row's enrichment overlay is re-probed; invalidating them all
- * would turn one commit into one refetch PER ON-SCREEN ROW. The base listing,
- * the workspace-path queries, and the epic-scoped binding listing always go,
- * at any scope: a change can add or remove rows, which no per-path overlay
- * can express, and a worktree path does not map back to the workspace folders
- * or epics that list it. Called once per BURST rather than per event: the
- * host's sweep emits one event per re-derived row, and refetching the full
- * base list per row is pure amplification - one trailing refetch renews
- * demand and freshness the same.
+ * Scope-aware on purpose, split by what a refetch COSTS the host:
+ *
+ * - An enrichment key (`activityPaths: [...]`, selection mode) DERIVES on the
+ *   host: a read spawns git for every covered row that needs it. So a
+ *   `worktreePath` event re-probes only the keys for the rows it names, and
+ *   every activity-enriched surface caches one key per path precisely so this
+ *   stays one row per named path - History's 27-row page used to be one key,
+ *   so every frame re-derived all 27 rows, and a host that published a frame
+ *   from a derive rode that edge into a feedback loop. A row no surface is
+ *   observing is only MARKED (`refetchType: "active"`), so a frame for a row
+ *   off screen re-probes nothing.
+ * - The base listing (`activityPaths: null`) never spawns git, and the host
+ *   RELIES on path events refetching it: it publishes one exactly when a row
+ *   first resolves (Settings' merge gate refuses an overlay while the base row
+ *   still reads unresolved) and one per REMOVED row, so a change can add or
+ *   remove rows, which no per-path overlay can express. It always goes, at any
+ *   scope - once per burst, active observers only.
+ *
+ * A frame names a path in the host's spelling (the lexical `path.resolve` of
+ * the row's path), while a per-path key names whatever the client requested -
+ * which for a binding-sourced path may be spelled differently. The two are
+ * matched by `worktreePathMatcher`, so such a key still refreshes on its own
+ * row's frame.
+ *
+ * The workspace-path queries and the epic-scoped binding listing always go
+ * too: a worktree path does not map back to the workspace folders or epics
+ * that list it. Called once per BURST rather than per event: the host's sweep
+ * emits one event per re-derived row, and refetching the full base list per
+ * row is pure amplification - one trailing refetch renews demand and freshness
+ * the same.
  */
 export function invalidateWorktreeChangedCaches(
   queryClient: QueryClient,
@@ -33,18 +58,39 @@ export function invalidateWorktreeChangedCaches(
     hostId,
     "worktree.listAllForHost",
   );
+  const isFramedPath = worktreePathMatcher(scopes.worktreePaths);
   void queryClient.invalidateQueries({
     queryKey: listAllScope,
     refetchType: "active",
     predicate: (query) => {
-      const path = perPathEnrichmentQueryPath(query.queryKey);
-      // Not an enrichment overlay (the base list, task-delete whole-list): row
-      // membership may have changed, so it always refetches.
-      if (path === null) return true;
       if (scopes.root) return true;
-      return scopes.worktreePaths.has(path);
+      // The base list (and the task-delete whole-list): non-spawning, and row
+      // membership may have changed, so it always refetches. That holds for
+      // the task-delete walk's `includeActivity: true` too: a paged read
+      // (`activityPaths: null`) never derives - the host serves every row,
+      // activity facts included, from its row cache, and only selection mode
+      // derives - so `includeActivity` there costs a larger page, not git.
+      if (!isPerPathEnrichmentQueryKey(query.queryKey)) return true;
+      const path = perPathEnrichmentQueryPath(query.queryKey);
+      return path !== null && isFramedPath(path);
     },
   });
+  // A MULTI-path enrichment key is never refetched by a path event: its read
+  // would re-derive every row it covers for one row's change. No surface
+  // builds one (every enrichment read caches per path; the census test holds
+  // that), so this only guards a batch that reappears - it goes stale and
+  // re-reads on its next mount instead of amplifying the burst. A root event
+  // already refetched it above.
+  if (!scopes.root) {
+    void queryClient.invalidateQueries({
+      queryKey: listAllScope,
+      refetchType: "none",
+      predicate: (query) => {
+        const paths = enrichmentQueryPaths(query.queryKey);
+        return paths !== null && paths.length > 1 && paths.some(isFramedPath);
+      },
+    });
+  }
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(
       hostId,

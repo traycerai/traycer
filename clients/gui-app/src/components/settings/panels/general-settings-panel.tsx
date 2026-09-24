@@ -6,7 +6,6 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
-import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -36,8 +35,6 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 }
 
 export function GeneralSettingsPanel() {
-  const defaultPermission = useSettingsStore((s) => s.defaultPermission);
-  const setDefaultPermission = useSettingsStore((s) => s.setDefaultPermission);
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -67,50 +64,6 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
-          <SettingsRow
-            row={GENERAL.definitions.defaultPermission}
-            control={
-              <PermissionsPicker
-                value={defaultPermission}
-                disabled={false}
-                onChange={(next) => {
-                  trackGeneralSetting("defaultPermission");
-                  setDefaultPermission(next);
-                }}
-                // No harness scope: the default is install-wide and every
-                // option stays enabled. A provider that does not honour the
-                // chosen mode narrows it in the composer, where a harness is
-                // actually selected.
-                supportedPermissionModes={null}
-                harnessLabel={null}
-                // Install-wide and harness-agnostic, so there is no catalog to
-                // union, no turn to be mid-way through, no one host whose judge
-                // this row could name, and no negotiated catalog line to read.
-                //
-                // `hostKnowsAutoMode={null}` is the THIRD state, and it is load
-                // bearing rather than a formality: `null` means no host is in
-                // scope, exactly as `supportedPermissionModes={null}` above
-                // means no harness is. `false` would be a different claim -
-                // "a machine was asked and cannot spell `auto`" - and this row
-                // has asked no machine anything. It once passed `false` with a
-                // comment calling the value inert, which was true while the
-                // flag only vetoed the upgrade sentence and stopped being true
-                // the moment it also gated the option: the row silently refused
-                // to let anyone choose Auto as their default.
-                //
-                // Nothing is lost by offering it here. A default is a
-                // preference, and the composer clamps it per host at the point
-                // a host actually exists - the same division of labour the
-                // `supportedPermissionModes` comment above describes for
-                // harnesses.
-                catalogSupportedModes={null}
-                hostKnowsAutoMode={null}
-                turnActive={false}
-                judgeBilling={null}
-                closeFocus="trigger"
-              />
-            }
-          />
           <VoiceSettingsSection />
           <SettingsRow
             row={GENERAL.definitions.quoteReply}

@@ -3,7 +3,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
-  RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -12,7 +11,9 @@ import type {
   WorktreeHostEntryV14,
   WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
-import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useWorktreeEnrichmentForClient } from "@/hooks/worktree/use-worktree-enrichment-query";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
 import {
   useWorktreeListByWorkspacePathsForClient,
@@ -22,8 +23,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { queryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
+import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
 
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV14[] = [];
 const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV14[] = [];
 
 type WorktreeListAllForHostResponse = ResponseOfMethod<
@@ -74,26 +75,6 @@ function bindingRunPaths(binding: WorktreeBinding | null): {
         ),
       ),
     ),
-  };
-}
-
-/**
- * The one place `worktree.listAllForHost`'s request shape is written. Shared
- * between the background query (render-scoped `worktreePaths`) and a forced
- * refresh's cache-write key (the `worktreePaths` CAPTURED at mutate time), so
- * the two cannot drift into hand-copied literals that quietly fork.
- */
-function worktreeListAllForHostParams(
-  worktreePaths: ReadonlyArray<string>,
-): RequestOfMethod<HostRpcRegistry, "worktree.listAllForHost"> {
-  return {
-    includeActivity: true,
-    activityPaths: [...worktreePaths],
-    cursor: null,
-    limit: null,
-    // A background read: serve the host's TTL-cached view. Only an explicit
-    // Refresh forces a disk recompute (see the mutation's own `mapVariables`).
-    forceRefresh: false,
   };
 }
 
@@ -231,20 +212,13 @@ export function useWorktreeOwnerMetadata(args: {
     args.client,
     { workspacePaths, enabled: args.enabled },
   );
-  const listParams = useMemo(
-    () => worktreeListAllForHostParams(worktreePaths),
-    [worktreePaths],
+  // Cached per path, like every activity-enriched read: a `worktree.changed`
+  // frame for one of this owner's worktrees re-probes that row alone.
+  const worktreesQuery = useWorktreeEnrichmentForClient(
+    args.client,
+    worktreePaths,
+    args.enabled,
   );
-  const worktreesQuery = useHostQuery<
-    HostRpcRegistry,
-    "worktree.listAllForHost"
-  >({
-    cacheKeyIdentity: undefined,
-    client: args.client,
-    method: "worktree.listAllForHost",
-    params: listParams,
-    options: { enabled: args.enabled && worktreePaths.length > 0 },
-  });
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
     "worktree.listAllForHost",
@@ -282,20 +256,36 @@ export function useWorktreeOwnerMetadata(args: {
       // toast is the only place a failure can surface.
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh workspace details."),
-      // Lands in the SAME cache entry the card renders from. Reissuing the
-      // query with `forceRefresh: true` in its params instead would fork a
-      // second key that no observer reads, so the fresh facts would never
+      // Lands in the SAME per-path cache entries the card renders from.
+      // Reissuing the query with `forceRefresh: true` in its params instead
+      // would fork keys that no observer reads, so the fresh facts would never
       // reach the screen. Built from the captured context, not the render's
-      // `listParams`, so it lands in the entry THIS request actually read.
+      // paths, so each row lands in the entry THIS request actually covered -
+      // split by `rowsByRequestedPath`, the same fan-out the batcher applies
+      // to a background read. These paths come from the BINDING, which an
+      // explicit import stores as given, so the host may answer one under its
+      // own normalized spelling; exact matching alone would drop that row.
+      //
+      // The write runs through the entry's `keepResolvedEnrichmentRows`, and
+      // that is intended: a forced read that answers a row UNRESOLVED
+      // (`resolvedAt: null`, the host could not derive it this time) keeps the
+      // resolved row already shown rather than blanking it to "detached HEAD".
+      // `checkedAt` then still reports that row's own derive time, which is
+      // the honest age of what the card is showing.
       onSuccess: (response, _variables, context) => {
-        queryClient.setQueryData<WorktreeListAllForHostResponse>(
-          queryKeys.hostMethod<HostRpcRegistry, "worktree.listAllForHost">(
-            context.hostId,
-            "worktree.listAllForHost",
-            worktreeListAllForHostParams(context.worktreePaths),
-          ),
-          response,
+        const rowsByPath = rowsByRequestedPath(
+          context.worktreePaths,
+          response.worktrees,
         );
+        for (const worktreePath of context.worktreePaths) {
+          queryClient.setQueryData<WorktreeListAllForHostResponse>(
+            perPathEnrichmentQueryKey(context.hostId, worktreePath),
+            {
+              worktrees: [...(rowsByPath.get(worktreePath) ?? [])],
+              nextCursor: null,
+            },
+          );
+        }
       },
     },
   });
@@ -368,7 +358,7 @@ export function useWorktreeOwnerMetadata(args: {
     ]);
   }, [refetchBinding, refreshWorkspaces, refreshWorktrees, suppliedBinding]);
 
-  const worktrees = worktreesQuery.data?.worktrees ?? EMPTY_WORKTREES;
+  const worktrees = worktreesQuery.worktrees;
   const workspaces = workspacesQuery.data?.workspaces ?? EMPTY_WORKSPACES;
   return {
     binding,

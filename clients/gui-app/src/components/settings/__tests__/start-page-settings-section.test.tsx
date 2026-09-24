@@ -356,9 +356,14 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
     const dunesTile = await screen.findByRole("button", { name: "Dunes" });
     // The tile is the start page's own component on its `preview` surface:
     // the thumbnail as its image and the grain texture, at full opacity and
-    // without the page veil - the texture is what a tile has to show.
-    const surface = dunesTile.querySelector(".appearance-wallpaper");
+    // without the page veil - the texture is what a tile has to show. Nor the
+    // page's containment/isolation class: in the mobile Settings scroller it
+    // stops WebKit painting the image at all.
+    const surface = dunesTile.querySelector(
+      '[data-wallpaper-surface="preview"]',
+    );
     expect(surface).not.toBeNull();
+    expect(surface?.classList.contains("appearance-wallpaper")).toBe(false);
     const img = surface?.querySelector("img");
     expect(img?.getAttribute("src")).toBe(dunes.thumbUrl);
     expect(img?.getAttribute("referrerpolicy")).toBe("no-referrer");
@@ -413,7 +418,9 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
     ).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Photo" }));
     expect(dunesTile.querySelector(".appearance-wallpaper-texture")).toBeNull();
-    expect(dunesTile.querySelector(".appearance-wallpaper")).not.toBeNull();
+    expect(
+      dunesTile.querySelector('[data-wallpaper-surface="preview"]'),
+    ).not.toBeNull();
   });
 
   it("shows every tile and no more-tile when the catalog fits the six slots", async () => {

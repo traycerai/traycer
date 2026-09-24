@@ -55,6 +55,8 @@ import { PendingInterviewCard } from "@/components/chat/segments/pending-intervi
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
+import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
 import {
@@ -70,6 +72,7 @@ import {
 } from "@/lib/chat/background-item-tree";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { usePortForwardsForChat } from "@/stores/port-forwards/port-forwards-for-chat";
 import {
   useHeldManagedCommandsForChat,
   useRunningManagedCommandsForChat,
@@ -221,6 +224,10 @@ export interface ChatLowerApprovalsState {
   readonly highlightedApprovalId: string | null;
   /** Advances on each jump so a repeat to the same row restarts the pulse. */
   readonly highlightedGeneration?: number;
+  /** Where this chat runs, for the rules an approval card drafts. */
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  /** Opens Settings from an approval card's links. */
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
 
 export interface ChatLowerQueueState {
@@ -456,10 +463,19 @@ export function ChatLowerInteractionSurfaces(
     hostId: props.hostId,
   });
   const heldManagedCommandCount = heldManagedCommands.length;
+  // A forward outlives the turn that made it, so an otherwise idle chat can
+  // still hold one; it opens the section on its own, like a hold does.
+  const portForwards = usePortForwardsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId: props.hostId,
+  });
+  const portForwardCount = portForwards.length;
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount,
     heldManagedCommandCount,
+    portForwardCount,
   });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
@@ -473,6 +489,7 @@ export function ChatLowerInteractionSurfaces(
     backgroundItems: props.backgroundItems,
     runningManagedCommands,
     heldManagedCommands,
+    portForwardCount,
     queue: props.queue.value,
   });
   const pinnedStackVisible =
@@ -589,6 +606,7 @@ export function ChatLowerInteractionSurfaces(
           backgroundItems={props.backgroundItems}
           runningManagedCommandCount={runningManagedCommandCount}
           heldManagedCommandCount={heldManagedCommandCount}
+          portForwardCount={portForwardCount}
           backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
           backgroundStopAllPending={props.backgroundStopAllPending}
           backgroundSessionStopPending={props.backgroundSessionStopPending}
@@ -680,6 +698,7 @@ interface ChatDockChromeInput {
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly runningManagedCommands: ReadonlyArray<ManagedCommand>;
   readonly heldManagedCommands: ReadonlyArray<HeldManagedCommandUpdate>;
+  readonly portForwardCount: number;
   readonly queue: ChatSessionState["queue"];
 }
 
@@ -773,8 +792,14 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         waitingWakeCount: dedupedBackgroundItems.filter(
           (item) => item.kind === "wakeup",
         ).length,
+        portForwardCount: input.portForwardCount,
       }),
-    [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
+    [
+      backgroundRunning,
+      input.heldManagedCommands,
+      dedupedBackgroundItems,
+      input.portForwardCount,
+    ],
   );
   const changeTotals = useMemo(
     () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),
@@ -1055,6 +1080,8 @@ function RuntimeGatedApprovalSurface(props: {
         onApprovalDecision={model.approvals.onApprovalDecision}
         highlightedApprovalId={model.approvals.highlightedApprovalId}
         highlightedGeneration={model.approvals.highlightedGeneration}
+        ruleDraftWorkspace={model.approvals.ruleDraftWorkspace}
+        onOpenSettings={model.approvals.onOpenSettings}
       />
     </ComposerSlotShell>
   );
@@ -1216,6 +1243,8 @@ function PendingApprovalQueues(props: {
   readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
   readonly highlightedApprovalId: string | null;
   readonly highlightedGeneration?: number;
+  readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
+  readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -1232,6 +1261,8 @@ function PendingApprovalQueues(props: {
         onDecision={props.onApprovalDecision}
         highlightedApprovalId={props.highlightedApprovalId}
         highlightedGeneration={props.highlightedGeneration}
+        ruleDraftWorkspace={props.ruleDraftWorkspace}
+        onOpenSettings={props.onOpenSettings}
       />
     </div>
   );

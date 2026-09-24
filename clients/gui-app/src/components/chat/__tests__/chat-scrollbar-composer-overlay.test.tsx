@@ -194,6 +194,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               chatId="chat-1"
               runningManagedCommandCount={0}
               heldManagedCommandCount={0}
+              portForwardCount={0}
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
@@ -264,6 +265,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               chatId="chat-1"
               runningManagedCommandCount={0}
               heldManagedCommandCount={0}
+              portForwardCount={0}
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
@@ -543,6 +545,8 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onFileEditDecision: () => undefined,
     onApprovalDecision: () => undefined,
     highlightedApprovalId: null,
+    ruleDraftWorkspace: { remote: null, branch: null },
+    onOpenSettings: () => undefined,
   };
   const queue: ChatLowerQueueState = {
     editingItem: null,

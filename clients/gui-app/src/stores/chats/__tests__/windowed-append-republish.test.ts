@@ -169,6 +169,7 @@ function republishSnapshot(input: {
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
       indexRevision: input.indexRevision,

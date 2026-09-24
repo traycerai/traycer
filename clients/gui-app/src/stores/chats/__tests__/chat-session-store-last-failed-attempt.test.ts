@@ -203,6 +203,7 @@ function emitLegacySnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: undefined,
       pendingReturn: undefined,
       lastFailedAttempt,
@@ -275,6 +276,7 @@ function deferredWindowedSnapshot(
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       // Unhydrated tail (same construction as the D215 file's) - every case
       // below drives the DEFERRAL branch, not the ordinary fold. `rowCount: 2`
       // with `fromOrdinal: 0` below leaves ordinal 1 uncovered, so a partial

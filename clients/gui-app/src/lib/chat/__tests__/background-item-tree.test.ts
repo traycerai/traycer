@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
-import { backgroundRunningRowCount } from "@/lib/chat/background-item-tree";
+import {
+  backgroundHeaderSummary,
+  backgroundRunningRowCount,
+} from "@/lib/chat/background-item-tree";
 
 function wakeup(taskId: string): BackgroundItem {
   return {
@@ -83,5 +86,64 @@ describe("backgroundRunningRowCount", () => {
         heldManagedCommandIds: [],
       }),
     ).toBe(1);
+  });
+});
+
+describe("backgroundHeaderSummary", () => {
+  it("says '0 running' when every count is zero", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 0,
+        heldCount: 0,
+        waitingWakeCount: 0,
+        portForwardCount: 0,
+      }),
+    ).toBe("0 running");
+  });
+
+  it("singularizes a single port forward", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 0,
+        heldCount: 0,
+        waitingWakeCount: 0,
+        portForwardCount: 1,
+      }),
+    ).toBe("1 port forward");
+  });
+
+  it("pluralizes more than one port forward", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 0,
+        heldCount: 0,
+        waitingWakeCount: 0,
+        portForwardCount: 3,
+      }),
+    ).toBe("3 port forwards");
+  });
+
+  it("contributes nothing when the port forward count is zero, alongside other non-zero parts", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 2,
+        heldCount: 1,
+        waitingWakeCount: 0,
+        portForwardCount: 0,
+      }),
+    ).toBe("2 running · 1 held");
+  });
+
+  // Composition order the implementation uses: running, held, waiting, then
+  // port forwards last.
+  it("composes with the existing parts in running, held, waiting, port-forward order", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 2,
+        heldCount: 1,
+        waitingWakeCount: 4,
+        portForwardCount: 1,
+      }),
+    ).toBe("2 running · 1 held · 4 waiting · 1 port forward");
   });
 });

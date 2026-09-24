@@ -12,6 +12,7 @@ import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
 import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattended-denial-segment";
+import { AutoJudgeNoticeSegment } from "./segments/auto-judge-notice-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
@@ -69,8 +70,20 @@ export interface ChatMessageForkAction {
   ) => void;
 }
 
+/**
+ * Where the host is with a row it has accepted and not yet started - the
+ * chat's opening prompt, while its worktree and session are set up.
+ */
+export type ChatMessageDeliveryPhase = "pending" | "preparing";
+
 export interface ChatMessageUserActions {
   readonly type: "user";
+  /**
+   * Set while the host is still delivering this row, `null` otherwise. Such a
+   * row shows its phase and offers copy only (`enabled` is false and nothing is
+   * being edited); it becomes an ordinary message when it starts.
+   */
+  readonly deliveryPhase: ChatMessageDeliveryPhase | null;
   readonly enabled: boolean;
   readonly confirmingDelete: boolean;
   readonly editing: ChatMessageEditing | null;
@@ -157,6 +170,16 @@ function renderSingleSpecialSegment(
         <AutoJudgeUnattendedDenialSegment
           rule={segment.rule}
           reason={segment.reason}
+        />
+      </div>
+    );
+  }
+  if (segment.kind === "auto-judge-notice") {
+    return (
+      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
+        <AutoJudgeNoticeSegment
+          marker={segment.marker}
+          message={segment.message}
         />
       </div>
     );

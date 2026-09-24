@@ -15,6 +15,7 @@
  * None of them is wire surface: they are constructor inputs to the engine.
  */
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type {
   AuthorityIdentitySource,
   HostFleetEntry,
@@ -105,6 +106,41 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
     : null;
 }
 
+/**
+ * One registry answer, with the time of the read that PRODUCED it.
+ *
+ * `readAtMs` is metadata beside the response, never inside it: the response is
+ * the cloud's own body and has no business carrying a reader's clock.
+ *
+ * The two producers stamp it from the same source, which is what makes the
+ * comparison meaningful. A local fetch stamps `now()` when it STARTS - not
+ * when it lands, because the question is which read OBSERVED the registry
+ * first. A pushed snapshot carries `fetchedAtMs`, which is the local host's
+ * clock at its own read: the host runs on THIS machine, so the two stamps come
+ * from one clock and are directly comparable. A remote host's clock would not
+ * be, and nothing here accepts one.
+ */
+export interface RegistryRead {
+  readonly response: HostListResponse;
+  readonly readAtMs: number;
+}
+
+/**
+ * A registry answer this port did not fetch, with the identity generation the
+ * SUBSCRIPTION that produced it was opened under.
+ *
+ * A stream speaks for one account for its whole life - the serving host bound
+ * the subscribing user at subscribe time - so a snapshot that was already in
+ * flight when this process changed accounts is A's rows arriving in B's world.
+ * Stamping it with the generation current at adoption, as a fetch of our own
+ * is stamped, would publish and adopt A's membership as B's. The producer
+ * tears its stream down on an identity change; this field is what does not
+ * depend on which callback ran first.
+ */
+export interface PushedRegistryRead extends RegistryRead {
+  readonly openedAtGeneration: number;
+}
+
 export interface DesktopHostFleetSourceOptions {
   readonly authnBaseUrl: string;
   readonly identity: AuthorityIdentitySource;
@@ -135,6 +171,14 @@ export interface DesktopHostFleetSourceOptions {
    * not a failure anything reports.
    */
   readonly publishRegistryResponse: (push: RegisteredHostsPush) => void;
+  /**
+   * This machine's clock, for stamping when a registry read started.
+   *
+   * A port rather than a bare `Date.now()` because the ordering rule it feeds
+   * - a read that observed the registry EARLIER never overwrites one that
+   * observed it later - is otherwise only testable against wall time.
+   */
+  readonly now: () => number;
   readonly log: AuthorityLog;
 }
 
@@ -239,6 +283,37 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private localIdentitySeq = 0;
   private adoptedLocalIdentitySeq = 0;
   private readonly listeners = new Set<(snapshot: HostFleetSnapshot) => void>();
+  /**
+   * Set only by the local-host inventory subscription; read only by the
+   * registry cadence. Not part of the snapshot and deliberately not published
+   * anywhere: it says who is READING the registry, which is nobody's business
+   * but the reader's.
+   */
+  /**
+   * The read TIME of the newest registry answer this port has adopted.
+   *
+   * `refreshSeq` orders answers by when they were REQUESTED here, which is the
+   * right rule for two of this port's own fetches and the wrong one the moment
+   * a second reader appears. A pushed snapshot is handed over when the
+   * subscription opens, and the rows in it were read by the host up to a full
+   * interval earlier: it arrives newest and observed oldest. Ordering on
+   * arrival let it overwrite a poll that had already landed, so a host
+   * deregistered in between came back until the host's next read.
+   *
+   * So adoption is ordered by when the registry was OBSERVED, and both rules
+   * stand: this one rejects an older observation, `refreshSeq` still rejects
+   * an older request. Advanced only where rows are actually adopted.
+   *
+   * NOT reset on an identity change, deliberately. Resetting would re-open the
+   * hole across an account switch - a push carrying rows read in the previous
+   * account's era could win again - and what not resetting costs is bounded
+   * and covered: a newly signed-in account whose host replays a snapshot older
+   * than the last adopted read is declined, and the poll, which is running
+   * precisely because that push is not covering anything yet, serves the fleet
+   * until the host's next read supersedes it.
+   */
+  private adoptedReadAtMs = Number.NEGATIVE_INFINITY;
+  private pushActive = false;
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
   private disposed = false;
@@ -319,7 +394,69 @@ export class DesktopHostFleetSource implements HostFleetSource {
     }
   }
 
+  /**
+   * The same adoption, for rows this process did not fetch.
+   *
+   * The local host reads `GET /api/v3/hosts` for its own reasons and can push
+   * the answer (`local-host-inventory-subscription.ts`), which is one fewer
+   * read of the same lease. What arrives is a registry RESPONSE, identical in
+   * shape and provenance to the one `listRegisteredHosts` returns - so it goes
+   * through the same path rather than a second, subtly different one: the same
+   * identity generation captured before the local-identity read, the same
+   * `refreshSeq` ordering against a poll that may be in flight, the same
+   * signed-out and unverified branches, the same publish-then-adopt order.
+   *
+   * TOTAL, like {@link refresh}: its caller is a stream callback with nobody
+   * to reject to.
+   */
+  async acceptPushedRows(read: PushedRegistryRead): Promise<void> {
+    if (this.disposed) return;
+    try {
+      await this.adoptRegistryResponse(read);
+    } catch (error: unknown) {
+      this.options.log.warn("[selection-fleet] pushed registry adopt threw", {
+        error: String(error),
+      });
+    }
+  }
+
+  /**
+   * Whether a push plane is currently covering the registry, for the cadence
+   * that would otherwise fetch it.
+   *
+   * Only the subscription may set this, and it says `false` for every way its
+   * stream can be less than healthy - including a snapshot the host itself
+   * marked stale. The poll reads it per tick rather than being stopped and
+   * restarted, so the failure mode of this flag getting stuck is a redundant
+   * read, never a fleet that stops being refreshed.
+   */
+  setPushActive(active: boolean): void {
+    this.pushActive = active;
+  }
+
+  isPushActive(): boolean {
+    return this.pushActive && !this.disposed;
+  }
+
   private async refreshOrThrow(): Promise<void> {
+    await this.refreshWith(null);
+  }
+
+  private async adoptRegistryResponse(read: PushedRegistryRead): Promise<void> {
+    await this.refreshWith(read);
+  }
+
+  /**
+   * One refresh, from a response this call fetches (`pushed === null`) or one
+   * the local host already read for us.
+   *
+   * The two share everything but the fetch, and that is the point: every race
+   * rule this port has - the generation captured before the local-identity
+   * read, `refreshSeq` ordering a push against a poll in flight, the
+   * signed-out and unverified branches, publishing before adopting - is a rule
+   * about ADOPTING registry rows, not about who read them.
+   */
+  private async refreshWith(pushed: PushedRegistryRead | null): Promise<void> {
     // Stamped at fetch START (contract: "the generation this snapshot was
     // FETCHED under"), so a completion that lands after an account switch is
     // recognisably stale. The identity KEY is captured in the same read for
@@ -330,6 +467,25 @@ export class DesktopHostFleetSource implements HostFleetSource {
     const generation = identity.generation;
     this.refreshSeq += 1;
     const seq = this.refreshSeq;
+    if (pushed !== null && pushed.openedAtGeneration !== generation) {
+      // Rows read for an account this process has left. Checked BEFORE the
+      // await, so nothing about them is published, adopted, or even read from
+      // disk on their behalf: the generation this port would otherwise stamp
+      // them with is the CURRENT one, which is exactly the mis-attribution.
+      this.options.log.debug(
+        "[selection-fleet] dropped a push from a retired identity",
+        {
+          openedAtGeneration: pushed.openedAtGeneration,
+          generation,
+        },
+      );
+      return;
+    }
+    // The time the registry was OBSERVED, which is what adoption is ordered
+    // on. A fetch of our own is stamped HERE - at its start, before the await
+    // - so it is the moment this process went to look, not the moment the
+    // answer happened to land. A push brings the host's own read time with it.
+    const readAtMs = pushed === null ? this.options.now() : pushed.readAtMs;
     // ONE read of the snapshot, not two: `token` and `verified` are committed
     // together and a second `get()` could straddle a revoke, spending a bearer
     // this snapshot had already disowned.
@@ -341,7 +497,17 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // other observation so it supersedes an identity read still in flight,
       // rather than being overwritten by one that started before the sign-out.
       this.localIdentitySeq += 1;
-      this.applyFetched(generation, seq, this.localIdentitySeq, null, []);
+      // `readAtMs` here is this observation's own time, not a registry read's:
+      // signing out is a fact about the account learned right now, and it must
+      // supersede any read that observed the fleet before it.
+      this.applyFetched(
+        generation,
+        seq,
+        this.localIdentitySeq,
+        null,
+        [],
+        readAtMs,
+      );
       return;
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
@@ -371,6 +537,23 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return;
     }
+    if (pushed !== null) {
+      // The host has already made the read this branch would make. It arrives
+      // with no `kind` to check because a snapshot IS the host's successful
+      // read - a host that could not read sends nothing, and a host serving
+      // rows it could not refresh marks them stale, which the subscription
+      // handles by standing the poll back up rather than by withholding rows.
+      this.publishAndAdopt(
+        identity,
+        generation,
+        seq,
+        identitySeq,
+        localHostId,
+        pushed.response,
+        readAtMs,
+      );
+      return;
+    }
     let result: HostListFetchResult;
     try {
       result = await this.options.listRegisteredHosts(
@@ -397,22 +580,86 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return;
     }
-    // Published BEFORE the id projection is adopted, and published even when
-    // `applyFetched` declines to adopt (a late completion for a retired
-    // identity). Both are deliberate: the push carries the identity it was
-    // FETCHED under, so a renderer on another account drops it by the same
-    // rule the engine rejects the snapshot by - one stamp, two readers, no
-    // second staleness policy.
+    this.publishAndAdopt(
+      identity,
+      generation,
+      seq,
+      identitySeq,
+      localHostId,
+      result.response,
+      readAtMs,
+    );
+  }
+
+  /**
+   * Published BEFORE the id projection is adopted, and published even when
+   * `applyFetched` declines to adopt (a late completion for a retired
+   * identity). Both are deliberate: the push carries the identity it was
+   * FETCHED under, so a renderer on another account drops it by the same
+   * rule the engine rejects the snapshot by - one stamp, two readers, no
+   * second staleness policy.
+   */
+  private publishAndAdopt(
+    identity: { readonly identityKey: string | null },
+    generation: number,
+    seq: number,
+    identitySeq: number,
+    localHostId: string | null,
+    response: HostListResponse,
+    readAtMs: number,
+  ): void {
+    if (readAtMs < this.adoptedReadAtMs) {
+      // An answer that observed the registry EARLIER than one already adopted.
+      // Declined before the publish, not just before the adoption: the renderer
+      // push is the display half of the same fact, and showing windows a fleet
+      // the authority has refused is the same bug with a different surface.
+      this.options.log.debug(
+        "[selection-fleet] dropped an older registry read",
+        {
+          readAtMs,
+          adopted: this.adoptedReadAtMs,
+        },
+      );
+      return;
+    }
+    if (
+      generation === this.options.identity.current().generation &&
+      seq < this.adoptedSeq
+    ) {
+      // Same-identity ordering, applied to the PUBLISH as well as the
+      // adoption. `applyFetched` has always declined an older request, but it
+      // declines it after this method has already told every window what that
+      // request found - and read-time ordering made that reachable: a poll
+      // that STARTED before a push's read completes after it, passes the
+      // read-time check (it did observe the registry later), publishes its
+      // rows, and is then refused on seq. Windows would be showing a fleet the
+      // authority had just rejected.
+      //
+      // Gated on the generation matching, which is what keeps the retired-
+      // identity path below intact: a late completion for an account this
+      // process has left is still published, stamped with the generation it
+      // was fetched under, precisely so the renderer can drop it by the same
+      // rule the engine does.
+      this.options.log.debug(
+        "[selection-fleet] dropped a superseded registry read before publish",
+        {
+          seq,
+          adopted: this.adoptedSeq,
+        },
+      );
+      return;
+    }
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
-      response: result.response,
+      response,
     });
     this.applyFetched(
       generation,
       seq,
       identitySeq,
       localHostId,
-      result.response.hosts.map((row) => row.hostId),
+      response.hosts.map((row) => row.hostId),
+      readAtMs,
     );
   }
 
@@ -518,6 +765,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     identitySeq: number,
     localHostId: string | null,
     rows: readonly string[],
+    readAtMs: number,
   ): void {
     if (this.disposed) return;
     if (generation !== this.options.identity.current().generation) {
@@ -543,6 +791,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
       return;
     }
     this.adoptedSeq = seq;
+    // Advanced HERE and nowhere else: the watermark means "the newest read
+    // whose rows are the ones this port is serving", so a completion declined
+    // above - or one that never reached this method - must not raise it and
+    // lock out the read that should win.
+    this.adoptedReadAtMs = Math.max(this.adoptedReadAtMs, readAtMs);
     this.rows = rows;
     // The ID is fenced SEPARATELY from the rows: this refresh's row projection
     // can be the current one while the id it read before the fetch has since

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowDownToLine, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,6 @@ import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mut
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
 import {
   HOST_UPDATE_BANNER_SNOOZE_MS,
-  HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS,
   isHostUpdateBannerSnoozed,
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
@@ -233,19 +232,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // cannot be snoozed away" (experience doc), and a parked
   // `waiting-to-activate` is precisely the state a person needs to see.
   //
-  // A TERMINAL attempt is different, and used to be treated the same. A rich
-  // `failed`/`complete` view superseded the controller status like every other
-  // non-idle kind, but the branch it superseded INTO rendered no terminal
-  // lifecycle at all — no Retry, no Diagnostics, no dismiss for a failure, no
-  // acknowledgement for a success. The controller lane's own terminal branch
-  // has all of those, and a rich attempt could never reach it. So a detached
-  // attempt that failed left a dead-end banner on the landing page for the
-  // whole retention lifetime of the record, and a completed one simply never
-  // went away.
+  // Failures can be dismissed here and remain discoverable in Settings.
+  // Successful updates have no landing notice; Settings owns acknowledgement.
   const dismissedAttemptIds = useHostUpdateBannerStore(
     (state) => state.landingDismissedAttemptIds,
   );
-  useLandingCompletionCollapse(localUpdate.view);
   const showOperation =
     operationSupersedesControllerStatus(
       localUpdate.view,
@@ -427,7 +418,13 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
             runApply(false);
           }}
           onDiagnostics={() => {
-            openSettings({ section: "diagnostics", resetToGeneral: false });
+            openSettings({
+              section: "diagnostics",
+              resetToGeneral: false,
+              tab: null,
+              draft: null,
+              hostId: null,
+            });
           }}
           onOperationDismiss={dismissLandingAttempt}
           onTerminalRetry={() => {
@@ -469,8 +466,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * `idle` does NOT: the host looked and there is no attempt, so the controller's
  * "a stage is ready" / "activation debt" answer is the more useful one.
  *
- * Everything concrete wins — including `unavailable`, whose whole point is to
- * stay visible rather than read as a quiet host.
+ * Concrete progress and problems win, including `unavailable`. Successful
+ * updates belong in Settings and do not raise a landing banner.
  *
  * `unknown` SPLITS, and used to be rejected outright.
  *
@@ -504,10 +501,11 @@ function operationSupersedesControllerStatus(
   view: FleetUpdateView,
   controllerHasConcreteFact: boolean,
 ): boolean {
-  // `isQuietUpdateView` is the shared "nothing to show" predicate — the
-  // Overview hides its operation card on the same test, so the two surfaces
-  // agree on where quiet begins.
   if (isQuietUpdateView(view)) return false;
+  // Retained success is just as quiet as a fresh completion. Opening the
+  // landing page must not acknowledge or dismiss Settings' success notice.
+  const kind = view.kind === "unknown" ? view.lastKnownKind : view.kind;
+  if (kind === "complete" || kind === "finalizing-record") return false;
   if (view.kind === "unknown") return !controllerHasConcreteFact;
   return true;
 }
@@ -591,9 +589,9 @@ function BannerBody(props: BannerBodyProps) {
 }
 
 /**
- * A terminal attempt the landing banner has finished with.
+ * A failed attempt the landing banner has finished with.
  *
- * `complete` and `failed` only. `unavailable` is deliberately NOT dismissible —
+ * `unavailable` is NOT dismissible —
  * its whole purpose is to stay visible until the record is repaired, and it
  * carries no attempt id to key a dismissal by in any case.
  */
@@ -601,54 +599,9 @@ function isLandingDismissed(
   view: FleetUpdateView,
   dismissedAttemptIds: ReadonlyArray<string>,
 ): boolean {
-  if (
-    view.kind !== "complete" &&
-    view.kind !== "failed" &&
-    view.kind !== "finalizing-record"
-  ) {
-    return false;
-  }
+  if (view.kind !== "failed") return false;
   const attemptId = view.attemptId;
   return attemptId !== null && dismissedAttemptIds.includes(attemptId);
-}
-
-/**
- * A completed update acknowledges itself and collapses.
- *
- * "Completion may auto-collapse after a short acknowledgement; Settings still
- * shows the running version" (experience doc). Without this a retained
- * `complete` record — which the host keeps for days — sat on the landing page
- * indefinitely announcing a success nobody had to act on.
- *
- * Keyed on the attempt id so the timer restarts for a genuinely new completion
- * and does nothing on a re-render. The dismissal it writes is the same one the
- * failure path uses, so "collapsed" and "dismissed" cannot drift into two
- * different notions of hidden.
- */
-function useLandingCompletionCollapse(view: FleetUpdateView): void {
-  const dismissLandingAttempt = useHostUpdateBannerStore(
-    (state) => state.dismissLandingAttempt,
-  );
-  // `finalizing-record` collapses on the same timer, and for the reason above
-  // stated exactly: it is a SUCCESS nobody has to act on, and it outlives a
-  // retained `complete` rather than expiring sooner — the record it names is
-  // reconciled by the next update RUN, which may be days away and may never
-  // come. Leaving it out would have parked "Updated to v1.2.3. Finalizing the
-  // update record." on the landing page permanently, which is the exact defect
-  // this hook was written to fix, reintroduced through its own omission.
-  const completedAttemptId =
-    view.kind === "complete" || view.kind === "finalizing-record"
-      ? view.attemptId
-      : null;
-  useEffect(() => {
-    if (completedAttemptId === null) return;
-    const timer = setTimeout(() => {
-      dismissLandingAttempt(completedAttemptId);
-    }, HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [completedAttemptId, dismissLandingAttempt]);
 }
 
 interface OperationContentProps {
@@ -784,14 +737,8 @@ function OperationContent(props: OperationContentProps) {
           </Button>
         ) : null}
         {/*
-          Dismiss exists ONLY for a failure, and only once there is an attempt
-          id to remember it by. There is deliberately no dismiss on an active or
-          parked operation — the doc forbids snoozing those away — and none on a
-          completion, which collapses on its own.
-
-          Dismissing hides this banner and nothing else: the selected-host
-          Overview still shows the failed attempt, because "the failure remains
-          discoverable in the selected-host Overview".
+          Failed attempts are dismissed on the landing page only; Settings
+          retains the failure. Active and parked operations stay visible.
         */}
         {failedAttemptId === null ? null : (
           <Button

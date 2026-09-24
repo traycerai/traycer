@@ -456,7 +456,9 @@ describe("WorktreeOwnerSettingsHeader", () => {
 
     expect(screen.getByText("Full access")).toBeTruthy();
     expect(permissionIconClass().split(/\s+/)).not.toContain("lucide-lock");
-    expect(permissionIconClass()).toMatch(/open|unlock/);
+    // The mode registry's icon for Full access is `ShieldOff`: no shield at
+    // all, which is the opposite of a padlock.
+    expect(permissionIconClass().split(/\s+/)).toContain("lucide-shield-off");
   });
 
   it("shows the profile as a corner dot, not as trailing text", () => {

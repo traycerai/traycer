@@ -229,6 +229,7 @@ function fakeChatActions(
     ackFailedSendRestoration: () => undefined,
     ackAcceptedAction: () => undefined,
     takeSetupFailedRestoration: () => null,
+    messageDeliveryRestored: () => null,
   };
 }
 
@@ -240,6 +241,7 @@ function baseInput(
     activeInlineEdit: null,
     canModifyMessages: true,
     canAct: true,
+    messageDelivery: null,
     interviewDeliveryRetryProtocolSupported: false,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,

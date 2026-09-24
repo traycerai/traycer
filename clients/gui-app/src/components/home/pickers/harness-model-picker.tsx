@@ -717,6 +717,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     openSettings({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
   }
   // Falls back to the fallback harness list's label while the catalog hasn't

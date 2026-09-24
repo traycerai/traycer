@@ -32,6 +32,7 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
+import { normalizeSearchableText } from "@/lib/find-engine/searchable-text";
 import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ActivityGroupModel,
@@ -477,6 +478,9 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
           }),
         ),
       ];
+    case "auto-judge-notice":
+      // The host's notice is the whole painted line.
+      return [normalizeSearchableText(segment.message)];
     case "setup-card":
       return [
         normalizeSearchableText(
@@ -838,15 +842,6 @@ function tableToText(token: Tokens.Table): string {
 
 function isBuiltInMarkedToken(token: Token): token is MarkedToken {
   return BUILT_IN_MARKED_TOKEN_TYPES.some((type) => type === token.type);
-}
-
-function normalizeSearchableText(value: string): string {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 function fileChangeVerb(operation: string): string {

@@ -24,6 +24,7 @@ import {
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   ChatMessage,
+  type ChatMessageDeliveryPhase,
   type ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
@@ -513,6 +514,43 @@ describe("<UserMessageBody /> agent messages", () => {
     screen.getByRole("menuitem", { name: "Copy" });
     expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("keeps only Copy in the touch menu while the row's delivery is unresolved", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    screen.getByRole("menuitem", { name: "Copy" });
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("returns Edit and Delete to the touch menu once the row has started", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    screen.getByRole("menuitem", { name: "Copy" });
+    screen.getByRole("menuitem", { name: "Edit" });
+    screen.getByRole("menuitem", { name: "Delete" });
   });
 
   it("hands the corner to the delete confirm chip while it is open", () => {
@@ -1619,6 +1657,7 @@ function displayUserActions(handlers: {
 }): ChatMessageUserActions {
   return {
     type: "user",
+    deliveryPhase: null,
     enabled: true,
     confirmingDelete: false,
     editing: null,
@@ -1632,6 +1671,7 @@ function displayUserActions(handlers: {
 function editingUserActions(content: JsonContent): ChatMessageUserActions {
   return {
     type: "user",
+    deliveryPhase: null,
     enabled: true,
     confirmingDelete: false,
     editing: {
@@ -1880,6 +1920,98 @@ function restoreProperty(
   }
   Object.defineProperty(target, key, descriptor);
 }
+
+function deliveryUserActions(
+  phase: ChatMessageDeliveryPhase,
+): ChatMessageUserActions {
+  return {
+    type: "user",
+    deliveryPhase: phase,
+    enabled: false,
+    confirmingDelete: false,
+    editing: null,
+    onEdit: () => undefined,
+    onDeleteRequest: () => undefined,
+    onDeleteConfirm: () => undefined,
+    onDeleteCancel: () => undefined,
+  };
+}
+
+describe("<UserMessageBody /> message delivery footer", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("pending: shows a 'Sending' status with a spinner", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+
+  it("preparing: shows a 'Setting up' status with a spinner", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("preparing")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Setting up");
+  });
+
+  it("renders no footer once the row has started (an ordinary, resolved actions object)", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("renders no footer for a row with no delivery view at all (actions: null)", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("a delivering row hides Edit/Delete but keeps Copy available", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    expect(screen.queryByLabelText("Delete message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("Edit and Delete return once the row has started", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    screen.getByLabelText("Edit message");
+    screen.getByLabelText("Delete message");
+    screen.getByLabelText("Copy message");
+  });
+});
 
 describe("<ChatMessage /> sender overline timestamp", () => {
   const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();

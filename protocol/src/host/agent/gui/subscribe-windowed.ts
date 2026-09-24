@@ -5,6 +5,7 @@ import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   messageSchema,
+  messageSchemaPreMessageDelivery,
   messageSchemaPreBrowser,
   messageSchemaPreFallback,
   messageSchemaPreShellHost,
@@ -695,6 +696,44 @@ export const chatTranscriptDerivedSchemaPreSetupPlacement = lazySchema(() =>
  * places it, so the client can seat the tail against a skeleton it has not
  * finished receiving yet.
  */
+export const chatTranscriptWindowSchemaPreMessageDelivery = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    /**
+     * One ROW id per row in the tail, in order - the same identity echo a
+     * `range` carries, and read the same way.
+     *
+     * The tail is emitted BEFORE the skeleton streams, so the client cannot check
+     * these against an index it does not have yet. That is not what they are for
+     * here: without them the client has to take the tail's extent positionally
+     * (`fromOrdinal` to `rowCount`) and leave every id blank until a skeleton
+     * chunk supplies one, which also leaves {@link rowContext} with nothing to
+     * key on.
+     *
+     * Optional rather than defaulted, for the reason `row-context.ts` gives:
+     * absent is a producer that has nothing to say, not an empty answer. A host
+     * that predates the field leaves the client on the positional read it used
+     * before; an empty ARRAY would be indistinguishable from "this tail served no
+     * rows", which is a real and different state.
+     */
+    rowIds: z.array(z.string()).optional(),
+    /** Rows whose required record set is incomplete in this tail. */
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreMessageDelivery),
+    events: z.array(chatEventSchema),
+    /**
+     * What the tail's rows render WITH, by row id - see
+     * {@link chatRangeResponseSchema}'s field of the same name.
+     *
+     * The tail needs this for the same reason a range does and with less chance
+     * of repair: the planner counts these rows hydrated, so no range is ever
+     * asked for them and a wrong elapsed time or profile label persists until the
+     * rows are evicted. Most tails have nothing to say and omit it.
+     */
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
+
 export const chatTranscriptWindowSchema = lazySchema(() =>
   z.object({
     fromOrdinal: z.number().int().nonnegative(),
@@ -900,6 +939,55 @@ export type ChatIndexChange = z.infer<typeof chatIndexChangeSchema>;
  * asked for is not always a range that fits. The client requests the remainder
  * from there; it is not an error.
  */
+export const chatRangeResponseSchemaPreMessageDelivery = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    /**
+     * One ROW id per served row, in order.
+     *
+     * Not `(kind, messageId | eventId)`: a row can be several records (a folded
+     * assistant turn), several rows can share one record set (that turn's slices
+     * and the steer bubbles between them), and a setup card or a synthesized
+     * stopped row has no single record to name. Record identity cannot address a
+     * row - see `row-projection.ts`.
+     */
+    rowIds: z.array(z.string()),
+    /** Rows whose required record set is incomplete in this response. */
+    incompleteRowIds: z.array(z.string()).optional(),
+    /**
+     * The DEDUPLICATED union of records the served rows render from - not a
+     * parallel array to `rowIds`. A turn's records appear once however many of
+     * its slices are in the span.
+     */
+    messages: z.array(messageSchemaPreMessageDelivery),
+    events: z.array(chatEventSchema),
+    /**
+     * What the served rows render WITH, by row id.
+     *
+     * The host projects a row against whole history; this response serves that
+     * row's records alone. Anything the renderer derives by looking at rows
+     * AROUND the one it is drawing therefore gets a different answer from an
+     * isolated span - and in two cases the re-derived row id then disagrees with
+     * the skeleton, so the ordinal is suppressed and the row draws unplaced at
+     * the tail. Those derivations read this instead.
+     *
+     * A map holding only rows with something to say, not a parallel array to
+     * `rowIds`: most rows need none, and `{}` per row is real bytes on a frame
+     * that has already overshot its budget once.
+     *
+     * Absent for a row means "the projection has nothing to add", NOT a default -
+     * a consumer falls back to its own derivation, which is what keeps a host
+     * predating a field from silently asserting one.
+     */
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
+
 export const chatRangeResponseSchema = lazySchema(() =>
   z.object({
     requestId: rangeRequestIdSchema,

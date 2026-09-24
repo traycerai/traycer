@@ -43,6 +43,7 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
   createChatSessionStore,
+  withdrawnMessageDeliveryId,
   type ChatSessionStoreHandle,
   type ConfirmedManualFallbackAction,
 } from "@/stores/chats/chat-session-store";
@@ -520,6 +521,7 @@ function windowedSnapshotBase(input: {
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: input.transcriptEpoch,
       rowCount: input.rowCount,
       indexRevision: null,
@@ -632,6 +634,7 @@ function bootstrap(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: pending,
       pendingReturn: returning,
       lastFallbackOutcome,
@@ -3003,6 +3006,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
           ? []
           : state.transcriptDerived.setupCardWindows,
       pendingUserMessages: state.pendingUserMessages,
+      withdrawnMessageId: withdrawnMessageDeliveryId(state.messageDelivery),
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,

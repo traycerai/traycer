@@ -18,14 +18,6 @@ export type CommGraphCloudAvailability =
 
 const RECONNECTING_RELAY_FAILOVER_MS = 15_000;
 
-export function selectCommGraphAuthoritativeSnapshot(
-  availability: CommGraphCloudAvailability,
-  cloud: CommGraphSnapshot,
-  local: CommGraphSnapshot,
-): CommGraphSnapshot {
-  return availability === "available" ? cloud : local;
-}
-
 /** The two halves of one directory update, installed together. */
 export interface CommGraphRelayReconciliation {
   readonly hostIds: ReadonlyArray<string>;
@@ -249,6 +241,11 @@ export class CommGraphCloudSubscriptionManager {
     if (!this.attached) return;
     this.attached = false;
     this.closeCurrent();
+    // Retained cloud rows remain readable while authorization is unavailable,
+    // but a detached relay must not advertise them as a live feed. This marks
+    // retained data as non-live; retries resume only on attach. Feed-health UI
+    // gates on isAttached(), so detaching does not claim an active retry.
+    this.relayStatus = "reconnecting";
     // A later attach opens a new stream whose first snapshot is backlog learned
     // while this surface was absent. Retain rows/cursor, but start a fresh
     // arrival boundary so that backlog cannot pulse as live activity.

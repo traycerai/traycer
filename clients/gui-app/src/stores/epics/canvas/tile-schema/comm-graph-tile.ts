@@ -14,7 +14,10 @@ import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
-import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/office-view-vocabulary";
+import {
+  OFFICE_VIEW_IDS,
+  OFFICE_VIEW_CHOICES,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 import { TILE_KIND_COMM_GRAPH } from "../tile-kinds";
 import type {
   CommGraphTileCamera,
@@ -145,8 +148,11 @@ function readOfficeViewId(value: unknown): OfficeViewId | null {
 }
 
 function readOfficeViewChoice(value: unknown): OfficeViewChoice | null {
-  if (value === "auto") return "auto";
-  return readOfficeViewId(value);
+  if (value === "auto") return "floor";
+  if (value === "towers" || value === "city") {
+    return "building";
+  }
+  return OFFICE_VIEW_CHOICES.find((id) => id === value) ?? null;
 }
 
 /**
@@ -210,20 +216,18 @@ export function isNeutralCamera(camera: CommGraphTileCamera): boolean {
   );
 }
 
+function isRetiredOfficeView(value: unknown): boolean {
+  return value === "auto" || value === "towers" || value === "city";
+}
+
 export function parseCommGraphTileViewState(
   value: unknown,
 ): CommGraphTileViewState {
   if (!isRecord(value)) return PERSISTED_COMM_GRAPH_VIEW;
   const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
   const officeView = readOfficeViewChoice(value.officeView);
-  // An explicit office view this build cannot honour degrades to null -
-  // "inherit the Settings default". The Auto outcome recorded under that
-  // now-unknown pick is dormant, but if the inherited default is Auto at the
-  // same generation the renderer trusts it and skips measurement, reopening an
-  // arbitrarily old Floor/Towers decision the degraded pick never stood for.
-  // Drop the outcome so the newly inherited Auto measures afresh. An ABSENT
-  // officeView is "inherit from the start", not a degrade, and keeps its
-  // dormant outcome; the generation follows the view to null on its own.
+  // Preserve legacy Auto metadata only for readable records. It no longer
+  // selects a layout or governs whether the office renders.
   const officeViewDegraded = degradesFrom(value.officeView, officeView);
   const officeAutoView = officeViewDegraded
     ? null
@@ -233,27 +237,11 @@ export function parseCommGraphTileViewState(
     officeAutoView,
   );
   const officeCameraView = readOfficeViewId(value.officeCameraView);
-  // The camera means "this much of THAT view". Once the view it was saved
-  // against has degraded away, the numbers point into a floor plan that is not
-  // coming back - and keeping them would reopen the fallback view scrolled off
-  // into empty space with no sign of why.
-  // A resolved Auto outcome frames the camera only while the tile is EXPLICITLY
-  // on Auto. `officeView === null` is not that: it means "inherit the Settings
-  // default", which the renderer resolves to `agentOfficeDefaultView` and may
-  // be a concrete view like Towers - and this parser cannot know which, so it
-  // must not assume Auto and clear a camera that frames the resolved concrete
-  // view. Once the tile shows a concrete view (chosen or inherited),
-  // `officeAutoView` lingers as a dormant record; letting ITS unreadability
-  // degrade the camera would wipe the framing saved for the view actually
-  // shown. The explicit `officeView` and the camera's own `officeCameraView`
-  // still degrade unconditionally, so the view the camera frames is covered for
-  // every `officeView` value.
-  const usesAutoOutcome = officeView === "auto";
+  // A retired layout's camera cannot frame its replacement.
   const stale =
+    isRetiredOfficeView(value.officeView) ||
+    isRetiredOfficeView(value.officeCameraView) ||
     degradesFrom(value.officeView, officeView) ||
-    (usesAutoOutcome && degradesFrom(value.officeAutoView, officeAutoView)) ||
-    // The most direct case of the rule above: the camera names the view it
-    // frames, and that view is one this build cannot draw.
     degradesFrom(value.officeCameraView, officeCameraView);
   const mode = readCommGraphViewMode(value.mode);
   const camera: CommGraphTileCamera = {

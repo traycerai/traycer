@@ -8,6 +8,7 @@ import {
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   autoJudgeGetV10,
+  autoJudgeListRecentV10,
   autoJudgeSelectionSchema,
   autoJudgeSetV10,
   autoPolicyGetV10,
@@ -96,25 +97,29 @@ describe("auto-mode protocol change", () => {
     expect(ALL_PERMISSION_MODES_PRE_AUTO).not.toContain("auto");
   });
 
-  it("registers all five settings methods off the released floor", () => {
+  it("registers all six settings methods off the released floor", () => {
     // The floor is fail-closed on the method-name UNION: a name present on only
     // one peer makes the WHOLE connection incompatible, which is how
     // `worktree.readScriptsAtRef` broke 1.0.1-rc.1. New methods must therefore
     // stay out of it and state their missing-peer behaviour instead.
+    //
+    // `autoJudge.get` / `autoJudge.set` head at `1.1` now (the `fallback`
+    // response arm); the other four are still `1.0`.
     const methods = [
-      "providers.setAutoJudge",
-      "autoJudge.get",
-      "autoJudge.set",
-      "autoPolicy.get",
-      "autoPolicy.set",
+      { method: "providers.setAutoJudge", latestMinor: 0 },
+      { method: "autoJudge.get", latestMinor: 1 },
+      { method: "autoJudge.set", latestMinor: 1 },
+      { method: "autoPolicy.get", latestMinor: 0 },
+      { method: "autoPolicy.set", latestMinor: 0 },
+      { method: "autoJudge.listRecent", latestMinor: 0 },
     ] as const;
 
-    for (const method of methods) {
+    for (const { method, latestMinor } of methods) {
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
       const entry = hostRpcRegistry[method];
       expect(entry).toBeDefined();
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(entry[1].latestMinor).toBe(0);
+      expect(entry[1].latestMinor).toBe(latestMinor);
     }
 
     expect(
@@ -132,6 +137,9 @@ describe("auto-mode protocol change", () => {
     expect(hostRpcRegistry["autoPolicy.set"][1].versions[0].contract).toBe(
       autoPolicySetV10,
     );
+    expect(
+      hostRpcRegistry["autoJudge.listRecent"][1].versions[0].contract,
+    ).toBe(autoJudgeListRecentV10);
   });
 
   it("keeps the judge selection's harness id an open string", () => {
@@ -207,13 +215,19 @@ describe("auto-mode protocol change", () => {
     ).toBe(false);
   });
 
-  it("keeps the widened autoJudge methods on unreleased 1.0 lines", () => {
+  it("keeps the released 1.0 autoJudge lines installed and frozen, with 1.1 as the head", () => {
+    // `1.0` shipped (`host-v1.3.2-staging.39`), so it stays installed and
+    // immutable; `1.1` is the unreleased head that carries the `fallback` arm.
     for (const method of ["autoJudge.get", "autoJudge.set"] as const) {
       const entry = hostRpcRegistry[method];
-      expect(entry[1].latestMinor).toBe(0);
+      expect(entry[1].latestMinor).toBe(1);
       expect(entry[1].versions[0].contract.schemaVersion).toEqual({
         major: 1,
         minor: 0,
+      });
+      expect(entry[1].versions[1].contract.schemaVersion).toEqual({
+        major: 1,
+        minor: 1,
       });
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
     }

@@ -66,7 +66,7 @@ const PREVIEW_FRAME_CLASS: Record<StatusBarPreviewWidth, string> = {
  * **It never causes one.** Every usage observer under it is passive (see
  * `useStatusBarRateLimitSegments`'s `mode`), it mounts no cold-start refresh, no
  * refresh control, no popover, no resource stream and no
- * `RateLimitQueueProvider` consumer, and it registers no keyboard handler. What
+ * `RateLimitPollProvider` consumer, and it registers no keyboard handler. What
  * it shows is exactly what the strip and the usage panel have already put in
  * the shared cache - which is why the caption says where a refresh comes from
  * instead of offering one.

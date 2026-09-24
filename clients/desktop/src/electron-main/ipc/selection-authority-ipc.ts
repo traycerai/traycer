@@ -49,6 +49,11 @@ import {
   resolvePreferredHostFilePath,
 } from "../selection/preferred-host-store";
 import {
+  createLocalHostInventoryStreamClient,
+  startLocalHostInventorySubscription,
+  type LocalHostEndpoint,
+} from "../selection/local-host-inventory-subscription";
+import {
   createRegisteredHostsPublisher,
   registerRegisteredHostsBroadcast,
 } from "./registered-hosts-broadcast";
@@ -95,6 +100,7 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     // Every window hears the rows this port just fetched, so the app makes ONE
     // registry request per tick instead of one per window (P4.1/F22).
     publishRegistryResponse: createRegisteredHostsPublisher(bridge),
+    now: () => Date.now(),
     log: authorityLog,
   });
   const localOutage = new DesktopLocalHostOutageSignal({
@@ -126,12 +132,73 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
   // The app's one registry cadence. Registered here, beside the fleet source
   // it drives, because that source is what owns the fetch's race rules.
   registerRegisteredHostsBroadcast(bridge, fleet);
+  // ...and the reader that can make that cadence unnecessary. The local host
+  // already reads the same endpoint on the same interval with its own
+  // credential, so while its stream is healthy the poll above steps aside and
+  // these rows come from a read nobody paid twice for. Every failure - an
+  // older host, a stopped host, a dropped stream - puts the poll straight
+  // back, so this is an optimization that cannot become an outage.
+  const localHostEndpoint = (): LocalHostEndpoint | null => {
+    const snapshot = bridge.options.host.getSnapshot();
+    if (snapshot === null || snapshot.websocketUrl === null) return null;
+    return { hostId: snapshot.hostId, websocketUrl: snapshot.websocketUrl };
+  };
+  const localInventory = startLocalHostInventorySubscription({
+    localHost: localHostEndpoint,
+    // The SAME identity source the authority and the fleet port read, so the
+    // generation a snapshot is stamped with at open and the one it is fenced
+    // against at adoption can never disagree.
+    identity: () => {
+      const current = identity.current();
+      return { userId: current.identityKey, generation: current.generation };
+    },
+    onAuthChanged: (listener) => {
+      bridge.authSession.on("change", listener);
+      return () => {
+        bridge.authSession.off("change", listener);
+      };
+    },
+    onLocalHostChanged: (listener) => {
+      bridge.options.host.on("change", listener);
+      return () => {
+        bridge.options.host.off("change", listener);
+      };
+    },
+    openStreamClient: createLocalHostInventoryStreamClient({
+      localHost: localHostEndpoint,
+      appVersion: app.getVersion(),
+      bearer: () => {
+        // ONE read, and the token bound into the closure from it: `token` and
+        // the profile are committed together, and reading the session again
+        // inside `getBearerToken` could hand the dial a credential from a
+        // different snapshot than the identity it is dialing under. The
+        // provider itself is re-invoked per dial, so a rotation is picked up
+        // at the only moment it matters.
+        const snapshot = bridge.authSession.get();
+        const token = snapshot.token;
+        const userId = snapshot.profile?.userId ?? null;
+        if (token === null || userId === null) return null;
+        return {
+          getBearerToken: () => token,
+          identity: { userId },
+        };
+      },
+    }),
+    onRows: (read) => {
+      void fleet.acceptPushedRows(read);
+    },
+    onPushActiveChanged: (active) => {
+      fleet.setPushActive(active);
+    },
+    log: authorityLog,
+  });
 
   // Seed real membership. The engine already read the (empty) startup
   // snapshot; this publishes the account's fleet at a higher revision.
   void fleet.refresh();
 
   bridge.disposeFns.push(() => {
+    localInventory.dispose();
     engine.dispose();
     fleet.dispose();
     localOutage.dispose();

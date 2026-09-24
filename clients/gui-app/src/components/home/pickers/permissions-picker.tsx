@@ -1,9 +1,12 @@
+import { useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
@@ -85,6 +88,13 @@ interface PermissionsPickerProps {
    * in) out from under the panel the user is reading.
    */
   closeFocus: "composer" | "trigger";
+  /**
+   * The trailing "Permission settings…" item's action, or `null` to render no
+   * such item. A composer passes one (it always has a run-target host); the
+   * Settings default-mode row passes `null`, because a Settings surface must
+   * not open Settings.
+   */
+  onOpenPermissionSettings: (() => void) | null;
 }
 
 export function PermissionsPicker(props: PermissionsPickerProps) {
@@ -99,7 +109,13 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     turnActive,
     judgeBilling,
     closeFocus,
+    onOpenPermissionSettings,
   } = props;
+  // Set by the trailing Settings item for the close it causes. That close must
+  // not hand focus back to the composer: the composer registry can name an
+  // editor in another tab, and restoring focus there would pull that tab over
+  // the Settings surface this item just opened.
+  const openingSettingsRef = useRef(false);
   // Display value is the *normalized* one: when the sticky value isn't in the
   // active harness's supported set (rehydration of a saved chat, the one-frame
   // window between a harness swap and the parent's clamp commit, or any race
@@ -180,6 +196,11 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
         // restores focus to the trigger, leaving the caret out of the textbox.
         // A `"trigger"` caller keeps Radix's own restore (see `closeFocus`).
         onCloseAutoFocus={(event) => {
+          if (openingSettingsRef.current) {
+            openingSettingsRef.current = false;
+            event.preventDefault();
+            return;
+          }
           if (closeFocus !== "composer") return;
           if (focusActiveComposer()) event.preventDefault();
         }}
@@ -257,6 +278,19 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
             );
           })}
         </DropdownMenuRadioGroup>
+        {onOpenPermissionSettings !== null ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => {
+                openingSettingsRef.current = true;
+                onOpenPermissionSettings();
+              }}
+            >
+              Permission settings…
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

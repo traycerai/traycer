@@ -201,6 +201,7 @@ export function UserMessageBody({
           agentSenderInfo={message.agentSenderInfo}
           sentAt={message.sentAt ?? message.createdAt}
         />
+        <MessageDeliveryFooter actions={actions} />
       </>
     );
   }
@@ -462,6 +463,7 @@ function UserMessageDisplayView({
           structuredContent={message.structuredContent}
         />
       </div>
+      <MessageDeliveryFooter actions={actions} />
       {profileProvenance !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
           profileId={tombstoneIdentity.profileId}
@@ -471,6 +473,34 @@ function UserMessageDisplayView({
           removed={profileProvenance.removedOnThisHost}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where the host is with a row it has not started yet - the chat's opening
+ * prompt while its worktree and session are set up. Nothing to act on: once it
+ * starts it is an ordinary message, and a withdrawn row has left the
+ * transcript with its text back in the composer.
+ */
+function MessageDeliveryFooter({
+  actions,
+}: {
+  readonly actions: ChatMessageUserActions | null;
+}): ReactNode {
+  const phase = actions?.deliveryPhase ?? null;
+  if (phase === null) return null;
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center justify-end gap-2 text-ui-xs text-muted-foreground"
+      role="status"
+    >
+      <span>{phase === "pending" ? "Sending" : "Setting up"}</span>
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
     </div>
   );
 }

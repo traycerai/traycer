@@ -53,6 +53,7 @@ import {
   chatMessageEditingForInlineEdit,
   chatTileUiReducer,
   createInitialChatTileUiState,
+  normalizeInlineEditForSession,
   type ChatTileUiState,
   findPendingInterview,
   findUnanswerableInterviews,
@@ -63,7 +64,9 @@ import {
   type InlineEditState,
 } from "../chat-tile-session-state";
 import type {
+  AcceptedChatAction,
   ChatSessionState,
+  PendingChatAction,
   PendingUserMessage,
 } from "@/stores/chats/chat-session-store";
 
@@ -265,6 +268,162 @@ describe("chatTileUiReducer - inline edit revisions", () => {
 
     expect(marked.inlineEdit?.pendingClientActionId).toBe("ca-1");
     expect(marked.inlineEdit?.pendingMessageId).toBe("m-1");
+  });
+});
+
+function pendingAction(
+  overrides: Partial<PendingChatAction>,
+): PendingChatAction {
+  return {
+    wireContent: null,
+    clientActionId: "ca-1",
+    action: "editUserMessage",
+    queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
+    interviewBlockId: null,
+    interviewDeliveryRetry: null,
+    messageId: "persisted-message-1",
+    restore: null,
+    sender: null,
+    settings: null,
+    restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    sentContentHashes: null,
+    messageConfirmedByHost: false,
+    accountContext: null,
+    deliveryPolicy: null,
+    hashOnlyRetry: false,
+    createdAt: 1_000,
+    connectionEpoch: 0,
+    ...overrides,
+  };
+}
+
+function acceptedAction(
+  overrides: Partial<AcceptedChatAction>,
+): AcceptedChatAction {
+  return {
+    clientActionId: "ca-1",
+    action: "editUserMessage",
+    queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
+    interviewBlockId: null,
+    interviewDeliveryRetry: null,
+    messageId: "persisted-message-1",
+    acceptedAt: 2_000,
+    restore: null,
+    sender: null,
+    settings: null,
+    accountContext: null,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    connectionEpoch: 0,
+    confirmedByHost: false,
+    ...overrides,
+  };
+}
+
+function userRow(messageId: string): Extract<Message, { role: "user" }> {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "owner-1" },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+    timestamp: 1_000,
+    sessionAnchor: null,
+  };
+}
+
+function normalizeState(input: {
+  readonly messages?: ChatSessionState["messages"];
+  readonly pendingActions?: Record<string, PendingChatAction>;
+  readonly acceptedActions?: Record<string, AcceptedChatAction>;
+}): Pick<
+  ChatSessionState,
+  "messages" | "pendingActions" | "acceptedActions" | "transcriptWindow"
+> {
+  return {
+    messages: input.messages ?? [],
+    pendingActions: input.pendingActions ?? {},
+    acceptedActions: input.acceptedActions ?? {},
+    transcriptWindow: emptyTranscriptWindow(),
+  };
+}
+
+describe("normalizeInlineEditForSession", () => {
+  it("passes null through unchanged", () => {
+    expect(normalizeInlineEditForSession(null, normalizeState({}))).toBeNull();
+  });
+
+  it("a DIFFERENT-id edit (queue-style: a replacement row lands under a new id) clears via the durable-row shortcut", () => {
+    const edit: InlineEditState = {
+      ...inlineEditState(true),
+      targetMessageId: "message-1",
+      pendingMessageId: "message-2",
+      pendingClientActionId: "ca-1",
+    };
+    const state = normalizeState({ messages: [userRow("message-2")] });
+    expect(normalizeInlineEditForSession(edit, state)).toBeNull();
+  });
+
+  it("keeps an edit open while its dispatched row has not landed and its action is still pending", () => {
+    const edit: InlineEditState = {
+      ...inlineEditState(true),
+      targetMessageId: "persisted-message-1",
+      pendingMessageId: "message-2",
+      pendingClientActionId: "ca-1",
+    };
+    const state = normalizeState({
+      messages: [userRow("persisted-message-1")],
+      pendingActions: { "ca-1": pendingAction({ clientActionId: "ca-1" }) },
+    });
+    expect(normalizeInlineEditForSession(edit, state)).toBe(edit);
+  });
+
+  it("closes an edit once its action moves from pending to ACCEPTED, even before the replacement row lands", () => {
+    const edit: InlineEditState = {
+      ...inlineEditState(true),
+      targetMessageId: "persisted-message-1",
+      pendingMessageId: "message-2",
+      pendingClientActionId: "ca-1",
+    };
+    const state = normalizeState({
+      messages: [userRow("persisted-message-1")],
+      acceptedActions: { "ca-1": acceptedAction({ clientActionId: "ca-1" }) },
+    });
+    expect(normalizeInlineEditForSession(edit, state)).toBeNull();
+  });
+
+  it("reopens editable (ids cleared) once its action is neither pending nor accepted - a rejected dispatch", () => {
+    const edit: InlineEditState = {
+      ...inlineEditState(true),
+      targetMessageId: "persisted-message-1",
+      pendingMessageId: "message-2",
+      pendingClientActionId: "ca-1",
+    };
+    const state = normalizeState({
+      messages: [userRow("persisted-message-1")],
+    });
+    const normalized = normalizeInlineEditForSession(edit, state);
+    expect(normalized).not.toBeNull();
+    expect(normalized?.pendingClientActionId).toBeNull();
+    expect(normalized?.pendingMessageId).toBeNull();
+    // Reopened editable, not discarded: the user's in-progress content
+    // (`dirty`/`currentContent`) survives the rejection untouched.
+    expect(normalized?.dirty).toBe(true);
+  });
+
+  it("an edit with no pendingClientActionId at all (nothing dispatched yet) passes through unchanged", () => {
+    const edit: InlineEditState = {
+      ...inlineEditState(true),
+      targetMessageId: "persisted-message-1",
+      pendingMessageId: null,
+      pendingClientActionId: null,
+    };
+    expect(normalizeInlineEditForSession(edit, normalizeState({}))).toBe(edit);
   });
 });
 

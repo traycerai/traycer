@@ -40,7 +40,13 @@ export function useChatTileHostUpdate(): ChatTileHostUpdate {
   const { openSettings } = useSystemTabModalActions();
   const openHostUpdate = useCallback(() => {
     carryViewedHostIntoSettingsScope(tabHostId);
-    openSettings({ section: "host", resetToGeneral: false });
+    openSettings({
+      section: "host",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   }, [openSettings, tabHostId]);
   return useMemo(
     () => ({

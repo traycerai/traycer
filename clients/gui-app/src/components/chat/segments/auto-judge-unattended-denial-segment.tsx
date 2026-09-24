@@ -1,4 +1,4 @@
-import { Gavel } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
 
 interface AutoJudgeUnattendedDenialSegmentProps {
@@ -32,7 +32,7 @@ export function AutoJudgeUnattendedDenialSegment(
       data-testid="auto-judge-unattended-denial"
       className="flex w-full min-w-0 items-start gap-2 py-2 text-ui-xs text-muted-foreground"
     >
-      <Gavel className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <p className="m-0 min-w-0 text-pretty" data-find-include="true">
         {autoJudgeUnattendedDenialText(props)}
       </p>

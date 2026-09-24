@@ -379,6 +379,8 @@ function surfacesProps(patch: {
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
       highlightedApprovalId: null,
+      ruleDraftWorkspace: { remote: null, branch: null },
+      onOpenSettings: () => undefined,
     },
     queue: {
       editingItem: null,

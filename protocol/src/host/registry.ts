@@ -246,6 +246,7 @@ import {
   agentGuiListHarnessesUpgradeV71ToV80,
   agentGuiListHarnessesUpgradeV80ToV90,
   agentGuiListHarnessesUpgradeV90ToV91,
+  agentGuiListHarnessesUpgradeV91ToV92,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -258,6 +259,7 @@ import {
   agentGuiListHarnessesV80,
   agentGuiListHarnessesV90,
   agentGuiListHarnessesV91,
+  agentGuiListHarnessesV92,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -273,6 +275,9 @@ import {
   chatSubscribeV111,
   chatSubscribeV112,
   chatSubscribeV113,
+  chatSubscribeV114,
+  chatSubscribeV115,
+  chatSubscribeV116,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -423,6 +428,14 @@ import {
   browserReplRunCellV10,
   browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
+import {
+  hostPortForwardAcquireLeaseV10,
+  hostPortForwardLeaseEndedV10,
+  hostPortForwardReleaseLeaseV10,
+  portForwardCutLeaseV10,
+  portForwardListForHostV10,
+  portForwardStopV10,
+} from "@traycer/protocol/host/port-forward";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -497,6 +510,8 @@ import {
   epicCreateUpgradeV11ToV12,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
+  epicDeleteChatV11,
+  epicDeleteChatUpgradeV10ToV11,
   epicDeleteCommentThreadV10,
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
@@ -655,6 +670,7 @@ import {
   gitStreamFileAssetV11,
   gitStreamFileAssetV12,
 } from "@traycer/protocol/host/git-asset-stream";
+import { hostTunnelOpenV10 } from "@traycer/protocol/host/tunnel-stream";
 import {
   terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
@@ -794,8 +810,13 @@ import {
   sessionImportScanV12,
 } from "@traycer/protocol/host/session-import/scan";
 import {
+  autoJudgeGetUpgradeV10ToV11,
   autoJudgeGetV10,
+  autoJudgeGetV11,
+  autoJudgeListRecentV10,
+  autoJudgeSetUpgradeV10ToV11,
   autoJudgeSetV10,
+  autoJudgeSetV11,
   autoPolicyGetV10,
   autoPolicySetV10,
   providersSetAutoJudgeV10,
@@ -828,6 +849,7 @@ import {
   hostCommunicationGraphCloudFeedSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
+import { hostInventorySubscribeV10 } from "@traycer/protocol/host/host-inventory";
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
@@ -4911,19 +4933,35 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // released method floor, so a peer that predates them advertises neither
   // handler nor capability; clients feature-detect and render their explicit
   // unsupported state rather than making the whole connection incompatible.
-  // The `auto` permission mode's two host-scoped settings, plus the
-  // per-provider judge switch. All optional-capability methods with an
-  // `unsupported` degrade - see `auto-mode/contracts.ts` for why none of them
-  // may enter `RELEASED_FLOOR_METHOD_NAMES`, and why neither setting could live
+  // The `auto` permission mode's two host-scoped settings, the per-provider
+  // judge switch, and the recent-decisions log. All optional-capability
+  // methods with an `unsupported` degrade - see `auto-mode/contracts.ts` for
+  // why none of them may enter `RELEASED_FLOOR_METHOD_NAMES`, and why neither
+  // setting could live
   // in the CLI config's `features` block.
   "autoJudge.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      // @1.0 is RELEASED (`host-v1.3.2-staging.39` advertised it), so the
+      // Automatic judge's `{ source: "fallback" }` answer opens @1.1 rather
+      // than widening it in place.
+      latestMinor: 1,
       versions: {
         0: {
           contract: autoJudgeGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: autoJudgeGetV11,
+          upgradeFromPreviousVersion: autoJudgeGetUpgradeV10ToV11,
+          // `effective` gains the `fallback` arm over 1.0, which is response
+          // VALUE growth, and `blocked` loses its `no-default` member, a
+          // replaced arm of the nullable union. Both are emission-gated:
+          // host dispatch serves a 1.0 caller
+          // `projectAutoJudgeGetResponseToV10`, which maps a fallback answer
+          // to "no judge can run" (`effective: null`, `provider-disabled`),
+          // never to the Traycer pocket a 1.0 desktop would bill it to.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -4932,10 +4970,35 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "autoJudge.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      // Same line, same reason, as `autoJudge.get`: the echo reports the
+      // judge the new selection resolves to.
+      latestMinor: 1,
       versions: {
         0: {
           contract: autoJudgeSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: autoJudgeSetV11,
+          upgradeFromPreviousVersion: autoJudgeSetUpgradeV10ToV11,
+          // See `autoJudge.get@1.1`; the projection is
+          // `projectAutoJudgeSetResponseToV10`.
+          responseGrowthProjectionGated: true,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The host's recent judge decisions (the Permissions > Activity tab).
+  // Read-only and host-scoped; a host that predates the log advertises
+  // nothing, and the tab renders its unsupported state.
+  "autoJudge.listRecent": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoJudgeListRecentV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6211,7 +6274,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
     9: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentGuiListHarnessesV90,
@@ -6227,9 +6290,17 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // the host resolves the catalog against the negotiated minor and
           // serves a 9.0 peer the pre-`auto` array. `nativeAutoJudge` and
           // `unavailableReason` need no annotation - each new KEY is stripped
-          // by the within-major re-parse. The reason widens this unreleased
-          // 9.1 head in place; the 9.0 -> 9.1 bridge fills null for old hosts.
+          // by the within-major re-parse. The reason widened 9.1 in place
+          // before it shipped; the 9.0 -> 9.1 bridge fills null for old hosts.
           responseGrowthProjectionGated: true,
+        },
+        // `judgeDefaultModel` on the row. A new KEY, stripped for a 9.0/9.1
+        // peer by the within-major re-parse, so no annotation (the
+        // `providers.list@9.2` precedent). 9.1 is released and is frozen at
+        // `guiHarnessOptionSchemaV91`.
+        2: {
+          contract: agentGuiListHarnessesV92,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV91ToV92,
         },
       },
       downgradePathsFromLatest: {
@@ -7483,11 +7554,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteChat": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicDeleteChatV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicDeleteChatV11,
+          upgradeFromPreviousVersion: epicDeleteChatUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8821,6 +8896,84 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostFileTransferCloseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.acquireLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardAcquireLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.releaseLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardReleaseLeaseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.portForward.leaseEnded": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostPortForwardLeaseEndedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.listForHost": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardListForHostV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "portForward.cutLease": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: portForwardCutLeaseV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -11531,6 +11684,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // Host-to-host byte tunnel a port forward rides on - no degrade; rationale in `tunnel-stream.ts`'s file-level doc.
+  "host.tunnel.open": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostTunnelOpenV10,
+        },
+      },
+    },
+  },
   "resources.subscribe": {
     1: {
       latestMinor: 5,
@@ -11698,6 +11862,24 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // stay installed and FROZEN on their unstamped frames; the host gates
   // emission on the negotiated version exactly as it does for the @1.1 kinds,
   // the @1.2 cloud arm and the @1.3 head.
+  // Additive, post-v1.0.0 OPTIONAL stream method: the account's host registry,
+  // pushed by the viewer's own host instead of fetched by every window. The
+  // rows are the cloud's own `HostListItem`s, so a client keeps the projection
+  // it already runs. A host that predates it never advertises it and the
+  // client's subscription degrades to `unsupported`, whose contract is simply
+  // that the app's 60s `GET /api/v3/hosts` poll remains the directory's only
+  // refresh - one extra read per window, never a missing fleet. Never add it
+  // to the unary released floor - that list is fail-closed on the name set.
+  "host.hostInventory.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostInventorySubscribeV10,
+        },
+      },
+    },
+  },
   "host.chatRecords.subscribe": {
     1: {
       latestMinor: 4,
@@ -11902,7 +12084,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 13,
+      latestMinor: 16,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11970,9 +12152,27 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         12: {
           contract: chatSubscribeV112,
         },
-        // @1.13 is the `auto` line, and the live one.
+        // @1.13 is the `auto` line. Frozen without the port-forward surface.
         13: {
           contract: chatSubscribeV113,
+        },
+        // @1.14 is the port-forward line, and the live one: the agent's
+        // forwards on the snapshot, `portForwardsChanged`, and the queue item
+        // that reports one going `interrupted`. The host PROJECTS all three
+        // away below this minor rather than refusing the subscribe.
+        14: {
+          contract: chatSubscribeV114,
+        },
+        // @1.15 is host-owned accepted-message delivery. Frozen with the
+        // pre-tier approval card since @1.16 opened above it.
+        15: {
+          contract: chatSubscribeV115,
+        },
+        // @1.16 adds `tier` on the approval card's judge reason. A defaulted
+        // key in a non-strict object: a @1.15 peer drops it on parse, so the
+        // host withholds nothing.
+        16: {
+          contract: chatSubscribeV116,
         },
       },
     },

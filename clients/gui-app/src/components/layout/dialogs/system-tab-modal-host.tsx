@@ -9,6 +9,7 @@ import {
 } from "@/stores/tabs/use-system-tab-modal";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
+  abandonOverlayPromotion,
   overlayConsumesEscape,
   overlayMeta,
   prepareOverlayForPromotion,
@@ -16,6 +17,8 @@ import {
 } from "@/stores/tabs/system-overlay-registry";
 import { LEADER_SCOPE_SETTINGS } from "@/lib/keybindings/leader-scope";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { useRulesEditLifetime } from "@/components/settings/panels/permissions/rules-edit-store";
 
 /**
  * Global host for the system-tab modal (Settings / History). Reads
@@ -35,6 +38,17 @@ export function SystemTabModalHost(): ReactNode {
   useSystemTabModalRefreshGuard();
   const open = modal.active !== null;
   const editingTheme = useThemeLibraryStore((state) => state.draft !== null);
+  // The one observer of this window's Settings opening and closing, which is
+  // what ends Settings ▸ Rules' unsaved edit: always mounted, so it sees the
+  // modal and the Settings tab alike, and outlives the modal's content, which
+  // Radix remounts when `modal` flips below.
+  const settingsTabOpen = useTabsStore(
+    (state) => state.systemTabs.settings !== null,
+  );
+  useRulesEditLifetime(
+    modal.active?.kind === "settings" || settingsTabOpen,
+    settingsTabOpen,
+  );
 
   // External-store sync - publish the live modal API for framework-free
   // callers (router adapter, keybinding dispatch, palette sources).
@@ -71,7 +85,8 @@ export interface SystemTabModalSurfaceProps {
   readonly active: SystemModalActive;
   readonly editingTheme: boolean;
   readonly onClose: () => void;
-  readonly onPromote: () => void;
+  /** `onRejected` runs when the tab navigation refuses the promotion. */
+  readonly onPromote: (onRejected: () => void) => void;
 }
 
 export function SystemTabModalSurface(
@@ -100,10 +115,12 @@ export function SystemTabModalSurface(
       promoteTestId={`system-tab-modal-promote-${active.kind}`}
       closeTestId={`system-tab-modal-close-${active.kind}`}
       // The body gets its say while it is still mounted: promotion unmounts
-      // it, and the tab's body mounts only afterwards.
+      // it, and the tab's body mounts only afterwards. A refused promotion
+      // leaves the modal open with no tab to take what was handed over, so the
+      // body takes it back.
       onPromote={() => {
         prepareOverlayForPromotion(active);
-        onPromote();
+        onPromote(() => abandonOverlayPromotion(active));
       }}
       onClose={onClose}
       onEscapeKeyDown={(event) => {

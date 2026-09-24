@@ -134,6 +134,7 @@ import {
   dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
   projectQueueWithPendingCancellations,
+  withdrawnMessageDeliveryId,
   type ChatSessionState,
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
@@ -213,6 +214,7 @@ import {
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import { useChatMessageDeliveryRestoreDriver } from "@/hooks/chats/use-chat-message-delivery-restore-driver";
 import { useEpicCreateSeedHoldDriver } from "@/hooks/chats/use-epic-create-seed-hold-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
@@ -258,7 +260,12 @@ import {
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useAnySystemOverlayActive } from "@/stores/tabs/use-system-tab-modal";
+import {
+  useAnySystemOverlayActive,
+  useSystemTabModalActions,
+} from "@/stores/tabs/use-system-tab-modal";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
+import { autoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeSnapshotCumulativeBundleDiffTile,
@@ -1507,6 +1514,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 preContent={view.preContent}
                 restoreContext={view.restoreContext}
                 node={view.node}
+                taskTitle={view.taskTitle}
                 epicId={view.currentEpicId}
                 viewTabId={view.viewTabId}
                 tabHostId={view.tabHostId}
@@ -1834,6 +1842,7 @@ function useChatTileSessionViewModel(
       transcriptWindow: s.transcriptWindow,
       transcriptDerived: s.transcriptDerived,
       queue: s.queue,
+      messageDelivery: s.messageDelivery,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
@@ -2063,6 +2072,7 @@ function useChatTileSessionViewModel(
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
       queuedPromptMessageIds: queuedPromptIds,
+      withdrawnMessageId: withdrawnMessageDeliveryId(state.messageDelivery),
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,
@@ -2148,6 +2158,14 @@ function useChatTileSessionViewModel(
   useChatSetupFailureRestoreDriver({
     handle,
     nodeId: node.id,
+  });
+  // The opening the host withdrew before it started (`chat.subscribe@1.15`'s
+  // delivery view) comes back from the view alone, ahead of any draft - every
+  // local copy of that message stands aside for it.
+  useChatMessageDeliveryRestoreDriver({
+    handle,
+    nodeId: node.id,
+    profileUserId: profile?.userId ?? null,
   });
   // Ends the create-time binding-seed hold once THIS chat's worktree
   // provisioning has an outcome. A no-op for every tile whose (epic, chat) pair
@@ -2595,6 +2613,7 @@ function useChatTileSessionViewModel(
       chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
+      messageDelivery: state.messageDelivery,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are
@@ -3398,6 +3417,21 @@ function useChatTileSessionViewModel(
     ],
   );
 
+  // The remote and branch this chat's binding records, which is what an
+  // approval card's "Allow from now on…" narrows its drafted rule by.
+  const ruleDraftWorkspace = useMemo(
+    () => autoModeRuleDraftWorkspace(state.worktreeBinding),
+    [state.worktreeBinding],
+  );
+  const { openSettings } = useSystemTabModalActions();
+  // The card's settings links open on THIS tab's machine: the judge and the
+  // rules it names are the ones this conversation's host applies.
+  const openSettingsOnTabHost = useCallback(
+    (opts: TabHostSettingsOpts) => {
+      openSettings({ ...opts, hostId: viewModelHostId });
+    },
+    [openSettings, viewModelHostId],
+  );
   const lowerApprovals = useMemo(
     () => ({
       pendingFileEditApprovals: state.pendingFileEditApprovals,
@@ -3406,6 +3440,8 @@ function useChatTileSessionViewModel(
       onApprovalDecision: dispatchApprovalDecision,
       highlightedApprovalId: composerHighlightBlockId,
       highlightedGeneration: composerHighlightGeneration,
+      ruleDraftWorkspace,
+      onOpenSettings: openSettingsOnTabHost,
     }),
     [
       composerHighlightBlockId,
@@ -3414,6 +3450,8 @@ function useChatTileSessionViewModel(
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,
       dispatchApprovalDecision,
+      ruleDraftWorkspace,
+      openSettingsOnTabHost,
     ],
   );
 
@@ -3537,9 +3575,16 @@ function useChatTileSessionViewModel(
     [state.pendingFallback, state.pendingReturn],
   );
 
+  const chatStateTitle = state.chat?.title ?? "";
   return {
     handle,
     node,
+    // The title the tab strip shows. `node.name` is the tile's persisted
+    // opening-name snapshot, so a chat opened before its title was generated
+    // announced every finished turn as "Untitled agent" for the tile's life.
+    taskTitle:
+      projectedChatTitle ??
+      (chatStateTitle.length > 0 ? chatStateTitle : node.name),
     viewTabId,
     tileId,
     tabHostId: activeHostId,
@@ -3699,6 +3744,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly preContent: ChatTilePreContentFrame | null;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
+  /** The chat's live title, for the transcript's own announcements. */
+  readonly taskTitle: string;
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tabHostId: string | null;
@@ -3820,7 +3867,7 @@ function ChatSessionMessagesSurface(
             workspaceRoots={props.workspaceRoots}
           >
             <ChatMessages
-              taskTitle={props.node.name}
+              taskTitle={props.taskTitle}
               taskId={props.node.id}
               epicId={props.epicId}
               hostId={props.tabHostId}

@@ -15,7 +15,21 @@
  *   managed-command item, minted above that;
  * - `1.13` is the `auto` permission mode, minted above THAT. It carries the
  *   whole fallback and shell-host surface too - what it holds back from `1.11`
- *   is the queue and approval-card shape, pinned in `chat-subscribe.test.ts`.
+ *   is the queue and approval-card shape, pinned in `chat-subscribe.test.ts`;
+ * - `1.14` is the port-forward surface, minted above `1.13`: the agent's
+ *   forwards on the snapshot, the `portForwardsChanged` frame, and the queue
+ *   item that reports one going `interrupted`;
+ * - `1.15` is the message-delivery surface, minted above `1.14`: the one
+ *   `messageDeliveryRestored` client acknowledgement and the
+ *   `messageDeliveryChanged` push. Its own shape/freeze coverage lives in
+ *   `chat-subscribe-message-delivery-v115.test.ts`; it is listed here only so
+ *   the line-count and ceiling assertions below stay truthful;
+ * - `1.16` is the approval-tier surface, minted above `1.15`: the optional
+ *   `tier` on the approval card's judge reason. It is tolerance, not
+ *   projection (written at every minor, dropped by an older decoder), so no
+ *   needle can pin a boundary for it; its shape coverage lives in
+ *   `chat-subscribe-approval-tier-v116.test.ts` and it is listed here for the
+ *   same line-count and ceiling reason as `1.15`.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -41,7 +55,11 @@ const FALLBACK_MINOR = 10;
 const SHELL_HOST_MINOR = 11;
 const DRAFT_IMAGE_CAUSE_MINOR = 12;
 const AUTO_MINOR = 13;
-const LIVE_MINOR = AUTO_MINOR;
+const PORT_FORWARD_MINOR = 14;
+// `1.15` (message delivery) and `1.16` (approval tier) mint no boundary a
+// needle below can pin, so only the ceiling names them.
+const APPROVAL_TIER_MINOR = 16;
+const LIVE_MINOR = APPROVAL_TIER_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -89,6 +107,17 @@ const PLACEMENT_NEEDLE = '"deliveryPlacement":';
 // but that key name is shared with unrelated frames; `reviewing` is unique to
 // the card, and the two are added and frozen together.
 const AUTO_APPROVAL_NEEDLE = '"reviewing":';
+
+// The port-forward surface: the snapshot key, the frame kind, the queue item's
+// discriminant and the key only that item carries. All four or none - a line
+// that carried the queue item without the frame would show a wake chip for a
+// forward it has no row for.
+const PORT_FORWARD_NEEDLES = [
+  '"portForwards":',
+  '"portForwardsChanged"',
+  '"port-forward"',
+  '"forwardId":',
+];
 
 // The two shapes the shell host rides, found structurally rather than by a
 // `"hostId":` needle - the chat record's own `hostId` is on every line. A
@@ -157,11 +186,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.13 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.16 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(MINORS).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
@@ -180,6 +211,7 @@ describe("chat.subscribe line surfaces", () => {
       const carriesFallback = minor >= FALLBACK_MINOR;
       const carriesShellHost = minor >= SHELL_HOST_MINOR;
       const carriesAuto = minor >= AUTO_MINOR;
+      const carriesPortForwards = minor >= PORT_FORWARD_MINOR;
       const carriesPlacement = minor >= 9;
       const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
 
@@ -230,6 +262,21 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           schemaText(contract.serverFrameSchema).includes(AUTO_APPROVAL_NEEDLE),
         ).toBe(carriesAuto);
+      });
+
+      it(`server frames ${carriesPortForwards ? "carry" : "hold back"} every port-forward surface`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = PORT_FORWARD_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(carriesPortForwards ? PORT_FORWARD_NEEDLES : []);
+      });
+
+      it("client frames hold back the port-forward surface on every line (a forward is stopped over portForward.stop)", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          PORT_FORWARD_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
       });
     });
   }

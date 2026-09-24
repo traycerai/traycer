@@ -16,6 +16,7 @@ import {
   projectTranscriptRows,
   assistantTurnNeedsTrailingRow,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 
 /**
  * These pin the rules a cold review found the previous record-level enumeration
@@ -739,6 +740,55 @@ describe("event rows", () => {
       "forked-chat-link:e-fork",
       "chat-event:e-anchor",
     ]);
+  });
+
+  it("orders judge notices after unattended refusals for equal timestamps, and sorts them by their own timestamp even inside a turn", () => {
+    const notice = chatEventSchema.parse({
+      eventId: "e-notice",
+      type: "permission.blocked",
+      timestamp: 50,
+      clientActionId: null,
+      actor: null,
+      message:
+        "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.",
+      turnId: "turn-1",
+      messageId: "m-1",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: { autoJudge: "fallback" },
+    });
+    const denial = chatEventSchema.parse({
+      eventId: "e-denial",
+      type: "approval.denied",
+      timestamp: 50,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { autoJudge: { attendanceReason: "agent-created" } },
+    });
+    const before = userMessage({ messageId: "m-1", timestamp: 10 });
+    const after = userMessage({ messageId: "m-2", timestamp: 90 });
+
+    // The log has the notice first; the passes put it after the refusal, which
+    // is the renderer's `baseRows` order too.
+    expect(project([before, after], [notice, denial], null)).toEqual([
+      "m-1",
+      "auto-judge-unattended-denial:e-denial",
+      "auto-judge-notice:e-notice",
+      "m-2",
+    ]);
+    // A range that hydrates the row serves the event that IS its body.
+    expect(
+      rowRecordIds({ kind: "auto-judge-notice", eventId: "e-notice" }),
+    ).toEqual({ messageIds: [], eventIds: ["e-notice"] });
   });
 
   it("gives an event that materializes no row no ordinal", () => {

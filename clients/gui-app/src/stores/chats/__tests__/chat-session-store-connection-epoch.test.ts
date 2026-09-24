@@ -106,6 +106,7 @@ function emitSnapshot(callbacks: ChatStreamCallbacks): void {
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: undefined,
       pendingReturn: undefined,
       lastFallbackOutcome: undefined,

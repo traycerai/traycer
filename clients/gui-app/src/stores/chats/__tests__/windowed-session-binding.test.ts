@@ -453,6 +453,7 @@ function windowedSnapshot(input: {
       accumulatedFileChangeCount: input.accumulatedFileChangeCount,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
       indexRevision: input.indexRevision ?? null,
@@ -1289,6 +1290,80 @@ describe("index deltas", () => {
       // this client has already left.
       expect(harness.rangeRequests).toHaveLength(rangesBefore);
     } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("asks for one resnapshot, not the same range again, when a range answer arrives from ahead of the window", () => {
+    // The `reindexed` that would have moved this window to epoch 5 was lost
+    // under backpressure, and the host - which serves every range from its
+    // current index - answers the outstanding request stamped 5. Dropping
+    // that answer with the window left valid re-planned the same span at
+    // once, and the host answered from ahead again: the 150-plus requests a
+    // second seen in the field, ending only when a turn completion's snapshot
+    // re-seated the epoch. An answer from ahead is a reindex learned late and
+    // asks for the one thing that repairs it.
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 2,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.rangeRequests).toHaveLength(1);
+      const requestId = harness.lastRangeRequestId();
+
+      harness.callbacks().onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId,
+          epoch: 5,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          rowContext: {},
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+
+      expect(harness.resnapshotCount()).toBe(1);
+      expect(harness.rangeRequests).toHaveLength(1);
+      expect(harness.handle.store.getState().transcriptWindow.invalidated).toBe(
+        true,
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "[transcript] discarded a range answer from ahead of the window; a reindex was missed, index voided",
+        expect.objectContaining({ requestId, epoch: 5, windowEpoch: 4 }),
+      );
+
+      // The resnapshot lands at the epoch the answer named, and hydration
+      // resumes against it - framed on the new space, not the old one.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 2,
+          tailFromOrdinal: 2,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.handle.store.getState().transcriptWindow.invalidated).toBe(
+        false,
+      );
+      expect(harness.rangeRequests).toHaveLength(2);
+      expect(harness.rangeRequests[1]?.epoch).toBe(5);
+    } finally {
+      warn.mockRestore();
       harness.handle.dispose();
     }
   });

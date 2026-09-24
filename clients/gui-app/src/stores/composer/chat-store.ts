@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
+import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type {
   ChatQueueSteerMode,
   ChatRunSettings,
@@ -469,6 +470,18 @@ export type MessageSegment =
        */
       rule: string | null;
       reason: string | null;
+    }
+  | {
+      id: string;
+      kind: "auto-judge-notice";
+      /**
+       * Synthesized in `rendered-messages` from the `permission.blocked` event
+       * a host journals for an auto-mode judge notice - the event itself is
+       * the record. `message` is the host's notice, drawn verbatim; `marker`
+       * says which of the three it is.
+       */
+      marker: AutoJudgeNoticeMarker;
+      message: string;
     }
   | {
       id: string;
