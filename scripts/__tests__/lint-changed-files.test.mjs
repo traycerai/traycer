@@ -8,6 +8,8 @@ import { MAX_FILES_PER_PROJECT, planLint } from "../lint-changed-files.mjs";
 
 /** Every path is still on disk unless a test says otherwise. */
 const present = () => true;
+/** Every project declares `lint:files` unless a test says otherwise. */
+const always = () => true;
 
 /** Builds a `projectOf` that maps repo-relative paths to a project root by
  * longest-prefix match against the given project roots, or null. */
@@ -32,6 +34,7 @@ describe("planLint", () => {
     ])("%s changing switches to repo mode", (repoConfigPath) => {
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: [repoConfigPath, "clients/gui-app/src/App.tsx"],
         projectOf,
       });
@@ -49,6 +52,7 @@ describe("planLint", () => {
       ]) {
         const plan = planLint({
           exists: present,
+          lintsFiles: always,
           changedPaths: [path],
           projectOf,
         });
@@ -62,6 +66,7 @@ describe("planLint", () => {
       // project's own root counts, and that is exercised separately below.
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: ["clients/gui-app/nested/package.json"],
         projectOf,
       });
@@ -74,6 +79,7 @@ describe("planLint", () => {
       const projectOf = projectOfFactory(["clients/gui-app"]);
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: [
           "clients/gui-app/src/b.tsx",
           "clients/gui-app/src/a.ts",
@@ -98,6 +104,7 @@ describe("planLint", () => {
       ]);
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: ["clients/gui-app/src/a.ts", "clients/desktop/src/b.ts"],
         projectOf,
       });
@@ -115,6 +122,7 @@ describe("planLint", () => {
     it("ignores non-source extensions such as .css and .md", () => {
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: [
           "clients/gui-app/src/styles.css",
           "clients/gui-app/README.md",
@@ -128,6 +136,7 @@ describe("planLint", () => {
     it("produces no run for a project whose only changes are non-lintable", () => {
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: [
           "clients/gui-app/src/styles.css",
           "clients/gui-app/assets/logo.svg",
@@ -148,6 +157,7 @@ describe("planLint", () => {
       ]);
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: [
           "clients/gui-app/package.json",
           "clients/gui-app/src/a.ts",
@@ -182,6 +192,7 @@ describe("planLint", () => {
         const projectOf = projectOfFactory(["clients/gui-app"]);
         const plan = planLint({
           exists: present,
+          lintsFiles: always,
           changedPaths: [`clients/gui-app/${relativeConfig}`],
           projectOf,
         });
@@ -199,7 +210,12 @@ describe("planLint", () => {
         { length: MAX_FILES_PER_PROJECT + 1 },
         (_, index) => `clients/gui-app/src/file-${index}.ts`,
       );
-      const plan = planLint({ exists: present, changedPaths, projectOf });
+      const plan = planLint({
+        exists: present,
+        lintsFiles: always,
+        changedPaths,
+        projectOf,
+      });
       const run = plan.runs.find((r) => r.project === "clients/gui-app");
       expect(run.files).toBeNull();
       expect(run.reason).toBe(`${MAX_FILES_PER_PROJECT + 1} files changed`);
@@ -211,7 +227,12 @@ describe("planLint", () => {
         { length: MAX_FILES_PER_PROJECT },
         (_, index) => `clients/gui-app/src/file-${index}.ts`,
       );
-      const plan = planLint({ exists: present, changedPaths, projectOf });
+      const plan = planLint({
+        exists: present,
+        lintsFiles: always,
+        changedPaths,
+        projectOf,
+      });
       const run = plan.runs.find((r) => r.project === "clients/gui-app");
       expect(run.files).not.toBeNull();
       expect(run.files).toHaveLength(MAX_FILES_PER_PROJECT);
@@ -223,6 +244,7 @@ describe("planLint", () => {
       const projectOf = projectOfFactory(["clients/gui-app"]);
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: ["README.md", "clients/gui-app/src/a.ts"],
         projectOf,
       });
@@ -240,6 +262,7 @@ describe("planLint", () => {
       const projectOf = projectOfFactory(["clients/gui-app"]);
       const plan = planLint({
         exists: present,
+        lintsFiles: always,
         changedPaths: ["README.md", "docs/notes.md"],
         projectOf,
       });
@@ -254,6 +277,7 @@ describe("planLint", () => {
       const plan = planLint({
         changedPaths: ["clients/shared/oxlint.config.ts"],
         projectOf,
+        lintsFiles: always,
         exists: (path) => !deleted.has(path),
       });
       expect(plan).toEqual({
@@ -272,6 +296,7 @@ describe("planLint", () => {
       const plan = planLint({
         changedPaths: ["eslint/traycer-type-safety-rules.mjs"],
         projectOf,
+        lintsFiles: always,
         exists: () => false,
       });
       expect(plan.mode).toBe("repo");
@@ -285,6 +310,7 @@ describe("planLint", () => {
           "clients/gui-app/src/kept.ts",
         ],
         projectOf,
+        lintsFiles: always,
         exists: (path) => !deleted.has(path),
       });
       expect(plan).toEqual({
@@ -297,6 +323,50 @@ describe("planLint", () => {
           },
         ],
       });
+    });
+  });
+  describe("projects without lint:files", () => {
+    const projectOf = projectOfFactory(["clients/shared", "clients/gui-app"]);
+    const onlyGuiApp = (project) => project === "clients/gui-app";
+
+    it("lints a changed project that has no lint:files script whole", () => {
+      const plan = planLint({
+        changedPaths: ["clients/shared/src/a.ts", "clients/gui-app/src/b.ts"],
+        projectOf,
+        lintsFiles: onlyGuiApp,
+        exists: present,
+      });
+      expect(plan).toEqual({
+        mode: "projects",
+        runs: [
+          {
+            project: "clients/gui-app",
+            files: ["src/b.ts"],
+            reason: "1 changed file(s)",
+          },
+          {
+            project: "clients/shared",
+            files: null,
+            reason: "no lint:files script",
+          },
+        ],
+      });
+    });
+
+    it("still lints it whole when only its package.json changed", () => {
+      const plan = planLint({
+        changedPaths: ["clients/shared/package.json"],
+        projectOf,
+        lintsFiles: onlyGuiApp,
+        exists: present,
+      });
+      expect(plan.runs).toEqual([
+        {
+          project: "clients/shared",
+          files: null,
+          reason: "package.json changed",
+        },
+      ]);
     });
   });
 });

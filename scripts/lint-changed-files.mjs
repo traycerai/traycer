@@ -12,8 +12,10 @@
 // no-floating-promises) is reported by CI, not by the commit. The compile
 // step still type-checks every file locally.
 //
-// A project takes part by declaring a `lint:files` script that lints the
-// paths appended to it (its `lint` script is `lint:files .`). When a change
+// A project is the nearest package.json with a `lint` script. One that also
+// declares `lint:files` (lint the paths appended to it; its `lint` is then
+// `lint:files .`) is linted per file; one without it is linted whole, so a
+// new project, or one that drops `lint:files`, is never skipped. When a change
 // can alter lint results for files that did not change, the runner falls back
 // to whole-project lint: a project's own lint config, tsconfig or
 // package.json switches that project to `lint`; a repo-level one switches
@@ -44,17 +46,18 @@ const PROJECT_LINT_CONFIG =
 export const MAX_FILES_PER_PROJECT = 200;
 
 /**
- * @param {{ changedPaths: string[], projectOf: (path: string) => string | null, exists: (path: string) => boolean }} input
+ * @param {{ changedPaths: string[], projectOf: (path: string) => string | null, lintsFiles: (project: string) => boolean, exists: (path: string) => boolean }} input
  *   changedPaths: repo-relative, `/`-separated, deletions included.
- *   projectOf: the repo-relative root of the nearest project with a
- *   `lint:files` script, or null. exists: whether the path is still on disk;
- *   a deleted config still selects whole-project lint, a deleted source file
- *   is not linted.
+ *   projectOf: the repo-relative root of the nearest project with a `lint`
+ *   script, or null. lintsFiles: whether that project has `lint:files`.
+ *   exists: whether the path is still part of the commit (git status, not
+ *   the disk: `git rm --cached` leaves the file behind); a deleted config
+ *   still selects whole-project lint, a deleted source file is not linted.
  * @returns {{ mode: "repo", reason: string }
  *   | { mode: "projects", runs: { project: string, files: string[] | null, reason: string }[] }}
  *   `files: null` means lint the whole project.
  */
-export function planLint({ changedPaths, projectOf, exists }) {
+export function planLint({ changedPaths, projectOf, lintsFiles, exists }) {
   const repoConfig = changedPaths.find((path) =>
     REPO_LINT_CONFIG.some((pattern) => pattern.test(path)),
   );
@@ -81,6 +84,8 @@ export function planLint({ changedPaths, projectOf, exists }) {
   for (const [project, { files, configChange }] of byProject) {
     if (configChange !== null) {
       runs.push({ project, files: null, reason: `${configChange} changed` });
+    } else if (files.length > 0 && !lintsFiles(project)) {
+      runs.push({ project, files: null, reason: "no lint:files script" });
     } else if (files.length > MAX_FILES_PER_PROJECT) {
       runs.push({
         project,
@@ -122,42 +127,55 @@ function main(baseRef) {
   // did not change, so it must still select whole-project lint. Renames are
   // split into delete + add for the same reason. planLint drops a deleted
   // SOURCE file itself, after config detection, since config files are
-  // sources too (oxlint.config.ts).
-  const changedPaths = git(root, [
+  // sources too (oxlint.config.ts). Deletion is read from git's status, not
+  // the disk: `git rm --cached` removes a file from the commit and leaves it
+  // in the working tree.
+  const fields = git(root, [
     "diff",
-    "--name-only",
+    "--name-status",
     "--no-renames",
     "--diff-filter=ACMD",
     "-z",
     mergeBase,
   ])
     .split("\0")
-    .filter((path) => path !== "");
-  const exists = (path) => existsSync(join(root, path));
+    .filter((field) => field !== "");
+  const changedPaths = [];
+  const deleted = new Set();
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const [status, path] = [fields[index], fields[index + 1]];
+    changedPaths.push(path);
+    if (status === "D") deleted.add(path);
+  }
+  const exists = (path) => !deleted.has(path);
 
-  const projectRoots = new Map();
+  /** @type {Map<string, Record<string, unknown> | null>} project scripts by directory */
+  const projectScripts = new Map();
   const projectOf = (path) => {
     for (
       let directory = posix.dirname(path);
       ;
       directory = posix.dirname(directory)
     ) {
-      if (!projectRoots.has(directory)) {
+      if (!projectScripts.has(directory)) {
         const manifest = join(root, directory, "package.json");
-        let hasLintFiles = false;
+        let scripts = null;
         if (directory !== "." && existsSync(manifest)) {
-          const scripts =
+          const declared =
             JSON.parse(readFileSync(manifest, "utf8")).scripts ?? {};
-          hasLintFiles = typeof scripts["lint:files"] === "string";
+          if (typeof declared.lint === "string") scripts = declared;
         }
-        projectRoots.set(directory, hasLintFiles);
+        projectScripts.set(directory, scripts);
       }
-      if (projectRoots.get(directory)) return directory;
+      if (projectScripts.get(directory) !== null) return directory;
       if (directory === ".") return null;
     }
   };
 
-  const plan = planLint({ changedPaths, projectOf, exists });
+  const lintsFiles = (project) =>
+    typeof projectScripts.get(project)?.["lint:files"] === "string";
+
+  const plan = planLint({ changedPaths, projectOf, lintsFiles, exists });
   if (plan.mode === "repo") {
     console.log(`lint: ${plan.reason}; linting every affected project.`);
     return run(
