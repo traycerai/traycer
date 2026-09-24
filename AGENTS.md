@@ -40,10 +40,13 @@ make dev-desktop VERSION=1.2.3  # pin host release
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 **Commits:** do **not** manually run `compile` / `build` / `lint` / `format`
-before committing. `pre-commit` already runs the affected workspace checks
-(build, compile, lint, format). Tests run in CI (`test.yml`), not in the hook —
-only re-run checks yourself when diagnosing a hook or CI failure. Commits need
-DCO (`git commit -s`).
+before committing. `pre-commit` already runs the local checks: lint on the
+files your branch changed, format, and an incremental compile of the affected
+projects. It takes one machine-wide slot, so concurrent commits from other
+worktrees queue rather than stacking multi-GB type-checks. CI runs the
+whole-project lint and the `build` targets. Tests run in CI (`test.yml`), not
+in the hook; only re-run checks yourself when diagnosing a hook or CI failure.
+Commits need DCO (`git commit -s`).
 
 ## Non-negotiable
 

@@ -28,6 +28,22 @@ nx_parallel="${NX_PARALLEL:-8}"
 nx_compile_parallel="${NX_COMPILE_PARALLEL:-3}"
 workspace_check_lane="${WORKSPACE_CHECK_LANE:-all}"
 
+# LOCAL runs differ from CI in three ways, all for memory. Agents commit from
+# several worktrees at once, and each check below holds a whole type program
+# resident, so a commit used to cost ~8 GB (gui-app `tsgo -b`, never warm) +
+# ~5 GB (whole-project type-aware lint) + ~5 GB (desktop's vite build), times
+# every concurrent commit.
+#
+#   1. One machine-wide slot (scripts/machine-slot.sh, one per 16 GB of RAM)
+#      for the whole run, shared with the internal monorepo's hook, so
+#      concurrent commits queue instead of stacking their peaks.
+#   2. Lint covers only the files this branch changed
+#      (scripts/lint-changed-files.mjs); CI lints every affected project.
+#   3. No `build`: bundling verifies packaging, not types, and CI runs it.
+#
+# The compile targets themselves are incremental and single-threaded in every
+# lane, so a warm local re-check costs seconds and ~2 GB.
+
 run_static_checks() {
   local args=("$@")
   bun x nx affected --target=lint "${args[@]}" --parallel="${nx_parallel}"
@@ -36,6 +52,11 @@ run_static_checks() {
   else
     bun run format
   fi
+}
+
+run_local_static_checks() {
+  bun scripts/lint-changed-files.mjs "$1"
+  bun run format
 }
 
 run_compile_checks() {
@@ -59,7 +80,7 @@ run_full_checks() {
       bun run lint
       if [ -n "${CI:-}" ]; then bun run format:check; else bun run format; fi
       bun run compile
-      bun run build
+      if [ -n "${CI:-}" ]; then bun run build; fi
       ;;
     *) echo "Unknown WORKSPACE_CHECK_LANE: ${workspace_check_lane}" >&2; exit 2 ;;
   esac
@@ -80,10 +101,32 @@ run_affected() {
   esac
 }
 
+run_local_affected() {
+  local base="$1"
+  shift
+  case "${workspace_check_lane}" in
+    static) run_local_static_checks "${base}" ;;
+    compile) run_compile_checks --base="${base}" "$@" ;;
+    build) run_build_checks --base="${base}" "$@" ;;
+    all)
+      run_local_static_checks "${base}"
+      run_compile_checks --base="${base}" "$@"
+      ;;
+    *) echo "Unknown WORKSPACE_CHECK_LANE: ${workspace_check_lane}" >&2; exit 2 ;;
+  esac
+}
+
 if [ -n "${CI:-}" ] && [ -n "${NX_BASE:-}" ] && [ -n "${NX_HEAD:-}" ]; then
   echo "Affected workspace checks (${NX_BASE}..${NX_HEAD})..."
   run_affected --base="${NX_BASE}" --head="${NX_HEAD}" --tui=false
 else
+  # The hook runs shellcheck without -x, so it cannot follow this file.
+  # shellcheck disable=SC1091
+  . "$(dirname "${BASH_SOURCE[0]}")/machine-slot.sh"
+  if [ -z "${CI:-}" ]; then
+    machine_slot_acquire commit-checks auto
+  fi
+
   base_ref=""
   for ref in origin/main main HEAD~1; do
     if git rev-parse --verify "${ref}" >/dev/null 2>&1; then
@@ -96,7 +139,11 @@ else
     run_full_checks
   else
     echo "Affected workspace checks (base: ${base_ref})..."
-    run_affected --base="${base_ref}" --tui=false
+    if [ -n "${CI:-}" ]; then
+      run_affected --base="${base_ref}" --tui=false
+    else
+      run_local_affected "${base_ref}" --tui=false
+    fi
   fi
 fi
 
