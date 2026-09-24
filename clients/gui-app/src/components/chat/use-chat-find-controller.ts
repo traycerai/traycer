@@ -1,12 +1,15 @@
 import {
   buildChatFindRows,
+  buildSubagentChatFindRows,
   createChatFindAdapter,
   queryMountedChatFindUnit,
   queryMountedChatMessageRoot,
+  subagentChatFindRowId,
   type ChatFindAdapter,
   type ChatFindReconcileTarget,
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find";
+import { subagentCardPath } from "@/components/chat/segments/subagent-display";
 import {
   serializeChatCollapsibleKey,
   type ChatCollapsibleKey,
@@ -74,6 +77,14 @@ interface ChatFindControllerArgs {
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
+  /**
+   * The card an open-as-chat view shows, or `null` while the transcript does.
+   * While a card is open find searches ONLY its conversation, resolves anchors
+   * under `getSubagentViewRoot()`, and never scrolls the covered timeline; a
+   * change re-runs the open query over the new scope.
+   */
+  readonly openSubagentId: string | null;
+  readonly getSubagentViewRoot: () => HTMLElement | null;
 }
 
 interface ChatFindController {
@@ -105,7 +116,13 @@ export function useChatFindController(
     scrollToLocation,
     cancelManualNavigation,
     setScrolledActiveUserMessageIdIfChanged,
+    openSubagentId,
+    getSubagentViewRoot,
   } = args;
+
+  // Read lazily by the adapter's suppliers, like `messagesRef`, so opening a
+  // card does not re-register the adapter; the scope effect below keeps it.
+  const openSubagentIdRef = useRef(openSubagentId);
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const setFindActiveTarget = useSetChatFindActiveTarget();
@@ -175,6 +192,9 @@ export function useChatFindController(
 
   const scrollToMessageForFind = useCallback(
     (messageId: string): void => {
+      // The open conversation's one row is always mounted, and the timeline
+      // under it is not what the reader is looking at: leave it where it is.
+      if (openSubagentIdRef.current !== null) return;
       cancelManualNavigation();
       setScrolledActiveUserMessageIdIfChanged(
         selectActiveUserMessageId(messagesRef.current, messageId, false),
@@ -198,11 +218,17 @@ export function useChatFindController(
 
   const getMountedMessageRoot = useCallback(
     (messageId: string): HTMLElement | null => {
+      const openId = openSubagentIdRef.current;
+      if (openId !== null) {
+        return messageId === subagentChatFindRowId(openId)
+          ? getSubagentViewRoot()
+          : null;
+      }
       const scroller = getScroller();
       if (scroller === null) return null;
       return queryMountedChatMessageRoot(scroller, messageId);
     },
-    [getScroller],
+    [getScroller, getSubagentViewRoot],
   );
 
   const getMountedFindUnitRoot = useCallback(
@@ -422,17 +448,42 @@ export function useChatFindController(
   }, [backgroundToolBlockIds, messages]);
 
   useLayoutEffect(() => {
+    if (openSubagentIdRef.current === openSubagentId) return;
+    openSubagentIdRef.current = openSubagentId;
+    // A new scope is a new search space: an open query re-runs over it from
+    // its first match, exactly as typing it afresh would - a passive rescan
+    // would try to keep a match that no longer exists in this scope.
+    const adapter = chatFindAdapterRef.current;
+    if (adapter === null) return;
+    const { requestId, query, matchCase } = adapter.getSnapshot();
+    if (query.length === 0) return;
+    void adapter.search({ requestId, query, matchCase });
+  }, [openSubagentId]);
+
+  useLayoutEffect(() => {
     if (tileFindContext === null) return undefined;
 
     const adapter = createChatFindAdapter({
       tileInstanceId: instanceId,
-      getRows: () =>
-        buildChatFindRows(
+      getRows: () => {
+        const openId = openSubagentIdRef.current;
+        if (openId !== null) {
+          return buildSubagentChatFindRows(
+            subagentCardPath(messagesRef.current, openId)?.at(-1) ?? null,
+            instanceId,
+          );
+        }
+        return buildChatFindRows(
           messagesRef.current,
           instanceId,
           backgroundToolBlockIdsRef.current,
-        ),
-      getCoverageMessage: getFindCoverageMessage,
+        );
+      },
+      // A card's conversation lives inside one loaded turn: the windowed
+      // line's caveat describes transcript rows, which an open card never
+      // searches.
+      getCoverageMessage: () =>
+        openSubagentIdRef.current === null ? getFindCoverageMessage() : null,
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,

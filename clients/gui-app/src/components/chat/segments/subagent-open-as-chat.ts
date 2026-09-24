@@ -19,6 +19,24 @@ export function useOpenSubagentAsChat(): OpenSubagentAsChat | null {
   return use(OpenSubagentAsChatContext);
 }
 
+/**
+ * The open-as-chat control drawn on the card with this id under `root` - where
+ * focus returns when the reader steps back out of that card. Compares the
+ * dataset value rather than interpolating the id into a selector: card ids are
+ * persisted block ids behind a plain `string`, and jsdom has no `CSS.escape`.
+ */
+export function queryOpenAsChatControl(
+  root: ParentNode,
+  cardId: string,
+): HTMLElement | null {
+  for (const element of root.querySelectorAll<HTMLElement>(
+    "[data-subagent-open-as-chat]",
+  )) {
+    if (element.dataset.subagentOpenAsChat === cardId) return element;
+  }
+  return null;
+}
+
 export interface SubagentDrillIn {
   /** The card whose conversation is open, or `null` for the transcript. */
   readonly openId: string | null;

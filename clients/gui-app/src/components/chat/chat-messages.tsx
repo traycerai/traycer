@@ -1991,6 +1991,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  // The open-as-chat view's scroll area while a card is open (`null` while the
+  // transcript shows): the scroll keys and chat find address it instead of the
+  // timeline it covers.
+  const subagentViewScrollRef = useRef<HTMLDivElement | null>(null);
   // Width AND typography invalidate every remembered height at once - see
   // `observeLayoutBasis`. A ResizeObserver on the container rather than React
   // state, for the reason the memory itself is not state: a resize must not
@@ -2480,10 +2484,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   const handleKeyDownCapture = useCallback(
     (event: globalThis.KeyboardEvent): void => {
-      const scroller = chatTimelineRef.current?.getScrollableNode();
-      if (!scroller) return;
       const scrollAction = chatKeyboardScrollAction(event);
       if (scrollAction === null) return;
+      // An open-as-chat view covers the timeline: the keys scroll the
+      // conversation the reader is looking at, and the timeline's follow state
+      // is left exactly as it was.
+      const drillInScroller = subagentViewScrollRef.current;
+      if (drillInScroller !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyChatKeyboardScroll(drillInScroller, scrollAction);
+        return;
+      }
+      const scroller = chatTimelineRef.current?.getScrollableNode();
+      if (!scroller) return;
       event.preventDefault();
       event.stopPropagation();
       // Freeze an owned native smooth-scroll at its current pixel first, then
@@ -3702,6 +3716,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     return chatFindCoverageMessage(unhydratedRowCount(window));
   }, []);
 
+  // Open-as-chat: a card's conversation drawn over the transcript, inside
+  // this tile. Declared before find, which searches only that conversation
+  // while it is open.
+  const subagentDrillIn = useSubagentDrillIn();
+  const { close: closeSubagentDrillIn } = subagentDrillIn;
+  const getSubagentViewRoot = useCallback(
+    (): HTMLElement | null => subagentViewScrollRef.current,
+    [],
+  );
+
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
     scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
@@ -3717,6 +3741,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
     cancelManualNavigation: cancelManualNavigationForFind,
     setScrolledActiveUserMessageIdIfChanged,
+    openSubagentId: subagentDrillIn.openId,
+    getSubagentViewRoot,
   });
 
   // Viewport-driven hydration (slice C of the windowed line): translate the
@@ -3766,6 +3792,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
+    // A jump from outside the tile targets the transcript: an open-as-chat
+    // view covering it would hide where the jump lands.
+    closeSubagentDrillIn();
     if (request.kind === "end") {
       scrollToEnd(true);
       scrollRequestRef.current = null;
@@ -3824,6 +3853,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [
     activityGroupOpenStore,
     cancelTimelineLiveFollowForUserNavigation,
+    closeSubagentDrillIn,
     identity,
     scrollRequest?.requestId,
     scrollToEnd,
@@ -3885,10 +3915,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     unseenCompletion: hasUnseenTurnCompletion,
     workingVerb,
   });
-  // Open-as-chat: a card's conversation drawn over the transcript, inside
-  // this tile. Inside the open-store providers because the view reuses the
-  // same collapsible segments the transcript does.
-  const subagentDrillIn = useSubagentDrillIn();
   // The rail navigates the transcript, which an open-as-chat view covers; it
   // would float over that view (z-40), so it steps aside until the view closes.
   const showTurnMinimap =
@@ -3911,7 +3937,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             // wrapper also holds the absolutely-positioned lower-surfaces dock
             // (composer, approvals, todo), which must stay out of the selection.
             // The timeline is virtualized, so this covers the mounted rows.
-            data-selection-root=""
+            // While an open-as-chat view covers it the view declares the root
+            // instead (an outer root would shadow it), so Ctrl/Cmd+A selects
+            // the conversation on screen, not the transcript underneath.
+            data-selection-root={
+              subagentDrillIn.openId === null ? "" : undefined
+            }
             onPointerDown={handleTranscriptPointerDown}
             className="relative flex-1 overflow-hidden"
           >
@@ -3985,6 +4016,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               drillIn={subagentDrillIn}
               messages={messages}
               bottomInset={endInset}
+              scrollRef={subagentViewScrollRef}
+              transcriptRef={transcriptContainerRef}
             />
           </div>
         </OpenSubagentAsChatContext.Provider>

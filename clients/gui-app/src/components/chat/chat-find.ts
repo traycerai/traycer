@@ -7,6 +7,10 @@
 
 export {
   buildChatFindRows,
+  buildSubagentChatFindRows,
+  subagentChatFindRowId,
+  chatFindSubagentChatTaskUnitId,
+  chatFindSubagentChatResultUnitId,
   markdownToChatSearchText,
   chatFindMessageContentUnitId,
   chatFindSegmentUnitId,

@@ -1345,4 +1345,23 @@ describe("<SubagentSegment /> conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open as chat" }));
     expect(open).toHaveBeenCalledWith(expect.stringMatching(/^conv-\d+$/));
   });
+
+  it("marks the Open as chat button with the card id for focus return", () => {
+    render(
+      <OpenSubagentAsChatContext value={vi.fn()}>
+        <ConversationCard
+          nested={[textChild("t1", "child words")]}
+          result={null}
+          progressUpdates={[]}
+          variant="promoted"
+        />
+      </OpenSubagentAsChatContext>,
+    );
+    const button = screen.getByRole("button", { name: "Open as chat" });
+    const cardId = button.getAttribute("data-subagent-open-as-chat");
+    expect(cardId).toMatch(/^conv-\d+$/);
+    expect(button.getAttribute("data-testid")).toBe(
+      `subagent-open-as-chat-${cardId}`,
+    );
+  });
 });

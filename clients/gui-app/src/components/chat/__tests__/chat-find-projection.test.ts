@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
+  buildSubagentChatFindRows,
+  chatFindSubagentChatResultUnitId,
+  chatFindSubagentChatTaskUnitId,
+  subagentChatFindRowId,
   chatFindActivityGroupChildHeaderUnitId,
   chatFindActivityGroupSummaryUnitId,
   chatFindMessageContentUnitId,
@@ -19,6 +23,8 @@ import {
 } from "@/components/chat/chat-collapsible-key";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ApprovalSegment,
@@ -27,6 +33,7 @@ import type {
   MessageSegment,
   SubagentSegment,
   TextSegment,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 import { makeMessage } from "./chat-message-fixtures";
 
@@ -1527,3 +1534,124 @@ function rowSearchText(row: ChatFindRow): string {
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+describe("buildSubagentChatFindRows", () => {
+  const OPEN_ID = "open-card";
+
+  function openCard(patch: Partial<SubagentSegment>): SubagentSegment {
+    return {
+      id: OPEN_ID,
+      kind: "subagent",
+      name: "Opener",
+      agentType: null,
+      task: "Open task words",
+      progressUpdates: [],
+      result: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      startedAt: 1,
+      durationMs: 10,
+      spawnToolCallId: null,
+      parentId: null,
+      workflowMeta: null,
+      children: [],
+      ...patch,
+    };
+  }
+
+  function nestedCard(): SubagentSegment {
+    return {
+      ...openCard({ id: "nested-card", name: "Nested", task: "Nested task" }),
+      parentId: OPEN_ID,
+      children: [
+        {
+          id: "nested-text",
+          kind: "text",
+          markdown: "nested words",
+          isStreaming: false,
+          parentId: "nested-card",
+        },
+      ],
+    };
+  }
+
+  function toolChild(): ToolSegment {
+    const input = { command: "ls" };
+    return {
+      id: "tool-1",
+      kind: "tool",
+      toolName: "Bash",
+      inputSummary: deriveToolInputSummary("Bash", input),
+      inputDetail: deriveToolInputDetail("Bash", input),
+      taskTodoItems: null,
+      error: null,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      imageResults: [],
+      startedAt: 0,
+      durationMs: null,
+      parentId: OPEN_ID,
+    };
+  }
+
+  const childText: TextSegment = {
+    id: "open-child-text",
+    kind: "text",
+    markdown: "Child prose.",
+    isStreaming: false,
+    parentId: OPEN_ID,
+  };
+
+  it("gives no rows for a card that left the transcript", () => {
+    expect(buildSubagentChatFindRows(null, TILE_INSTANCE_ID)).toEqual([]);
+  });
+
+  it("orders task, child text and nested header, rooted at the view", () => {
+    const rows = buildSubagentChatFindRows(
+      openCard({ result: "Ignored result", children: [childText, nestedCard()] }),
+      TILE_INSTANCE_ID,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].messageId).toBe(subagentChatFindRowId(OPEN_ID));
+    const ids = rows[0].units.map((unit) => unit.unitId);
+    expect(ids.slice(0, 3)).toEqual([
+      chatFindSubagentChatTaskUnitId(OPEN_ID),
+      chatFindSegmentUnitId("open-child-text"),
+      chatFindSubagentHeaderUnitId("nested-card"),
+    ]);
+    expect(rows[0].units[0].owningChain).toEqual([]);
+    expect(rows[0].units[1].owningChain).toEqual([]);
+    expect(rows[0].units[2].owningChain).toEqual([]);
+    expect(ids).not.toContain(chatFindSubagentChatResultUnitId(OPEN_ID));
+    expect(ids).not.toContain(chatFindSubagentHeaderUnitId(OPEN_ID));
+    expect(ids).not.toContain(chatFindSubagentBodyUnitId(OPEN_ID));
+    expect(ids).not.toContain(
+      chatFindSubagentHeaderUnitId(derivePromotedSubagentRenderId(OPEN_ID)),
+    );
+  });
+
+  it("emits the result unit last when the children hold no text", () => {
+    const rows = buildSubagentChatFindRows(
+      openCard({
+        result: "Final answer",
+        children: [
+          toolChild(),
+        ],
+      }),
+      TILE_INSTANCE_ID,
+    );
+    const units = rows[0].units;
+    const last = units[units.length - 1];
+    expect(last.unitId).toBe(chatFindSubagentChatResultUnitId(OPEN_ID));
+    expect(last.text).toBe("Final answer");
+    expect(last.owningChain).toEqual([]);
+  });
+});

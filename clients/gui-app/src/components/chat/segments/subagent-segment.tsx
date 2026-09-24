@@ -641,6 +641,9 @@ function useOpenAsChatHeaderAction(
         size="icon-xs"
         aria-label={OPEN_AS_CHAT_LABEL}
         data-testid={`subagent-open-as-chat-${id}`}
+        // Where focus returns when the reader steps back out of this card
+        // (`queryOpenAsChatControl`).
+        data-subagent-open-as-chat={id}
         onClick={() => openAsChat(id)}
       >
         <MessagesSquare aria-hidden />

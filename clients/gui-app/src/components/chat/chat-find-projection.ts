@@ -147,6 +147,61 @@ export function chatFindSubagentResultUnitId(renderId: string): string {
   return `subagent:${renderId}:result`;
 }
 
+/** The one find row an open-as-chat view projects while it is open. */
+export function subagentChatFindRowId(cardId: string): string {
+  return `subagent-chat:${cardId}`;
+}
+
+export function chatFindSubagentChatTaskUnitId(cardId: string): string {
+  return `subagent-chat:${cardId}:task`;
+}
+
+export function chatFindSubagentChatResultUnitId(cardId: string): string {
+  return `subagent-chat:${cardId}:result`;
+}
+
+/**
+ * Find's rows while an open-as-chat view covers the transcript: ONE row, the
+ * open card's conversation exactly as `SubagentChatView` draws it - the task
+ * bubble, the conversation (the same units the card's own body projects, but
+ * rooted at the view, so no card collapsible sits in front of them), then the
+ * Result panel when the view shows one. The transcript underneath is not
+ * searched: what a reader can see is the open conversation. `null` (the card
+ * left the loaded transcript) searches nothing.
+ */
+export function buildSubagentChatFindRows(
+  card: SubagentSegment | null,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindRow> {
+  if (card === null) return [];
+  // Mirrors the view: no Result panel once the conversation has text.
+  const shownResult = subagentHasChildText(card.children) ? null : card.result;
+  return [
+    {
+      messageId: subagentChatFindRowId(card.id),
+      units: [
+        ...compactUnits([
+          chatFindUnit({
+            unitId: chatFindSubagentChatTaskUnitId(card.id),
+            text: cleanSubagentNotificationText(card.task) ?? "",
+            owningChain: [],
+          }),
+        ]),
+        ...subagentConversationSearchUnits(card, [], tileInstanceId),
+        ...compactUnits([
+          shownResult === null
+            ? null
+            : chatFindUnit({
+                unitId: chatFindSubagentChatResultUnitId(card.id),
+                text: markdownToChatSearchText(shownResult),
+                owningChain: [],
+              }),
+        ]),
+      ],
+    },
+  ];
+}
+
 export function chatFindA2ASendBodyUnitId(segmentId: string): string {
   return `a2a-send:${segmentId}:body`;
 }

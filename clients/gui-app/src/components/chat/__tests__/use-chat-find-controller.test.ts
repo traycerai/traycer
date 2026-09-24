@@ -32,6 +32,9 @@ import { makeMessage } from "./chat-message-fixtures";
 
 const TILE_INSTANCE_ID = "find-controller-tile";
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set<string>();
+// Stable across renders, as ChatMessages passes it: a new identity re-creates
+// the adapter and drops its query.
+const NO_COVERAGE_MESSAGE = (): string | null => null;
 const SUBAGENT_ID = "subagent-find-ctrl";
 const UNIQUE_NEEDLE = "find-ctrl-unique-needle-xyz";
 
@@ -69,7 +72,20 @@ describe("useChatFindController - chain-open on reveal", () => {
     vi.restoreAllMocks();
   });
 
-  function renderController(messages: ReadonlyArray<ChatMessageModel>): {
+  interface ControllerScope {
+    readonly openSubagentId: string | null;
+    readonly getSubagentViewRoot: () => HTMLElement | null;
+  }
+
+  const TRANSCRIPT_SCOPE: ControllerScope = {
+    openSubagentId: null,
+    getSubagentViewRoot: () => null,
+  };
+
+  function renderController(
+    messages: ReadonlyArray<ChatMessageModel>,
+    initialScope: ControllerScope,
+  ): {
     readonly getAdapter: () => ChatFindAdapter;
     readonly forceStore: StoreApi<ChatFindForceState>;
     readonly getController: () => {
@@ -78,7 +94,11 @@ describe("useChatFindController - chain-open on reveal", () => {
     readonly rerenderMessages: (
       messages: ReadonlyArray<ChatMessageModel>,
     ) => void;
+    readonly rerenderScope: (scope: ControllerScope) => void;
   } {
+    const getScroller = (): HTMLElement => scroller;
+    let currentScope = initialScope;
+    let currentMessages = messages;
     const tileFindContext = {
       tileInstanceId: TILE_INSTANCE_ID,
       registerAdapter: (adapter: TileFindAdapter) => {
@@ -116,7 +136,11 @@ describe("useChatFindController - chain-open on reveal", () => {
     }
 
     const rendered = renderHook(
-      (currentMessages: ReadonlyArray<ChatMessageModel>) => {
+      (props: {
+        readonly messages: ReadonlyArray<ChatMessageModel>;
+        readonly scope: ControllerScope;
+      }) => {
+        const currentMessages = props.messages;
         const messagesRef = useRef(currentMessages);
         messagesRef.current = currentMessages;
         const rowIndexByKeyRef = useRef(
@@ -140,16 +164,21 @@ describe("useChatFindController - chain-open on reveal", () => {
           backgroundToolBlockIdsRef,
           // This suite drives the legacy line, where the transcript is fully
           // materialized and find has nothing to disclose.
-          getFindCoverageMessage: () => null,
+          getFindCoverageMessage: NO_COVERAGE_MESSAGE,
           rowIndexByKeyRef,
-          getScroller: () => scroller,
+          getScroller,
           scrollToLocation,
           cancelManualNavigation,
           setScrolledActiveUserMessageIdIfChanged,
+          openSubagentId: props.scope.openSubagentId,
+          getSubagentViewRoot: props.scope.getSubagentViewRoot,
         });
         return controller;
       },
-      { initialProps: messages, wrapper: Wrapper },
+      {
+        initialProps: { messages, scope: initialScope },
+        wrapper: Wrapper,
+      },
     );
 
     return {
@@ -164,13 +193,20 @@ describe("useChatFindController - chain-open on reveal", () => {
         if (controller === null) throw new Error("controller did not mount");
         return controller;
       },
-      rerenderMessages: (nextMessages) => rendered.rerender(nextMessages),
+      rerenderMessages: (nextMessages) => {
+        currentMessages = nextMessages;
+        rendered.rerender({ messages: currentMessages, scope: currentScope });
+      },
+      rerenderScope: (scope) => {
+        currentScope = scope;
+        rendered.rerender({ messages: currentMessages, scope });
+      },
     };
   }
 
   it("force-opens the owning chain on a genuine find reveal", () => {
     const messages = makeTranscriptWithSubagentBodyNeedle();
-    const { getAdapter, forceStore } = renderController(messages);
+    const { getAdapter, forceStore } = renderController(messages, TRANSCRIPT_SCOPE);
     const adapter = getAdapter();
 
     act(() => {
@@ -195,7 +231,7 @@ describe("useChatFindController - chain-open on reveal", () => {
 
   it("does not re-force-open on a passive reconcile of the same target", () => {
     const messages = makeTranscriptWithSubagentBodyNeedle();
-    const { getAdapter, forceStore } = renderController(messages);
+    const { getAdapter, forceStore } = renderController(messages, TRANSCRIPT_SCOPE);
     const adapter = getAdapter();
 
     act(() => {
@@ -219,7 +255,7 @@ describe("useChatFindController - chain-open on reveal", () => {
     onTestFinished(installMockHighlights());
     const messages = makeTranscriptWithInterviewDetailNeedle();
     const { getAdapter, getController, forceStore } =
-      renderController(messages);
+      renderController(messages, TRANSCRIPT_SCOPE);
     const adapter = getAdapter();
 
     act(() => {
@@ -266,7 +302,7 @@ describe("useChatFindController - chain-open on reveal", () => {
   it("clears an interview target when passive reconciliation moves to an ordinary unit", () => {
     const messages = makeTranscriptWithInterviewDetailNeedle();
     const { getAdapter, forceStore, rerenderMessages } =
-      renderController(messages);
+      renderController(messages, TRANSCRIPT_SCOPE);
     const adapter = getAdapter();
 
     act(() => {
@@ -283,6 +319,104 @@ describe("useChatFindController - chain-open on reveal", () => {
     // so the controller's messages layout effect performs passive reconciliation.
     act(() => rerenderMessages(ordinaryMessages));
     expect(forceStore.getState().activeTarget).toBeNull();
+  });
+
+  describe("with an open subagent conversation", () => {
+    const CARD_ID = "card-open";
+
+    function viewRoot(): HTMLElement {
+      const root = document.createElement("div");
+      const unit = document.createElement("span");
+      unit.dataset.chatFindUnit = "segment:card-text";
+      unit.textContent = "needle card";
+      root.append(unit);
+      document.body.append(root);
+      onTestFinished(() => root.remove());
+      return root;
+    }
+
+    function transcriptWithCard(): ReadonlyArray<ChatMessageModel> {
+      const user: ChatMessageModel = {
+        ...makeMessage(0, "user"),
+        id: "msg-user",
+        content: "needle user",
+      };
+      const assistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        id: "msg-assistant",
+        segments: [
+          {
+            id: CARD_ID,
+            kind: "subagent",
+            name: "Opener",
+            agentType: null,
+            task: "Investigate",
+            progressUpdates: [],
+            result: null,
+            isStreaming: false,
+            endState: null,
+            stopped: false,
+            startedAt: 1,
+            durationMs: 100,
+            spawnToolCallId: null,
+            parentId: null,
+            workflowMeta: null,
+            children: [
+              {
+                id: "card-text",
+                kind: "text",
+                markdown: "needle card",
+                isStreaming: false,
+                parentId: CARD_ID,
+              },
+            ],
+          },
+        ],
+      };
+      return [user, assistant];
+    }
+
+    it("counts only the card's matches and reveals without scrolling the timeline", () => {
+      const root = viewRoot();
+      const { getAdapter } = renderController(transcriptWithCard(), {
+        openSubagentId: CARD_ID,
+        getSubagentViewRoot: () => root,
+      });
+      const adapter = getAdapter();
+
+      act(() => {
+        void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+      });
+      flushFrames();
+
+      expect(adapter.getSnapshot().total).toBe(1);
+      expect(adapter.getSnapshot().coverageMessage).toBeNull();
+      expect(scrollToLocation).not.toHaveBeenCalled();
+      expect(cancelManualNavigation).not.toHaveBeenCalled();
+    });
+
+    it("re-runs an active query when the open card changes", () => {
+      const root = viewRoot();
+      // One stable getter across scopes, as ChatMessages passes: a new
+      // identity would re-create the adapter and drop its query.
+      const getSubagentViewRoot = (): HTMLElement => root;
+      const { getAdapter, rerenderScope } = renderController(
+        transcriptWithCard(),
+        { openSubagentId: null, getSubagentViewRoot },
+      );
+      const adapter = getAdapter();
+
+      act(() => {
+        void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+      });
+      expect(adapter.getSnapshot().total).toBe(2);
+
+      act(() => rerenderScope({ openSubagentId: CARD_ID, getSubagentViewRoot }));
+      expect(getAdapter().getSnapshot().total).toBe(1);
+
+      act(() => rerenderScope({ openSubagentId: null, getSubagentViewRoot }));
+      expect(getAdapter().getSnapshot().total).toBe(2);
+    });
   });
 });
 
