@@ -1,14 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+} from "@traycer-clients/shared/platform/runner-host";
 import {
   RunnerHostEvent,
+  RunnerHostInvoke,
   RunnerHostSync,
   SelectionAuthorityChannels,
 } from "../../../ipc-contracts/ipc-channels";
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type {
   IpcHostController,
+  IpcAuthTokenStore,
   IpcManagedWindow,
   IpcWindowRecord,
   IpcWindowRegistry,
@@ -196,6 +217,10 @@ class FakeHost {
   private readonly listeners = new Set<
     (snapshot: DesktopPublishedHostSnapshot | null) => void
   >();
+
+  setSnapshot(snapshot: DesktopPublishedHostSnapshot | null): void {
+    this.snapshot = snapshot;
+  }
 
   getSnapshot(): DesktopPublishedHostSnapshot | null {
     return this.snapshot;
@@ -597,10 +622,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function buildBridge(options: {
+let runnerIpcModule: typeof import("../register-runner-ipc") | null = null;
+
+beforeAll(async () => {
+  runnerIpcModule = await import("../register-runner-ipc");
+}, 30_000);
+
+function buildBridge(options: {
   readonly signedIn?: { readonly userId: string; readonly token: string };
+  readonly authTokenStore?: IpcAuthTokenStore;
+  readonly host?: FakeHost;
 }) {
-  const mod = await import("../register-runner-ipc");
+  const mod = runnerIpcModule;
+  if (mod === null) throw new Error("runner IPC module was not initialized");
   const registry = new FakeWindowRegistry();
   const authSession = new DesktopAuthSession();
   if (options.signedIn !== undefined) {
@@ -610,13 +644,13 @@ async function buildBridge(options: {
     );
   }
   const bridge = new mod.RunnerIpcBridge({
-    host: new FakeHost(),
+    host: options.host ?? new FakeHost(),
     hostController: new FakeHostController(),
     authnBaseUrl: "http://localhost:5005",
     authRedirectUri: null,
     tray: null,
     zoomController: undefined,
-    authTokenStore: undefined,
+    authTokenStore: options.authTokenStore,
     windowRegistry: registry,
     ownership: new EpicWindowOwnership(null),
     perWindowState: new PerWindowState(null),
@@ -624,6 +658,84 @@ async function buildBridge(options: {
     quitState: undefined,
   });
   return { bridge, registry, authSession };
+}
+
+class FakeAuthTokenStore implements IpcAuthTokenStore {
+  private readonly listeners = new Set<(change: TokenStoreChange) => void>();
+  readCount = 0;
+
+  constructor(private readonly read: () => Promise<StoredCredentials | null>) {}
+
+  get(): Promise<StoredCredentials | null> {
+    this.readCount += 1;
+    return this.read();
+  }
+
+  async signIn(
+    _tokens: StoredAuthTokens,
+    _identity: StoredCredentialsIdentity,
+  ): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async rotate(_expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult> {
+    return { outcome: "deleted", pair: null, rejection: null };
+  }
+
+  delete(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async deleteIfToken(_expectedToken: string): Promise<"deleted" | "kept"> {
+    return "kept";
+  }
+
+  subscribe(listener: (change: TokenStoreChange) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  async migrateLegacyCredentials(
+    _legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome> {
+    return "retryable";
+  }
+
+  dispose(): void {
+    this.listeners.clear();
+  }
+
+  emit(change: TokenStoreChange): void {
+    for (const listener of Array.from(this.listeners)) listener(change);
+  }
+}
+
+function restoreLocalHandler(): InvokeHandler {
+  const handler = ipcMainState.handlers.get(
+    RunnerHostInvoke.authSessionRestoreLocal,
+  );
+  if (handler === undefined)
+    throw new Error("local auth restore handler missing");
+  return handler;
+}
+
+function buildStoredCredentials(
+  userId: string,
+  token: string,
+): StoredCredentials {
+  return {
+    token,
+    refreshToken: "refresh-token",
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: {
+      id: userId,
+      email: `${userId}@example.com`,
+      name: "Local User",
+    },
+  };
 }
 
 /**
@@ -695,6 +807,27 @@ async function awaitFleetMembership(
   });
 }
 
+/** Waits for the engine to derive this host as the current selection target. */
+async function awaitSelectionTarget(
+  window: CapturingWindow,
+  hostId: string,
+): Promise<void> {
+  await vi.waitFor(() => {
+    const arrived = window.sentMessages.some((message) => {
+      if (message.channel !== RunnerHostEvent.selectionChanged) return false;
+      const payload = message.payload;
+      if (typeof payload !== "object" || payload === null) return false;
+      const change = (payload as { change: unknown }).change;
+      return (
+        typeof change === "object" &&
+        change !== null &&
+        (change as { targetHostId: unknown }).targetHostId === hostId
+      );
+    });
+    expect(arrived).toBe(true);
+  });
+}
+
 function attachHandler(): InvokeHandler {
   const handler = ipcMainState.handlers.get(
     SelectionAuthorityChannels.invoke.attach,
@@ -723,6 +856,277 @@ function refreshFleetHandler(): InvokeHandler {
   if (handler === undefined) throw new Error("refreshFleet handler missing");
   return handler;
 }
+
+describe("local auth-session restore", () => {
+  it("restores a matching file identity into an empty main and selects its available local host without cloud access", async () => {
+    const webSocketConstructor = vi.fn(function WebSocketConstructor() {
+      throw new Error("unexpected local inventory connection");
+    });
+    vi.stubGlobal("WebSocket", webSocketConstructor);
+    const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
+    const enrollmentFile = join(directory, "identity", "enrollment.json");
+    await mkdir(dirname(enrollmentFile), { recursive: true });
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host" }),
+      "utf8",
+    );
+    const host = new FakeHost();
+    host.identityEnrollmentFile = enrollmentFile;
+    host.setSnapshot({
+      hostId: "local-host",
+      websocketUrl: "ws://127.0.0.1:1",
+      version: "1.0.0",
+      pid: 123,
+      systemHostName: "test-host",
+      displayName: "Test Host",
+      availability: "available",
+    });
+    const stored = buildStoredCredentials("user-a", "stored-token");
+    const tokenStore = new FakeAuthTokenStore(async () => stored);
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+      host,
+    });
+    const window = buildWindow();
+    registry.add("window-a", 101, window);
+    bridge.install();
+
+    try {
+      expect(authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+
+      await expect(
+        restoreLocalHandler()(sender(101), {
+          userId: "user-a",
+          token: "stored-token",
+        }),
+      ).resolves.toBe("restored");
+
+      expect(authSession.get()).toEqual({
+        status: "unverified",
+        token: "stored-token",
+        profile: {
+          userId: "user-a",
+          userName: "Local User",
+          email: "user-a@example.com",
+        },
+        verified: false,
+      });
+      await awaitSelectionTarget(window, "local-host");
+      expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
+
+      const attachSeq = invokeSyncWithSender(
+        RunnerHostSync.selectionAttachSeq,
+        101,
+      );
+      const attached = await attachOk(attachHandler(), 101, attachSeq, [
+        {
+          hostId: "local-host",
+          sessionId: "already-running-local-host",
+          transportKind: "local-ws",
+        },
+      ]);
+      expect(attached.snapshot.effectiveHostId).toBe("local-host");
+      expect(authSession.get().verified).toBe(false);
+      expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
+      expect(webSocketConstructor).not.toHaveBeenCalled();
+    } finally {
+      bridge.dispose();
+      await rm(directory, { recursive: true, force: true });
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses a renderer's expected user or token when it does not match the credentials file", async () => {
+    const stored = buildStoredCredentials("user-a", "stored-token");
+    const tokenStore = new FakeAuthTokenStore(async () => stored);
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+    });
+    registry.add("window-a", 101, buildWindow());
+    bridge.install();
+
+    try {
+      const restore = restoreLocalHandler();
+      await expect(
+        restore(sender(101), { userId: "user-b", token: "stored-token" }),
+      ).resolves.toBe("superseded");
+      await expect(
+        restore(sender(101), { userId: "user-a", token: "different-token" }),
+      ).resolves.toBe("superseded");
+      expect(authSession.get().status).toBe("signed-out");
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it("does not accept a renderer-supplied unverified identity through authSessionSet", async () => {
+    const stored = buildStoredCredentials("user-a", "stored-token");
+    const tokenStore = new FakeAuthTokenStore(async () => stored);
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+    });
+    registry.add("window-a", 101, buildWindow());
+    bridge.install();
+
+    try {
+      const setHandler = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionSet,
+      );
+      if (setHandler === undefined) {
+        throw new Error("auth session set handler missing");
+      }
+      await expect(
+        setHandler(sender(101), {
+          status: "unverified",
+          token: "stored-token",
+          profile: {
+            userId: "user-a",
+            userName: "Renderer Claim",
+            email: "renderer@example.com",
+          },
+        }),
+      ).resolves.toEqual({ outcome: "accepted" });
+      expect(authSession.get()).toEqual({
+        status: "signed-out",
+        token: null,
+        profile: null,
+        verified: false,
+      });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it("does not let a pending file read restore over a newer sign-out", async () => {
+    const { promise: pendingRead, resolve: resolveRead } =
+      Promise.withResolvers<StoredCredentials | null>();
+    const tokenStore = new FakeAuthTokenStore(() => pendingRead);
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+    });
+    registry.add("window-a", 101, buildWindow());
+    bridge.install();
+
+    try {
+      const restorePending = restoreLocalHandler()(sender(101), {
+        userId: "user-a",
+        token: "stored-token",
+      });
+      const setHandler = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionSet,
+      );
+      if (setHandler === undefined)
+        throw new Error("auth session set handler missing");
+      await expect(
+        setHandler(sender(101), {
+          status: "signed-out",
+          token: null,
+          profile: null,
+        }),
+      ).resolves.toEqual({ outcome: "accepted" });
+
+      resolveRead(buildStoredCredentials("user-a", "stored-token"));
+      await expect(restorePending).resolves.toBe("superseded");
+      expect(authSession.get().status).toBe("signed-out");
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it("keeps a same-user verified session when local restoration is requested", async () => {
+    const stored = buildStoredCredentials("user-a", "stored-token");
+    const tokenStore = new FakeAuthTokenStore(async () => stored);
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+      signedIn: { userId: "user-a", token: "verified-token" },
+    });
+    registry.add("window-a", 101, buildWindow());
+    bridge.install();
+
+    try {
+      const verifiedSnapshot = authSession.get();
+      await expect(
+        restoreLocalHandler()(sender(101), {
+          userId: "user-a",
+          token: "stored-token",
+        }),
+      ).resolves.toBe("superseded");
+      expect(authSession.get()).toEqual(verifiedSnapshot);
+      expect(authSession.get().verified).toBe(true);
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it("re-reads the same pair after a duplicate credentials watcher hint", async () => {
+    const { promise: pendingFirstRead, resolve: resolveRead } =
+      Promise.withResolvers<StoredCredentials | null>();
+    const stored = buildStoredCredentials("user-a", "stored-token");
+    const readResults = [pendingFirstRead, Promise.resolve(stored)];
+    const tokenStore = new FakeAuthTokenStore(
+      () => readResults.shift() ?? Promise.resolve(null),
+    );
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+    });
+    registry.add("window-a", 101, buildWindow());
+    bridge.install();
+
+    try {
+      const restorePending = restoreLocalHandler()(sender(101), {
+        userId: "user-a",
+        token: "stored-token",
+      });
+      tokenStore.emit({ present: false, userId: null, revision: 1 });
+      resolveRead(stored);
+      await expect(restorePending).resolves.toBe("restored");
+      expect(tokenStore.readCount).toBe(2);
+      expect(authSession.get()).toMatchObject({
+        status: "unverified",
+        token: "stored-token",
+        verified: false,
+      });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it("discards a stale first read when a credentials watcher hint reveals deletion", async () => {
+    const { promise: pendingFirstRead, resolve: resolveRead } =
+      Promise.withResolvers<StoredCredentials | null>();
+    const readResults = [
+      pendingFirstRead,
+      Promise.resolve<StoredCredentials | null>(null),
+    ];
+    const tokenStore = new FakeAuthTokenStore(
+      () => readResults.shift() ?? Promise.resolve(null),
+    );
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+    });
+    registry.add("window-a", 101, buildWindow());
+    bridge.install();
+
+    try {
+      const restorePending = restoreLocalHandler()(sender(101), {
+        userId: "user-a",
+        token: "stored-token",
+      });
+      tokenStore.emit({ present: false, userId: null, revision: 1 });
+      resolveRead(buildStoredCredentials("user-a", "stored-token"));
+      await expect(restorePending).resolves.toBe("superseded");
+      expect(tokenStore.readCount).toBe(2);
+      expect(authSession.get().status).toBe("signed-out");
+    } finally {
+      bridge.dispose();
+    }
+  });
+});
 
 describe("selection authority IPC binding", () => {
   it("serves the attach-seq sync channel: known sender gets a number, unknown gets null, repeats increase", async () => {
