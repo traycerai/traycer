@@ -14,6 +14,7 @@ export {
   chatFindActivityGroupChildHeaderUnitId,
   chatFindSubagentHeaderUnitId,
   chatFindSubagentBodyUnitId,
+  chatFindSubagentResultUnitId,
   chatFindA2ASendBodyUnitId,
   chatFindA2AReceivedBodyUnitId,
   type ChatFindRow,

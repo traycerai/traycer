@@ -338,3 +338,81 @@ describe("Codex retry presentation", () => {
     );
   });
 });
+
+describe("a subagent's parented rows", () => {
+  function proseBlock(
+    template: PresentedContentBlock,
+    input: {
+      readonly blockId: string;
+      readonly variant: "text" | "reasoning";
+      readonly parentBlockId: string | null;
+    },
+  ): PresentedContentBlock {
+    const body =
+      input.variant === "text"
+        ? { text: "some words", providerNotice: null }
+        : { content: "some thoughts", startedAt: null };
+    const raw = {
+      blockId: input.blockId,
+      status: "completed",
+      timestamp: 21,
+      type: input.variant,
+      ...body,
+      ...(input.parentBlockId === null
+        ? {}
+        : { parentBlockId: input.parentBlockId }),
+    };
+    return {
+      ...template,
+      blockId: input.blockId,
+      variant: input.variant,
+      known: snapshotContentBlockSchema.parse(raw),
+      raw,
+      payloadRefs: [],
+    };
+  }
+
+  it("labels parented text and reasoning as the subagent's, and unparented ones as before", async () => {
+    const presented = await present({ resolvable: null });
+    const template = presented.messages
+      .flatMap((message) => message.blocks)
+      .at(0);
+    if (template === undefined) throw new Error("Fixture chat has no block");
+    const chat = codexRetryChat(presented, {
+      turnId: "turn-subagent-labels",
+      blocks: [
+        proseBlock(template, {
+          blockId: "t-parented",
+          variant: "text",
+          parentBlockId: "task-1",
+        }),
+        proseBlock(template, {
+          blockId: "r-parented",
+          variant: "reasoning",
+          parentBlockId: "task-1",
+        }),
+        proseBlock(template, {
+          blockId: "t-plain",
+          variant: "text",
+          parentBlockId: null,
+        }),
+        proseBlock(template, {
+          blockId: "r-plain",
+          variant: "reasoning",
+          parentBlockId: null,
+        }),
+      ],
+      events: [],
+    });
+
+    const transcript = buildCloudChatTranscript(chat);
+    const labels = transcript.messages[1].blocks.map((block) => block.label);
+
+    expect(labels).toEqual([
+      "Subagent · Response",
+      "Subagent · Thinking",
+      "Response",
+      "Thinking",
+    ]);
+  });
+});

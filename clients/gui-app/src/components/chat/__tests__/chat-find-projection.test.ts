@@ -7,6 +7,7 @@ import {
   chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
+  chatFindSubagentResultUnitId,
   markdownToChatSearchText,
   type ChatFindRow,
 } from "@/components/chat/chat-find";
@@ -14,6 +15,7 @@ import {
   deriveActivityGroupRenderId,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
+  deriveSubagentCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
@@ -23,6 +25,7 @@ import type {
   ChatMessage as ChatMessageModel,
   InterviewSegment,
   MessageSegment,
+  SubagentSegment,
 } from "@/stores/composer/chat-store";
 import { makeMessage } from "./chat-message-fixtures";
 
@@ -810,10 +813,15 @@ describe("chat find projection", () => {
     expect(bodyUnit?.text.match(/Scanning/g)).toHaveLength(2);
     expect(bodyUnit?.text).toContain("Reading");
     expect(bodyUnit?.text).toContain("Investigate the flake");
-    expect(bodyUnit?.text).toContain("All clear.");
+    // The result is its own unit now: the body unit no longer holds it.
+    expect(bodyUnit?.text).not.toContain("All clear.");
+    const resultUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+    );
+    expect(resultUnit?.text).toBe("All clear.");
   });
 
-  it("indexes a workflow card's Intent/Activity/Result in the same order the card renders them", () => {
+  it("indexes a workflow card's Intent/Activity in card order and its Result as its own unit", () => {
     const subagentId = "workflow-projection";
     const assistant: ChatMessageModel = {
       ...makeMessage(6, "assistant"),
@@ -858,10 +866,14 @@ describe("chat find projection", () => {
     const text = bodyUnit?.text ?? "";
     const intentIndex = text.indexOf("Review the diff");
     const activityIndex = text.indexOf("Find");
-    const resultIndex = text.indexOf("3 findings");
     expect(intentIndex).toBeGreaterThanOrEqual(0);
     expect(activityIndex).toBeGreaterThan(intentIndex);
-    expect(resultIndex).toBeGreaterThan(activityIndex);
+    expect(text).not.toContain("3 findings");
+    expect(
+      row.units.find(
+        (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+      )?.text,
+    ).toBe("3 findings");
   });
 
   it("falls back to the rendered Subagent placeholder when the name is null", () => {
@@ -1169,6 +1181,123 @@ describe("chat find projection", () => {
     // body - expanding the card reveals the notice alongside it.
     expect(noticeUnit?.owningChain).toEqual(bodyUnit?.owningChain);
     expect(noticeUnit?.owningChain).toHaveLength(1);
+  });
+
+  describe("a promoted card's conversation", () => {
+    const CARD_ID = "card-conversation";
+    const renderId = derivePromotedSubagentRenderId(CARD_ID);
+
+    function card(patch: Partial<SubagentSegment>): SubagentSegment {
+      return {
+        id: CARD_ID,
+        kind: "subagent",
+        name: "Researcher",
+        agentType: null,
+        task: "Investigate",
+        progressUpdates: [],
+        result: null,
+        isStreaming: false,
+        endState: null,
+        stopped: false,
+        startedAt: 1,
+        durationMs: 10,
+        spawnToolCallId: null,
+        parentId: null,
+        workflowMeta: null,
+        children: [],
+        ...patch,
+      };
+    }
+
+    function rowFor(segment: SubagentSegment): ChatFindRow {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(40, "assistant"),
+        segments: [segment],
+      };
+      return buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    }
+
+    function childText(id: string, markdown: string): MessageSegment {
+      return {
+        id,
+        kind: "text",
+        markdown,
+        isStreaming: false,
+        parentId: CARD_ID,
+      };
+    }
+
+    it("indexes a child text as its own segment unit chained through the card's collapsible key", () => {
+      const row = rowFor(
+        card({ children: [childText("child-text", "The parser is fine.")] }),
+      );
+      const unit = row.units.find(
+        (candidate) => candidate.unitId === chatFindSegmentUnitId("child-text"),
+      );
+      expect(unit?.text).toContain("The parser is fine.");
+      expect(unit?.owningChain).toEqual([
+        deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, renderId),
+      ]);
+    });
+
+    it("emits the result unit only when the card has no child text", () => {
+      const withText = rowFor(
+        card({
+          result: "Final answer",
+          children: [childText("child-text", "The parser is fine.")],
+        }),
+      );
+      expect(
+        withText.units.some(
+          (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+        ),
+      ).toBe(false);
+      expect(rowSearchText(withText)).not.toContain("Final answer");
+
+      const noProse = rowFor(
+        card({
+          result: "Final answer",
+          children: [
+            {
+              id: "notice-only",
+              kind: "provider_notice",
+              status: "completed",
+              noticeKind: "model_rerouted",
+              tone: "info",
+              title: "Model changed",
+              message: "Switched models.",
+              details: [],
+              parentId: CARD_ID,
+            },
+          ],
+        }),
+      );
+      const resultUnit = noProse.units.find(
+        (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+      );
+      expect(resultUnit?.text).toBe("Final answer");
+      expect(resultUnit?.owningChain).toEqual([
+        deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, renderId),
+      ]);
+    });
+
+    it("drops a progress line equal to a child text and keeps a line matching none", () => {
+      const row = rowFor(
+        card({
+          progressUpdates: ["The parser is fine.", "Summary: nothing found"],
+          children: [childText("child-text", "The parser is fine.")],
+        }),
+      );
+      const body = row.units.find(
+        (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
+      );
+      expect(body?.text).toContain("Summary: nothing found");
+      expect(body?.text).not.toContain("The parser is fine.");
+      // The prose is indexed once, in its own unit.
+      expect(countOccurrences(rowSearchText(row), "The parser is fine.")).toBe(
+        1,
+      );
+    });
   });
 
   // A regular user message renders its whole body as ONE anchor

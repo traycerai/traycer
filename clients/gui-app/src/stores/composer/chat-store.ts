@@ -183,17 +183,21 @@ export interface ToolSegment {
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
-// cards (any spawn depth), not just their tool/file_change/command activity.
-// Unlike tool/file_change/command (which only ride along for spawn-tool-call
-// suppression bookkeeping), a nested `ProviderNoticeSegment` DOES render as a
-// visible row inside the owning card - see `SubagentChildProviderNotices` in
-// `subagent-segment.tsx`.
+// cards (any spawn depth). Every entry renders, in order, inside the owning
+// card through the ordinary segment renderers (`SubagentConversation` in
+// `subagent-conversation.tsx`): the subagent's prose and reasoning, its tool /
+// command / file-change activity, notices, errors and nested agents. The same
+// list also feeds spawn-row suppression, the turn-level "Changes" group and
+// jump-to-block.
 export type SubagentChildSegment =
   | ToolSegment
   | FileChangeSegment
   | CommandSegment
   | SubagentSegment
-  | ProviderNoticeSegment;
+  | ProviderNoticeSegment
+  | TextSegment
+  | ReasoningSegment
+  | ErrorSegment;
 
 // A durable provider-generated notice (Codex model reroute / safety
 // verification / buffering, and future harness equivalents), projected from a
@@ -229,7 +233,18 @@ export interface ReasoningSegment {
   // Thinking duration once completed (`null` while streaming or for blocks
   // persisted before `startedAt` existed). Drives the "Thought for Xs" label.
   durationMs: number | null;
+  // Owning block id when a subagent did the thinking (nests under that card).
+  // Present only on a parented block, like `browserSession` on text.
+  parentId?: string;
 }
+
+// A subagent's prose nests under its card through `parentId`, exactly like its
+// reasoning; a top-level (main-agent) text segment carries none.
+export type TextSegment = Extract<MessageSegment, { kind: "text" }>;
+
+// An error on a subagent's own thread (an OpenCode import parents the child's
+// abort) nests under that card through `parentId`.
+export type ErrorSegment = Extract<MessageSegment, { kind: "error" }>;
 
 export interface CommandSegment {
   id: string;
@@ -297,11 +312,10 @@ export interface SubagentSegment {
   // fleet data (intent, activity timeline, fleet counts, tokens) an old reader
   // can't render. Null for an ordinary agent card.
   workflowMeta: WorkflowMeta | null;
-  // The subagent's own activity nested under this block, keyed off each child
-  // segment's `parentId === this.id` - tool calls, file changes, commands, AND
-  // nested agent cards (any depth). Only the `subagent`-kind entries render
-  // (the "Sub-agents" section); the rest ride along for spawn-tool-call
-  // suppression.
+  // The subagent's own conversation nested under this block, keyed off each
+  // child segment's `parentId === this.id` - prose, reasoning, tool calls,
+  // file changes, commands, notices, errors AND nested agent cards (any
+  // depth), in block order. All of it renders inside the card.
   children: ReadonlyArray<SubagentChildSegment>;
 }
 
@@ -388,6 +402,9 @@ export type MessageSegment =
       browserSession?: BrowserSessionReference;
       isStreaming: boolean;
       assistantImageContext?: AssistantMarkdownImageContext;
+      // Owning subagent block id when this is a subagent's prose; absent for
+      // the main agent's own text. See `ReasoningSegment.parentId`.
+      parentId?: string;
     }
   | ReasoningSegment
   | ToolSegment
@@ -431,6 +448,9 @@ export type MessageSegment =
        * one the engine acted on.
        */
       failure: AgentFailure | null;
+      // Owning subagent block id when the error ended a subagent's own thread;
+      // absent for a turn-level error. See `ReasoningSegment.parentId`.
+      parentId?: string;
     }
   | {
       id: string;

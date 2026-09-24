@@ -1,5 +1,9 @@
-import { ChevronDown, Workflow as WorkflowIcon } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import {
+  ChevronDown,
+  MessagesSquare,
+  Workflow as WorkflowIcon,
+} from "lucide-react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -7,7 +11,9 @@ import {
 } from "@/components/ui/collapsible";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import {
@@ -20,9 +26,9 @@ import {
   type ChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import {
-  chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
+  chatFindSubagentResultUnitId,
 } from "@/components/chat/chat-find";
 import {
   useChatCollapsibleTileInstanceId,
@@ -34,15 +40,17 @@ import type {
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
-  adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
+  subagentHasChildText,
+  subagentProgressItems,
   type ProgressUpdateItem,
 } from "./subagent-display";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
-import { ProviderNoticeSegment } from "./provider-notice-segment";
 import { SubagentAvatar } from "./subagent-avatar";
+import { SubagentConversation } from "./subagent-conversation";
+import { useOpenSubagentAsChat } from "./subagent-open-as-chat";
 import { ElapsedTime } from "./segment-elapsed";
-import { SegmentCard } from "./segment-card";
+import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
@@ -75,10 +83,10 @@ interface SubagentSegmentProps {
   // rendering (header live line, Intent, Activity timeline, Result totals)
   // instead of the plain agent layout.
   workflowMeta: WorkflowMeta | null;
-  // This agent's own nested children (tool calls, file changes, commands, AND
-  // further nested agents), keyed by `parentId`. Only the `subagent`-kind
-  // entries render, as the "Sub-agents" section - recursion is bounded only
-  // by actual spawn depth.
+  // This agent's own conversation (prose, reasoning, tool calls, file changes,
+  // commands, notices, errors AND further nested agents), keyed by
+  // `parentId`, in block order. All of it renders as one ordered list through
+  // `SubagentConversation` - recursion is bounded only by actual spawn depth.
   nested: ReadonlyArray<SubagentChildSegment>;
   variant: "card" | "row" | "promoted";
 }
@@ -144,16 +152,28 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     },
     [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
-  const displayProgressUpdates =
-    useAdjacentDedupedProgressItems(progressUpdates);
+  const displayProgressUpdates = useSubagentProgressItems(
+    progressUpdates,
+    nested,
+  );
+  const headerAction = useOpenAsChatHeaderAction(
+    id,
+    nested,
+    variant === "row" ? "bare" : "cell",
+  );
 
   const displayTask = cleanSubagentNotificationText(task);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
   const displayAgentType = cleanSubagentNotificationText(agentType);
   const lastProgress = displayProgressUpdates.at(-1)?.text ?? null;
   // Collapsed line shows what's happening now (live progress) or the result -
-  // never the task. Task + full progress live in the expanded body.
-  const summary = result ?? lastProgress ?? (isStreaming ? "Starting…" : null);
+  // never the task. Task + full progress live in the expanded body. The
+  // Result's presence rule holds here too: once the conversation has text,
+  // the result (an import's is the spawn tool's output, under the CLI's
+  // hand-back header) is not drawn as this card's answer.
+  const shownResult = subagentHasChildText(nested) ? null : result;
+  const summary =
+    shownResult ?? lastProgress ?? (isStreaming ? "Starting…" : null);
 
   const header = (
     <>
@@ -197,53 +217,64 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     </>
   );
 
+  // The body's own find unit covers only Task + Progress. The conversation's
+  // entries carry their own units and the Result its own, so no unit's root
+  // holds another unit's text - a unit is painted by walking its root, and a
+  // nested unit would shift every occurrence after it.
   const body = (
     <div className="flex flex-col gap-2 text-ui-sm">
-      {displayTask !== null ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Task
-          </span>
-          <p className="m-0 whitespace-pre-wrap text-foreground/85">
-            {displayTask}
-          </p>
-        </div>
-      ) : null}
-      {displayProgressUpdates.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Progress
-          </span>
-          <ul className="m-0 flex list-none flex-col gap-1 pl-0">
-            {displayProgressUpdates.map((update) => (
-              <li
-                key={update.key}
-                className="relative pl-4 text-foreground/80 before:absolute before:left-1 before:top-[0.55em] before:size-1 before:rounded-full before:bg-muted-foreground/60"
-              >
-                {update.text}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <SubagentChildProviderNotices nested={nested} />
-      <SubagentChildrenSection nested={nested} />
-      {result !== null ? (
-        <SubagentResultPanel result={result} isStreaming={isStreaming} />
-      ) : null}
+      <div
+        data-chat-find-unit={bodyFindUnitId}
+        className="flex flex-col gap-2 empty:hidden"
+      >
+        {displayTask !== null ? (
+          <div className="flex flex-col gap-1">
+            <span
+              data-find-skip
+              className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+            >
+              Task
+            </span>
+            <p className="m-0 whitespace-pre-wrap text-foreground/85">
+              {displayTask}
+            </p>
+          </div>
+        ) : null}
+        {displayProgressUpdates.length > 0 ? (
+          <div className="flex flex-col gap-1">
+            <span
+              data-find-skip
+              className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+            >
+              Progress
+            </span>
+            <ul className="m-0 flex list-none flex-col gap-1 pl-0">
+              {displayProgressUpdates.map((update) => (
+                <li
+                  key={update.key}
+                  className="relative pl-4 text-foreground/80 before:absolute before:left-1 before:top-[0.55em] before:size-1 before:rounded-full before:bg-muted-foreground/60"
+                >
+                  {update.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+      <SubagentConversation entries={nested} isStreaming={isStreaming} />
+      <SubagentResultSection
+        renderId={id}
+        result={result}
+        isStreaming={isStreaming}
+        nested={nested}
+      />
     </div>
   );
 
   if (variant === "row") {
     return (
       <SegmentRow
-        headerAction={null}
+        headerAction={headerAction}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}
@@ -252,7 +283,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         stickyHeader
         expandable
         headerFindUnitId={headerFindUnitId}
-        bodyFindUnitId={bodyFindUnitId}
+        bodyFindUnitId={null}
         className={undefined}
         footer={null}
       />
@@ -263,7 +294,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
       open={open}
       onOpenChange={handleOpenChange}
       header={header}
-      headerAction={null}
+      headerAction={headerAction}
       collapsedPreview={null}
       body={body}
       tone="default"
@@ -271,7 +302,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
       bodyOverflow="hidden"
       expandable
       headerFindUnitId={headerFindUnitId}
-      bodyFindUnitId={bodyFindUnitId}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );
@@ -315,7 +346,8 @@ function PromotedSubagentSegment(
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
   const displayAgentType = cleanSubagentNotificationText(agentType);
   const displayTask = cleanSubagentNotificationText(task);
-  const dedupedProgress = useAdjacentDedupedProgressItems(progressUpdates);
+  const dedupedProgress = useSubagentProgressItems(progressUpdates, nested);
+  const headerAction = useOpenAsChatHeaderAction(id, nested, "cell");
   const lastProgress = dedupedProgress.at(-1)?.text ?? null;
   // Collapsed line shows live progress only. Finished cards omit it because
   // the final result is visible in the expanded body and duplicates the title.
@@ -332,29 +364,44 @@ function PromotedSubagentSegment(
       )}
       variant="card"
     >
-      <PromotedSubagentTrigger
-        id={id}
-        headerFindUnitId={headerFindUnitId}
-        displayName={displayName}
-        displayAgentType={displayAgentType}
-        headerSummary={headerSummary}
-        showHeaderSummary={showHeaderSummary}
-        isStreaming={isStreaming}
-        endState={endState}
-        stopped={stopped}
-        startedAt={startedAt}
-        durationMs={durationMs}
-        open={open}
-      />
+      {/* The sticky treatment lives on this row, not the trigger: the action
+          beside the trigger has to pin with it, and a sticky element travels
+          only within its containing block - which is this row for the
+          trigger, and the card for the row. */}
+      <div
+        className={cn(
+          "flex w-full items-stretch",
+          open
+            ? "sticky top-0 z-20 rounded-t-md border-b border-border/35 bg-background shadow-sm"
+            : null,
+        )}
+      >
+        <PromotedSubagentTrigger
+          id={id}
+          headerFindUnitId={headerFindUnitId}
+          displayName={displayName}
+          displayAgentType={displayAgentType}
+          headerSummary={headerSummary}
+          showHeaderSummary={showHeaderSummary}
+          isStreaming={isStreaming}
+          endState={endState}
+          stopped={stopped}
+          startedAt={startedAt}
+          durationMs={durationMs}
+          open={open}
+        />
+        {headerAction}
+      </div>
       <CollapsibleContent className="overflow-hidden">
         <div
-          data-chat-find-unit={bodyFindUnitId}
           className={cn(
             "px-3 py-2.5",
             open ? null : "border-t border-border/35",
           )}
         >
           <SubagentDetails
+            renderId={id}
+            bodyFindUnitId={bodyFindUnitId}
             displayTask={displayTask}
             progressUpdates={dedupedProgress}
             result={result}
@@ -411,12 +458,12 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
       data-find-include="true"
       data-chat-find-unit={headerFindUnitId}
       className={cn(
-        "group/subagent flex w-full text-left",
+        "group/subagent flex min-w-0 flex-1 text-left",
         showHeaderSummary ? "items-start" : "items-center",
         // The sticky header floats over scrolled content, so its hover tint
         // must stay opaque - a translucent bg lets the content bleed through.
         open
-          ? "sticky top-0 z-20 rounded-t-md border-b border-border/35 bg-background shadow-sm hover:bg-[color-mix(in_oklch,var(--muted)_35%,var(--background))]"
+          ? "rounded-t-md hover:bg-[color-mix(in_oklch,var(--muted)_35%,var(--background))]"
           : null,
       )}
       variant="panel"
@@ -481,6 +528,8 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
 }
 
 interface SubagentDetailsProps {
+  readonly renderId: string;
+  readonly bodyFindUnitId: string;
   readonly displayTask: string | null;
   readonly progressUpdates: ReadonlyArray<ProgressUpdateItem>;
   readonly result: string | null;
@@ -489,132 +538,123 @@ interface SubagentDetailsProps {
 }
 
 function SubagentDetails(props: SubagentDetailsProps) {
-  const { displayTask, isStreaming, nested, progressUpdates, result } = props;
+  const { displayTask, isStreaming, nested, progressUpdates } = props;
+  // A running card with a conversation already shows its liveness there; the
+  // "Starting..." placeholder is for a card that has nothing else to show.
+  const showProgress =
+    progressUpdates.length > 0 || (isStreaming && nested.length === 0);
   return (
     <div className="flex flex-col gap-2 text-ui-sm">
-      {displayTask !== null ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Task
-          </span>
-          <p className="m-0 whitespace-pre-wrap text-foreground/85">
-            {displayTask}
-          </p>
-        </div>
-      ) : null}
-      {progressUpdates.length > 0 || isStreaming ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Progress
-          </span>
-          <ProgressTimeline
-            updates={progressUpdates}
-            isStreaming={isStreaming}
-            emptyLabel="Starting..."
-          />
-        </div>
-      ) : null}
-      <SubagentChildProviderNotices nested={nested} />
-      <SubagentChildrenSection nested={nested} />
-      {result !== null ? (
-        <SubagentResultPanel result={result} isStreaming={isStreaming} />
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * The "Sub-agents" section (Flow 1): nested agent CHILDREN only - the rest of
- * `nested` (tool/file_change/command) exists purely for spawn-tool-call
- * suppression and isn't separately rendered here, matching how a top-level
- * agent's own tool activity was never itemized either. Each nested agent
- * renders as a `row`-variant card and recurses through the SAME component, so
- * depth beyond one level falls out of this section rendering for free - the
- * indentation (`border-l` + `pl-3`) accumulates once per level.
- */
-function SubagentChildrenSection(props: {
-  readonly nested: ReadonlyArray<SubagentChildSegment>;
-}) {
-  const nestedAgents = props.nested.filter(
-    (child): child is Extract<SubagentChildSegment, { kind: "subagent" }> =>
-      child.kind === "subagent",
-  );
-  if (nestedAgents.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      <span
-        data-find-skip
-        className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+      {/* Task + Progress only: see the compact card's body for why the
+          conversation and the Result carry units of their own. */}
+      <div
+        data-chat-find-unit={props.bodyFindUnitId}
+        className="flex flex-col gap-2 empty:hidden"
       >
-        Sub-agents
-      </span>
-      <div className="flex flex-col gap-1.5 border-l border-border/40 pl-3">
-        {nestedAgents.map((agent) => (
-          <SubagentSegment
-            key={agent.id}
-            id={agent.id}
-            name={agent.name}
-            agentType={agent.agentType}
-            task={agent.task}
-            progressUpdates={agent.progressUpdates}
-            result={agent.result}
-            isStreaming={agent.isStreaming}
-            endState={agent.endState}
-            stopped={agent.stopped}
-            startedAt={agent.startedAt}
-            durationMs={agent.durationMs}
-            workflowMeta={agent.workflowMeta}
-            nested={agent.children}
-            variant="row"
-          />
-        ))}
+        {displayTask !== null ? (
+          <div className="flex flex-col gap-1">
+            <span
+              data-find-skip
+              className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+            >
+              Task
+            </span>
+            <p className="m-0 whitespace-pre-wrap text-foreground/85">
+              {displayTask}
+            </p>
+          </div>
+        ) : null}
+        {showProgress ? (
+          <div className="flex flex-col gap-1">
+            <span
+              data-find-skip
+              className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+            >
+              Progress
+            </span>
+            <ProgressTimeline
+              updates={progressUpdates}
+              isStreaming={isStreaming}
+              emptyLabel="Starting..."
+            />
+          </div>
+        ) : null}
       </div>
+      <SubagentConversation entries={nested} isStreaming={isStreaming} />
+      <SubagentResultSection
+        renderId={props.renderId}
+        result={props.result}
+        isStreaming={isStreaming}
+        nested={nested}
+      />
     </div>
   );
 }
 
 /**
- * Provider notices (Codex model reroute / safety verification / buffering,
- * etc.) that arrived on THIS subagent's thread - unlike the tool/file_change/
- * command entries in `nested`, these DO render as visible rows, right where
- * the notice actually happened for this sub-agent.
+ * The Result panel under its own find unit, drawn only when the card has no
+ * child text (`subagentHasChildText`): once the subagent's prose renders in the
+ * conversation, its final message is already there, and a second copy would
+ * read as the answer twice. The result is shown as-is, never stripped.
  */
-function SubagentChildProviderNotices(props: {
+function SubagentResultSection(props: {
+  readonly renderId: string;
+  readonly result: string | null;
+  readonly isStreaming: boolean;
   readonly nested: ReadonlyArray<SubagentChildSegment>;
 }) {
-  const notices = props.nested.filter(
-    (
-      child,
-    ): child is Extract<SubagentChildSegment, { kind: "provider_notice" }> =>
-      child.kind === "provider_notice",
-  );
-  if (notices.length === 0) return null;
+  const { isStreaming, nested, renderId, result } = props;
+  if (result === null || subagentHasChildText(nested)) return null;
   return (
-    <div className="flex flex-col gap-1">
-      {notices.map((notice) => (
-        <ProviderNoticeSegment
-          key={notice.id}
-          status={notice.status}
-          noticeKind={notice.noticeKind}
-          presentation={notice.presentation}
-          tone={notice.tone}
-          title={notice.title}
-          message={notice.message}
-          details={notice.details}
-          findUnitId={chatFindSegmentUnitId(notice.id)}
-        />
-      ))}
+    <div data-chat-find-unit={chatFindSubagentResultUnitId(renderId)}>
+      <SubagentResultPanel result={result} isStreaming={isStreaming} />
     </div>
   );
 }
 
-function SubagentResultPanel(props: {
+const OPEN_AS_CHAT_LABEL = "Open as chat";
+
+/**
+ * The card header's open-as-chat control, or `null` when there is nothing to
+ * open (no conversation yet) or nowhere to open it (no transcript in context).
+ * Returned as a node rather than rendered as a component so the card shells
+ * can tell a real action from an empty one - they round the header's corner
+ * on `headerAction === null`.
+ */
+function useOpenAsChatHeaderAction(
+  id: string,
+  nested: ReadonlyArray<SubagentChildSegment>,
+  placement: "cell" | "bare",
+): ReactNode | null {
+  const openAsChat = useOpenSubagentAsChat();
+  if (openAsChat === null || nested.length === 0) return null;
+  const button = (
+    <TooltipWrapper
+      label={OPEN_AS_CHAT_LABEL}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="muted"
+        size="icon-xs"
+        aria-label={OPEN_AS_CHAT_LABEL}
+        data-testid={`subagent-open-as-chat-${id}`}
+        onClick={() => openAsChat(id)}
+      >
+        <MessagesSquare aria-hidden />
+      </Button>
+    </TooltipWrapper>
+  );
+  return placement === "cell" ? (
+    <SegmentCardHeaderActionCell>{button}</SegmentCardHeaderActionCell>
+  ) : (
+    button
+  );
+}
+
+export function SubagentResultPanel(props: {
   readonly result: string;
   readonly isStreaming: boolean;
 }) {
@@ -696,12 +736,13 @@ function ProgressTimeline(props: ProgressTimelineProps) {
   );
 }
 
-function useAdjacentDedupedProgressItems(
+function useSubagentProgressItems(
   progressUpdates: ReadonlyArray<string>,
+  nested: ReadonlyArray<SubagentChildSegment>,
 ): ReadonlyArray<ProgressUpdateItem> {
   return useMemo(
-    () => adjacentDedupedProgressItems(progressUpdates),
-    [progressUpdates],
+    () => subagentProgressItems(progressUpdates, nested),
+    [nested, progressUpdates],
   );
 }
 
@@ -751,6 +792,12 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
       if (!newOpen) setFindForcedOpen(collapsibleKey, false);
     },
     [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
+  );
+
+  const headerAction = useOpenAsChatHeaderAction(
+    id,
+    nested,
+    variant === "row" ? "bare" : "cell",
   );
 
   const displayName = cleanSubagentNotificationText(name) ?? "Workflow";
@@ -808,47 +855,54 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
     </>
   );
 
+  // Intent + Activity under the body unit; the conversation and the Result
+  // carry their own (see the compact card's body).
   const body = (
     <div className="flex flex-col gap-2 text-ui-sm">
-      {workflowMeta.intent !== null ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Intent
-          </span>
-          <p className="m-0 whitespace-pre-wrap text-foreground/85">
-            {workflowMeta.intent}
-          </p>
-        </div>
-      ) : null}
-      {workflowMeta.activity.length > 0 || isStreaming ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Activity
-          </span>
-          <WorkflowActivityTimeline
-            activity={workflowMeta.activity}
-            isStreaming={isStreaming}
-          />
-        </div>
-      ) : null}
-      <SubagentChildProviderNotices nested={nested} />
-      <SubagentChildrenSection nested={nested} />
-      {result !== null ? (
-        <>
-          <SubagentResultPanel result={result} isStreaming={isStreaming} />
-          {!isStreaming ? (
-            <WorkflowResultTotals
-              workflowMeta={workflowMeta}
-              durationMs={durationMs}
+      <div
+        data-chat-find-unit={bodyFindUnitId}
+        className="flex flex-col gap-2 empty:hidden"
+      >
+        {workflowMeta.intent !== null ? (
+          <div className="flex flex-col gap-1">
+            <span
+              data-find-skip
+              className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+            >
+              Intent
+            </span>
+            <p className="m-0 whitespace-pre-wrap text-foreground/85">
+              {workflowMeta.intent}
+            </p>
+          </div>
+        ) : null}
+        {workflowMeta.activity.length > 0 || isStreaming ? (
+          <div className="flex flex-col gap-1">
+            <span
+              data-find-skip
+              className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+            >
+              Activity
+            </span>
+            <WorkflowActivityTimeline
+              activity={workflowMeta.activity}
+              isStreaming={isStreaming}
             />
-          ) : null}
-        </>
+          </div>
+        ) : null}
+      </div>
+      <SubagentConversation entries={nested} isStreaming={isStreaming} />
+      <SubagentResultSection
+        renderId={id}
+        result={result}
+        isStreaming={isStreaming}
+        nested={nested}
+      />
+      {result !== null && !isStreaming ? (
+        <WorkflowResultTotals
+          workflowMeta={workflowMeta}
+          durationMs={durationMs}
+        />
       ) : null}
     </div>
   );
@@ -856,7 +910,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
-        headerAction={null}
+        headerAction={headerAction}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}
@@ -865,7 +919,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
         stickyHeader
         expandable
         headerFindUnitId={headerFindUnitId}
-        bodyFindUnitId={bodyFindUnitId}
+        bodyFindUnitId={null}
         className={undefined}
         footer={null}
       />
@@ -876,7 +930,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
       open={open}
       onOpenChange={handleOpenChange}
       header={header}
-      headerAction={null}
+      headerAction={headerAction}
       collapsedPreview={null}
       body={body}
       tone="primary"
@@ -884,7 +938,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
       bodyOverflow="hidden"
       expandable
       headerFindUnitId={headerFindUnitId}
-      bodyFindUnitId={bodyFindUnitId}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );

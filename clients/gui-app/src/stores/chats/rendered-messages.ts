@@ -98,6 +98,7 @@ import type {
   SegmentTodoItem,
   SubagentChildSegment,
   SubagentSegment,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
 import { manualRungAnchorSegmentId } from "@/stores/chats/manual-rung-anchor";
@@ -293,6 +294,10 @@ function turnSignature(blocks: ReadonlyArray<ContentBlock>): string {
     hash = hashStringField(hash, block.status);
     hash = hashNumberField(hash, block.timestamp);
     hash = hashNumberField(hash, blockContentVersion(block));
+    // Parentage is a rendered field: it decides whether a block draws flat in
+    // the transcript or inside its subagent's card, so a block whose parent
+    // resolves after its first render must not serve the cached flat segment.
+    hash = hashStringField(hash, block.parentBlockId ?? "");
   }
   return `${blocks.length}:${hash}`;
 }
@@ -3055,7 +3060,13 @@ function renderAssistantTurnRows(
 ): ReadonlyArray<ChatMessageModel> {
   const blocks = resolveResumeDeliveryPlacements(input.acc.blocks);
   const plan = planAssistantTurnRows(blocks);
-  const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
+  const homedSlices = sliceBlockIndicesHomedToCards(plan, blocks);
+  const rowIdByBlockId = assistantRowIdsByBlockId(
+    plan,
+    homedSlices,
+    blocks,
+    input.turnKey,
+  );
 
   const hiddenSliceIds = new Set<string>();
   const rows = plan.entries.map((entry): ChatMessageModel => {
@@ -3085,18 +3096,26 @@ function renderAssistantTurnRows(
         createdAt: input.rowAnchorAt,
       };
     }
-    const sliceBlocks = entry.blockIndices.map((index) => blocks[index]);
+    const sliceBlocks = (
+      homedSlices.get(entry.chunkIndex) ?? entry.blockIndices
+    ).map((index) => blocks[index]);
+    // A slice whose every block was a child homed into an earlier card's
+    // slice hides exactly like a slice of hidden retries: no bare row between
+    // two steers.
+    const emptiedByHoming =
+      sliceBlocks.length === 0 && entry.blockIndices.length > 0;
     if (
-      sliceBlocks.length > 0 &&
-      sliceBlocks.every(
-        (block) =>
-          block.type === "error" &&
-          codexRetryVisibility(
-            input.acc.sender.harnessId,
-            block.code,
-            input.retryTurnEnded,
-          ) === "hidden",
-      )
+      emptiedByHoming ||
+      (sliceBlocks.length > 0 &&
+        sliceBlocks.every(
+          (block) =>
+            block.type === "error" &&
+            codexRetryVisibility(
+              input.acc.sender.harnessId,
+              block.code,
+              input.retryTurnEnded,
+            ) === "hidden",
+        ))
     ) {
       hiddenSliceIds.add(
         assistantSliceRowId(input.turnKey, entry.chunkIndex, plan.split),
@@ -3279,13 +3298,122 @@ function withTurnCompletion(
   );
 }
 
+const NO_HOMED_SLICES: ReadonlyMap<number, ReadonlyArray<number>> = new Map();
+
+/**
+ * Each assistant slice's block indices with every subagent child moved into
+ * the slice that holds its card (keyed by `chunkIndex`), or an empty map when
+ * no child sits outside its card's slice.
+ *
+ * A steer splits a turn into slices, and each slice builds its segments on its
+ * own - so a card's children that stream in after a steer land in a LATER
+ * slice than the card, find no card there, and render flat in the parent
+ * agent's voice. This homes each child block to its ROOT card's slice (a
+ * nested agent follows its own parent), in block order. Membership only: the
+ * plan, its row count and every row id are untouched, so the host's ordinals
+ * still agree. Every slice gets a bucket, so a slice whose blocks all moved
+ * out reads as EMPTY rather than falling back to its planned blocks; the
+ * renderer hides that slice exactly like a slice of hidden retries.
+ */
+function sliceBlockIndicesHomedToCards(
+  plan: AssistantTurnRowPlan,
+  blocks: ReadonlyArray<ContentBlock>,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+  if (!plan.split) return NO_HOMED_SLICES;
+  const sliceByIndex = new Map<number, number>();
+  const homed = new Map<number, number[]>();
+  for (const entry of plan.entries) {
+    if (entry.kind === "steer") continue;
+    homed.set(entry.chunkIndex, []);
+    for (const index of entry.blockIndices) {
+      sliceByIndex.set(index, entry.chunkIndex);
+    }
+  }
+  const cardIndexById = cardBlockIndexById(blocks);
+  let moved = false;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const own = sliceByIndex.get(index);
+    if (own === undefined) continue;
+    const home =
+      sliceByIndex.get(rootCardBlockIndex(blocks, cardIndexById, index)) ??
+      own;
+    if (home !== own) moved = true;
+    homed.get(home)?.push(index);
+  }
+  return moved ? homed : NO_HOMED_SLICES;
+}
+
+/**
+ * Blocks a child can name as its card: a rendered subagent block, or a tool
+ * call (a tool row that owns children draws as a card - see
+ * `withToolCardParents`). A subagent wins an id it shares with a tool call.
+ */
+function cardBlockIndexById(
+  blocks: ReadonlyArray<ContentBlock>,
+): ReadonlyMap<string, number> {
+  const byId = new Map<string, number>();
+  blocks.forEach((block, index) => {
+    if (block.type === "subagent" && isRenderableSubAgentBlock(block)) {
+      byId.set(block.blockId, index);
+    }
+  });
+  blocks.forEach((block, index) => {
+    if (block.type === "tool_call" && !byId.has(block.blockId)) {
+      byId.set(block.blockId, index);
+    }
+  });
+  return byId;
+}
+
+/**
+ * The index of the outermost card a block nests under (itself when it nests
+ * under none), following `parentBlockId` through blocks that nest - the block
+ * counterpart of `isSubagentChildSegment`. A cycle stops where it closes.
+ */
+function rootCardBlockIndex(
+  blocks: ReadonlyArray<ContentBlock>,
+  cardIndexById: ReadonlyMap<string, number>,
+  start: number,
+): number {
+  const seen = new Set<number>([start]);
+  let current = start;
+  for (;;) {
+    const block = blocks[current];
+    const parentId = nestsUnderCard(block)
+      ? (block.parentBlockId ?? null)
+      : null;
+    const parentIndex =
+      parentId === null ? undefined : cardIndexById.get(parentId);
+    if (parentIndex === undefined || seen.has(parentIndex)) return current;
+    seen.add(parentIndex);
+    current = parentIndex;
+  }
+}
+
+function nestsUnderCard(block: ContentBlock): boolean {
+  switch (block.type) {
+    case "text":
+    case "reasoning":
+    case "error":
+    case "file_change":
+    case "command":
+    case "subagent":
+      return true;
+    case "tool_call":
+      return block.toolName !== "image_generation";
+    default:
+      return false;
+  }
+}
+
 /**
  * Which row each block ended up on, for in-turn block targeting (jump-to-block,
- * image resolution). Read straight off the plan so it cannot disagree with the
- * rows actually rendered from it.
+ * image resolution). Read off the plan and the same homed membership the rows
+ * render from, so it cannot disagree with the rows actually rendered.
  */
 function assistantRowIdsByBlockId(
   plan: AssistantTurnRowPlan,
+  homedSlices: ReadonlyMap<number, ReadonlyArray<number>>,
   blocks: ReadonlyArray<ContentBlock>,
   turnKey: string,
 ): ReadonlyMap<string, string> {
@@ -3293,7 +3421,8 @@ function assistantRowIdsByBlockId(
   for (const entry of plan.entries) {
     if (entry.kind === "steer") continue;
     const rowId = assistantSliceRowId(turnKey, entry.chunkIndex, plan.split);
-    for (const index of entry.blockIndices) {
+    const indices = homedSlices.get(entry.chunkIndex) ?? entry.blockIndices;
+    for (const index of indices) {
       rowIdByBlockId.set(blocks[index].blockId, rowId);
     }
   }
@@ -4031,15 +4160,105 @@ function isSubagentChildSegment(
   // provider_notice IS eligible too - a notice on a subagent's own thread
   // nests under that card instead of interrupting the top-level transcript;
   // one with no matching parent (or none) falls through to topLevel below.
-  // Image-generation cards stay top-level so SubagentChildrenSection cannot
-  // swallow a nested generation while rendering only child agents.
+  // text / reasoning / error are the subagent's own conversation: left
+  // top-level they would render flat, in the parent agent's voice (the
+  // Codex/OpenCode import leak). Image-generation cards stay top-level: they
+  // are the turn's prominent outcome, not a step of the subagent's work.
   return (
     (segment.kind === "tool" && segment.toolName !== "image_generation") ||
     segment.kind === "file_change" ||
     segment.kind === "command" ||
     segment.kind === "subagent" ||
-    segment.kind === "provider_notice"
+    segment.kind === "provider_notice" ||
+    segment.kind === "text" ||
+    segment.kind === "reasoning" ||
+    segment.kind === "error"
   );
+}
+
+/** A child-eligible segment's owner, normalizing the absent key to null. */
+function subagentChildParentId(segment: SubagentChildSegment): string | null {
+  return segment.parentId ?? null;
+}
+
+/**
+ * The card-parent predicate: a segment draws a card when some block NAMES it
+ * as its parent - never by tool name. A `subagent` block is one by
+ * construction; a `tool` row becomes one when it owns parented children, which
+ * is how a model-invoked `Skill` fork arrives on import (its sidechain is
+ * parented to the `Skill` tool-use id, not to a subagent block). Without this
+ * those children would name a plain tool row that never draws them, and fall
+ * back to the top level - flat, in the parent agent's voice.
+ */
+function withToolCardParents(
+  flat: ReadonlyArray<MessageSegment>,
+): ReadonlyArray<MessageSegment> {
+  const ownerIds = new Set<string>();
+  for (const segment of flat) {
+    if (!isSubagentChildSegment(segment)) continue;
+    const parentId = subagentChildParentId(segment);
+    if (parentId !== null) ownerIds.add(parentId);
+  }
+  if (ownerIds.size === 0) return flat;
+  let promoted = false;
+  // The tool's own failure has no place in a card header, so it rides as the
+  // LAST entry of the card's conversation instead of being dropped - appended
+  // after every block, since children bucket in flat order.
+  const failures: MessageSegment[] = [];
+  const out: MessageSegment[] = [];
+  for (const segment of flat) {
+    if (segment.kind !== "tool" || !ownerIds.has(segment.id)) {
+      out.push(segment);
+      continue;
+    }
+    promoted = true;
+    const failure = toolCardFailure(segment);
+    if (failure !== null) failures.push(failure);
+    out.push(toolCardParent(segment));
+  }
+  return promoted ? [...out, ...failures] : flat;
+}
+
+/**
+ * A tool row re-cast as the card its children draw in. The row's identity is
+ * kept (same id, so jump-to-block and find still address it), the tool name is
+ * the card's name and its input summary the task. It has no spawn tool call of
+ * its own to suppress - it IS the row.
+ */
+function toolCardParent(tool: ToolSegment): SubagentSegment {
+  return {
+    id: tool.id,
+    kind: "subagent",
+    name: tool.toolName,
+    agentType: null,
+    task: tool.inputSummary,
+    progressUpdates: [],
+    result: null,
+    isStreaming: tool.isStreaming,
+    endState: tool.endState,
+    stopped: tool.stopped,
+    startedAt: tool.startedAt,
+    durationMs: tool.durationMs,
+    spawnToolCallId: null,
+    parentId: tool.parentId,
+    workflowMeta: null,
+    children: [],
+  };
+}
+
+function toolCardFailure(tool: ToolSegment): MessageSegment | null {
+  if (tool.stopped || tool.error === null || tool.error.length === 0) {
+    return null;
+  }
+  return {
+    id: `${tool.id}:error`,
+    kind: "error",
+    message: tool.error,
+    recoverable: false,
+    code: null,
+    failure: null,
+    parentId: tool.id,
+  };
 }
 
 /**
@@ -4053,8 +4272,9 @@ function isSubagentChildSegment(
  * being silently lost. Order is preserved at every level.
  */
 function nestSubagentChildren(
-  flat: ReadonlyArray<MessageSegment>,
+  input: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
+  const flat = withToolCardParents(input);
   const subagentSegmentsById = new Map(
     flat.flatMap((segment) =>
       segment.kind === "subagent" ? [[segment.id, segment] as const] : [],
@@ -4065,14 +4285,17 @@ function nestSubagentChildren(
   const childrenByParent = new Map<string, SubagentChildSegment[]>();
   const topLevel: MessageSegment[] = [];
   for (const segment of flat) {
+    const parentId = isSubagentChildSegment(segment)
+      ? subagentChildParentId(segment)
+      : null;
     if (
       isSubagentChildSegment(segment) &&
-      segment.parentId !== null &&
-      subagentSegmentsById.has(segment.parentId)
+      parentId !== null &&
+      subagentSegmentsById.has(parentId)
     ) {
-      const bucket = childrenByParent.get(segment.parentId);
+      const bucket = childrenByParent.get(parentId);
       if (bucket === undefined) {
-        childrenByParent.set(segment.parentId, [segment]);
+        childrenByParent.set(parentId, [segment]);
       } else {
         bucket.push(segment);
       }
@@ -4552,6 +4775,19 @@ function hasSnapshotHash(hash: string | null | undefined): hash is string {
   return hash !== null && hash !== undefined;
 }
 
+/**
+ * The `parentId` key for a text / reasoning / error segment: present only on a
+ * parented block, so a main-agent segment keeps exactly the shape it always
+ * had (the `browserSession` convention on the same handler).
+ */
+function parentIdField(parentBlockId: string | null | undefined): {
+  readonly parentId?: string;
+} {
+  return parentBlockId === null || parentBlockId === undefined
+    ? {}
+    : { parentId: parentBlockId };
+}
+
 const BLOCK_HANDLERS: {
   [K in ContentBlock["type"]]: (
     block: Extract<ContentBlock, { type: K }>,
@@ -4584,6 +4820,7 @@ const BLOCK_HANDLERS: {
             ? {}
             : { browserSession: block.browserSession }),
           isStreaming: block.status === "streaming",
+          ...parentIdField(block.parentBlockId),
         };
   },
   reasoning: (block) =>
@@ -4600,6 +4837,7 @@ const BLOCK_HANDLERS: {
             block.startedAt,
             block.timestamp,
           ),
+          ...parentIdField(block.parentBlockId),
         },
   tool_call: (block) => ({
     kind: "tool",
@@ -4724,6 +4962,7 @@ const BLOCK_HANDLERS: {
     // affordances turn on it - so reading it here and inferring it from
     // `message`/`code` anywhere else would be two answers to one question.
     failure: block.failure,
+    ...parentIdField(block.parentBlockId),
   }),
   compaction: (block) => ({
     kind: "compaction",
