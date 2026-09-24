@@ -170,9 +170,12 @@ describe("SystemTabModalHost theme editor integration", () => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
 
-    const darkPicker = within(settings).getByRole("button", {
-      name: "Dark theme",
-    });
+    // The modal body is `lazy()`, so the panel arrives after the frame does.
+    const darkPicker = await within(settings).findByRole(
+      "button",
+      { name: "Dark theme" },
+      { timeout: 10_000 },
+    );
     await user.click(darkPicker);
     const search = await screen.findByRole("combobox", {
       name: "Search dark themes",

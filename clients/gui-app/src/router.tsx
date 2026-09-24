@@ -8,7 +8,10 @@ import { queryClient } from "@/lib/query-client";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { isMobileApp } from "@/lib/mobile-app";
-import { RoutePendingScreen } from "@/components/loading/route-pending-screen";
+import {
+  ROUTE_PENDING_MS,
+  RoutePendingScreen,
+} from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
 import { routeTree } from "@/routeTree.gen";
@@ -45,7 +48,7 @@ export function createAppRouter(
     // threshold instead of holding the previous screen. The pend is dominated
     // by code-split chunk download on first visit (see `warmRouteChunks`); warm
     // navigations resolve well under this threshold so the screen never flashes.
-    defaultPendingMs: 200,
+    defaultPendingMs: ROUTE_PENDING_MS,
     defaultPendingComponent: RoutePendingScreen,
     // Catch-all for any error thrown inside a route match (loader, beforeLoad,
     // or component render) that the route's own `errorComponent` didn't handle.
@@ -60,7 +63,7 @@ export function createAppRouter(
     ...(history === undefined ? {} : { history }),
   });
   bindAuthInvalidation(router);
-  warmRouteChunks();
+  warmRouteChunks(router);
   return router;
 }
 
