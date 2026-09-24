@@ -614,7 +614,8 @@ interface Features {
    * {@link checkpointHeavyOp}'s wider mix (P1): 1-4 entries over a 5-path
    * pool, no-ops, non-undoable null/null entries, unparseable/null metadata,
    * `turnId: null` checkpoints, and deliberate superseding-manifest overlap
-   * shapes. Requires `checkpoints: true`.
+   * shapes. It also draws that op on {@link CHECKPOINT_HEAVY_OP_SHARE} of all
+   * ops before the shared mix is consulted. Requires `checkpoints: true`.
    */
   readonly checkpointHeavy: boolean;
   readonly setupCards: boolean;
@@ -696,6 +697,33 @@ function newCheckpointFuzzStats(): CheckpointFuzzStats {
   };
 }
 
+/** Which branch of {@link randomOp} drew an op. */
+type FuzzOpKind =
+  | "user"
+  | "assistant"
+  | "history-edit"
+  | "event-rows"
+  | "pause"
+  | "checkpoint"
+  | "setup"
+  | "turn-end"
+  | "active-flip";
+
+/**
+ * The op kinds a family's features let {@link randomOp} draw. `turn-end` has
+ * no feature of its own: every family can end a turn once one exists.
+ */
+function opKindsEnabledBy(features: Features): readonly FuzzOpKind[] {
+  const kinds: FuzzOpKind[] = ["user", "assistant", "turn-end"];
+  if (features.historyEdits) kinds.push("history-edit");
+  if (features.eventRows) kinds.push("event-rows");
+  if (features.pauseEvents) kinds.push("pause");
+  if (features.checkpoints) kinds.push("checkpoint");
+  if (features.setupCards) kinds.push("setup");
+  if (features.activeTurnFlips) kinds.push("active-flip");
+  return kinds;
+}
+
 interface ChatModel {
   readonly users: string[];
   readonly turns: string[];
@@ -709,6 +737,8 @@ interface ChatModel {
    */
   readonly checkpointPaths: Map<string, readonly string[]>;
   readonly checkpointStats: CheckpointFuzzStats;
+  /** How many ops each branch of {@link randomOp} drew. */
+  readonly opKinds: Map<FuzzOpKind, number>;
 }
 
 function newModel(): ChatModel {
@@ -719,6 +749,7 @@ function newModel(): ChatModel {
     clock: 1000,
     checkpointPaths: new Map(),
     checkpointStats: newCheckpointFuzzStats(),
+    opKinds: new Map(),
   };
 }
 
@@ -996,6 +1027,22 @@ function eventRowsOp(
   }
 }
 
+/**
+ * P1: the share of the checkpoint-heavy family's ops that
+ * {@link checkpointHeavyOp} takes before the shared mix in {@link randomOp} is
+ * consulted. Through the shared mix alone the family drew a checkpoint op on
+ * about 3% of ops, so it needed 500 ops per seed to total 146 checkpoint ops
+ * and a single disjoint supersede across all eight seeds. Every op checks the
+ * whole history against the oracle, so a seed of that length costs O(ops^2):
+ * about 1.4 s locally, and more than vitest's 5 s timeout on a loaded CI
+ * runner. The ops this draw does not take keep the shared distribution.
+ */
+const CHECKPOINT_HEAVY_OP_SHARE = 0.3;
+
+function countOpKind(model: ChatModel, kind: FuzzOpKind): void {
+  model.opKinds.set(kind, (model.opKinds.get(kind) ?? 0) + 1);
+}
+
 /** One randomized op, applied and checked. */
 function randomOp(
   store: RowFoldStore,
@@ -1005,18 +1052,34 @@ function randomOp(
   label: string,
 ): ApplyResult {
   model.clock += Math.floor(r() * 5);
-  const x = r();
   const upserts: Message[] = [];
   const removes: string[] = [];
   const events: ChatEvent[] = [];
   let activeTurnId: string | null = null;
 
+  // Drawn only in the checkpoint-heavy family, so every other family's ops
+  // come off the same random sequence as before.
+  if (features.checkpointHeavy && r() < CHECKPOINT_HEAVY_OP_SHARE) {
+    countOpKind(model, "checkpoint");
+    checkpointHeavyOp(r, model, events);
+    return applyStep(
+      store,
+      { upserts, removes, events, activeTurnId },
+      { mayDecline: false },
+      label,
+    );
+  }
+
+  const x = r();
+  let kind: FuzzOpKind | null = null;
   if (x < 0.22) {
+    kind = "user";
     const id = freshId("m");
     upserts.push(userMessage(id, model.clock, pick(r, ANCHORS)));
     model.users.push(id);
     model.messages.push(id);
   } else if (x < 0.5) {
+    kind = "assistant";
     let turnId: string;
     const startedAt = features.legacyRecords && r() < 0.2 ? null : model.clock;
     if (model.turns.length === 0 || r() < 0.4) {
@@ -1045,12 +1108,14 @@ function randomOp(
     model.messages.push(id);
     if (r() < 0.3) activeTurnId = turnId;
   } else if (features.historyEdits && x < 0.6) {
+    kind = "history-edit";
     // Rewrite an existing user's session anchor (a fallback hop).
     if (model.users.length > 0) {
       const id = pick(r, model.users);
       upserts.push(userMessage(id, model.clock, pick(r, ANCHORS)));
     }
   } else if (features.historyEdits && x < 0.7) {
+    kind = "history-edit";
     // Rewrite an existing assistant record's blocks (facts change).
     if (model.turns.length > 0) {
       const turnId = pick(r, model.turns);
@@ -1065,6 +1130,7 @@ function randomOp(
       model.messages.push(id);
     }
   } else if (features.historyEdits && x < 0.8) {
+    kind = "history-edit";
     // Remove one or a few live records, tail-biased, or occasionally re-upsert one.
     if (model.messages.length > 0) {
       const count = r() < 0.3 ? 1 + Math.floor(r() * 3) : 1;
@@ -1078,8 +1144,10 @@ function randomOp(
       }
     }
   } else if (features.eventRows && x < 0.68) {
+    kind = "event-rows";
     eventRowsOp(r, model, events);
   } else if (features.pauseEvents && x < 0.86 && model.turns.length > 0) {
+    kind = "pause";
     const turnId = pick(r, model.turns);
     if (r() < 0.5) {
       events.push(
@@ -1106,6 +1174,7 @@ function randomOp(
     x < 0.9 &&
     (model.turns.length > 0 || features.checkpointHeavy)
   ) {
+    kind = "checkpoint";
     if (features.checkpointHeavy) {
       checkpointHeavyOp(r, model, events);
     } else {
@@ -1126,6 +1195,7 @@ function randomOp(
       );
     }
   } else if (features.setupCards && x < 0.94) {
+    kind = "setup";
     const triggering =
       model.users.length > 0 && r() < 0.5 ? pick(r, model.users) : null;
     events.push(
@@ -1141,6 +1211,7 @@ function randomOp(
       ),
     );
   } else if (model.turns.length > 0 && x < 0.97) {
+    kind = "turn-end";
     const turnId = pick(r, model.turns);
     const type = pick(r, [
       "turn.completed",
@@ -1158,9 +1229,11 @@ function randomOp(
       ),
     );
   } else if (features.activeTurnFlips) {
+    kind = "active-flip";
     activeTurnId =
       model.turns.length > 0 && r() < 0.5 ? pick(r, model.turns) : null;
   }
+  if (kind !== null) countOpKind(model, kind);
 
   return applyStep(
     store,
@@ -1297,7 +1370,15 @@ function assertCheckpointLoadMechanism(
 
 describe("P1/P2: checkpoint-heavy fuzz", () => {
   const SEEDS = 8;
-  const OPS = 500;
+  /**
+   * Every op checks the whole history against the oracle, so a seed's cost
+   * grows with the square of this: 100 ops took 100 ms locally, 250 took 380
+   * and 500 took 1,445. At 180, with {@link CHECKPOINT_HEAVY_OP_SHARE}, a seed
+   * takes about 0.2 s locally, still draws every op kind the family enables,
+   * and the eight seeds together carry more checkpoint ops and supersedes than
+   * 500 ops did without the share. Measure on CI before raising it.
+   */
+  const OPS = 180;
   const totals = newCheckpointFuzzStats();
 
   for (let seed = 1; seed <= SEEDS; seed += 1) {
@@ -1321,6 +1402,14 @@ describe("P1/P2: checkpoint-heavy fuzz", () => {
         store.declines,
         `checkpoint-heavy seed ${seed}: unexpected declines`,
       ).toEqual([]);
+      // Every seed drew every op kind the family's features enable, not only
+      // the checkpoint mix the coverage test below totals across seeds.
+      for (const kind of opKindsEnabledBy(CHECKPOINT_HEAVY_FEATURES)) {
+        expect(
+          model.opKinds.get(kind) ?? 0,
+          `checkpoint-heavy seed ${seed}: ${kind} ops drawn`,
+        ).toBeGreaterThan(0);
+      }
       totals.ops += model.checkpointStats.ops;
       totals.supersedes += model.checkpointStats.supersedes;
       totals.subset += model.checkpointStats.subset;
