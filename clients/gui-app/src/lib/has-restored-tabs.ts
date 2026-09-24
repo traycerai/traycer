@@ -1,10 +1,14 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  isOpenLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 
 /**
  * `true` when this window already holds restorable content - an open tab, a
- * canvas epic tab, or a landing draft.
+ * canvas epic tab, or an open landing draft. Closed drafts are retained for
+ * recovery but cannot keep an otherwise empty window from opening a new tab.
  *
  * Reads the three stores synchronously, so callers must decide when it is safe
  * to trust the answer. In Electron the stores are authoritative only AFTER
@@ -16,6 +20,5 @@ import { useTabsStore } from "@/stores/tabs/store";
 export function hasRestoredTabs(): boolean {
   if (useTabsStore.getState().stripOrder.length > 0) return true;
   if (useEpicCanvasStore.getState().openTabOrder.length > 0) return true;
-  if (useLandingDraftStore.getState().drafts.length > 0) return true;
-  return false;
+  return useLandingDraftStore.getState().drafts.some(isOpenLandingDraft);
 }
