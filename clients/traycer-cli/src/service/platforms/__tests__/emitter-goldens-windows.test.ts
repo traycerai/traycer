@@ -69,15 +69,29 @@ const windowsCli: CliInvocation = {
   args: [],
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("USERDOMAIN", "");
   vi.stubEnv("USERNAME", "golden-user");
   vi.stubEnv("SystemRoot", "C:\\Windows");
   vi.stubEnv("SYSTEMROOT", "C:\\Windows");
+  // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now prefers
+  // a real SID from `whoami /user`, and its environment fallback also reads
+  // `COMPUTERNAME`/`USERDNSDOMAIN`. On a Windows dev machine, a real
+  // COMPUTERNAME or a readable SID would change the resolved `<UserId>` and
+  // this golden would stop matching the checked-in file. Stub both env
+  // vars empty and force the SID reader to `null` so this suite's
+  // `<UserId>` stays the bare `golden-user` the golden file was written
+  // against, regardless of what machine runs it.
+  vi.stubEnv("COMPUTERNAME", "");
+  vi.stubEnv("USERDNSDOMAIN", "");
+  const { setWindowsTaskUserSidReaderForTests } = await import("../windows");
+  setWindowsTaskUserSidReaderForTests(() => null);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
+  const { setWindowsTaskUserSidReaderForTests } = await import("../windows");
+  setWindowsTaskUserSidReaderForTests(null);
 });
 
 describe("Windows: buildScheduledTaskXml and buildWindowsHiddenHostLauncher (win32 path semantics)", () => {

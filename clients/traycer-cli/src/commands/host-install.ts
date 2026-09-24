@@ -419,7 +419,15 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         credentialProvision,
       },
       human,
-      exitCode: 0,
+      // A post-swap start that failed is a failed install to a shell: the
+      // bytes are committed but nothing is serving them, and a script that
+      // gates on the exit status (the dev-desktop loops) used to go on to
+      // report "service registered". The payload is unchanged - Desktop
+      // trusts a terminal `ok` line over a non-zero exit on both of its
+      // runners and reads `serviceLifecycle.postSwapError` exactly as before.
+      // Not `host apply`'s contract: that primitive's exit 0 answers "did the
+      // swap commit?" by design (see host-apply.ts).
+      exitCode: handle !== null && handle.state.postSwapError !== null ? 1 : 0,
     };
   };
 }

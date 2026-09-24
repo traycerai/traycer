@@ -36,9 +36,12 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 // convergence: Desktop's `applyStagedCliOwned` reads `postSwapError` off this
 // exit-0 envelope and renders "installed, not converged" with a Doctor
 // pointer, and it reserves the thrown-error path for applies that did not
-// commit at all (where its recovery is "retry with force"). Exiting non-zero
-// on a failed post-swap start would route a committed swap into that
-// wrong-recovery branch.
+// commit at all (where its recovery is "retry with force"). Desktop now trusts
+// a terminal `ok` line over a non-zero exit, so the exit code no longer picks
+// its branch - the contract stands on the primitive/composite split below,
+// which this command's help states. `host install` and
+// `host ensure` are composites of the other kind and exit non-zero on a
+// failed post-swap start.
 //
 // `host update` is the composite and answers the other question - it stages,
 // applies, then health-probes, and FAILS (`E_HOST_UPDATE_HEALTH_CHECK_FAILED`)

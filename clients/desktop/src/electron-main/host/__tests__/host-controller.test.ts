@@ -6142,7 +6142,17 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       "keep-installed",
     );
 
-    expect(outcome.kind).toBe("failed");
+    // The message, not just `kind`: with the postSwapError check gone the
+    // outcome is still `failed`, through this fixture's readiness mock
+    // answering a version the ensure never installed - a control that fires
+    // for the wrong reason. The check also returns before any readiness wait.
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining(
+        "background service failed to start after the swap: launchctl bootstrap failed: 5: Input/output error",
+      ),
+    });
+    expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
   it("does not converge when an already-stamped service-starting branch never becomes reachable", async () => {

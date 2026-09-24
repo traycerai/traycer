@@ -401,6 +401,50 @@ describe("buildHostEnsureCommand", () => {
     );
   });
 
+  // SSH-USERDOMAIN-WORKGROUP (E3/E4): `host ensure` now exits 1 whenever the
+  // post-swap start itself failed, the same rule `host install` follows -
+  // Desktop's CLI runners trust the terminal `ok` line over a non-zero exit,
+  // so the JSON payload stays exactly what it was.
+  it("E3: a post-swap start failure exits 1, with data.postSwapError unchanged", async () => {
+    // Both `postSwapError` fields are set, as the "Both postSwapError
+    // fields are set" fixture above explains: every `HostProvisionResult`
+    // construction site copies one value into the nested lifecycle AND the
+    // top-level field.
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "started",
+        serviceLifecycle: lifecycle({
+          postSwapAction: "start",
+          postSwapError: "launchctl load failed",
+        }),
+        postSwapError: "launchctl load failed",
+      }),
+    );
+
+    const command = buildHostEnsureCommand(baseArgs({}));
+    const result = await command(fakeCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toMatchObject({
+      postSwapError: "launchctl load failed",
+    });
+  });
+
+  it("E4: no post-swap error exits 0", async () => {
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "started",
+        serviceLifecycle: lifecycle({ postSwapAction: "start" }),
+        postSwapError: null,
+      }),
+    );
+
+    const command = buildHostEnsureCommand(baseArgs({}));
+    const result = await command(fakeCtx());
+
+    expect(result.exitCode).toBe(0);
+  });
+
   it("a mutating run DOES invoke the pre-flight, and a signed-out one truthfully reports the host it just started as unprovisioned", async () => {
     // Contrast with the no-op case above: this run actually installs/
     // starts a host, so "unprovisioned" is a truthful claim about a host

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
   isServiceMutationAuthorityError,
@@ -2750,36 +2751,88 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
 `;
 }
 
-// Resolve the Task XML `<UserId>` value. schtasks requires a fully
-// qualified `<domain>\<name>` for domain-joined machines and accepts a
-// bare `<name>` for local accounts. We can't easily distinguish the two
-// from inside Node without Win32 API calls, so we lean on the env vars
-// that the shell sets at logon:
-//   - USERDOMAIN + USERNAME both set, non-empty → `<domain>\<name>`
-//   - USERNAME only → bare `<name>` (local-account path)
-//   - neither → fail closed; missing identity would produce a Task XML
-//     that schtasks rejects with a confusing error
+// Resolve the Task XML `<UserId>` value: the SID of the account this CLI
+// runs as, and a name from the environment only when that cannot be read.
 //
-// TODO(microsoft-account-sid): For users signed in with a Microsoft
-// account, Windows exposes the identity as a SID
-// (`S-1-12-1-...`) reached through the LookupAccountName / NetUserGetInfo
-// Win32 APIs. That requires a native helper out of scope for this fix.
-// The current heuristic is correct for the local + domain-joined
-// majority; MSA users will see the bare USERNAME fallback, which
-// schtasks usually accepts for their local profile.
+// The SID first, because it is the one form that does not depend on how
+// the session was logged on. `USERDOMAIN` does: an interactive logon on a
+// workgroup machine sets it to the machine name, but an OpenSSH session
+// sets it to `WORKGROUP`, and schtasks rejects `WORKGROUP\<name>` from
+// EVERY session ("No mapping between account names and security IDs was
+// done") - so a registration run over ssh swapped the host's bytes and then
+// failed (SSH-USERDOMAIN-WORKGROUP). Measured on the Windows VM
+// (PROBE-TASK-USERID-SSH): the SID from `whoami /user` is identical in both
+// sessions, schtasks accepts it from both, the task it stores carries the
+// same `<UserId>` pair as the task Traycer registers interactively (SID
+// principal, `<machine>\<name>` logon trigger - schtasks canonicalises every
+// accepted form to that pair), and it runs in the console session. It is
+// also account-type independent: the token's SID is what
+// schtasks resolves every name to, so a Microsoft-account sign-in needs no
+// name at all (the old `TODO(microsoft-account-sid)`; not measured on an
+// MSA-linked account, since no lane has one).
 function resolveTaskUserId(): string {
-  const domain = process.env.USERDOMAIN ?? "";
-  const name = process.env.USERNAME ?? "";
-  if (domain.length > 0 && name.length > 0) {
-    return `${domain}\\${name}`;
+  const sid = taskUserSidReader();
+  if (sid !== null) return sid;
+  return resolveTaskUserIdFromEnvironment();
+}
+
+/**
+ * The SID of the account this process runs as, from `whoami /user`, or `null`
+ * when it cannot be read (not Windows, `whoami` missing or refused, output
+ * not in the expected shape). One spawn per registration.
+ */
+function readCurrentUserSidFromWhoami(): string | null {
+  if (process.platform !== "win32") return null;
+  let stdout: string;
+  try {
+    stdout = execFileSync(
+      windowsSystemExecutable("whoami.exe"),
+      ["/user", "/fo", "csv", "/nh"],
+      { encoding: "utf8", windowsHide: true, timeout: 10_000 },
+    );
+  } catch {
+    return null;
   }
+  // `"<domain>\<name>","S-1-5-21-..."`: the SID is the last CSV field.
+  const match = /"(S-1-[0-9]+(?:-[0-9]+)+)"\s*$/.exec(stdout.trim());
+  return match === null ? null : (match[1] ?? null);
+}
+
+let taskUserSidReader: () => string | null = readCurrentUserSidFromWhoami;
+
+/** Test-only override for the SID reader; `null` restores `whoami`. */
+export function setWindowsTaskUserSidReaderForTests(
+  reader: (() => string | null) | null,
+): void {
+  taskUserSidReader = reader ?? readCurrentUserSidFromWhoami;
+}
+
+// The fallback when no SID could be read, from the variables the logon
+// sets:
+//   - USERDNSDOMAIN set → a domain logon: `<USERDOMAIN>\<name>`
+//   - otherwise the account is local to this machine: `<COMPUTERNAME>\<name>`,
+//     never `<USERDOMAIN>\<name>`, which names the WORKGROUP in an ssh
+//     session. At an interactive logon the two are the same value, so that
+//     form is unchanged.
+//   - no COMPUTERNAME either → `<USERDOMAIN>\<name>` as before, then bare
+//     `<name>`
+//   - no USERNAME → fail closed; missing identity would produce a Task XML
+//     that schtasks rejects with a confusing error
+function resolveTaskUserIdFromEnvironment(): string {
+  const domain = process.env.USERDOMAIN ?? "";
+  const dnsDomain = process.env.USERDNSDOMAIN ?? "";
+  const computer = process.env.COMPUTERNAME ?? "";
+  const name = process.env.USERNAME ?? "";
   if (name.length > 0) {
+    if (dnsDomain.length > 0 && domain.length > 0) return `${domain}\\${name}`;
+    if (computer.length > 0) return `${computer}\\${name}`;
+    if (domain.length > 0) return `${domain}\\${name}`;
     return name;
   }
   throw cliError({
     code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     message:
-      "schtasks: cannot resolve a Task XML <UserId>; neither USERDOMAIN nor USERNAME is set in the environment. " +
+      "schtasks: cannot resolve a Task XML <UserId>; `whoami /user` gave no SID and USERNAME is not set in the environment. " +
       "Run `traycer host service install` from an interactive logon session.",
     details: { USERDOMAIN: domain, USERNAME: name },
     exitCode: 1,

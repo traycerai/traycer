@@ -142,7 +142,11 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         credentialProvision,
       },
       human: buildHuman(result, authPreflight, credentialProvision),
-      exitCode: 0,
+      // An ensure whose post-swap start failed did not ensure anything is
+      // running, so it exits non-zero - the same rule as `host install`. The
+      // payload is unchanged: Desktop trusts a terminal `ok` line over a
+      // non-zero exit and already maps `postSwapError` to a failed converge.
+      exitCode: result.postSwapError !== null ? 1 : 0,
     };
   };
 }

@@ -76,6 +76,7 @@ vi.mock("../../process-runner", async (importOriginal) => {
 
 afterAll(async () => {
   vi.unstubAllEnvs();
+  setWindowsTaskUserSidReaderForTests(null);
   await rm(TEST_STORE_ROOT, { recursive: true, force: true });
 });
 
@@ -85,6 +86,7 @@ import {
   inspectWindowsServiceDefinition,
   refreshWindowsServiceDefinition,
   setWindowsDefinitionDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
 } from "../windows";
 import { windowsTaskName, type ServiceLabel } from "../../label";
@@ -128,6 +130,18 @@ function labelFor(id: string): ServiceLabel {
 beforeAll(() => {
   vi.stubEnv("USERDOMAIN", "");
   vi.stubEnv("USERNAME", "traycer-test-user");
+  // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now prefers
+  // a real SID from `whoami /user`, and its environment fallback also reads
+  // `COMPUTERNAME`/`USERDNSDOMAIN`. This file's own `<UserId>` comparisons
+  // are self-referential (both sides call `buildScheduledTaskXml` with the
+  // same env in the same test), so a real COMPUTERNAME or SID would not
+  // desync them - but stubbing both empty and forcing the SID reader to
+  // `null` keeps every case exercising the SAME environment-fallback branch
+  // (bare `traycer-test-user`) this file's comments describe, on every
+  // machine.
+  vi.stubEnv("COMPUTERNAME", "");
+  vi.stubEnv("USERDNSDOMAIN", "");
+  setWindowsTaskUserSidReaderForTests(() => null);
 });
 
 const DIRECT_CLI_COMMAND = "C:\\Program Files\\Traycer\\traycer.exe";

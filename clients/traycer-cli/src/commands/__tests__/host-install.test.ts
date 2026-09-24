@@ -1405,6 +1405,83 @@ describe("buildHostInstallCommand", () => {
       expect(result.data).toMatchObject({ credentialProvision: null });
     });
 
+    // SSH-USERDOMAIN-WORKGROUP (E1): a post-swap start failure is a failed
+    // install to a shell, even though the swap itself committed - the exit
+    // code must say so while the JSON payload stays exactly what it was
+    // (Desktop's runners trust the terminal `ok` line over a non-zero exit,
+    // see `traycer-cli.ts`'s `sawTerminalOk`/`extractTerminalEnvelope`).
+    it("E1: a post-swap start failure exits 1, with serviceLifecycle.postSwapError unchanged in the payload", async () => {
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue({
+        state: {
+          priorState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "start",
+          postSwapError: "failed to start the host process",
+        },
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: null,
+        },
+      });
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      });
+
+      const command = buildHostInstallCommand(baseArgs({}));
+      const result = await command(fakeCtx());
+
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toMatchObject({
+        serviceLifecycle: {
+          postSwapAction: "start",
+          postSwapError: "failed to start the host process",
+        },
+      });
+    });
+
+    // E2: the positive twins - a clean post-swap start, and the bytes-only
+    // (`--no-service-register`) path where no service lifecycle ran at all -
+    // both exit 0.
+    it("E2: no post-swap error exits 0, and a --no-service-register (bytes-only) install exits 0", async () => {
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      });
+
+      const command = buildHostInstallCommand(baseArgs({}));
+      const result = await command(fakeCtx());
+      expect(result.exitCode).toBe(0);
+
+      const bytesOnlyLifecycle = {
+        beforeSwap: vi.fn(async () => {}),
+        afterSwap: vi.fn(async () => {}),
+        swapLockRecovery: null,
+      };
+      mocks.createBytesOnlyInstallLifecycleMock.mockReturnValue(
+        bytesOnlyLifecycle,
+      );
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      });
+
+      const bytesOnlyCommand = buildHostInstallCommand(
+        baseArgs({ noServiceRegister: true }),
+      );
+      const bytesOnlyResult = await bytesOnlyCommand(fakeCtx());
+      expect(bytesOnlyResult.exitCode).toBe(0);
+    });
+
     it("resolveHostAuth going null between the preflight and the re-read: surfaces as unauthorized, not skipped", async () => {
       mocks.resolveHostAuthMock.mockResolvedValueOnce({
         token: "test-token",

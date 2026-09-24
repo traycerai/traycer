@@ -30,6 +30,7 @@ import {
   parseWindowsProcessTableJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
   WINDOWS_KILL_TARGETS_PER_SCRIPT,
   type ProcessRunner,
   type WindowsControllerDeps,
@@ -4029,8 +4030,19 @@ describe("Scheduled Task XML identity", () => {
     // "sh from Unknown Developer" login item, one field cheaper to fix.
     const prevDomain = process.env.USERDOMAIN;
     const prevUser = process.env.USERNAME;
+    const prevComputer = process.env.COMPUTERNAME;
+    const prevDnsDomain = process.env.USERDNSDOMAIN;
     process.env.USERDOMAIN = "TESTBOX";
     process.env.USERNAME = "testuser";
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now
+    // prefers a real SID from `whoami /user`, and its environment fallback
+    // also reads COMPUTERNAME/USERDNSDOMAIN - none of which this test
+    // asserts on, but a real COMPUTERNAME or SID on a Windows dev machine
+    // must not be allowed to throw off `buildScheduledTaskXml`'s <UserId>
+    // resolution underneath it.
+    process.env.COMPUTERNAME = "";
+    process.env.USERDNSDOMAIN = "";
+    setWindowsTaskUserSidReaderForTests(() => null);
     try {
       const xml = buildScheduledTaskXml({
         label: serviceLabelFor("staging"),
@@ -4045,6 +4057,11 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERDOMAIN = prevDomain;
       if (prevUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = prevUser;
+      if (prevComputer === undefined) delete process.env.COMPUTERNAME;
+      else process.env.COMPUTERNAME = prevComputer;
+      if (prevDnsDomain === undefined) delete process.env.USERDNSDOMAIN;
+      else process.env.USERDNSDOMAIN = prevDnsDomain;
+      setWindowsTaskUserSidReaderForTests(null);
     }
   });
 
@@ -4091,8 +4108,19 @@ describe("Scheduled Task XML identity", () => {
     // second run for a failed repair".
     const prevDomain = process.env.USERDOMAIN;
     const prevUser = process.env.USERNAME;
+    const prevComputer = process.env.COMPUTERNAME;
+    const prevDnsDomain = process.env.USERDNSDOMAIN;
     process.env.USERDOMAIN = "TESTBOX";
     process.env.USERNAME = "testuser";
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now
+    // prefers a real SID from `whoami /user`, and its environment fallback
+    // also reads COMPUTERNAME/USERDNSDOMAIN - none of which this test
+    // asserts on, but a real COMPUTERNAME or SID on a Windows dev machine
+    // must not be allowed to throw off `buildScheduledTaskXml`'s <UserId>
+    // resolution underneath it.
+    process.env.COMPUTERNAME = "";
+    process.env.USERDNSDOMAIN = "";
+    setWindowsTaskUserSidReaderForTests(() => null);
     try {
       const xml = buildScheduledTaskXml({
         label: serviceLabelFor("staging"),
@@ -4109,6 +4137,11 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERDOMAIN = prevDomain;
       if (prevUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = prevUser;
+      if (prevComputer === undefined) delete process.env.COMPUTERNAME;
+      else process.env.COMPUTERNAME = prevComputer;
+      if (prevDnsDomain === undefined) delete process.env.USERDNSDOMAIN;
+      else process.env.USERDNSDOMAIN = prevDnsDomain;
+      setWindowsTaskUserSidReaderForTests(null);
     }
   });
 
@@ -4132,8 +4165,19 @@ describe("Scheduled Task XML identity", () => {
     // is what makes that arrive as a red test rather than as a support ticket.
     const prevDomain = process.env.USERDOMAIN;
     const prevUser = process.env.USERNAME;
+    const prevComputer = process.env.COMPUTERNAME;
+    const prevDnsDomain = process.env.USERDNSDOMAIN;
     process.env.USERDOMAIN = "TESTBOX";
     process.env.USERNAME = "testuser";
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now
+    // prefers a real SID from `whoami /user`, and its environment fallback
+    // also reads COMPUTERNAME/USERDNSDOMAIN - none of which this test
+    // asserts on, but a real COMPUTERNAME or SID on a Windows dev machine
+    // must not be allowed to throw off `buildScheduledTaskXml`'s <UserId>
+    // resolution underneath it.
+    process.env.COMPUTERNAME = "";
+    process.env.USERDNSDOMAIN = "";
+    setWindowsTaskUserSidReaderForTests(() => null);
     try {
       const xml = buildScheduledTaskXml({
         label: serviceLabelFor("staging"),
@@ -4148,6 +4192,11 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERDOMAIN = prevDomain;
       if (prevUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = prevUser;
+      if (prevComputer === undefined) delete process.env.COMPUTERNAME;
+      else process.env.COMPUTERNAME = prevComputer;
+      if (prevDnsDomain === undefined) delete process.env.USERDNSDOMAIN;
+      else process.env.USERDNSDOMAIN = prevDnsDomain;
+      setWindowsTaskUserSidReaderForTests(null);
     }
   });
 });
@@ -4791,6 +4840,14 @@ describe("Windows controller — installService launcher-restore behavior", () =
   beforeEach(() => {
     vi.stubEnv("USERDOMAIN", "TESTBOX");
     vi.stubEnv("USERNAME", "testuser");
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): this block runs the REAL
+    // `stageTaskDefinition` (see the block comment above), which reaches
+    // `resolveTaskUserId`. Stub COMPUTERNAME/USERDNSDOMAIN empty and force
+    // the SID reader to `null` so a Windows dev machine's real values can't
+    // change what these launcher-restore tests exercise.
+    vi.stubEnv("COMPUTERNAME", "");
+    vi.stubEnv("USERDNSDOMAIN", "");
+    setWindowsTaskUserSidReaderForTests(() => null);
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
     LAUNCHER_RESTORE_FAILURE.readFile = null;
@@ -4800,6 +4857,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    setWindowsTaskUserSidReaderForTests(null);
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
     LAUNCHER_RESTORE_FAILURE.readFile = null;
