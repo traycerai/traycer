@@ -31,6 +31,7 @@ import {
   COMPRESSION_MIN_PAYLOAD_BYTES,
   decodeMuxMessageBody,
   encodeMuxMessageBody,
+  INFLATE_INPUT_SLICE_BYTES,
   type ReassembledMessage,
   OutboundChunkSource,
   unchunkedStreamFrameViolation,
@@ -520,11 +521,11 @@ describe("body compression round-trip (T5)", () => {
         );
         expect(inflateSync).not.toHaveBeenCalled();
         // An unbounded `Inflate.push(deflated, true)` calls its callback only
-        // after all 4 MiB of output; the forged one-byte declaration permits
-        // only one compressed byte per push before that callback is checked.
-        expect(Math.max(...push.mock.calls.map((args) => args[0].length))).toBe(
-          1,
-        );
+        // after the whole stream's output; the inflater is fed bounded input
+        // slices, so the callback is checked after at most one slice.
+        expect(
+          Math.max(...push.mock.calls.map((args) => args[0].length)),
+        ).toBeLessThanOrEqual(INFLATE_INPUT_SLICE_BYTES);
       } finally {
         push.mockRestore();
       }
@@ -643,6 +644,151 @@ describe("body compression round-trip (T5)", () => {
       expect(() =>
         reassembler.accept(compressedFrame(12, plainBody.length + 1)),
       ).toThrow(MuxFrameDecodeError);
+    });
+  });
+
+  /**
+   * A frame whose compressed payload spans several inflate slices. The cases
+   * above all fit in one push, so they cannot see a slice boundary landing
+   * mid-symbol or the number of pushes a real frame costs.
+   *
+   * The plaintext is base64-shaped text from a seeded generator, the shape of
+   * an attachment body: DEFLATE shrinks it only ~25%, so a full 64 KiB chunk
+   * stays well over one slice after compression.
+   */
+  describe("inflating a payload that spans several input slices", () => {
+    const BASE64_ALPHABET =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    // Under one chunk so the over-declared case below still passes the
+    // chunk-bound check and reaches the inflater.
+    function base64ShapedBody(): Uint8Array {
+      const text = new Uint8Array(BULK_CHUNK_SIZE_BYTES - 4096);
+      let seed = 0x2545f491;
+      for (let index = 0; index < text.length; index += 1) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        text[index] = BASE64_ALPHABET.charCodeAt(seed >>> 26);
+      }
+      return encodeMuxMessageBody(null, text);
+    }
+
+    const plain = base64ShapedBody();
+    const plainBinary = decodeMuxMessageBody(plain).binary;
+    const deflated = deflateSync(plain, { level: 1 });
+
+    function frameOf(
+      streamId: number,
+      declaredPlainLength: number,
+      deflateBytes: Uint8Array,
+    ): MuxFrame {
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, declaredPlainLength);
+      return decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, deflateBytes),
+        }),
+      );
+    }
+
+    it("the fixture really spans several slices", () => {
+      expect(deflated.length).toBeGreaterThan(4 * INFLATE_INPUT_SLICE_BYTES);
+    });
+
+    it("delivers an exact-length frame byte-identical, in one push per input slice", () => {
+      const reassembler = new ChunkReassembler(undefined);
+      const push = vi.spyOn(Inflate.prototype, "push");
+      try {
+        const message = reassembler.accept(frameOf(21, plain.length, deflated));
+        expect(message).not.toBeNull();
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        expect(bytesEqual(message!.binary!, plainBinary!)).toBe(true);
+        expect(push).toHaveBeenCalledTimes(
+          Math.ceil(deflated.length / INFLATE_INPUT_SLICE_BYTES),
+        );
+      } finally {
+        push.mockRestore();
+      }
+    });
+
+    it("rejects a frame that declares one byte more than it inflates to", () => {
+      const reassembler = new ChunkReassembler(undefined);
+      expect(() =>
+        reassembler.accept(frameOf(22, plain.length + 1, deflated)),
+      ).toThrow(
+        `compressed frame inflated to ${plain.length} bytes, declared ${plain.length + 1}`,
+      );
+    });
+
+    it("rejects a frame that declares one byte less than it inflates to", () => {
+      const reassembler = new ChunkReassembler(undefined);
+      expect(() =>
+        reassembler.accept(frameOf(23, plain.length - 1, deflated)),
+      ).toThrow(
+        `compressed frame inflated to more than ${plain.length - 1} bytes, declared ${plain.length - 1}`,
+      );
+    });
+
+    it("rejects a real DEFLATE stream cut off mid-way, whatever length it declares", () => {
+      const reassembler = new ChunkReassembler(undefined);
+      const truncated = deflated.subarray(
+        0,
+        deflated.length - INFLATE_INPUT_SLICE_BYTES - 7,
+      );
+      expect(() =>
+        reassembler.accept(frameOf(24, plain.length, truncated)),
+      ).toThrow(MuxFrameDecodeError);
+    });
+
+    it("stops a forged bomb after its first slice, with that slice's output bounded by DEFLATE's maximum ratio", () => {
+      // Many slices of compressed input that genuinely inflate to 16 MiB,
+      // declared as one byte. Rejection must come after the FIRST push, and
+      // that push can only have produced what one slice can expand to.
+      const DEFLATE_MAX_EXPANSION_RATIO = 1032;
+      const bomb = deflateSync(new Uint8Array(16 * 1024 * 1024), { level: 6 });
+      expect(bomb.length).toBeGreaterThan(2 * INFLATE_INPUT_SLICE_BYTES);
+
+      const produced: number[] = [];
+      const originalPush = Inflate.prototype.push;
+      const push = vi
+        .spyOn(Inflate.prototype, "push")
+        .mockImplementation(function (
+          this: Inflate,
+          chunk: Uint8Array,
+          final: boolean | undefined,
+        ) {
+          const handler = this.ondata;
+          this.ondata = (data, isFinal) => {
+            produced.push(data.length);
+            handler(data, isFinal);
+          };
+          try {
+            originalPush.call(this, chunk, final);
+          } finally {
+            this.ondata = handler;
+          }
+        });
+      try {
+        const reassembler = new ChunkReassembler(undefined);
+        expect(() => reassembler.accept(frameOf(25, 1, bomb))).toThrow(
+          "compressed frame inflated to more than 1 bytes, declared 1",
+        );
+        expect(push).toHaveBeenCalledTimes(1);
+        expect(produced).toHaveLength(1);
+        expect(produced[0]).toBeLessThanOrEqual(
+          INFLATE_INPUT_SLICE_BYTES * DEFLATE_MAX_EXPANSION_RATIO,
+        );
+      } finally {
+        push.mockRestore();
+      }
     });
   });
 });

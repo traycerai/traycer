@@ -119,10 +119,19 @@ export const COMPRESSION_MIN_PAYLOAD_BYTES = 4096;
  */
 const COMPRESSION_LEVEL = 1;
 
-// A DEFLATE stream can expand by roughly this factor. It sizes each input push
-// so `Inflate`'s synchronous callback can reject a lie about the plaintext
-// length before one push performs material work beyond the receive bound.
-const DEFLATE_MAX_EXPANSION_RATIO = 1032;
+/**
+ * Compressed bytes handed to `Inflate` per push. `Inflate` reports output only
+ * after a push, so this is what bounds the work a forged frame gets before
+ * the length check rejects it: DEFLATE expands at most ~1032:1, so one push
+ * produces at most ~4 MiB before the callback sees it.
+ *
+ * Fixed, not sized from the remaining output budget. Every push allocates
+ * fresh buffers inside fflate (a grown output buffer and a copy of its 32 KiB
+ * window), and a budget-sized slice starts at 63 bytes and shrinks to 1 near
+ * the end of a frame - thousands of pushes and hundreds of megabytes of
+ * garbage per 64 KiB frame. At this size an honest frame takes a handful.
+ */
+export const INFLATE_INPUT_SLICE_BYTES = 4 * 1024;
 
 /**
  * A compressed payload is `[plainLen:u32 BE][deflate bytes]`. The length
@@ -312,10 +321,10 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  * which is the outcome the per-stream routing exists to prevent.
  *
  * The output buffer is deliberately allocated ONE BYTE LARGER than the
- * declared length. The synchronous `Inflate` callback is fed bounded slices
- * of the compressed source and stops the decoder as soon as its actual output
- * would pass the declared length. That preserves the old three-way sentinel
- * post-condition without letting `inflateSync(..., { out })` walk an attacker
+ * declared length. The synchronous `Inflate` callback is fed fixed
+ * {@link INFLATE_INPUT_SLICE_BYTES} slices of the compressed source and stops
+ * the decoder as soon as its actual output would pass the declared length.
+ * That preserves the old three-way sentinel post-condition without letting `inflateSync(..., { out })` walk an attacker
  * supplied gigabyte of output merely to discover the extra byte: exact output
  * is accepted, a short expansion reports its count, and an over-expansion is
  * represented by the spare byte as `more than plainLength`.
@@ -351,14 +360,12 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
   const compressed = payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN);
   try {
     for (let offset = 0; offset < compressed.length;) {
-      // `Inflate` calls ondata after each push, not each decoded symbol. Keep
-      // one push's possible expansion inside the remaining output budget so a
-      // forged small prefix cannot turn into a renderer-thread-sized inflate.
-      const inputLength = Math.max(
-        1,
-        Math.floor((plainLength - written) / DEFLATE_MAX_EXPANSION_RATIO),
+      // `Inflate` calls ondata after each push, not each decoded symbol, so
+      // the slice size is what bounds a forged frame's work before rejection.
+      const end = Math.min(
+        offset + INFLATE_INPUT_SLICE_BYTES,
+        compressed.length,
       );
-      const end = Math.min(offset + inputLength, compressed.length);
       inflater.push(
         compressed.subarray(offset, end),
         end === compressed.length,
