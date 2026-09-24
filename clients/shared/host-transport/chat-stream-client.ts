@@ -566,6 +566,10 @@ export class ChatStreamClient {
         this.callbacks.onHeldUpdatesChanged(frame);
         return;
       }
+      // Handler wired by the suggestion-chip/thinking-tokens work (T14).
+      case "thinkingTokens": {
+        return;
+      }
       case "pong": {
         return;
       }
@@ -820,6 +824,10 @@ export class ChatStreamClient {
       }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      // Handler wired by the suggestion-chip/thinking-tokens work (T14).
+      case "thinkingTokens": {
         return;
       }
       case "pong": {

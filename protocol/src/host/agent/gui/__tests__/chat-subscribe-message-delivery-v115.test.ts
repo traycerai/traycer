@@ -77,10 +77,10 @@ function serverFrameKinds(contract: ChatSubscribeContract): readonly string[] {
 }
 
 describe("chat.subscribe registry carries the new line at 1.15", () => {
-  it("keeps 1.15 installed and bound to chatSubscribeV115 - the head has since moved to 1.16", () => {
+  it("keeps 1.15 installed and bound to chatSubscribeV115 - the head has since moved to 1.17", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(line.versions[15]?.contract).toBe(chatSubscribeV115);
-    expect(line.latestMinor).toBe(16);
+    expect(line.latestMinor).toBe(17);
   });
 
   it("keeps 1.14 bound to its own contract, not silently re-pointed at 1.15", () => {

@@ -86,6 +86,9 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
     // DOING, the same as every label above it.
     case "fallback-wait":
       return "Waiting";
+    // Placeholder - the crons panel work (T15) owns the real row.
+    case "cron":
+      return "Scheduled job";
   }
   const unreachableKind: never = kind;
   return unreachableKind;

@@ -77,8 +77,10 @@ import {
 import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
+  runtimeApprovalDisplayFactSchema,
   runtimeEventSchema,
   runtimeEventSchemaPreBrowser,
+  runtimeEventSchemaPreDisplayFacts,
   runtimeEventSchemaPreFallback,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
@@ -415,6 +417,9 @@ export const backgroundItemKindSchema = lazySchema(() =>
     // this panel - the chat is doing something, the user can see when it will
     // end, and the user can stop it - even though nothing is executing.
     "fallback-wait",
+    // `1.17`: a job the model scheduled with the CLI's cron tools. Unlike
+    // every kind above it has no stop control - see `cronBackgroundItemSchema`.
+    "cron",
   ]),
 );
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
@@ -511,10 +516,64 @@ const fallbackWaitBackgroundItemSchema = lazySchema(() =>
   }),
 );
 
-export const backgroundItemSchema = lazySchema(() =>
+// ─── Frozen `chat.subscribe@1.10–1.16` background-item shapes ──────────────
+//
+// `1.17` adds the `cron` kind below. Every line from `1.10` through `1.16`
+// binds this union - the live one as it stood when `1.17` opened above it -
+// and not an alias for the live one, for the reason the pre-`fallback-wait`
+// freeze above gives: a released peer's decoder is a closed discriminated
+// union, so an unknown `kind` fails the WHOLE frame. The host omits a cron
+// item from those lines' `backgroundItems` rather than sending one.
+export const backgroundItemSchemaPreCron = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...backgroundItemSchemaPreFallbackWait.def.options,
     fallbackWaitBackgroundItemSchema,
+  ]),
+);
+
+// ─── Live background-item shapes (`chat.subscribe@1.17`) ───────────────────
+
+/**
+ * A job the model scheduled with the CLI's `CronCreate` tool
+ * (`chat.subscribe@1.17`).
+ *
+ * Its own kind rather than a reused `wakeup`, and the differences are the
+ * reason:
+ *
+ * - **No `scheduledFor`.** Neither the cron tools' results nor the Stop hook's
+ *   `session_crons` carry a next-fire time, so the row states the schedule
+ *   (`humanSchedule`, e.g. "Every 5 minutes", with the raw `schedule`
+ *   expression beside it) and never a countdown. A wake's timestamp is
+ *   required; inventing one here would be a guess rendered as a fact.
+ * - **No stop affordance, by construction.** A job ends only when the model
+ *   deletes it (`CronDelete` is a model tool call and nothing else) or when its
+ *   session ends. The wake-cancel path cannot delete a CLI job, so a client
+ *   must not offer `stopBackgroundItem` for this kind and a host must refuse
+ *   one. A cron-fired turn that is RUNNING is stopped with the ordinary Stop.
+ * - **Never a live background signal.** A job keeps no session alive and holds
+ *   no process; it is listed so a scheduled job is visible, not so it can be
+ *   managed from the panel.
+ *
+ * Identity rides the shared base fields: `taskId` is the CLI's job id (the
+ * same id a lost job is reported under) and `title` is `humanSchedule`.
+ * `prompt` is the model-authored text the job re-sends, rendered as plain
+ * text. `recurring` is false for a one-shot job.
+ */
+const cronBackgroundItemSchema = lazySchema(() =>
+  z.object({
+    ...backgroundItemBaseFields,
+    kind: z.literal("cron"),
+    schedule: z.string(),
+    humanSchedule: z.string(),
+    prompt: z.string(),
+    recurring: z.boolean(),
+  }),
+);
+
+export const backgroundItemSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...backgroundItemSchemaPreCron.def.options,
+    cronBackgroundItemSchema,
   ]),
 );
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
@@ -522,6 +581,7 @@ export type CommandBackgroundItem = z.infer<typeof commandBackgroundItemSchema>;
 export type FallbackWaitBackgroundItem = z.infer<
   typeof fallbackWaitBackgroundItemSchema
 >;
+export type CronBackgroundItem = z.infer<typeof cronBackgroundItemSchema>;
 
 export const chatActionAckStatusSchema = lazySchema(() =>
   z.enum(["accepted", "rejected"]),
@@ -1100,13 +1160,49 @@ export type ChatApprovalStatePreTier = z.infer<
 >;
 
 /**
- * The live approval card (`chat.subscribe@1.16`): the reason carries its
- * `tier`. `.extend` over an existing key keeps that key's position, so the
- * shape differs from `1.15`'s by the one nested key.
+ * Frozen approval card as `chat.subscribe@1.16` ships it: the reason carries
+ * its `tier`. `.extend` over an existing key keeps that key's position, so the
+ * shape differs from `1.15`'s by the one nested key. `1.17` adds the card's
+ * display facts and `cautious` on the live schema below.
+ *
+ * Do NOT add fields here. Add them to `chatApprovalStateSchema` below.
  */
-export const chatApprovalStateSchema = lazySchema(() =>
+export const chatApprovalStateSchemaPreDisplayFacts = lazySchema(() =>
   chatApprovalStateSchemaPreTier.extend({
     reason: chatApprovalReasonSchema.nullable().default(null),
+  }),
+);
+export type ChatApprovalStatePreDisplayFacts = z.infer<
+  typeof chatApprovalStateSchemaPreDisplayFacts
+>;
+
+/**
+ * The live approval card (`chat.subscribe@1.17`): `1.16`'s card plus what the
+ * provider said about the ask.
+ *
+ * Both keys are OPTIONAL and stripped, the opposite call from `1.16`'s `tier`
+ * (defaulted, tolerated): the host deletes them by name for every peer below
+ * `1.17` (`chat-frame-projection.ts`), so an older line never carries a key
+ * its contract does not name, and a `1.17` client reading an older host's
+ * frame sees absence - "the provider said nothing" - which is what an older
+ * host means.
+ *
+ * Pending-only, like `reviewing`: neither key reaches the accumulated
+ * approval block or the journal, so a card restored from history carries
+ * neither.
+ */
+export const chatApprovalStateSchema = lazySchema(() =>
+  chatApprovalStateSchemaPreDisplayFacts.extend({
+    /** Card-only facts - see `runtimeApprovalDisplayFactSchema`. */
+    displayFacts: z.array(runtimeApprovalDisplayFactSchema).optional(),
+    /**
+     * The CLI stamped this ask as one a person must answer individually (it
+     * carried the tool's own `decisionReason` or a `matchedAskRule`). "Approve
+     * all" skips it. Not the judge's `tier`: that is Traycer's judge saying why
+     * it escalated, this is the provider's own stamp, and it exists in every
+     * mode, judge or none.
+     */
+    cautious: z.boolean().optional(),
   }),
 );
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
@@ -1838,6 +1934,35 @@ export const lastFallbackOutcomeSchema = lazySchema(() =>
 );
 export type LastFallbackOutcome = z.infer<typeof lastFallbackOutcomeSchema>;
 
+/**
+ * The provider's predicted next prompt for this chat (`chat.subscribe@1.17`),
+ * for a click-to-fill chip above the composer. The chip fills the composer
+ * and never sends.
+ *
+ * Carried the way `lastFallbackOutcome` is, on the snapshot AND on
+ * `turnStateChanged`: it outlives the provider frame that produced it (which
+ * lands after the turn has already ended), and an ABSENT key CLEARS - the host
+ * drops it on any send, any run opening and teardown, and a renderer that kept
+ * its last value would offer a suggestion for a conversation that has moved
+ * on. Live state only: never persisted, never published.
+ *
+ * Model-authored text, rendered as plain text.
+ */
+export const chatSuggestedPromptSchema = lazySchema(() => z.string());
+
+/**
+ * The provider's running estimate of the thinking tokens the active turn has
+ * spent (`chat.subscribe@1.17`), shown beside the streaming "Thinking" label.
+ *
+ * An ESTIMATE for a progress indicator, not usage: the turn's final usage
+ * carries the real output tokens, so this is never written to a message, a
+ * journal or a publication. A whole, non-negative count - the host rounds the
+ * provider's value before it reaches the wire.
+ */
+export const chatThinkingTokensEstimateSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
+
 // Historical snapshot field set. The live snapshot grows from this base;
 // additions must not flow backwards into chat.subscribe 1.7.
 const chatSnapshotSchemaV17 = lazySchema(() =>
@@ -1960,6 +2085,12 @@ export const chatSnapshotSchema = lazySchema(() =>
     // because its whole job is to be readable after the incident's transcript
     // row has left the bounded tail.
     lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    // The `1.17` live-only keys, kept in step with the windowed snapshot for
+    // the reason `portForwards` is above. No line that binds this shape can
+    // carry them - every full-snapshot line is below `1.17` - so the host
+    // deletes both from every snapshot it sends on one.
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
+    thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
   }),
 );
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
@@ -1983,42 +2114,64 @@ const chatSubscribeSnapshotServerFrameSchema = lazySchema(() =>
   }),
 );
 
+// The frame as `chat.subscribe@1.13`-`1.16` ship it. `1.17` widens it on the
+// live frame below; the pre-`auto` freeze grows from this one too, so nothing
+// `1.17` adds can reach a line below it.
+const chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116 = lazySchema(
+  () =>
+    z.object({
+      kind: z.literal("turnStateChanged"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      // `runStatus` rides every turn-state broadcast so the GUI's in-progress
+      // indicator updates the instant a turn is requested, stops, or completes
+      // - including the request→activeTurn window where `activeTurn` is still
+      // null.
+      runStatus: chatRunStatusSchema,
+      activeTurn: chatActiveTurnSchema.nullable(),
+      // Background-items deltas ride this same broadcast (added/settled/
+      // stopped). Optional for the same capability-sentinel reason as the
+      // snapshot field; an older host omits it and the renderer keeps its last
+      // snapshot value. Frozen at the kinds `1.16` shipped (no `cron`).
+      backgroundItems: z.array(backgroundItemSchemaPreCron).optional(),
+      // See `chatSnapshotSchema.turnInProgress` - same predicate, same
+      // optionality, same conservative-fallback contract.
+      turnInProgress: z.boolean().optional(),
+      // Rides this broadcast for the same reason `backgroundItems` does: every
+      // transition the DTO describes is a turn-state transition too, so a
+      // separate frame would be a second ordering to get wrong. Absent means
+      // "no traversal", and unlike `backgroundItems` the renderer must NOT keep
+      // its last value - that is how a settled traversal's card would outlive
+      // it.
+      pendingFallback: pendingFallbackSchema.optional(),
+      // Same rule, same reason: the banner must vanish when the offer is
+      // answered, so an absent key CLEARS rather than preserving the last
+      // value.
+      pendingReturn: pendingReturnSchema.optional(),
+      // Same rule again (D152). The card must vanish when a replacement lands
+      // or a traversal takes the chat back over, so an absent key CLEARS - a
+      // renderer that kept its last value would offer Retry on a turn that has
+      // since succeeded, which is the exact defect D122 closed on the host
+      // side.
+      lastFailedAttempt: lastFailedAttemptSchema.optional(),
+      // The last confirmed automatic outcome (D215). The clearing rule is the
+      // same in mechanism and OPPOSITE in timing: an absent key clears, but this
+      // one is cleared by the next ARM rather than by the traversal ending - a
+      // settled traversal's outcome is exactly what a consumer still needs to
+      // speak.
+      lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    }),
+);
+
+// The live frame (`chat.subscribe@1.17`): the cron kind in `backgroundItems`
+// and the provider's suggested prompt. `.extend` over an existing key keeps
+// its position, so the new key lands last and nothing else moves.
 const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
-  z.object({
-    kind: z.literal("turnStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    // `runStatus` rides every turn-state broadcast so the GUI's in-progress
-    // indicator updates the instant a turn is requested, stops, or completes -
-    // including the request→activeTurn window where `activeTurn` is still null.
-    runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
-    // Background-items deltas ride this same broadcast (added/settled/stopped).
-    // Optional for the same capability-sentinel reason as the snapshot field; an
-    // older host omits it and the renderer keeps its last snapshot value.
+  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116.extend({
     backgroundItems: z.array(backgroundItemSchema).optional(),
-    // See `chatSnapshotSchema.turnInProgress` - same predicate, same
-    // optionality, same conservative-fallback contract.
-    turnInProgress: z.boolean().optional(),
-    // Rides this broadcast for the same reason `backgroundItems` does: every
-    // transition the DTO describes is a turn-state transition too, so a separate
-    // frame would be a second ordering to get wrong. Absent means "no traversal",
-    // and unlike `backgroundItems` the renderer must NOT keep its last value -
-    // that is how a settled traversal's card would outlive it.
-    pendingFallback: pendingFallbackSchema.optional(),
-    // Same rule, same reason: the banner must vanish when the offer is answered,
-    // so an absent key CLEARS rather than preserving the last value.
-    pendingReturn: pendingReturnSchema.optional(),
-    // Same rule again (D152). The card must vanish when a replacement lands or a
-    // traversal takes the chat back over, so an absent key CLEARS - a renderer
-    // that kept its last value would offer Retry on a turn that has since
-    // succeeded, which is the exact defect D122 closed on the host side.
-    lastFailedAttempt: lastFailedAttemptSchema.optional(),
-    // The last confirmed automatic outcome (D215). The clearing rule is the same
-    // in mechanism and OPPOSITE in timing: an absent key clears, but this one is
-    // cleared by the next ARM rather than by the traversal ending - a settled
-    // traversal's outcome is exactly what a consumer still needs to speak.
-    lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    // Same rule as the fallback keys: an absent key CLEARS the chip - see
+    // `chatSuggestedPromptSchema`.
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
   }),
 );
 
@@ -2027,9 +2180,10 @@ const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
 // TUPLES that name a permission mode - so on a pre-`auto` line they must be
 // the frozen tuples, exactly as the snapshot's copies are. This frame is
 // shared by every minor, which is why freezing the snapshot alone left `1.10`
-// still advertising `auto` through it.
+// still advertising `auto` through it. Built over the `1.13`-`1.16` freeze,
+// never the live frame, so nothing `1.17` added reaches these lines.
 const chatSubscribeTurnStateChangedServerFrameSchemaPreAuto = lazySchema(() =>
-  chatSubscribeTurnStateChangedServerFrameSchema.extend({
+  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116.extend({
     pendingFallback: pendingFallbackSchemaPreAuto.optional(),
     pendingReturn: pendingReturnSchemaPreAuto.optional(),
     lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
@@ -2094,6 +2248,34 @@ const chatSubscribePortForwardsChangedServerFrameSchema = lazySchema(() =>
     // Defaulted for the same reason as the snapshot's field: a consumer reads
     // one array shape on both channels and never null-checks either.
     portForwards: z.array(chatPortForwardSchema).default([]),
+  }),
+);
+
+/**
+ * The active turn's thinking-token estimate moved (`chat.subscribe@1.17`) -
+ * see `chatThinkingTokensEstimateSchema`.
+ *
+ * Its own LIGHT frame rather than a key on `turnStateChanged`, because that
+ * frame is the WHOLE turn state (background items, the fallback DTOs) and
+ * recomputing and queueing all of it once a second for one number is the cost
+ * this frame exists to avoid. The host coalesces it to at most one per second.
+ * The snapshot carries the latest value too (`thinkingTokensEstimate`), so a
+ * reconnect mid-thought is not blank.
+ *
+ * Turn-scoped, because the provider's estimate is: a renderer applies it only
+ * while `turnId` is the active turn and clears it on the turn-end state it
+ * already receives.
+ *
+ * Never sent to a peer that negotiated `<=1.16`: it has no variant for this
+ * kind, and the host's per-minor projection drops the frame whole.
+ */
+const chatSubscribeThinkingTokensServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("thinkingTokens"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    turnId: z.string(),
+    estimate: chatThinkingTokensEstimateSchema,
   }),
 );
 
@@ -2604,8 +2786,26 @@ const chatSubscribeCommonServerFrameSchemasV115 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.16`): the approval card's reason
-// carries its tier.
+// `chat.subscribe@1.16`'s common frames: the approval card's reason carries
+// its tier, and the card has no display facts yet - the one axis `1.17` adds
+// here.
+const chatSubscribeCommonServerFrameSchemasV116 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchemaPreDisplayFacts,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.17`): the approval card carries
+// the provider's display facts and `cautious`.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2688,15 +2888,16 @@ const chatSubscribeSharedServerFrameSchemasV112 = [
   ...chatSubscribeCommonServerFrameSchemasV112,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreBrowser),
 ];
-// `chat.subscribe@1.13`'s shared frames: the live `blockDelta` over the
-// pre-port-forward common set.
+// `chat.subscribe@1.13`'s shared frames: the pre-`1.17` `blockDelta` (no
+// approval display facts) over the pre-port-forward common set. `1.13` through
+// `1.16` bind the same frozen event union.
 const chatSubscribeSharedServerFrameSchemasV113 = [
   ...chatSubscribeCommonServerFrameSchemasV113,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const chatSubscribeSharedServerFrameSchemasV114 = [
   ...chatSubscribeCommonServerFrameSchemasV114,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const messageDeliveryChangedServerFrameSchema = lazySchema(() =>
   z.object({
@@ -2706,11 +2907,19 @@ const messageDeliveryChangedServerFrameSchema = lazySchema(() =>
     delivery: chatMessageDeliverySchema.nullable(),
   }),
 );
-// `chat.subscribe@1.15`'s shared frames: the live list with the pre-tier card.
+// `chat.subscribe@1.15`'s shared frames: the `1.16` list with the pre-tier
+// card.
 const chatSubscribeSharedServerFrameSchemasV115 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV115,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
+];
+// `chat.subscribe@1.16`'s shared frames: the tiered card with no display
+// facts, and the `blockDelta` whose `approval.requested` carries none either.
+const chatSubscribeSharedServerFrameSchemasV116 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV116,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
   messageDeliveryChangedServerFrameSchema,
@@ -2732,6 +2941,10 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    // `1.17`. The host emits it through the funnel typed by this union and
+    // drops it for every line below `1.17`, all of which a full-snapshot peer
+    // negotiates.
+    chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
@@ -4640,7 +4853,9 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
     missingWorktreePaths: z.array(z.string()),
     pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
-    backgroundItems: z.array(backgroundItemSchema).optional(),
+    // Pre-cron: `1.10` through `1.16` inherit this binding, and only the live
+    // snapshot (`1.17`) re-widens it.
+    backgroundItems: z.array(backgroundItemSchemaPreCron).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),
     heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
     turnInProgress: z.boolean().optional(),
@@ -4718,12 +4933,28 @@ const chatWindowedSnapshotSchemaV115 = lazySchema(() =>
     tail: chatTranscriptWindowSchema,
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.16`): `1.15` with the approval
-// card re-widened to carry its reason's tier. `.extend` over the existing key
-// keeps its position, so the shape moves by that nested key alone.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.16` ships it: `1.15` with the
+// approval card re-widened to carry its reason's tier. `.extend` over the
+// existing key keeps its position, so the shape moves by that nested key alone.
+const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
   chatWindowedSnapshotSchemaV115.extend({
+    pendingApprovals: z.array(chatApprovalStateSchemaPreDisplayFacts),
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.17`): `1.16` with the approval
+// card's display facts, the cron background kind, and two live-only keys. Both
+// new keys are optional and stripped by name below `1.17`, like `1.10`'s
+// fallback DTOs: absent is "nothing to show", which is also what an older
+// host's silence means.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV116.extend({
     pendingApprovals: z.array(chatApprovalStateSchema),
+    backgroundItems: z.array(backgroundItemSchema).optional(),
+    // The provider's predicted next prompt - see `chatSuggestedPromptSchema`.
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
+    // The latest thinking-token estimate for the active turn, so a reconnect
+    // mid-thought is not blank - see `thinkingTokens` for the live updates.
+    thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -4875,7 +5106,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -4883,7 +5114,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
   ]),
 );
 
-// `chat.subscribe@1.15`'s server frames: the live union with the pre-tier
+// `chat.subscribe@1.15`'s server frames: the `1.16` union with the pre-tier
 // approval card, on the snapshot and on the approval frames alike.
 const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -4894,11 +5125,40 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV115,
+  ]),
+);
+
+/**
+ * `chat.subscribe@1.16`'s server frames, frozen when `1.17` opened above it.
+ *
+ * Every arm `1.17` widens is swapped for its `1.16` copy: the snapshot (no
+ * `suggestedPrompt`, no `thinkingTokensEstimate`, no cron item, no approval
+ * display facts), `turnStateChanged` (no `suggestedPrompt`, no cron item), the
+ * approval frames' card, and `blockDelta`'s `approval.requested` (no display
+ * facts, `cautious` or `ruleForced`). There is no `thinkingTokens` arm. The
+ * arms `1.17` does not touch are the live ones by reference - which is sound
+ * only while later lines leave them untouched: whoever next changes one of
+ * them freezes that axis here, the way these are frozen now.
+ */
+const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV116,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV116,
   ]),
 );
 
@@ -4913,6 +5173,7 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
@@ -5069,7 +5330,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV113,
@@ -5505,10 +5766,59 @@ export const chatSubscribeV115 = defineStreamRpcContract({
  * A new minor although `1.15` is unreleased, because the minor is what tells
  * a client whether the key can be present. The client frames are `1.15`'s,
  * unchanged: the tier is host-authored.
+ *
+ * Frozen since `1.17` opened above it (`chatSubscribeServerFrameSchemaV116`).
+ * It was merged to `main` and not yet in any tag when that happened, which did
+ * not make it ours to grow: a long-lived branch does not own an unreleased
+ * minor.
  */
 export const chatSubscribeV116 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 16 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV116,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The Claude-parity line.
+ *
+ * `1.17` adds six host-authored surfaces, every one of them live-only state -
+ * nothing here is persisted, published or written to a chat-sync record:
+ *
+ *   - `suggestedPrompt` on the snapshot and on `turnStateChanged`, where an
+ *     absent key clears the chip;
+ *   - `thinkingTokensEstimate` on the snapshot, and the light `thinkingTokens`
+ *     frame that updates it;
+ *   - the `cron` background-item kind, which has no `scheduledFor` and no stop
+ *     affordance;
+ *   - `displayFacts` and `cautious` on the approval card, on the
+ *     `approval.requested` runtime event (and on the host-internal
+ *     `RuntimeApprovalRequest`);
+ *   - `ruleForced` on the `approval.requested` runtime event only.
+ *
+ * PROJECTION, not tolerance - the opposite call from `1.16`'s `tier`. Each key
+ * is deleted by name for every peer below `1.17`, the frame is dropped whole
+ * and a cron item is omitted from `backgroundItems`
+ * (`chat-frame-projection.ts`, one `chatSubscribeSupports…` predicate per
+ * surface). A new enum value and a new frame kind would fail an older peer's
+ * closed decoder outright, so those two could not be tolerated anyway; the keys
+ * are stripped as well, for the reason `1.10`'s fallback DTOs are - a card's
+ * worth of state sent to a peer that cannot render it is bytes for nothing,
+ * and a decoder's leniency is how a field ends up load-bearing on a line that
+ * never agreed to carry it.
+ *
+ * It also carries one behaviour with no schema change: a subagent's `text` and
+ * `reasoning` blocks may now be emitted parented under its card. A peer below
+ * `1.17` would render them flat, in the parent agent's voice, so the host's
+ * `< 1.17` projection tier blanks them in place for it rather than dropping
+ * them - dropping would renumber the rows that peer plans for itself.
+ *
+ * The client frames are `1.16`'s, unchanged: everything above is host-authored.
+ */
+export const chatSubscribeV117 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 17 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

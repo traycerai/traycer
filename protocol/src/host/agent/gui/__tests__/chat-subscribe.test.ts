@@ -23,6 +23,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2281,7 +2282,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 16 as chatSubscribeV116", () => {
+  it("registers chat.subscribe major 1 latestMinor 17 as chatSubscribeV117", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2317,7 +2318,7 @@ describe("chat.subscribe registry membership", () => {
     // judge reason, on the snapshot's `pendingApprovals` and on the approval
     // frames - a TOLERATED addition, not another ceiling switch, since a
     // `<=1.15` peer's non-strict decoder simply drops the unknown key.
-    expect(entry[1].latestMinor).toBe(16);
+    expect(entry[1].latestMinor).toBe(17);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2329,6 +2330,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[14].contract).toBe(chatSubscribeV114);
     expect(entry[1].versions[15].contract).toBe(chatSubscribeV115);
     expect(entry[1].versions[16].contract).toBe(chatSubscribeV116);
+    expect(entry[1].versions[17].contract).toBe(chatSubscribeV117);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2359,6 +2361,10 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV116.schemaVersion).toEqual({
       major: 1,
       minor: 16,
+    });
+    expect(chatSubscribeV117.schemaVersion).toEqual({
+      major: 1,
+      minor: 17,
     });
   });
 

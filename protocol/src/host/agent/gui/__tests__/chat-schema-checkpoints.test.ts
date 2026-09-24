@@ -22,6 +22,7 @@ import {
   chatSubscribeV113,
   chatSubscribeV114,
   chatSubscribeV115,
+  chatSubscribeV116,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -95,6 +96,10 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.15 is captured ON TIME, from the tree before 1.16 opened above it for the
 // approval card's judge-reason tier, and re-verified after that freeze:
 // identical.
+//
+// 1.16 is captured ON TIME, from the tree at OSS 0014b742d before 1.17 opened
+// above it for the Claude-parity surfaces, and re-verified after that freeze:
+// identical.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -160,6 +165,10 @@ const SERVER_FRAME_DIGESTS = {
     "9aca2d28d1d127a05921e532e779a43c929645bdf50a117b9953a64b3a3b35f0",
     "1f5c285666d7c8a100624291edafaae223ee22220a8787a68cdb41df701016b3",
   ],
+  16: [
+    "183b34c92b34eb6837d89bad85cabc8a1bc2223bee85d43ff27f372c47f1a760",
+    "258a4753885b4195260a7a9b32e99d43fcc76543ff8eade2249f36a375c7bbae",
+  ],
 } as const;
 
 const contracts = [
@@ -179,10 +188,11 @@ const contracts = [
   chatSubscribeV113,
   chatSubscribeV114,
   chatSubscribeV115,
+  chatSubscribeV116,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.15 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.16 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

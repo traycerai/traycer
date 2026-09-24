@@ -291,7 +291,9 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     if (action === null) return null;
     const triggerId = asString(r["trigger_id"]);
     return trim(
-      triggerId === null ? `${action} trigger` : `${action} trigger ${triggerId}`,
+      triggerId === null
+        ? `${action} trigger`
+        : `${action} trigger ${triggerId}`,
     );
   },
   SendFeedback: (input) => {

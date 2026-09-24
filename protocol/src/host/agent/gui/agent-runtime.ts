@@ -206,12 +206,55 @@ export type RuntimeApprovalDecision = z.infer<
   typeof runtimeApprovalDecisionSchema
 >;
 
+/**
+ * One labelled fact the approval card shows beside the request
+ * (`chat.subscribe@1.17`): the provider's own reason for asking, the path it
+ * blocked on, where an MCP server came from, that a rule forced the prompt.
+ * The `{ label, value }` pair provider notices already use.
+ *
+ * DISPLAY ONLY, and kept apart from `input` for that reason. `input` is what
+ * the judge reads and what the verdict cache keys on, so a fact decorated onto
+ * it would change an authorization decision, not just a card. Never journaled,
+ * never persisted on the approval block: it is pending-only, like the
+ * frame-only `reviewing` field on the card.
+ *
+ * Producer-authored strings: the producer caps their length, and every reader
+ * renders them as plain text.
+ */
+export const runtimeApprovalDisplayFactSchema = lazySchema(() =>
+  z.object({
+    label: z.string(),
+    value: z.string(),
+  }),
+);
+export type RuntimeApprovalDisplayFact = z.infer<
+  typeof runtimeApprovalDisplayFactSchema
+>;
+
+// Card-only facts shared by the approval request, the `approval.requested`
+// event and the live approval card (`chat.subscribe@1.17`). Optional rather
+// than defaulted: absent is "the provider said nothing", which is every
+// approval an older host or another harness produces. A peer below `1.17`
+// never receives either key - the host deletes them by name
+// (`chat-frame-projection.ts`).
+const runtimeApprovalCardFactFields = {
+  displayFacts: lazySchema(() =>
+    z.array(runtimeApprovalDisplayFactSchema).optional(),
+  ),
+  // The CLI's own "this ask must not be waved through" stamp: the ask carried
+  // the tool's own `decisionReason` or a `matchedAskRule`. NOT the judge's
+  // `tier` (`chatApprovalReasonSchema`), which says why TRAYCER's judge
+  // escalated - a card can carry both, either, or neither.
+  cautious: lazySchema(() => z.boolean().optional()),
+} as const;
+
 export const runtimeApprovalRequestSchema = lazySchema(() =>
   z.object({
     approvalId: z.string(),
     toolName: z.string(),
     description: z.string(),
     input: z.unknown().optional(),
+    ...runtimeApprovalCardFactFields,
   }),
 );
 export type RuntimeApprovalRequest = z.infer<
@@ -616,13 +659,40 @@ export const toolCallProgressEventSchema = lazySchema(() =>
 );
 export type ToolCallProgressEvent = z.infer<typeof toolCallProgressEventSchema>;
 
-export const approvalRequestedEventSchema = lazySchema(() =>
+// Wire-freeze copy of `approval.requested` as every `chat.subscribe` line
+// through `@1.16` ships it: before the card's display facts, `cautious` and
+// `ruleForced` (`1.17`). Every frozen runtime-event union below binds this
+// copy; only the live union reaches the widened event. Hand-frozen, not
+// derived from the live shape.
+export const approvalRequestedEventSchemaPreDisplayFacts = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
     type: z.literal("approval.requested"),
     toolName: z.string(),
     description: z.string(),
     input: z.unknown().optional(),
+  }),
+);
+
+// Live (`chat.subscribe@1.17`): the frozen event plus the card's facts and
+// `ruleForced`.
+export const approvalRequestedEventSchema = lazySchema(() =>
+  approvalRequestedEventSchemaPreDisplayFacts.extend({
+    ...runtimeApprovalCardFactFields,
+    /**
+     * A `permissions.ask` rule forced this prompt (the SDK's `matchedAskRule`).
+     *
+     * Rides the EVENT, not the request, and on the event only: the adapter has
+     * the rule in hand when it builds the event, before it calls the approval
+     * handler, and the host's event classifier must learn from the event itself
+     * that this ask may not be parked for a judge - the callback and the event
+     * race, and a fact carried only by the callback loses whenever the event
+     * wins. Optional: absent is "no rule forced it" (or the SDK did not say).
+     *
+     * A live-only key on a frame clients also receive, so it joins the `1.17`
+     * strip list like the two fields above.
+     */
+    ruleForced: z.boolean().optional(),
   }),
 );
 export type ApprovalRequestedEvent = z.infer<
@@ -1929,6 +1999,62 @@ export const runtimeEventSchema = lazySchema(() =>
 );
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.13`-`@1.16`
+// ship it: every live member, with `approval.requested` swapped for its
+// pre-`1.17` freeze so none of those lines can observe the approval card's
+// display facts, `cautious` or `ruleForced`. It is exactly what the live union
+// was when `1.17` opened above it. Explicitly listed rather than derived from
+// the live union, for the reason `runtimeEventSchemaPreImage` gives: a future
+// event must not silently join a line that has shipped peers.
+export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textDeltaEventSchema,
+    textCompletedEventSchema,
+    reasoningDeltaEventSchema,
+    reasoningCompletedEventSchema,
+    toolCallStartedEventSchema,
+    toolCallCompletedEventSchema,
+    toolCallErroredEventSchema,
+    toolCallProgressEventSchema,
+    approvalRequestedEventSchemaPreDisplayFacts,
+    approvalResolvedEventSchema,
+    todoUpdatedEventSchema,
+    planDeltaEventSchema,
+    planUpdatedEventSchema,
+    planCompletedEventSchema,
+    compactionStartedEventSchema,
+    compactionCompletedEventSchema,
+    compactionErroredEventSchema,
+    interviewRequestedEventSchema,
+    interviewResolvedEventSchema,
+    interviewErroredEventSchema,
+    subAgentStartedEventSchema,
+    subAgentProgressEventSchema,
+    subAgentCompletedEventSchema,
+    fileChangeStartedEventSchema,
+    fileChangeCompletedEventSchema,
+    artifactOperationEventSchema,
+    commandStartedEventSchema,
+    commandCompletedEventSchema,
+    sessionCreatedEventSchema,
+    sessionResumedEventSchema,
+    turnStartedEventSchema,
+    userMessageAnchorResolvedEventSchema,
+    turnCompletedEventSchema,
+    turnStoppedEventSchema,
+    turnInterruptedEventSchema,
+    steerSubmittedEventSchema,
+    usageUpdatedEventSchema,
+    errorEventSchema,
+    workflowStartedEventSchema,
+    workflowProgressEventSchema,
+    workflowCompletedEventSchema,
+    providerNoticeUpsertEventSchema,
+    imageResolutionUpdatedEventSchema,
+    userMessageAnchorTailUpdatedEventSchema,
+  ]),
+);
+
 // Wire-freeze copy of the current runtime-event union before browser-session
 // references. `chat.subscribe@1.10`-`@1.12` use this line; only the current
 // `@1.13` contract may expose the enrichment. Keep the option list explicit so
@@ -1943,7 +2069,7 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     toolCallCompletedEventSchema,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
-    approvalRequestedEventSchema,
+    approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
     planDeltaEventSchema,
@@ -2005,7 +2131,7 @@ export const runtimeEventSchemaPreImage = lazySchema(() =>
     toolCallCompletedEventSchemaPreImage,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
-    approvalRequestedEventSchema,
+    approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
     planDeltaEventSchemaPreReasonix,
@@ -2058,7 +2184,7 @@ export const runtimeEventSchemaV12PreInReplyTo = lazySchema(() =>
     toolCallCompletedEventSchemaPreImage,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
-    approvalRequestedEventSchema,
+    approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
     planDeltaEventSchemaPreReasonix,
@@ -2122,7 +2248,7 @@ export const runtimeEventSchemaPreSettlement = lazySchema(() =>
     toolCallCompletedEventSchemaPreReceipt,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
-    approvalRequestedEventSchema,
+    approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
     planDeltaEventSchemaPreReasonix,
@@ -2180,7 +2306,7 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     toolCallCompletedEventSchema,
     toolCallErroredEventSchema,
     toolCallProgressEventSchema,
-    approvalRequestedEventSchema,
+    approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
     planDeltaEventSchema,

@@ -326,6 +326,8 @@ describe("chatSubscribeWindowedServerFrameSchema's frame kinds", () => {
     "portForwardsChanged",
     // `1.15`: the host-owned accepted-message lifecycle.
     "messageDeliveryChanged",
+    // `1.17`: the running estimate of the turn's thinking tokens.
+    "thinkingTokens",
     "actionAck",
     "messageAccepted",
     "queueChanged",
