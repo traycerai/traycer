@@ -6,6 +6,11 @@ import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+import {
+  filterDeletedCloudChats,
+  useCloudChatDeletions,
+} from "@/lib/chats/cloud-chat-deletions";
+
 /**
  * The `epic.listCloudChats` answer, read WITHOUT a React observer.
  *
@@ -141,7 +146,7 @@ export function readCloudKnownChatIds(
   }
   if (state.status !== "success" || state.data === undefined) return null;
   return new Set(
-    state.data.chats
+    filterDeletedCloudChats(state.data.chats, useCloudChatDeletions.getState())
       .filter(cloudRowIsViewersOwn)
       .map((chat) => chat.identity.chatId),
   );
