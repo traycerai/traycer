@@ -94,6 +94,67 @@ export function createHarness(): Harness {
   };
 }
 
+/** Each windowed frame, keyed by its `kind`. */
+type WindowedFrameByKind = {
+  readonly [F in ChatSubscribeWindowedServerFrame as F["kind"]]: F;
+};
+
+/**
+ * The callback the real client routes each frame kind to. A mapped type over
+ * every kind, so a kind the protocol adds without a route here fails to
+ * compile - the exhaustiveness a `switch` gets from its `never` arm.
+ */
+type WindowedFrameRoutes = {
+  readonly [K in keyof WindowedFrameByKind]: (
+    cb: ChatStreamCallbacks,
+    frame: WindowedFrameByKind[K],
+  ) => void;
+};
+
+const WINDOWED_FRAME_ROUTES: WindowedFrameRoutes = {
+  snapshot: (cb, frame) => cb.onWindowedSnapshot(frame),
+  skeletonChunk: (cb, frame) => cb.onSkeletonChunk(frame),
+  indexChanged: (cb, frame) => cb.onIndexChanged(frame),
+  range: (cb, frame) => cb.onRange(frame),
+  accumulatedChanges: (cb, frame) => cb.onAccumulatedChanges(frame),
+  actionAck: (cb, frame) => cb.onActionAck(frame),
+  messageAccepted: (cb, frame) => cb.onMessageAccepted(frame),
+  messageDeliveryChanged: (cb, frame) => cb.onMessageDeliveryChanged(frame),
+  queueChanged: (cb, frame) => cb.onQueueChanged(frame),
+  turnStateChanged: (cb, frame) => cb.onTurnStateChanged(frame),
+  blockDelta: (cb, frame) => cb.onBlockDelta(frame),
+  approvalRequested: (cb, frame) => cb.onApprovalRequested(frame),
+  approvalResolved: (cb, frame) => cb.onApprovalResolved(frame),
+  fileEditApprovalRequested: (cb, frame) =>
+    cb.onFileEditApprovalRequested(frame),
+  fileEditApprovalResolved: (cb, frame) => cb.onFileEditApprovalResolved(frame),
+  interviewRequested: (cb, frame) => cb.onInterviewRequested(frame),
+  interviewAnswered: (cb, frame) => cb.onInterviewAnswered(frame),
+  interviewErrored: (cb, frame) => cb.onInterviewErrored(frame),
+  eventAppended: (cb, frame) => cb.onEventAppended(frame),
+  restoreStarted: (cb, frame) => cb.onRestoreStarted(frame),
+  restoreProgress: (cb, frame) => cb.onRestoreProgress(frame),
+  restoreCompleted: (cb, frame) => cb.onRestoreCompleted(frame),
+  errorNotice: (cb, frame) => cb.onErrorNotice(frame),
+  worktreeStateChanged: (cb, frame) => cb.onWorktreeStateChanged(frame),
+  managedCommandsChanged: (cb, frame) => cb.onManagedCommandsChanged(frame),
+  portForwardsChanged: (cb, frame) => cb.onPortForwardsChanged(frame),
+  heldUpdatesChanged: (cb, frame) => cb.onHeldUpdatesChanged(frame),
+  pong: () => undefined,
+};
+
+/**
+ * One frame to its route. Generic in the kind so the route and the frame are
+ * the same kind's: the table lookup is typed by `K`, not by the whole union.
+ */
+function routeWindowedFrame<K extends keyof WindowedFrameByKind>(
+  cb: ChatStreamCallbacks,
+  kind: K,
+  frame: WindowedFrameByKind[K],
+): void {
+  WINDOWED_FRAME_ROUTES[kind](cb, frame);
+}
+
 /**
  * Parses one envelope exactly as `handleWindowedFrame` does and routes it to
  * the callback the real client would call. A frame that fails to parse THROWS:
@@ -111,69 +172,7 @@ export function dispatchEnvelope(
     );
   }
   const frame: ChatSubscribeWindowedServerFrame = parsed.data;
-  switch (frame.kind) {
-    case "snapshot":
-      return cb.onWindowedSnapshot(frame);
-    case "skeletonChunk":
-      return cb.onSkeletonChunk(frame);
-    case "indexChanged":
-      return cb.onIndexChanged(frame);
-    case "range":
-      return cb.onRange(frame);
-    case "accumulatedChanges":
-      return cb.onAccumulatedChanges(frame);
-    case "actionAck":
-      return cb.onActionAck(frame);
-    case "messageAccepted":
-      return cb.onMessageAccepted(frame);
-    case "messageDeliveryChanged":
-      return cb.onMessageDeliveryChanged(frame);
-    case "queueChanged":
-      return cb.onQueueChanged(frame);
-    case "turnStateChanged":
-      return cb.onTurnStateChanged(frame);
-    case "blockDelta":
-      return cb.onBlockDelta(frame);
-    case "approvalRequested":
-      return cb.onApprovalRequested(frame);
-    case "approvalResolved":
-      return cb.onApprovalResolved(frame);
-    case "fileEditApprovalRequested":
-      return cb.onFileEditApprovalRequested(frame);
-    case "fileEditApprovalResolved":
-      return cb.onFileEditApprovalResolved(frame);
-    case "interviewRequested":
-      return cb.onInterviewRequested(frame);
-    case "interviewAnswered":
-      return cb.onInterviewAnswered(frame);
-    case "interviewErrored":
-      return cb.onInterviewErrored(frame);
-    case "eventAppended":
-      return cb.onEventAppended(frame);
-    case "restoreStarted":
-      return cb.onRestoreStarted(frame);
-    case "restoreProgress":
-      return cb.onRestoreProgress(frame);
-    case "restoreCompleted":
-      return cb.onRestoreCompleted(frame);
-    case "errorNotice":
-      return cb.onErrorNotice(frame);
-    case "worktreeStateChanged":
-      return cb.onWorktreeStateChanged(frame);
-    case "managedCommandsChanged":
-      return cb.onManagedCommandsChanged(frame);
-    case "portForwardsChanged":
-      return cb.onPortForwardsChanged(frame);
-    case "heldUpdatesChanged":
-      return cb.onHeldUpdatesChanged(frame);
-    case "pong":
-      return undefined;
-    default: {
-      const _exhaustive: never = frame;
-      void _exhaustive;
-      return undefined;
-    }
-  }
+  routeWindowedFrame(cb, frame.kind, frame);
 }
 
 /**
