@@ -30,6 +30,7 @@ import {
   deleteArtifactResponseSchema,
   deleteChatRequestSchema,
   deleteChatResponseSchema,
+  deleteChatResponseSchemaV10,
   deleteCommentRequestSchema,
   deleteCommentResponseSchema,
   deleteCommentThreadRequestSchema,
@@ -927,7 +928,24 @@ export const epicDeleteChatV10 = defineRpcContract({
   method: "epic.deleteChat",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: deleteChatRequestSchema,
+  responseSchema: deleteChatResponseSchemaV10,
+});
+
+export const epicDeleteChatV11 = defineRpcContract({
+  method: "epic.deleteChat",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: deleteChatRequestSchema,
   responseSchema: deleteChatResponseSchema,
+});
+
+export const epicDeleteChatUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicDeleteChatV10,
+  typeof epicDeleteChatV11
+>({
+  from: epicDeleteChatV10.schemaVersion,
+  to: epicDeleteChatV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, publicationChatId: null }),
 });
 
 export const epicReparentChatV10 = defineRpcContract({

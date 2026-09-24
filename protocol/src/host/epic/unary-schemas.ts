@@ -2183,8 +2183,18 @@ export const deleteChatRequestSchema = lazySchema(() =>
 );
 export type DeleteChatRequest = z.infer<typeof deleteChatRequestSchema>;
 
-export const deleteChatResponseSchema = lazySchema(() =>
+/** Frozen response for released epic.deleteChat@1.0 peers. */
+export const deleteChatResponseSchemaV10 = lazySchema(() =>
   z.object({ deleted: z.boolean() }),
+);
+
+export const deleteChatResponseSchema = lazySchema(() =>
+  z.object({
+    deleted: z.boolean(),
+    // Captured by the owning host before deletion. Null means the peer cannot
+    // report publication identity, not that the local id is the cloud id.
+    publicationChatId: z.string().nullable(),
+  }),
 );
 export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
 
