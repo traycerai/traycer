@@ -857,6 +857,17 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         const node = requireScrollNode(listRef);
         parkAtStrictBottom(node);
         const parked = detachReader(node, 240);
+        // `detachReader`'s native `scroll` dispatch reaches the library's own
+        // `handleScroll`, which only flushes `state.scroll` synchronously
+        // while already `scrollingTo` / mid initial-scroll / MVCP-active -
+        // otherwise it goes through `scrollEventCoalescer.schedule()`, an
+        // rAF-coalesced update (see `@legendapp/list/react.mjs`'s
+        // `handleScroll`/`useRafCoalescer`). Without a settle here, a
+        // mutation whose own maintain compensation reads `state.scroll`
+        // (footer-inset's `contentInsetEndAdjustment` path, in particular)
+        // computes its delta against the stale pre-detach value instead of
+        // the DOM's actual `parked` position.
+        await settleLegendList();
 
         await applyMutation(kind, {
           messages,
