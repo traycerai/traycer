@@ -10,6 +10,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { runHeaderStripCommitHandoff } from "./header-strip-commit-handoff";
@@ -92,6 +93,7 @@ export function TabStrip() {
 }
 
 function TabStripBody() {
+  const tabListRef = useRef<HTMLDivElement | null>(null);
   const headerItemIds = useHeaderStripItemIds();
   const layoutItems = useTabsStore((state) => state.items);
   const groups = useTabsStore((state) => state.groups);
@@ -104,11 +106,15 @@ function TabStripBody() {
   const modalActive = useAnySystemOverlayActive();
   const handleWheel = useHorizontalWheelScroll();
   const taskTabLayout = useSettingsStore((state) => state.taskTabLayout);
-  const { setScrollElement, hiddenTabKeys, revealTab } =
+  const { setScrollElement, hiddenTabKeys, hasOverflow, revealTab } =
     useHiddenHeaderTabs(taskTabLayout);
   const hiddenTabs = useMemo(() => {
-    const hidden = new Set(hiddenTabKeys);
-    return allTabs.filter((tab) => hidden.has(tabRefKey(tab)));
+    const left = new Set(hiddenTabKeys.left);
+    const right = new Set(hiddenTabKeys.right);
+    return {
+      left: allTabs.filter((tab) => left.has(tabRefKey(tab))),
+      right: allTabs.filter((tab) => right.has(tabRefKey(tab))),
+    };
   }, [allTabs, hiddenTabKeys]);
   const handleActivateHiddenTab = useCallback(
     (tab: HeaderTab) => {
@@ -367,7 +373,9 @@ function TabStripBody() {
         chatEpicIds={indicatorChatEpicIds}
       >
         <div
+          ref={tabListRef}
           role="tablist"
+          tabIndex={-1}
           aria-label="Open tabs"
           data-testid="tab-strip"
           data-tab-layout={taskTabLayout}
@@ -384,10 +392,12 @@ function TabStripBody() {
             />
           ) : null}
           <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
-            {hiddenTabs.length > 0 ? (
+            {hasOverflow ? (
               <HiddenTabsMenu
-                tabs={hiddenTabs}
+                tabs={hiddenTabs.left}
+                side="left"
                 onActivate={handleActivateHiddenTab}
+                fallbackFocusRef={tabListRef}
               />
             ) : null}
             <LayoutGroup id="header-tabs">
@@ -455,6 +465,14 @@ function TabStripBody() {
                 })}
               </div>
             </LayoutGroup>
+            {hasOverflow ? (
+              <HiddenTabsMenu
+                tabs={hiddenTabs.right}
+                side="right"
+                onActivate={handleActivateHiddenTab}
+                fallbackFocusRef={tabListRef}
+              />
+            ) : null}
             <TabStripNewButton onNewTab={handleNewTab} />
           </div>
           {closeTabFlow.unsyncedDialog}
