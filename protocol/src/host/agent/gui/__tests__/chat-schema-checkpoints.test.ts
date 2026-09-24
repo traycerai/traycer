@@ -23,6 +23,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -97,9 +98,21 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // approval card's judge-reason tier, and re-verified after that freeze:
 // identical.
 //
-// 1.16 is captured ON TIME, from the tree at OSS 0014b742d before 1.18 opened
-// above it for the Claude-parity surfaces, and re-verified after that freeze:
-// identical.
+// 1.16 is captured ON TIME, from main's own bytes at OSS commit 0014b742d,
+// before the sender-host key (`sentFromHostId` on the queued prompt item)
+// took 1.17 above it, and re-verified after the freeze: identical - and again
+// after the Claude-parity freeze put 1.18 above 1.17: identical. The first
+// draft of that key was added to the live prompt item in place, which every
+// line from 1.13 up reached by reference; this gate caught it on 1.13, and
+// the hand-frozen `chatQueuedPromptItemSchemaPreSentFromHost` copy is what
+// puts 1.13–1.16 back on their captured values.
+//
+// 1.17 is captured ON TIME, from main's own bytes at OSS commit da3d4f40d,
+// before the Claude-parity surfaces took 1.18 above it. That line had been
+// built as 1.17 on a long-lived branch while main minted its own 1.17, so it
+// was renumbered rather than folded in: main's line was already on a release
+// train. The merged tree's frozen 1.17 reproduces main's digests exactly,
+// server and client frames alike.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -169,6 +182,10 @@ const SERVER_FRAME_DIGESTS = {
     "183b34c92b34eb6837d89bad85cabc8a1bc2223bee85d43ff27f372c47f1a760",
     "258a4753885b4195260a7a9b32e99d43fcc76543ff8eade2249f36a375c7bbae",
   ],
+  17: [
+    "dbf3a7e702b1e2a00cf02943c4d8284850e6a0e58403149e3243600aeb4bf7fc",
+    "3cb2021ec06347cfdac037380776254b5f0677fba1ac6b2af23d42658024be33",
+  ],
 } as const;
 
 const contracts = [
@@ -189,10 +206,11 @@ const contracts = [
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.16 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.17 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

@@ -516,9 +516,9 @@ const fallbackWaitBackgroundItemSchema = lazySchema(() =>
   }),
 );
 
-// ─── Frozen `chat.subscribe@1.10–1.16` background-item shapes ──────────────
+// ─── Frozen `chat.subscribe@1.10–1.17` background-item shapes ──────────────
 //
-// `1.18` adds the `cron` kind below. Every line from `1.10` through `1.16`
+// `1.18` adds the `cron` kind below. Every line from `1.10` through `1.17`
 // binds this union - the live one as it stood when `1.18` opened above it -
 // and not an alias for the live one, for the reason the pre-`fallback-wait`
 // freeze above gives: a released peer's decoder is a closed discriminated
@@ -644,6 +644,17 @@ export const chatQueuedPromptItemSchema = lazySchema(() =>
     // selection (not per-chat), captured from the send frame at queue time.
     // Defaulted PERSONAL so older queued items still parse.
     accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+    // The machine the queued message was sent from (the send frame's
+    // `sentFromHostId`), captured at queue time like `accountContext`, so a
+    // queued send is placed by where it was SENT from rather than where the
+    // queue happened to drain. The queue is durable, so it is defaulted: a row
+    // written before the key rehydrates as "no machine named". Null for every
+    // host-authored item (A2A prompts, deliveries). Lives on the live item
+    // (`chat.subscribe@1.17`) only: `1.13`–`1.16` bind the hand-frozen
+    // `chatQueuedPromptItemSchemaPreSentFromHost` below, and every line below
+    // `1.13` the hand-frozen `chatQueuedPromptItemSchemaPreAuto`, neither of
+    // which has the key.
+    sentFromHostId: z.string().nullable().default(null),
     delivery: chatQueueItemDeliverySchema.default("next_turn"),
     status: chatQueueItemStatusSchema.default("pending"),
     targetTurnId: z.string().nullable().default(null),
@@ -789,17 +800,67 @@ export const chatQueueStateSchema = lazySchema(() =>
 );
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
 
+/**
+ * Wire-freeze copy of the queued prompt item as every line from
+ * `chat.subscribe@1.13` through `@1.16` ships it: the live item without the
+ * `sentFromHostId` that `1.17` added. Hand-frozen field-for-field, NOT
+ * `.omit()`-derived from the live item, so a later key cannot reach those
+ * lines through it - the derivation leak `chatQueuedPromptItemSchemaPreAuto`'s
+ * own comment records. Bound to `1.13`'s pre-port-forward union and to the
+ * `1.14`–`1.16` union below.
+ */
+const chatQueuedPromptItemSchemaPreSentFromHost = lazySchema(() =>
+  z.object({
+    kind: z.literal("prompt").default("prompt"),
+    queueItemId: z.string(),
+    messageId: z.string(),
+    message: userMessagePayloadSchema,
+    sender: userMessageSenderSchema,
+    settings: chatRunSettingsSchema,
+    accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    status: chatQueueItemStatusSchema.default("pending"),
+    targetTurnId: z.string().nullable().default(null),
+    steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+    fallbackReason: z.string().nullable().default(null),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+  }),
+);
+
 // Wire-freeze of the queue as `chat.subscribe@1.13` ships it: the two arms
-// that existed before `1.14` added the port-forward item. Written out as its
-// own union, NOT derived from the live one, so a later arm cannot reach `1.13`
+// that existed before `1.14` added the port-forward item, with the prompt
+// item as it was before `1.17` added the sender host. Written out as its own
+// union, NOT derived from the live one, so a later arm cannot reach `1.13`
 // through it. Bound to that line's snapshot and `queueChanged` frames.
 const chatQueuedItemSchemaPrePortForward = lazySchema(() =>
-  z.union([chatQueuedManagedCommandItemSchema, chatQueuedPromptItemSchema]),
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPromptItemSchemaPreSentFromHost,
+  ]),
 );
 const chatQueueStateSchemaPrePortForward = lazySchema(() =>
   z.object({
     status: z.enum(["idle", "running", "paused"]),
     items: z.array(chatQueuedItemSchemaPrePortForward),
+  }),
+);
+
+// Wire-freeze of the queue as `chat.subscribe@1.14` through `@1.16` ship it:
+// the live three arms, with the prompt item as it was before `1.17` added the
+// sender host. Same arm order as the live union, for the same `z.union`
+// reasons. Bound to those lines' snapshot and `queueChanged` frames.
+const chatQueuedItemSchemaPreSentFromHost = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedPromptItemSchemaPreSentFromHost,
+  ]),
+);
+const chatQueueStateSchemaPreSentFromHost = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(chatQueuedItemSchemaPreSentFromHost),
   }),
 );
 
@@ -834,7 +895,14 @@ const chatQueuedManagedCommandItemSchemaPreShellHost = lazySchema(() =>
 // own union and the composed freeze both build on it.
 
 /**
- * Wire-freeze of the queued turn's `permissionMode`, pre-`auto`.
+ * Wire-freeze of the queued prompt item as every line from `1.7` through
+ * `1.12` ships it: the queued turn's `permissionMode` pre-`auto`, and no
+ * `sentFromHostId`, which entered the live item at `1.13`.
+ *
+ * Hand-frozen field-for-field, NOT `.extend()` off the live item as it once
+ * was: that derivation carried every later live key down to the released
+ * `1.7`/`1.8` snapshot and `queueChanged` frames, which is exactly what the
+ * released-baseline gate exists to refuse.
  *
  * `chatQueuedItemSchemaPreAuto` pairs it with the LIVE managed-command item,
  * which is what `1.11` needs: that line carries the shell host but predates
@@ -842,8 +910,21 @@ const chatQueuedManagedCommandItemSchemaPreShellHost = lazySchema(() =>
  * `chatQueueStateSchemaPreShellHostPreAuto` below.
  */
 const chatQueuedPromptItemSchemaPreAuto = lazySchema(() =>
-  chatQueuedPromptItemSchema.extend({
+  z.object({
+    kind: z.literal("prompt").default("prompt"),
+    queueItemId: z.string(),
+    messageId: z.string(),
+    message: userMessagePayloadSchema,
+    sender: userMessageSenderSchema,
     settings: chatRunSettingsSchemaPreAuto,
+    accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    status: chatQueueItemStatusSchema.default("pending"),
+    targetTurnId: z.string().nullable().default(null),
+    steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+    fallbackReason: z.string().nullable().default(null),
+    createdAt: z.number(),
+    updatedAt: z.number(),
   }),
 );
 // A plain `z.union`, managed-command arm FIRST - mirroring
@@ -1160,10 +1241,10 @@ export type ChatApprovalStatePreTier = z.infer<
 >;
 
 /**
- * Frozen approval card as `chat.subscribe@1.16` ships it: the reason carries
- * its `tier`. `.extend` over an existing key keeps that key's position, so the
- * shape differs from `1.15`'s by the one nested key. `1.18` adds the card's
- * display facts and `cautious` on the live schema below.
+ * Frozen approval card as `chat.subscribe@1.16` and `1.17` ship it: the reason
+ * carries its `tier`. `.extend` over an existing key keeps that key's position,
+ * so the shape differs from `1.15`'s by the one nested key. `1.18` adds the
+ * card's display facts and `cautious` on the live schema below.
  *
  * Do NOT add fields here. Add them to `chatApprovalStateSchema` below.
  */
@@ -1177,7 +1258,7 @@ export type ChatApprovalStatePreDisplayFacts = z.infer<
 >;
 
 /**
- * The live approval card (`chat.subscribe@1.18`): `1.16`'s card plus what the
+ * The live approval card (`chat.subscribe@1.18`): `1.17`'s card plus what the
  * provider said about the ask.
  *
  * Both keys are OPTIONAL and stripped, the opposite call from `1.16`'s `tier`
@@ -1208,7 +1289,7 @@ export const chatApprovalStateSchema = lazySchema(() =>
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
 
 /**
- * Frozen file-edit approval card, as every line through `chat.subscribe@1.16`
+ * Frozen file-edit approval card, as every line through `chat.subscribe@1.17`
  * ships it. `1.18` adds `cautious` and `displayFacts` on the live schema below.
  *
  * Do NOT add fields here. Add them to `chatFileEditApprovalStateSchema` below.
@@ -1229,7 +1310,7 @@ export type ChatFileEditApprovalStatePreCautious = z.infer<
 >;
 
 /**
- * The live file-edit approval card (`chat.subscribe@1.18`): `1.16`'s card plus
+ * The live file-edit approval card (`chat.subscribe@1.18`): `1.17`'s card plus
  * the two keys the command card gained on the same line, for the same reason.
  *
  * Set when a user's ask rule forced this edit to a person: `cautious`, so the
@@ -2146,10 +2227,10 @@ const chatSubscribeSnapshotServerFrameSchema = lazySchema(() =>
   }),
 );
 
-// The frame as `chat.subscribe@1.13`-`1.16` ship it. `1.18` widens it on the
+// The frame as `chat.subscribe@1.13`-`1.17` ship it. `1.18` widens it on the
 // live frame below; the pre-`auto` freeze grows from this one too, so nothing
 // `1.18` adds can reach a line below it.
-const chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116 = lazySchema(
+const chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117 = lazySchema(
   () =>
     z.object({
       kind: z.literal("turnStateChanged"),
@@ -2199,7 +2280,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116 = lazySchema(
 // and the provider's suggested prompt. `.extend` over an existing key keeps
 // its position, so the new key lands last and nothing else moves.
 const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
-  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116.extend({
+  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117.extend({
     backgroundItems: z.array(backgroundItemSchema).optional(),
     // Same rule as the fallback keys: an absent key CLEARS the chip - see
     // `chatSuggestedPromptSchema`.
@@ -2212,10 +2293,10 @@ const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
 // TUPLES that name a permission mode - so on a pre-`auto` line they must be
 // the frozen tuples, exactly as the snapshot's copies are. This frame is
 // shared by every minor, which is why freezing the snapshot alone left `1.10`
-// still advertising `auto` through it. Built over the `1.13`-`1.16` freeze,
+// still advertising `auto` through it. Built over the `1.13`-`1.17` freeze,
 // never the live frame, so nothing `1.18` added reaches these lines.
 const chatSubscribeTurnStateChangedServerFrameSchemaPreAuto = lazySchema(() =>
-  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116.extend({
+  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117.extend({
     pendingFallback: pendingFallbackSchemaPreAuto.optional(),
     pendingReturn: pendingReturnSchemaPreAuto.optional(),
     lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
@@ -2298,7 +2379,7 @@ const chatSubscribePortForwardsChangedServerFrameSchema = lazySchema(() =>
  * while `turnId` is the active turn and clears it on the turn-end state it
  * already receives.
  *
- * Never sent to a peer that negotiated `<=1.16`: it has no variant for this
+ * Never sent to a peer that negotiated `<=1.17`: it has no variant for this
  * kind, and the host's per-minor projection drops the frame whole.
  */
 const chatSubscribeThinkingTokensServerFrameSchema = lazySchema(() =>
@@ -2495,7 +2576,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly action: ActionSchema;
   readonly approval: ApprovalSchema;
   /**
-   * The file-edit card: frozen pre-`cautious` on every line through `1.16`,
+   * The file-edit card: frozen pre-`cautious` on every line through `1.17`,
    * live on `1.18`, the same axis `approval` moves on.
    */
   readonly fileEditApproval: FileEditApprovalSchema;
@@ -2796,11 +2877,12 @@ const chatSubscribeCommonServerFrameSchemasV113 =
   });
 
 // `chat.subscribe@1.14`'s common frames: the port-forward item on the queue,
-// over `1.13`'s `auto`, with the pre-tier approval card.
+// over `1.13`'s `auto`, with the pre-tier approval card and the pre-sender-host
+// prompt item.
 const chatSubscribeCommonServerFrameSchemasV114 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
-    queue: chatQueueStateSchema,
+    queue: chatQueueStateSchemaPreSentFromHost,
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
@@ -2814,11 +2896,12 @@ const chatSubscribeCommonServerFrameSchemasV114 =
   });
 
 // `chat.subscribe@1.15`'s common frames: the live set with the pre-tier
-// approval card, the one axis `1.16` adds here.
+// approval card (the axis `1.16` adds) and the pre-sender-host prompt item
+// (the axis `1.17` adds).
 const chatSubscribeCommonServerFrameSchemasV115 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
-    queue: chatQueueStateSchema,
+    queue: chatQueueStateSchemaPreSentFromHost,
     event: chatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreTier,
@@ -2832,9 +2915,28 @@ const chatSubscribeCommonServerFrameSchemasV115 =
   });
 
 // `chat.subscribe@1.16`'s common frames: the approval card's reason carries
-// its tier, and the card has no display facts yet - the one axis `1.18` adds
-// here.
+// its tier, with no display facts (the axis `1.18` adds), and the prompt item
+// has no sender host (the axis `1.17` adds).
 const chatSubscribeCommonServerFrameSchemasV116 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchemaPreSentFromHost,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchemaPreDisplayFacts,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// `chat.subscribe@1.17`'s common frames: `1.16`'s with the queued prompt item
+// naming the machine it was sent from, and the approval cards still without
+// display facts or `cautious` - the axis `1.18` adds.
+const chatSubscribeCommonServerFrameSchemasV117 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
     queue: chatQueueStateSchema,
@@ -2939,7 +3041,7 @@ const chatSubscribeSharedServerFrameSchemasV112 = [
 ];
 // `chat.subscribe@1.13`'s shared frames: the pre-`1.18` `blockDelta` (no
 // approval display facts) over the pre-port-forward common set. `1.13` through
-// `1.16` bind the same frozen event union.
+// `1.17` bind the same frozen event union.
 const chatSubscribeSharedServerFrameSchemasV113 = [
   ...chatSubscribeCommonServerFrameSchemasV113,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
@@ -2964,10 +3066,18 @@ const chatSubscribeSharedServerFrameSchemasV115 = [
   blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 // `chat.subscribe@1.16`'s shared frames: the tiered card with no display
-// facts, and the `blockDelta` whose `approval.requested` carries none either.
+// facts, the pre-sender-host prompt item, and the `blockDelta` whose
+// `approval.requested` carries no display facts either.
 const chatSubscribeSharedServerFrameSchemasV116 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV116,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
+];
+// `chat.subscribe@1.17`'s shared frames: `1.16`'s with the sender-host prompt
+// item, still on the pre-display-facts `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasV117 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV117,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
@@ -3629,22 +3739,53 @@ const chatSubscribeClientFrameSchemaOptionsPreAuto = [
   fallbackReleaseChoiceClientFrameSchema,
 ] as const;
 
-// Live client frame (`chat.subscribe@1.11`) - the `1.10` composition with the
-// six mode-bearing frames re-bound to the live permission-mode enum. Same
-// frames in the same order; `1.11` is the first line whose client may say
-// `auto`.
-const chatSubscribeClientFrameSchemaOptionsPreMessageDelivery = [
-  lazySchema(() =>
-    chatSubscribeClientFrameSchemaV17ToV19Options[0].extend({
-      settings: chatRunSettingsSchema,
-    }),
-  ),
-  deleteMessageSuffixClientFrameSchema,
-  lazySchema(() =>
-    chatSubscribeClientFrameSchemaV17ToV19Options[2].extend({
-      settings: chatRunSettingsSchema,
-    }),
-  ),
+/**
+ * The host id of the machine the sending app runs on - the app's LOCAL host,
+ * never the tab's `hostId` - carried on the two turn-starting client frames
+ * (`send`, `editUserMessage`) and stamped at send time exactly as
+ * `accountContext` is. `null` from web and mobile, from a desktop app whose
+ * local host has not published yet, and from every client below `1.13`, whose
+ * frozen frames have no such key and whose frames are normalized up through
+ * the live schema, which fills the default.
+ *
+ * What it decides: where a routed browser realm born on that turn is placed
+ * (the machine the message was sent from, when it is one of the user's hosts
+ * and can place a tab natively), and nothing else. It is a client claim; the
+ * host checks membership against its own host inventory before dialing.
+ *
+ * Bound to the live lines (`1.17` and `1.18`, which adds nothing a client
+ * sends) only. Every line from `1.13` through `1.16`
+ * keeps the pre-key `send` / `editUserMessage` objects below, and every line
+ * below `1.13` its own `send` object above. A new minor although `1.16` is
+ * unreleased, for the reason `1.16` itself gives: the minor is what tells a
+ * peer whether the key can be present, and the checkpoint gate
+ * (`chat-schema-checkpoints.test.ts`) freezes every line but the newest.
+ */
+const sentFromHostIdFrameField = {
+  sentFromHostId: z.string().nullable().default(null),
+} as const;
+
+// `send` and `editUserMessage` as every line from `chat.subscribe@1.11`
+// through `@1.16` ships them: the `1.10` objects re-bound to the live
+// permission-mode enum, without the sender host `1.17` adds. The live line's
+// objects extend these two, so a later key cannot reach `1.11`–`1.16` except
+// by being added here on purpose.
+const sendClientFrameSchemaPreSentFromHost = lazySchema(() =>
+  chatSubscribeClientFrameSchemaV17ToV19Options[0].extend({
+    settings: chatRunSettingsSchema,
+  }),
+);
+const editUserMessageClientFrameSchemaPreSentFromHost = lazySchema(() =>
+  chatSubscribeClientFrameSchemaV17ToV19Options[2].extend({
+    settings: chatRunSettingsSchema,
+  }),
+);
+
+// The client frames after the three message frames, shared by every line
+// from `chat.subscribe@1.11` up: the `1.10` composition with the six
+// mode-bearing frames re-bound to the live permission-mode enum. Same frames
+// in the same order; `1.11` is the first line whose client may say `auto`.
+const chatSubscribeClientFrameSchemaTailOptionsLive = [
   ...chatSubscribeClientFrameSchemaMiddleOptionsLive,
   interviewAnswerClientFrameSchema,
   interviewErrorClientFrameSchema,
@@ -3657,21 +3798,51 @@ const chatSubscribeClientFrameSchemaOptionsPreMessageDelivery = [
   fallbackReleaseChoiceClientFrameSchema,
 ] as const;
 
-const chatSubscribeClientFrameSchemaOptions = [
+// Client frames of `chat.subscribe@1.11` through `@1.14`: no message-delivery
+// acknowledgement (`1.15`), no sender host (`1.17`).
+const chatSubscribeClientFrameSchemaOptionsPreMessageDelivery = [
+  sendClientFrameSchemaPreSentFromHost,
+  deleteMessageSuffixClientFrameSchema,
+  editUserMessageClientFrameSchemaPreSentFromHost,
+  ...chatSubscribeClientFrameSchemaTailOptionsLive,
+] as const;
+
+// The one lifecycle action a client has. An opening is sent or withdrawn by
+// the host alone; a client only acknowledges that it restored a withdrawn
+// prompt, naming the revision it restored from. Acknowledging a prompt that
+// is already claimed is a no-op, never an error: another device got there
+// first.
+const messageDeliveryRestoredClientFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("messageDeliveryRestored"),
+    ...ownerActionFrameFields,
+    messageId: z.string(),
+    expectedRevision: z.number().int().positive(),
+  }),
+);
+
+// Client frames of `chat.subscribe@1.15` and `@1.16`: `1.14`'s plus the
+// message-delivery acknowledgement, still without the sender host.
+const chatSubscribeClientFrameSchemaOptionsPreSentFromHost = [
   ...chatSubscribeClientFrameSchemaOptionsPreMessageDelivery,
-  // The one lifecycle action a client has. An opening is sent or withdrawn by
-  // the host alone; a client only acknowledges that it restored a withdrawn
-  // prompt, naming the revision it restored from. Acknowledging a prompt that
-  // is already claimed is a no-op, never an error: another device got there
-  // first.
+  messageDeliveryRestoredClientFrameSchema,
+] as const;
+
+// Live client frames (`chat.subscribe@1.17`): `1.16`'s with `send` and
+// `editUserMessage` naming the machine they were sent from. Same frames in
+// the same order.
+const chatSubscribeClientFrameSchemaOptions = [
   lazySchema(() =>
-    z.object({
-      kind: z.literal("messageDeliveryRestored"),
-      ...ownerActionFrameFields,
-      messageId: z.string(),
-      expectedRevision: z.number().int().positive(),
-    }),
+    sendClientFrameSchemaPreSentFromHost.extend(sentFromHostIdFrameField),
   ),
+  deleteMessageSuffixClientFrameSchema,
+  lazySchema(() =>
+    editUserMessageClientFrameSchemaPreSentFromHost.extend(
+      sentFromHostIdFrameField,
+    ),
+  ),
+  ...chatSubscribeClientFrameSchemaTailOptionsLive,
+  messageDeliveryRestoredClientFrameSchema,
 ] as const;
 
 export const chatSubscribeClientFrameSchema = lazySchema(() =>
@@ -4921,7 +5092,7 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
       chatFileEditApprovalStateSchemaPreCautious,
     ),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
-    // Pre-cron: `1.10` through `1.16` inherit this binding, and only the live
+    // Pre-cron: `1.10` through `1.17` inherit this binding, and only the live
     // snapshot (`1.18`) re-widens it.
     backgroundItems: z.array(backgroundItemSchemaPreCron).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),
@@ -4982,11 +5153,13 @@ const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
   }),
 );
 
-// The live windowed snapshot (`chat.subscribe@1.14`): `1.13` plus the agent's
-// port forwards and the queue item that reports one going `interrupted`.
+// The windowed snapshot as `chat.subscribe@1.14` ships it: `1.13` plus the
+// agent's port forwards and the queue item that reports one going
+// `interrupted`, with the prompt item as it was before `1.17` added the
+// sender host - a binding `1.15` and `1.16` inherit.
 const chatWindowedSnapshotSchemaV114 = lazySchema(() =>
   chatWindowedSnapshotSchemaV113.extend({
-    queue: chatQueueStateSchema,
+    queue: chatQueueStateSchemaPreSentFromHost,
     // `default([])`, not optional, for the reason `managedCommands` is: one
     // array shape on the snapshot and on `portForwardsChanged`, and a host too
     // old to send it has no forwards to show, so `[]` is the truth.
@@ -5003,19 +5176,27 @@ const chatWindowedSnapshotSchemaV115 = lazySchema(() =>
 );
 // The windowed snapshot as `chat.subscribe@1.16` ships it: `1.15` with the
 // approval card re-widened to carry its reason's tier. `.extend` over the
-// existing key keeps its position, so the shape moves by that nested key alone.
+// existing key keeps its position, so the shape moves by that nested key
+// alone.
 const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
   chatWindowedSnapshotSchemaV115.extend({
     pendingApprovals: z.array(chatApprovalStateSchemaPreDisplayFacts),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.18`): `1.16` with the approval
+// The windowed snapshot as `chat.subscribe@1.17` ships it: `1.16` with the
+// queue re-widened so its prompt item names the machine it was sent from.
+const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
+  chatWindowedSnapshotSchemaV116.extend({
+    queue: chatQueueStateSchema,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.18`): `1.17` with the approval
 // card's display facts, the cron background kind, and two live-only keys. Both
 // new keys are optional and stripped by name below `1.18`, like `1.10`'s
 // fallback DTOs: absent is "nothing to show", which is also what an older
 // host's silence means.
 export const chatWindowedSnapshotSchema = lazySchema(() =>
-  chatWindowedSnapshotSchemaV116.extend({
+  chatWindowedSnapshotSchemaV117.extend({
     pendingApprovals: z.array(chatApprovalStateSchema),
     // Both cards gain `cautious` and `displayFacts` on this line.
     pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
@@ -5176,7 +5357,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5195,7 +5376,7 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5204,16 +5385,18 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
 );
 
 /**
- * `chat.subscribe@1.16`'s server frames, frozen when `1.18` opened above it.
+ * `chat.subscribe@1.16`'s server frames, frozen when `1.17` opened above it
+ * and again when `1.18` did.
  *
- * Every arm `1.18` widens is swapped for its `1.16` copy: the snapshot (no
- * `suggestedPrompt`, no `thinkingTokensEstimate`, no cron item, no approval
- * display facts), `turnStateChanged` (no `suggestedPrompt`, no cron item), the
- * approval frames' card, and `blockDelta`'s `approval.requested` (no display
- * facts, `cautious` or `ruleForced`). There is no `thinkingTokens` arm. The
- * arms `1.18` does not touch are the live ones by reference - which is sound
- * only while later lines leave them untouched: whoever next changes one of
- * them freezes that axis here, the way these are frozen now.
+ * Every arm a later line widens is swapped for its `1.16` copy: the snapshot
+ * (the prompt item without its sender host; no `suggestedPrompt`, no
+ * `thinkingTokensEstimate`, no cron item, no approval display facts),
+ * `turnStateChanged` (no `suggestedPrompt`, no cron item), the queue and
+ * approval frames, and `blockDelta`'s `approval.requested` (no display facts,
+ * `cautious` or `ruleForced`). There is no `thinkingTokens` arm. The arms no
+ * later line touches are the live ones by reference - which is sound only while
+ * later lines leave them untouched: whoever next changes one of them freezes
+ * that axis here, the way these are frozen now.
  */
 const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -5224,11 +5407,34 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV116,
+  ]),
+);
+
+/**
+ * `chat.subscribe@1.17`'s server frames, frozen when `1.18` opened above it:
+ * `1.16`'s with the queued prompt item naming its sender host, on the snapshot
+ * and on the queue frames alike. Every Claude-parity arm stays at its `1.16`
+ * copy - `1.17` never carried any of them.
+ */
+const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV117,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV117,
   ]),
 );
 
@@ -5402,7 +5608,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV116,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV113,
@@ -5488,6 +5694,17 @@ const resnapshotClientFrameSchema = lazySchema(() =>
 export const chatSubscribeWindowedClientFrameSchemaV113ToV114 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...chatSubscribeClientFrameSchemaOptionsPreMessageDelivery,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]),
+);
+
+// The windowed client union of `chat.subscribe@1.15` and `@1.16`: the live
+// frames without the sender host. Exported so the host's stream resolver can
+// parse those connections against the contract they negotiated.
+export const chatSubscribeWindowedClientFrameSchemaV115ToV116 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsPreSentFromHost,
     loadRangeClientFrameSchema,
     resnapshotClientFrameSchema,
   ]),
@@ -5809,7 +6026,8 @@ export const chatSubscribeV114 = defineStreamRpcContract({
  * Accepted conversation messages retain explicit execution state on the host.
  *
  * Frozen at the pre-tier approval card since `1.16` opened above it
- * (`chatSubscribeServerFrameSchemaV115`). Its client frames are `1.16`'s,
+ * (`chatSubscribeServerFrameSchemaV115`), and at the pre-sender-host client
+ * frames and queue item since `1.17` did. Its client frames are `1.16`'s,
  * unchanged.
  */
 export const chatSubscribeV115 = defineStreamRpcContract({
@@ -5817,7 +6035,7 @@ export const chatSubscribeV115 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 15 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV115,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV115ToV116,
 });
 
 /**
@@ -5839,16 +6057,50 @@ export const chatSubscribeV115 = defineStreamRpcContract({
  * a client whether the key can be present. The client frames are `1.15`'s,
  * unchanged: the tier is host-authored.
  *
- * Frozen since `1.18` opened above it (`chatSubscribeServerFrameSchemaV116`).
- * It was merged to `main` and not yet in any tag when that happened, which did
- * not make it ours to grow: a long-lived branch does not own an unreleased
- * minor.
+ * Frozen at the pre-sender-host client frames and queue item since `1.17`
+ * opened above it, and at the pre-parity approval cards, events and
+ * `turnStateChanged` since `1.18` did (`chatSubscribeServerFrameSchemaV116`).
  */
 export const chatSubscribeV116 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 16 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV116,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV115ToV116,
+});
+
+/**
+ * The sender-host line.
+ *
+ * `1.17` adds one optional key, `sentFromHostId`, in three places: on the
+ * `send` and `editUserMessage` client frames (`sentFromHostIdFrameField`, the
+ * app's LOCAL host at send time, stamped like `accountContext`), and on the
+ * queued prompt item the host echoes back, so a queued send is placed by
+ * where it was SENT from rather than where the queue drained. It decides
+ * where a routed browser realm born on that turn is placed, and nothing else.
+ *
+ * TOLERANCE, not projection, in both directions. The key is
+ * `.nullable().default(null)` inside a non-strict object: a `<=1.16` client's
+ * frames have no such key and are normalized up through the live schema,
+ * which fills `null` (no machine named, so the realm is placed by the other
+ * rules); a `<=1.16` client's decoder drops the queue item's key as an
+ * unknown member; a `1.17` client reading a `<=1.16` host's item fills
+ * `null`. Nothing is withheld and nothing is refused.
+ *
+ * A new minor although `1.16` is unreleased, because the minor is what tells
+ * a peer whether the key can be present - and because the checkpoint gate
+ * freezes every line but the newest, so adding the key to `1.13`–`1.16` in
+ * place moved their captured surfaces.
+ *
+ * Frozen at the pre-parity approval cards, events and `turnStateChanged`
+ * since `1.18` opened above it (`chatSubscribeServerFrameSchemaV117`). Its
+ * client frames are the live ones: `1.18` adds nothing a client sends.
+ */
+export const chatSubscribeV117 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 17 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV117,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
@@ -5869,16 +6121,16 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  *     `RuntimeApprovalRequest`);
  *   - `ruleForced` on the `approval.requested` runtime event only.
  *
- * PROJECTION, not tolerance - the opposite call from `1.16`'s `tier`. Each key
- * is deleted by name for every peer below `1.18`, the frame is dropped whole
- * and a cron item is omitted from `backgroundItems`
- * (`chat-frame-projection.ts`, one `chatSubscribeSupports…` predicate per
- * surface). A new enum value and a new frame kind would fail an older peer's
- * closed decoder outright, so those two could not be tolerated anyway; the keys
- * are stripped as well, for the reason `1.10`'s fallback DTOs are - a card's
- * worth of state sent to a peer that cannot render it is bytes for nothing,
- * and a decoder's leniency is how a field ends up load-bearing on a line that
- * never agreed to carry it.
+ * PROJECTION, not tolerance - the opposite call from `1.16`'s `tier` and
+ * `1.17`'s `sentFromHostId`. Each key is deleted by name for every peer below
+ * `1.18`, the frame is dropped whole and a cron item is omitted from
+ * `backgroundItems` (`chat-frame-projection.ts`, one `chatSubscribeSupports…`
+ * predicate per surface). A new enum value and a new frame kind would fail an
+ * older peer's closed decoder outright, so those two could not be tolerated
+ * anyway; the keys are stripped as well, for the reason `1.10`'s fallback DTOs
+ * are - a card's worth of state sent to a peer that cannot render it is bytes
+ * for nothing, and a decoder's leniency is how a field ends up load-bearing on
+ * a line that never agreed to carry it.
  *
  * It also carries one behaviour with no schema change: a subagent's `text` and
  * `reasoning` blocks may now be emitted parented under its card. A peer below
@@ -5886,7 +6138,10 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * `< 1.18` projection tier blanks them in place for it rather than dropping
  * them - dropping would renumber the rows that peer plans for itself.
  *
- * The client frames are `1.16`'s, unchanged: everything above is host-authored.
+ * Opened above `1.17`, which `main` had taken for the sender-host line while
+ * this line was in flight as `1.17`: a long-lived branch does not own an
+ * unreleased minor. The client frames are `1.17`'s, unchanged: everything
+ * above is host-authored.
  */
 export const chatSubscribeV118 = defineStreamRpcContract({
   method: "chat.subscribe",

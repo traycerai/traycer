@@ -179,7 +179,6 @@ vi.mock("@/hooks/host/use-host-query", () => ({
             maxVersionsPerArtifact: 100,
             maxBytesPerArtifact: 16 * 1024 * 1024,
           },
-          storage: { referencedBytes: 0, reclaimableBytes: 0 },
         },
         isLoading: false,
         isError: false,

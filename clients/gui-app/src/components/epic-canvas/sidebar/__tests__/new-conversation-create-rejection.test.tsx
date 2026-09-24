@@ -74,14 +74,26 @@ function worktreeCreateRejection(): HostRpcError {
   });
 }
 
+interface RejectionCreateChatRequest {
+  readonly chatId: string;
+  readonly hostId?: string | null;
+  readonly initialMessage?: {
+    readonly sentFromHostId?: string | null;
+  } | null;
+}
+
 const testState = vi.hoisted(() => ({
   /** Resolved per test - a rejection, or a deferred one for the race case. */
   createChat:
-    vi.fn<(request: { readonly chatId: string }) => Promise<unknown>>(),
+    vi.fn<(request: RejectionCreateChatRequest) => Promise<unknown>>(),
   /** Every request the modal sent, so a test can name the chat it submitted. */
-  createRequests: [] as Array<{ readonly chatId: string }>,
+  createRequests: [] as Array<RejectionCreateChatRequest>,
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
+  // The directory's LOCAL host id - the machine typing, deliberately
+  // distinct from `PLACEMENT_TARGET`/`HOST_ID` (the target host the chat is
+  // created on) below.
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -152,7 +164,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
     isPending: false,
-    mutateAsync: (request: { readonly chatId: string }) => {
+    mutateAsync: (request: RejectionCreateChatRequest) => {
       testState.createRequests.push(request);
       return testState.createChat(request);
     },
@@ -194,7 +206,16 @@ const stubHostClient = {
   getRequestContextUserId: () => null,
 };
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
-vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => stubHostClient,
+  // The create stamps `sentFromHostId` from the directory's local host at
+  // submit - see `testState.getLocalHostId` for the default and the
+  // sender-host-placement case below for the assertion.
+  getHostBindingSnapshot: () => ({
+    hostClient: stubHostClient,
+    directory: { getLocalHostId: testState.getLocalHostId },
+  }),
+}));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
@@ -382,6 +403,8 @@ beforeEach(() => {
   testState.createRequests.length = 0;
   testState.createChat.mockReset();
   testState.createChat.mockRejectedValue(worktreeCreateRejection());
+  testState.getLocalHostId.mockReset();
+  testState.getLocalHostId.mockReturnValue("host-local-typing");
 });
 
 afterEach(() => {
@@ -402,6 +425,35 @@ describe("new-conversation modal: a rejected create leaves no live pending tab",
     await submitAndSettle();
 
     expect(handoff()?.status).toBe("pending");
+  });
+
+  // `sentFromHostId` names the machine the user is TYPING on (the local
+  // host), never the target `hostId` the chat is created on (`HOST_ID`,
+  // "host-a"). The suite's default local id ("host-local-typing") already
+  // diverges from that target, so a reader quietly replaced by the target
+  // host would fail this alongside one replaced by a constant. Captured
+  // regardless of the create's eventual rejection - the request the modal
+  // sent is what this pins, not the response.
+  it("stamps the initial message's sentFromHostId with the local host id, not the target host", async () => {
+    renderModal();
+    await submitAndSettle();
+
+    expect(testState.createRequests).toHaveLength(1);
+    const request = testState.createRequests[0];
+    expect(request.hostId).toBe(HOST_ID);
+    expect(request.initialMessage?.sentFromHostId).toBe("host-local-typing");
+  });
+
+  // The null path stays pinned: a shell with no local host sends no sender
+  // host, rather than falling back to the target host.
+  it("sends a null sentFromHostId when the directory has no local host", async () => {
+    testState.getLocalHostId.mockReturnValue(null);
+    renderModal();
+    await submitAndSettle();
+
+    expect(testState.createRequests).toHaveLength(1);
+    const request = testState.createRequests[0];
+    expect(request.initialMessage?.sentFromHostId ?? null).toBeNull();
   });
 
   it("marks the handoff failed when the host rejects the create, after the modal has closed", async () => {

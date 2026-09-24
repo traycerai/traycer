@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   queryOptions,
   useQuery,
@@ -21,6 +21,11 @@ import {
   decodeCloudChatPayload,
   type CloudChatPayloadBytes,
 } from "@/lib/chats/cloud-chat-payloads";
+import {
+  filterDeletedCloudChats,
+  useCloudChatDeletions,
+} from "@/lib/chats/cloud-chat-deletions";
+import type { ListCloudChatsResponse } from "@traycer/protocol/host/epic/cloud-chat";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -129,6 +134,14 @@ export function useCloudChatList(
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const params = useMemo(() => ({ taskId: args.taskId }), [args.taskId]);
+  const deletions = useCloudChatDeletions();
+  const select = useCallback(
+    (data: ListCloudChatsResponse): ListCloudChatsResponse => {
+      const chats = filterDeletedCloudChats(data.chats, deletions);
+      return chats === data.chats ? data : { ...data, chats: [...chats] };
+    },
+    [deletions],
+  );
   return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
     // The one shared spelling of this key's viewer component -
     // `cloudChatListQueryKey` (the imperative reader's builder) appends the
@@ -142,6 +155,7 @@ export function useCloudChatList(
     // do (see `cloudVerdictPreflight`).
     preflight: cloudVerdictPreflight("epic.listCloudChats"),
     options: {
+      select,
       enabled:
         args.enabled &&
         cloudAuthorized &&

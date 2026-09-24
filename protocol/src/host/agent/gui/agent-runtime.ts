@@ -660,7 +660,7 @@ export const toolCallProgressEventSchema = lazySchema(() =>
 export type ToolCallProgressEvent = z.infer<typeof toolCallProgressEventSchema>;
 
 // Wire-freeze copy of `approval.requested` as every `chat.subscribe` line
-// through `@1.16` ships it: before the card's display facts, `cautious` and
+// through `@1.17` ships it: before the card's display facts, `cautious` and
 // `ruleForced` (`1.18`). Every frozen runtime-event union below binds this
 // copy; only the live union reaches the widened event. Hand-frozen, not
 // derived from the live shape.
@@ -1999,7 +1999,7 @@ export const runtimeEventSchema = lazySchema(() =>
 );
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
-// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.13`-`@1.16`
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.13`-`@1.17`
 // ship it: every live member, with `approval.requested` swapped for its
 // pre-`1.18` freeze so none of those lines can observe the approval card's
 // display facts, `cautious` or `ruleForced`. It is exactly what the live union

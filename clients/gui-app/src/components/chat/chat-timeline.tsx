@@ -459,10 +459,11 @@ export const ChatTimeline = memo(function ChatTimeline({
           //
           // The rows themselves distinguish the two: a streaming token changes a
           // row's CONTENT in place, while an insert, a removal, or a move
-          // changes the sequence of row KEYS. Only the latter can shift what a
-          // detached reader is looking at, and only the latter needs the anchor,
-          // so the channel is on for exactly those commits. Off, positions are
-          // recalculated inline and stay coherent before the browser paints.
+          // changes the sequence of row KEYS. Only structural changes need the
+          // data anchor lock, so that channel is on for exactly those commits.
+          // Content-only passes can still refresh unmeasured height estimates;
+          // patches/@legendapp%2Flist@3.3.4.patch compensates via the SIZE channel,
+          // without the lock, while recalculating positions inline before paint.
           //
           // Deliberately NOT `itemsAreEqual`: the library reuses that same
           // comparator to decide whether a mounted container refreshes its item

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatSubscribeV116,
+  chatSubscribeV117,
   chatSubscribeV118,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -120,9 +121,12 @@ describe("chat.subscribe@1.18 carries cautious and displayFacts on the file-edit
   });
 });
 
-describe("chat.subscribe@1.16 (frozen) never declared them", () => {
-  const frozen = chatSubscribeV116.serverFrameSchema;
-
+// `1.16` and `1.17` both sit below the parity line; `1.17` differs from
+// `1.16` only by the sender host on the queued prompt item.
+describe.each([
+  { label: "1.16", frozen: chatSubscribeV116.serverFrameSchema },
+  { label: "1.17", frozen: chatSubscribeV117.serverFrameSchema },
+])("chat.subscribe@$label (frozen) never declared them", ({ frozen }) => {
   it("strips both from fileEditApprovalRequested", () => {
     const parsed = frozen.parse(fileEditRequestedFrame(true));
     if (parsed.kind !== "fileEditApprovalRequested") {

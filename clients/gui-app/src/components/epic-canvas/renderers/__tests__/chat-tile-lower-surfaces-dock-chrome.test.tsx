@@ -308,6 +308,7 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     sender: { type: "user", userId: "user-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

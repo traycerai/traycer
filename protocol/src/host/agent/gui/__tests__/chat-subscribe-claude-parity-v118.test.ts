@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatSubscribeV116,
+  chatSubscribeV117,
   chatSubscribeV118,
   chatThinkingTokensEstimateSchema,
   backgroundItemSchema,
@@ -207,76 +208,82 @@ describe("chat.subscribe@1.18 accepts every Claude-parity addition", () => {
   });
 });
 
-describe("chat.subscribe@1.16 (frozen) cannot carry the additions", () => {
-  const frozen = chatSubscribeV116.serverFrameSchema;
+// `1.16` and `1.17` both sit below the parity line; `1.17` differs from
+// `1.16` only by the sender host on the queued prompt item.
+describe.each([
+  { label: "1.16", frozen: chatSubscribeV116.serverFrameSchema },
+  { label: "1.17", frozen: chatSubscribeV117.serverFrameSchema },
+])(
+  "chat.subscribe@$label (frozen) cannot carry the additions",
+  ({ frozen }) => {
+    it("rejects the thinkingTokens frame (closed union)", () => {
+      expect(frozen.safeParse(THINKING_FRAME).success).toBe(false);
+    });
 
-  it("rejects the thinkingTokens frame (closed union)", () => {
-    expect(frozen.safeParse(THINKING_FRAME).success).toBe(false);
-  });
+    it("rejects a cron item on turnStateChanged, and accepts the same frame without it", () => {
+      expect(
+        frozen.safeParse(turnStateFrame([COMMAND_ITEM, CRON_ITEM], false))
+          .success,
+      ).toBe(false);
+      expect(
+        frozen.safeParse(turnStateFrame([COMMAND_ITEM], false)).success,
+      ).toBe(true);
+    });
 
-  it("rejects a cron item on turnStateChanged, and accepts the same frame without it", () => {
-    expect(
-      frozen.safeParse(turnStateFrame([COMMAND_ITEM, CRON_ITEM], false))
-        .success,
-    ).toBe(false);
-    expect(
-      frozen.safeParse(turnStateFrame([COMMAND_ITEM], false)).success,
-    ).toBe(true);
-  });
+    it("rejects a windowed snapshot carrying a cron item, and accepts it without", () => {
+      expect(frozen.safeParse(snapshotFrame(windowedSnapshot())).success).toBe(
+        false,
+      );
+      expect(
+        frozen.safeParse(
+          snapshotFrame({
+            ...windowedSnapshot(),
+            backgroundItems: [COMMAND_ITEM],
+          }),
+        ).success,
+      ).toBe(true);
+    });
 
-  it("rejects a windowed snapshot carrying a cron item, and accepts it without", () => {
-    expect(frozen.safeParse(snapshotFrame(windowedSnapshot())).success).toBe(
-      false,
-    );
-    expect(
-      frozen.safeParse(
+    it("strips the optional keys it never declared from the snapshot", () => {
+      const parsed = frozen.parse(
         snapshotFrame({
           ...windowedSnapshot(),
           backgroundItems: [COMMAND_ITEM],
         }),
-      ).success,
-    ).toBe(true);
-  });
+      );
+      if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+      expect(Object.hasOwn(parsed.snapshot, "suggestedPrompt")).toBe(false);
+      expect(Object.hasOwn(parsed.snapshot, "thinkingTokensEstimate")).toBe(
+        false,
+      );
+      const [card] = parsed.snapshot.pendingApprovals;
+      if (card === undefined) throw new Error("expected a card");
+      expect(Object.hasOwn(card, "displayFacts")).toBe(false);
+      expect(Object.hasOwn(card, "cautious")).toBe(false);
+    });
 
-  it("strips the optional keys it never declared from the snapshot", () => {
-    const parsed = frozen.parse(
-      snapshotFrame({
-        ...windowedSnapshot(),
-        backgroundItems: [COMMAND_ITEM],
-      }),
-    );
-    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    expect(Object.hasOwn(parsed.snapshot, "suggestedPrompt")).toBe(false);
-    expect(Object.hasOwn(parsed.snapshot, "thinkingTokensEstimate")).toBe(
-      false,
-    );
-    const [card] = parsed.snapshot.pendingApprovals;
-    if (card === undefined) throw new Error("expected a card");
-    expect(Object.hasOwn(card, "displayFacts")).toBe(false);
-    expect(Object.hasOwn(card, "cautious")).toBe(false);
-  });
+    it("strips suggestedPrompt from turnStateChanged", () => {
+      const parsed = frozen.parse(turnStateFrame([COMMAND_ITEM], true));
+      expect(Object.hasOwn(parsed, "suggestedPrompt")).toBe(false);
+    });
 
-  it("strips suggestedPrompt from turnStateChanged", () => {
-    const parsed = frozen.parse(turnStateFrame([COMMAND_ITEM], true));
-    expect(Object.hasOwn(parsed, "suggestedPrompt")).toBe(false);
-  });
+    it("strips displayFacts / cautious from approvalRequested", () => {
+      const parsed = frozen.parse(APPROVAL_REQUESTED_FRAME);
+      if (parsed.kind !== "approvalRequested") throw new Error("wrong kind");
+      expect(Object.hasOwn(parsed.approval, "displayFacts")).toBe(false);
+      expect(Object.hasOwn(parsed.approval, "cautious")).toBe(false);
+    });
 
-  it("strips displayFacts / cautious from approvalRequested", () => {
-    const parsed = frozen.parse(APPROVAL_REQUESTED_FRAME);
-    if (parsed.kind !== "approvalRequested") throw new Error("wrong kind");
-    expect(Object.hasOwn(parsed.approval, "displayFacts")).toBe(false);
-    expect(Object.hasOwn(parsed.approval, "cautious")).toBe(false);
-  });
-
-  it("strips displayFacts / cautious / ruleForced from a blockDelta approval.requested", () => {
-    const parsed = frozen.parse(BLOCK_DELTA_FRAME);
-    if (parsed.kind !== "blockDelta") throw new Error("wrong kind");
-    expect(parsed.event.type).toBe("approval.requested");
-    expect(Object.hasOwn(parsed.event, "displayFacts")).toBe(false);
-    expect(Object.hasOwn(parsed.event, "cautious")).toBe(false);
-    expect(Object.hasOwn(parsed.event, "ruleForced")).toBe(false);
-  });
-});
+    it("strips displayFacts / cautious / ruleForced from a blockDelta approval.requested", () => {
+      const parsed = frozen.parse(BLOCK_DELTA_FRAME);
+      if (parsed.kind !== "blockDelta") throw new Error("wrong kind");
+      expect(parsed.event.type).toBe("approval.requested");
+      expect(Object.hasOwn(parsed.event, "displayFacts")).toBe(false);
+      expect(Object.hasOwn(parsed.event, "cautious")).toBe(false);
+      expect(Object.hasOwn(parsed.event, "ruleForced")).toBe(false);
+    });
+  },
+);
 
 describe("the cron background item", () => {
   it("is a member of backgroundItemKindSchema", () => {

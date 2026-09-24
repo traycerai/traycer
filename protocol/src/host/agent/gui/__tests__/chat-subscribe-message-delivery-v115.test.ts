@@ -25,6 +25,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
   type ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { projectChatClientFrameForVersion } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
@@ -62,7 +63,8 @@ type ChatSubscribeContract =
   | typeof chatSubscribeV113
   | typeof chatSubscribeV114
   | typeof chatSubscribeV115
-  | typeof chatSubscribeV116;
+  | typeof chatSubscribeV116
+  | typeof chatSubscribeV117;
 
 function clientFrameKinds(contract: ChatSubscribeContract): readonly string[] {
   return contract.clientFrameSchema.options.map(
@@ -88,15 +90,14 @@ describe("chat.subscribe registry carries the new line at 1.15", () => {
     expect(line.versions[14]?.contract).toBe(chatSubscribeV114);
   });
 
-  it("carries the message-delivery frame kinds forward onto the head (1.16)", () => {
+  it("carries the message-delivery frame kinds forward onto the head (1.17)", () => {
     // The head still speaks the message-delivery slice this line minted:
-    // `1.16` only adds the approval-tier key, it does not drop anything.
-    expect(clientFrameKinds(chatSubscribeV116)).toContain(
-      NEW_CLIENT_ACTION_KIND,
-    );
-    expect(serverFrameKinds(chatSubscribeV116)).toContain(
-      "messageDeliveryChanged",
-    );
+    // `1.16` only adds the approval-tier key and `1.17` only the sender-host
+    // key; neither drops anything.
+    for (const contract of [chatSubscribeV116, chatSubscribeV117]) {
+      expect(clientFrameKinds(contract)).toContain(NEW_CLIENT_ACTION_KIND);
+      expect(serverFrameKinds(contract)).toContain("messageDeliveryChanged");
+    }
   });
 });
 

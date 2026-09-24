@@ -61,9 +61,10 @@ const SHELL_HOST_MINOR = 11;
 const DRAFT_IMAGE_CAUSE_MINOR = 12;
 const AUTO_MINOR = 13;
 const PORT_FORWARD_MINOR = 14;
-// `1.15` (message delivery) and `1.16` (approval tier) mint no boundary a
-// needle below can pin, so only the ceiling names them.
+// `1.15` (message delivery), `1.16` (approval tier) and `1.17` (sender host)
+// mint no boundary a needle below can pin, so only the ceiling names them.
 const APPROVAL_TIER_MINOR = 16;
+const SENT_FROM_HOST_MINOR = 17;
 // The Claude-parity surfaces: suggested prompt, thinking tokens, cron items,
 // approval display facts / cautious / rule-forced.
 const CLAUDE_PARITY_MINOR = 18;
@@ -212,7 +213,7 @@ describe("chat.subscribe line surfaces", () => {
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });

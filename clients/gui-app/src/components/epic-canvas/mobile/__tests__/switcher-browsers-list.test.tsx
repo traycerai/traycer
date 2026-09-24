@@ -535,6 +535,10 @@ describe("SwitcherBrowsersList", () => {
     renderList(() => undefined);
     const empty = screen.getByTestId("epic-browsers-panel-empty");
     expect(empty).toBeTruthy();
+    // The shared component's plain headline: this task has no browsers this
+    // window can see anywhere, so "yet" is the honest word. The other-machine
+    // headline is pinned where the component is defined.
+    expect(screen.getByText("No browsers yet.")).toBeTruthy();
     // On an empty list the header "+" and this labelled button are BOTH on
     // screen and share an accessible name, which device verification caught as
     // a two-match query waiting to happen. Pinned here so the ambiguity is a

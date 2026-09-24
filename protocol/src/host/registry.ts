@@ -278,6 +278,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
   chatSubscribeV118,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
@@ -414,7 +415,6 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
   hostAgentCreateFromRemoteSenderV10,
-  hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -511,6 +511,8 @@ import {
   epicCreateUpgradeV11ToV12,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
+  epicDeleteChatV11,
+  epicDeleteChatUpgradeV10ToV11,
   epicDeleteCommentThreadV10,
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
@@ -7553,11 +7555,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteChat": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicDeleteChatV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicDeleteChatV11,
+          upgradeFromPreviousVersion: epicDeleteChatUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8787,19 +8793,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostResolveRepoPathsV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.directory.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostDirectoryListV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -12165,9 +12158,17 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         // @1.16 adds `tier` on the approval card's judge reason. A defaulted
         // key in a non-strict object: a @1.15 peer drops it on parse, so the
-        // host withholds nothing. Frozen since @1.18 opened above it.
+        // host withholds nothing. Frozen since @1.17 opened above it.
         16: {
           contract: chatSubscribeV116,
+        },
+        // @1.17 adds `sentFromHostId` on `send` / `editUserMessage` and on the
+        // queued prompt item: the machine the message was sent from, which
+        // places a routed browser realm born on that turn. A defaulted key in
+        // a non-strict object at every minor, so the host withholds nothing.
+        // Frozen at the pre-parity cards and events since @1.18 opened above it.
+        17: {
+          contract: chatSubscribeV117,
         },
         // @1.18 is the Claude-parity line: the suggested prompt, the
         // thinking-token estimate and its light frame, the `cron` background

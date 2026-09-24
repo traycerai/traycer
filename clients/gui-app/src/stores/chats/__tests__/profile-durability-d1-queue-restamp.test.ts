@@ -158,6 +158,7 @@ function queuedItem(
     sender: { type: "user" as const, userId: OWNER_ID },
     settings,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn" as const,
     status: "pending" as const,
     targetTurnId: null,

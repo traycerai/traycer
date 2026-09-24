@@ -125,7 +125,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // surface (the agent's forwards on the snapshot, `portForwardsChanged`,
     // and the queue item that reports one going `interrupted`) took @1.14.
     // Host-owned accepted-message delivery took @1.15. The approval card's
-    // judge-reason tier took @1.16. The Claude-parity surfaces took @1.18.
+    // judge-reason tier took @1.16. The sender host on `send` /
+    // `editUserMessage` and on the queued prompt item took @1.17. The
+    // Claude-parity surfaces took @1.18.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
