@@ -71,6 +71,11 @@ const landingMocks = vi.hoisted(() => ({
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
+  // The directory's LOCAL host id - the machine the user is typing on,
+  // deliberately distinct from `getActiveHostId` (the target the chat is
+  // created on) so a suite that reads both from the same constant can't
+  // pass by coincidence.
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
   floorsRequested: new Array<unknown>(),
   dispatchOptions: new Array<{
     readonly method: string;
@@ -138,6 +143,10 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/lib/host/runtime", () => ({
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
+    // The create stamps `sentFromHostId` from the directory's local host at
+    // submit - see `landingMocks.getLocalHostId` for the default and the
+    // sender-host-placement cases below for the assertions.
+    directory: { getLocalHostId: landingMocks.getLocalHostId },
   }),
 }));
 
@@ -372,6 +381,8 @@ describe("useLandingComposerActions", () => {
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
     landingMocks.getActiveHostId.mockReturnValue("host-landing");
+    landingMocks.getLocalHostId.mockReset();
+    landingMocks.getLocalHostId.mockReturnValue("host-local-typing");
     landingMocks.getActiveHost.mockReset();
     landingMocks.getActiveHost.mockReturnValue({
       hostId: "host-landing",
@@ -555,6 +566,135 @@ describe("useLandingComposerActions", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     expect(toast.error).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  // `sentFromHostId` names the machine the user is TYPING on (the local host,
+  // read from `readLocalHostIdSnapshot`), never `activeHostId` (the tab/target
+  // host the chat is created on). This suite's default mocks already make the
+  // two diverge - `getLocalHostId` answers "host-local-typing",
+  // `getActiveHostId` answers "host-landing" - so a reader that was quietly
+  // replaced by the target host would fail this alongside a reader replaced
+  // by a constant.
+  it("stamps the initial message's sentFromHostId with the local host id, not the target host", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: {
+        hostId: "host-landing",
+        initialMessage: { sentFromHostId: "host-local-typing" },
+      },
+    });
+
+    queryClient.clear();
+  });
+
+  // Widening the divergence beyond the suite defaults: an explicit target
+  // host that is neither `undefined` nor coincidentally equal to the local
+  // host id, still pinned against the local id and not the target.
+  it("stamps sentFromHostId with the local host id even when the target host is switched", async () => {
+    landingMocks.getActiveHostId.mockReturnValue("host-target-different");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: {
+        hostId: "host-target-different",
+        initialMessage: { sentFromHostId: "host-local-typing" },
+      },
+    });
+
+    queryClient.clear();
+  });
+
+  // The null path stays pinned: a shell with no local host (browser, mobile,
+  // or before the runtime has resolved a binding) sends no sender host,
+  // rather than falling back to the target host.
+  it("sends a null sentFromHostId when the directory has no local host", async () => {
+    landingMocks.getLocalHostId.mockReturnValue(null);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: { initialMessage: { sentFromHostId: null } },
+    });
 
     queryClient.clear();
   });
