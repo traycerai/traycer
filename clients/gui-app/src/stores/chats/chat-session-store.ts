@@ -417,6 +417,22 @@ type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
 >[0];
+type BufferedSkeletonChunkFrame = Parameters<
+  ChatStreamCallbacks["onSkeletonChunk"]
+>[0];
+type BufferedIndexChangedFrame = Parameters<
+  ChatStreamCallbacks["onIndexChanged"]
+>[0];
+/** A windowed-transcript frame waiting for the next coalesced publish. */
+type BufferedTranscriptFrame =
+  | {
+      readonly kind: "skeletonChunk";
+      readonly frame: BufferedSkeletonChunkFrame;
+    }
+  | {
+      readonly kind: "indexChanged";
+      readonly frame: BufferedIndexChangedFrame;
+    };
 /**
  * The windowed snapshot fields a LATER frame can supersede.
  *
@@ -3685,6 +3701,21 @@ export function createChatSessionStoreWithNotificationDependencies(
     // matches arrival order.
     let bufferedDeltas: RuntimeEvent[] = [];
 
+    // Skeleton-chunk and index-change coalescing, on the same coordinator tick
+    // as the deltas above. Each of these frames rebuilds `transcriptWindow`,
+    // and every publish of a new window re-derives the whole transcript list
+    // in React - O(rowCount) per frame. A skeleton streams in several chunks
+    // and a busy turn echoes an index change per write, so publishing per
+    // frame repeated that whole-list pass once per frame received. Buffered
+    // frames fold in arrival order and publish once per tick
+    // (`flushTranscriptFrames`).
+    //
+    // Deferring a frame to the tick is indistinguishable from the frame
+    // arriving later on the wire, provided nothing else from the stream
+    // overtakes it. So every other stream frame, the delta flush, a retry, and
+    // a stream replacement flush this buffer first.
+    let bufferedTranscriptFrames: BufferedTranscriptFrame[] = [];
+
     // `providers.list` nudge driven by the DURABLE auth-failure signal: an
     // error block tagged `code: "auth"` persisted on the latest assistant row
     // (a trailing user row - e.g. a message accepted after the failure - does
@@ -3726,6 +3757,11 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     const applyBufferedDeltas = (): void => {
+      // Transcript frames first, unconditionally - including while a deferred
+      // snapshot holds the deltas below. Before buffering they were applied
+      // on arrival, so they always landed ahead of any delta still waiting for
+      // a tick, and a deferral never held them back.
+      flushTranscriptFrames();
       if (bufferedDeltas.length === 0) return;
       // HELD, not dropped, while a windowed snapshot waits for its tail.
       //
@@ -3841,12 +3877,19 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     const lease = options.streamFlushCoordinator.register({
       flush: applyBufferedDeltas,
-      hasPending: () => bufferedDeltas.length > 0,
+      hasPending: () =>
+        bufferedDeltas.length > 0 || bufferedTranscriptFrames.length > 0,
     });
     flushLease = lease;
 
     const clearBufferedDeltas = (): void => {
       bufferedDeltas = [];
+      bufferedTranscriptFrames = [];
+    };
+
+    const bufferTranscriptFrame = (entry: BufferedTranscriptFrame): void => {
+      bufferedTranscriptFrames.push(entry);
+      lease.requestFlush();
     };
 
     // Synchronous pre-frame flush used by consuming frames. The coordinator's
@@ -5284,6 +5327,11 @@ export function createChatSessionStoreWithNotificationDependencies(
      * for.
      */
     const supersedeInFlightHydration = (input: {
+      /**
+       * The window as it stood before this frame's fold - the store's own
+       * copy lags it while a batch of buffered frames is being folded.
+       */
+      readonly window: TranscriptWindow;
       readonly epoch: number;
       readonly changes: readonly ChatIndexChange[];
     }): void => {
@@ -5302,7 +5350,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const invalidated =
         bodyInvalidated === "all"
           ? bodyInvalidated
-          : recordSharingOrdinals(get().transcriptWindow, bodyInvalidated);
+          : recordSharingOrdinals(input.window, bodyInvalidated);
       recovery.markRangesSuperseded({ epoch: input.epoch, invalidated });
     };
 
@@ -5809,6 +5857,181 @@ export function createChatSessionStoreWithNotificationDependencies(
         appendLiveRecords(get().transcriptWindow, input),
         null,
       );
+    };
+
+    /**
+     * One buffered skeleton chunk, folded onto the window as the batch has it
+     * so far.
+     */
+    const foldSkeletonChunk = (
+      window: TranscriptWindow,
+      frame: BufferedSkeletonChunkFrame,
+    ): TranscriptWindow => {
+      // Can DROP bodies, not just add entries: this is where a tail seated
+      // with no ids to check against finally meets the rows it claimed.
+      const next = applySkeletonChunk(window, frame.chunk);
+      // The rebuild's guaranteed close: `skeletonComplete` is what
+      // discharges the skeleton-completion entry the announcement opened.
+      // Per chunk, ahead of the batch's publish, as it was per frame.
+      if (next.skeletonComplete) {
+        recovery.skeletonCompleted(next.epoch);
+      }
+      return next;
+    };
+
+    /**
+     * One buffered index change, folded onto `beforeFold` - the window as every
+     * earlier frame in the batch left it, which the store's own copy does not
+     * reflect until the batch publishes. Returns the folded window; publishing
+     * and planning are the batch's, once.
+     */
+    const foldIndexChange = (
+      beforeFold: TranscriptWindow,
+      frame: BufferedIndexChangedFrame,
+    ): TranscriptWindow => {
+      const activeTurnId = get().activeTurn?.turnId ?? null;
+      // The streaming turn's own index echo supersedes nothing: the deltas
+      // that produced it have already rewritten the held records, so an
+      // answer in flight for that turn's rows is not stale. Discarding it
+      // anyway is a starvation loop on a chat dominated by one long turn -
+      // every answer arrives after the next echo and hydration never lands.
+      //
+      // The exemption is NOT gated on the client holding a copy of the
+      // turn, and it used to be. That gate read as the conservative half of
+      // the choice and was the loop's own trigger: the state in which the
+      // window holds no copy - the live record retired by a seated span,
+      // that span then dropped or its answer discarded - is precisely the
+      // state every later echo then re-created. Each echo superseded the
+      // request in flight for the row, the discarded answer re-planned a
+      // new one, and the next echo (one per approval on a tool-heavy turn,
+      // sixty-odd on the turn that surfaced this) caught that one too. The
+      // row stayed a placeholder for the life of the turn and, with nothing
+      // backing it, the turn's live copy was not drawn either - only the
+      // status chip. The completion rebase was the first thing that seated
+      // it.
+      //
+      // What the gate was protecting is real and is handled differently: a
+      // copy the window does not hold is not being rewritten - its deltas
+      // are dropped - so an answer sliced before those deltas seats a body
+      // that trails the host, and a hydrated row is never re-asked for. So
+      // the seat is allowed, and the row is marked UNSOUND instead
+      // (`catchUpBudget`, read in `onRange`): the client's copy is not what
+      // the host would serve, and stays so until an answer provably closes
+      // the gap. That puts a trailing body on screen for a round trip rather
+      // than no body for the whole turn.
+      //
+      // The holds scan is gated on there being an outstanding request at
+      // all, so it never runs on the bare per-token path.
+      const streamingEcho = isActiveTurnStreamingEcho(
+        frame.changes,
+        activeTurnId,
+      );
+      const echoWhileUnheld =
+        streamingEcho &&
+        recovery.hasOpenRanges() &&
+        !holdsActiveTurnAssistantMessage(beforeFold, activeTurnId);
+      // Folded FIRST, but not published yet - the two orderings this has to
+      // satisfy pull in opposite directions and this is what satisfies both.
+      //
+      // `supersedeInFlightHydration` must read the PRE-fold window, because
+      // it compares against the epoch each in-flight request was framed
+      // against and the fold can move it. But it must not run for a frame
+      // the window REJECTS: `applyIndexChange` drops a duplicated or
+      // reordered same-epoch frame on `indexRevision <= window.indexRevision`
+      // and changes nothing, while the supersede has already marked a valid
+      // in-flight request - so its answer is discarded and re-asked for a
+      // frame that moved nothing, extending the placeholders it was going to
+      // fill. Repeated stragglers can keep a range from ever settling.
+      //
+      // Computing the fold without `set` gives both: `beforeFold` is still
+      // the pre-fold window below, and identity tells us whether the frame
+      // was accepted. Deliberately NOT a second copy of the acceptance rule -
+      // the epoch, revision and rebuild-suspension checks are intricate
+      // enough that a mirror of them here would drift.
+      const window = applyIndexChange(beforeFold, {
+        epoch: frame.epoch,
+        rowCount: frame.rowCount,
+        indexRevision: frame.indexRevision,
+        changes: frame.changes,
+        activeTurnId,
+      });
+      if (!streamingEcho && window !== beforeFold) {
+        supersedeInFlightHydration({
+          window: beforeFold,
+          epoch: frame.epoch,
+          changes: frame.changes,
+        });
+      }
+      if (streamingEcho && window !== beforeFold && activeTurnId !== null) {
+        // Same acceptance gate as the supersede: a frame the window rejected
+        // reports no write. An accepted one reports a write the host made,
+        // and every write moves the mark whether or not this client had a
+        // body to put it in - that is what lets a request's own mark decide
+        // whether its answer could have contained it.
+        activeTurnWriteMark += 1;
+        if (echoWhileUnheld) {
+          // And this write had nowhere to land, so the copy the client ends
+          // up with is torn around it. What the echo NAMED is deliberately
+          // not recorded - the write staled the turn's records, which every
+          // row of that turn shares, so an obligation keyed on the echoed
+          // ordinal misses the sibling rows carrying the same stale copy.
+          catchUpBudget = {
+            turnId: activeTurnId,
+            unsound: true,
+            rounds: budgetForTurn(activeTurnId).rounds,
+          };
+        }
+      }
+      return window;
+    };
+
+    /**
+     * Fold every buffered skeleton chunk and index change, in arrival order,
+     * and publish the result ONCE.
+     *
+     * Per frame this was fold, publish, re-plan. The folds and their ledger
+     * side effects (`recovery.skeletonCompleted`, the in-flight supersede, the
+     * active-turn write mark) still run per frame and in order; only the
+     * publish, the stream watchdog and the hydration plan collapse to one call
+     * after the last fold. Each of those reads only the state the LAST frame
+     * left: the watchdog is last-arm-wins (`restartDeadline`), and a plan over
+     * an intermediate window would only have been superseded by the next.
+     *
+     * With `IMMEDIATE_STREAM_FLUSH_COORDINATOR` every frame flushes on
+     * arrival, so the batch is always one frame and this is the per-frame path
+     * exactly.
+     */
+    const flushTranscriptFrames = (): void => {
+      if (bufferedTranscriptFrames.length === 0) return;
+      const batch = bufferedTranscriptFrames;
+      bufferedTranscriptFrames = [];
+      // Same downgrade guard the handlers apply on arrival. Nothing that can
+      // flip either flag runs between arrival and here without flushing first,
+      // so this only re-states it.
+      if (disposed || !windowedLine) return;
+      let window = get().transcriptWindow;
+      let foldedSkeletonChunk = false;
+      for (const entry of batch) {
+        if (entry.kind === "skeletonChunk") {
+          window = foldSkeletonChunk(window, entry.frame);
+          foldedSkeletonChunk = true;
+        } else {
+          window = foldIndexChange(window, entry.frame);
+        }
+      }
+      publishWindowedTranscript(window, null);
+      if (foldedSkeletonChunk) {
+        // Re-arms while the skeleton is still short, disarms once it covers
+        // `rowCount`. A stream that simply stops after a non-final chunk is
+        // otherwise indistinguishable from one still in progress.
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
+      }
+      // Covers the `reindexed` case too: `requestPlannedHydration` sends a
+      // `resnapshot` rather than a range when the window is invalidated.
+      requestPlannedHydration();
     };
 
     /**
@@ -7408,23 +7631,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
-        // Can DROP bodies, not just add entries: this is where a tail seated
-        // with no ids to check against finally meets the rows it claimed.
-        const window = applySkeletonChunk(get().transcriptWindow, frame.chunk);
-        // The rebuild's guaranteed close: `skeletonComplete` is what
-        // discharges the skeleton-completion entry the announcement opened.
-        if (window.skeletonComplete) {
-          recovery.skeletonCompleted(window.epoch);
-        }
-        publishWindowedTranscript(window, null);
-        // Re-arms while the skeleton is still short, disarms once it covers
-        // `rowCount`. A stream that simply stops after a non-final chunk is
-        // otherwise indistinguishable from one still in progress.
-        armStreamCompletionWatchdog({
-          readCompleteness: true,
-          restartDeadline: true,
-        });
-        requestPlannedHydration();
+        // Folded on the next coordinator tick with any other buffered chunk or
+        // index change - see `flushTranscriptFrames`.
+        bufferTranscriptFrame({ kind: "skeletonChunk", frame });
       },
       onIndexChanged: (frame) => {
         // Same downgrade guard as `onSkeletonChunk`.
@@ -7435,106 +7644,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
-        const activeTurnId = get().activeTurn?.turnId ?? null;
-        // The streaming turn's own index echo supersedes nothing: the deltas
-        // that produced it have already rewritten the held records, so an
-        // answer in flight for that turn's rows is not stale. Discarding it
-        // anyway is a starvation loop on a chat dominated by one long turn -
-        // every answer arrives after the next echo and hydration never lands.
-        //
-        // The exemption is NOT gated on the client holding a copy of the
-        // turn, and it used to be. That gate read as the conservative half of
-        // the choice and was the loop's own trigger: the state in which the
-        // window holds no copy - the live record retired by a seated span,
-        // that span then dropped or its answer discarded - is precisely the
-        // state every later echo then re-created. Each echo superseded the
-        // request in flight for the row, the discarded answer re-planned a
-        // new one, and the next echo (one per approval on a tool-heavy turn,
-        // sixty-odd on the turn that surfaced this) caught that one too. The
-        // row stayed a placeholder for the life of the turn and, with nothing
-        // backing it, the turn's live copy was not drawn either - only the
-        // status chip. The completion rebase was the first thing that seated
-        // it.
-        //
-        // What the gate was protecting is real and is handled differently: a
-        // copy the window does not hold is not being rewritten - its deltas
-        // are dropped - so an answer sliced before those deltas seats a body
-        // that trails the host, and a hydrated row is never re-asked for. So
-        // the seat is allowed, and the row is marked UNSOUND instead
-        // (`catchUpBudget`, read in `onRange`): the client's copy is not what
-        // the host would serve, and stays so until an answer provably closes
-        // the gap. That puts a trailing body on screen for a round trip rather
-        // than no body for the whole turn.
-        //
-        // The holds scan is gated on there being an outstanding request at
-        // all, so it never runs on the bare per-token path.
-        const streamingEcho = isActiveTurnStreamingEcho(
-          frame.changes,
-          activeTurnId,
-        );
-        const echoWhileUnheld =
-          streamingEcho &&
-          recovery.hasOpenRanges() &&
-          !holdsActiveTurnAssistantMessage(
-            get().transcriptWindow,
-            activeTurnId,
-          );
-        // Folded FIRST, but not published yet - the two orderings this has to
-        // satisfy pull in opposite directions and this is what satisfies both.
-        //
-        // `supersedeInFlightHydration` must read the PRE-fold window, because
-        // it compares against the epoch each in-flight request was framed
-        // against and the fold can move it. But it must not run for a frame
-        // the window REJECTS: `applyIndexChange` drops a duplicated or
-        // reordered same-epoch frame on `indexRevision <= window.indexRevision`
-        // and changes nothing, while the supersede has already marked a valid
-        // in-flight request - so its answer is discarded and re-asked for a
-        // frame that moved nothing, extending the placeholders it was going to
-        // fill. Repeated stragglers can keep a range from ever settling.
-        //
-        // Computing the fold without `set` gives both: `get()` still returns
-        // the pre-fold window below, and identity tells us whether the frame
-        // was accepted. Deliberately NOT a second copy of the acceptance rule -
-        // the epoch, revision and rebuild-suspension checks are intricate
-        // enough that a mirror of them here would drift.
-        const beforeFold = get().transcriptWindow;
-        const window = applyIndexChange(beforeFold, {
-          epoch: frame.epoch,
-          rowCount: frame.rowCount,
-          indexRevision: frame.indexRevision,
-          changes: frame.changes,
-          activeTurnId,
-        });
-        if (!streamingEcho && window !== beforeFold) {
-          supersedeInFlightHydration({
-            epoch: frame.epoch,
-            changes: frame.changes,
-          });
-        }
-        if (streamingEcho && window !== beforeFold && activeTurnId !== null) {
-          // Same acceptance gate as the supersede: a frame the window rejected
-          // reports no write. An accepted one reports a write the host made,
-          // and every write moves the mark whether or not this client had a
-          // body to put it in - that is what lets a request's own mark decide
-          // whether its answer could have contained it.
-          activeTurnWriteMark += 1;
-          if (echoWhileUnheld) {
-            // And this write had nowhere to land, so the copy the client ends
-            // up with is torn around it. What the echo NAMED is deliberately
-            // not recorded - the write staled the turn's records, which every
-            // row of that turn shares, so an obligation keyed on the echoed
-            // ordinal misses the sibling rows carrying the same stale copy.
-            catchUpBudget = {
-              turnId: activeTurnId,
-              unsound: true,
-              rounds: budgetForTurn(activeTurnId).rounds,
-            };
-          }
-        }
-        publishWindowedTranscript(window, null);
-        // Covers the `reindexed` case too: `requestPlannedHydration` sends a
-        // `resnapshot` rather than a range when the window is invalidated.
-        requestPlannedHydration();
+        // Folded on the next coordinator tick with any other buffered chunk or
+        // index change - see `flushTranscriptFrames`.
+        bufferTranscriptFrame({ kind: "indexChanged", frame });
       },
       onRange: (frame) => {
         // Same downgrade guard as `onSkeletonChunk`.
@@ -9069,7 +9181,20 @@ export function createChatSessionStoreWithNotificationDependencies(
      * that wants to swap one at runtime has to take that up with this line.
      */
     const makeCallbacks = (streamGeneration: number): ChatStreamCallbacks => {
+      // Every frame lands behind the skeleton chunks and index changes that
+      // arrived before it, as it did when those applied on arrival - see
+      // `bufferedTranscriptFrames`.
       const guarded = <TArgs extends unknown[]>(
+        handler: (...args: TArgs) => void,
+      ): ((...args: TArgs) => void) =>
+        guardHandler(streamGuard, streamGeneration, (...args: TArgs) => {
+          flushTranscriptFrames();
+          handler(...args);
+        });
+      // The frames that are themselves buffered, and so must not force the
+      // buffer out: the transcript frames, and `blockDelta`, whose own flush
+      // drains this buffer first (`applyBufferedDeltas`).
+      const guardedBuffered = <TArgs extends unknown[]>(
         handler: (...args: TArgs) => void,
       ): ((...args: TArgs) => void) =>
         guardHandler(streamGuard, streamGeneration, handler);
@@ -9090,6 +9215,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         retryCause: FatalErrorDetails | null,
       ): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
+        flushTranscriptFrames();
         // A RETRYABLE fatalError is the transport saying "not now" - the client
         // is already reconnecting on its own backoff and the user needs to do
         // nothing. Notifying on it turned an overnight sleep into a stack of
@@ -9120,6 +9246,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       return {
         onSnapshot: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
+          flushTranscriptFrames();
           callbacks.onSnapshot(frame);
           const activeTurnId = get().activeTurn?.turnId ?? null;
           if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
@@ -9134,8 +9261,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         // binds these must not apply a hydration response from a stream
         // generation this store has already replaced.
         onWindowedSnapshot: guarded(callbacks.onWindowedSnapshot),
-        onSkeletonChunk: guarded(callbacks.onSkeletonChunk),
-        onIndexChanged: guarded(callbacks.onIndexChanged),
+        onSkeletonChunk: guardedBuffered(callbacks.onSkeletonChunk),
+        onIndexChanged: guardedBuffered(callbacks.onIndexChanged),
         onRange: guarded(callbacks.onRange),
         onAccumulatedChanges: guarded(callbacks.onAccumulatedChanges),
         onActionAck: guarded(callbacks.onActionAck),
@@ -9144,13 +9271,14 @@ export function createChatSessionStoreWithNotificationDependencies(
         onMessageDeliveryChanged: guarded(callbacks.onMessageDeliveryChanged),
         onTurnStateChanged: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
+          flushTranscriptFrames();
           callbacks.onTurnStateChanged(frame);
           const activeTurnId = get().activeTurn?.turnId ?? null;
           if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
             fatalCloseTurnId = null;
           }
         },
-        onBlockDelta: guarded(callbacks.onBlockDelta),
+        onBlockDelta: guardedBuffered(callbacks.onBlockDelta),
         onApprovalRequested: guarded(callbacks.onApprovalRequested),
         onApprovalResolved: guarded(callbacks.onApprovalResolved),
         onFileEditApprovalRequested: guarded(
@@ -9380,6 +9508,9 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       retry: () => {
         if (disposed) return;
+        // Applied, not dropped: these arrived on the stream being replaced
+        // while it was current, which is when they used to apply.
+        flushTranscriptFrames();
         closeStreamClient();
         clearBufferedDeltas();
         const prior = get();
