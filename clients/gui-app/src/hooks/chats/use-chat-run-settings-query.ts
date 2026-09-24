@@ -90,19 +90,49 @@ export function useChatRunSettings(args: {
 }
 
 /**
+ * A batch of run-settings reads folded to what a consumer acts on.
+ *
+ * `settings[i]` answers `chatIds[i]`, `null` while unread, when the host has no
+ * tuple for the viewer, or when the read failed. `resolving` is true while any
+ * read is still in flight, retries included; a read that cannot run at all (no
+ * client, host not ready) is not in flight and does not hold it.
+ */
+export interface ChatRunSettingsBatch {
+  readonly resolving: boolean;
+  readonly settings: ReadonlyArray<GetChatRunSettingsResponse["settings"]>;
+}
+
+function combineChatRunSettings(
+  results: Array<UseQueryResult<GetChatRunSettingsResponse, HostRpcError>>,
+): ChatRunSettingsBatch {
+  return {
+    resolving: results.some(
+      (result) =>
+        result.status === "pending" && result.fetchStatus === "fetching",
+    ),
+    settings: results.map((result) => result.data?.settings ?? null),
+  };
+}
+
+/**
  * Persisted run-settings tuples for a set of chats owned by one host.
  *
  * The caller must establish the ownership boundary before passing `chatIds`:
  * one requester cannot resolve records owned by another host. Keeping the
  * batch on `useHostQueries` starts the independent reads together and reuses
  * the same viewer-scoped cache entries as {@link useChatRunSettings}.
+ *
+ * Folded through `combine`, so a consumer re-renders when the answer moves,
+ * not once per read's own status transitions. Never stale by time: the only
+ * writes are this app's own settings mutations, and those invalidate through
+ * {@link invalidateChatRunSettings}.
  */
 export function useChatRunSettingsBatch(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatIds: ReadonlyArray<string>;
   readonly enabled: boolean;
-}): Array<UseQueryResult<GetChatRunSettingsResponse, HostRpcError>> {
+}): ChatRunSettingsBatch {
   const viewerUserId = useCloudChatViewerId();
   const requests = useMemo(
     () =>
@@ -112,17 +142,22 @@ export function useChatRunSettingsBatch(args: {
       })),
     [args.chatIds, args.epicId],
   );
-  return useHostQueries<HostRpcRegistry, "epic.getChatRunSettings">({
+  return useHostQueries<
+    HostRpcRegistry,
+    "epic.getChatRunSettings",
+    ChatRunSettingsBatch
+  >({
     cacheKeyIdentity: viewerUserId,
     client: args.client,
     requests,
     options: {
       enabled: args.enabled && viewerUserId.length > 0,
-      staleTime: 60_000,
+      staleTime: Infinity,
       refetchOnWindowFocus: false,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
+    combine: combineChatRunSettings,
   });
 }
 

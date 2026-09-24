@@ -15,6 +15,7 @@ import type {
   ProfileRateLimitSwitchPrompt,
 } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 
+import type { TaskChatScope } from "@/components/chat/composer/use-task-profile-rate-limit-switch";
 import { LandingComposer } from "../landing-composer";
 
 interface CapturedPromptArgs {
@@ -28,7 +29,7 @@ interface CapturedPromptArgs {
 interface CapturedBannerProps {
   readonly runTargetHostId: string | null;
   readonly probeTarget: ProfileRateLimitDestination | null;
-  readonly affectedChatCount: number;
+  readonly taskScope: TaskChatScope;
   readonly onSwitchProfile: (profileId: string | null) => void;
   readonly onSwitchProfileForTask: (profileId: string | null) => void;
   readonly onDismiss: () => void;
@@ -374,8 +375,8 @@ describe("LandingComposer rate-limit banner wiring", () => {
     expect(screen.getByTestId("rate-limit-banner")).toBeTruthy();
     const bannerProps = testState.bannerProps;
     if (bannerProps === null) throw new Error("expected banner props");
-    // Task-wide checkbox is never wired: affectedChatCount is fixed at 0.
-    expect(bannerProps.affectedChatCount).toBe(0);
+    // Task-wide checkbox is never wired: a new task has no sibling chats.
+    expect(bannerProps.taskScope).toEqual({ kind: "none" });
     // Landing has no tab, but it does have a PLACEMENT (redesign P1.2): the
     // usage sidecar / R-key refresh must resolve to the composer's own
     // resolved host - the machine the turn will run on - not to whichever

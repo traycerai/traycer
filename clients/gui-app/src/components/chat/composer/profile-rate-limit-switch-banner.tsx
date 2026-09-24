@@ -27,6 +27,7 @@ import {
   type ProfileDropdownUsageEntry,
   type ProfileDropdownUsagePresentation,
 } from "@/components/providers/profile-dropdown-usage";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -45,6 +46,7 @@ import {
   type ProfileRateLimitDestination,
   type ProfileRateLimitSeverity,
 } from "./use-profile-rate-limit-switch-prompt";
+import type { TaskChatScope } from "./use-task-profile-rate-limit-switch";
 
 interface ProfileRateLimitSwitchBannerProps {
   readonly harnessId: GuiHarnessId;
@@ -81,9 +83,13 @@ interface ProfileRateLimitSwitchBannerProps {
    * carry.
    */
   readonly onSwitchProfile: (profileId: string | null) => void;
-  /** Includes the current chat. The current composer commit is handled by
-   * `onSwitchProfile`; this callback switches only matching siblings. */
-  readonly affectedChatCount: number;
+  /** The OTHER chats a task-wide switch would move. The current composer
+   * commit is handled by `onSwitchProfile`; `onSwitchProfileForTask` switches
+   * only the matching siblings. */
+  readonly taskScope: TaskChatScope;
+  /** Asks for the sibling reads behind `taskScope`; called when task scope is
+   * ticked, never on mount. */
+  readonly onResolveTaskScope: () => void;
   readonly onSwitchProfileForTask: (profileId: string | null) => void;
   readonly onDismiss: () => void;
 }
@@ -95,6 +101,9 @@ interface ProfileRateLimitDestinationMenuProps {
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
   readonly primaryTarget: ProfileRateLimitDestination | null;
   readonly usagePresentation: ProfileDropdownUsagePresentation;
+  /** Holds the switch actions while the task scope they would carry is still
+   * being read. */
+  readonly switchPending: boolean;
   readonly onSwitchProfile: (profileId: string | null) => void;
 }
 
@@ -122,6 +131,15 @@ const PREVIEW_NAVIGATION_KEYS = new Set([
 
 function switchLabel(profile: ProviderProfile): string {
   return `Switch to ${profileDisplayLabel(profile)}`;
+}
+
+/** The count is only known once the siblings are read. */
+function taskScopeLabel(scope: TaskChatScope): string {
+  if (scope.kind !== "resolved") {
+    return "Also switch matching chats in this task";
+  }
+  const count = scope.otherChatCount;
+  return `Also switch ${count} other chat${count === 1 ? "" : "s"} in this task`;
 }
 
 function profileMenuRows(
@@ -215,12 +233,17 @@ export function ProfileRateLimitSwitchBanner(
   props: ProfileRateLimitSwitchBannerProps,
 ) {
   const [includeOtherChats, setIncludeOtherChats] = useState(false);
-  const checkboxId = useId();
   const readOnly = !props.destinations.some(
     (destination) => destination.selectable,
   );
-  const canIncludeOtherChats = !readOnly && props.affectedChatCount > 1;
+  const taskScope = props.taskScope;
+  const canIncludeOtherChats = !readOnly && taskScope.kind !== "none";
   const effectiveTaskScope = canIncludeOtherChats && includeOtherChats;
+  // Task scope ticked but its siblings not read yet: a switch now would move
+  // this chat and whichever siblings happened to have answered, and the
+  // composer's profile changes with the switch, so the rest could never be
+  // matched afterwards. The actions wait for the read instead.
+  const switchPending = effectiveTaskScope && taskScope.kind !== "resolved";
   const usagePresentation = useProfileUsagePresentation({
     runTargetHostId: props.runTargetHostId,
     providerId: props.providerId,
@@ -254,6 +277,7 @@ export function ProfileRateLimitSwitchBanner(
     probeEntry.ensureFresh().catch(() => undefined);
   }, [probeEntry, probeReady]);
   const executeSwitch = (profileId: string | null): void => {
+    if (switchPending) return;
     const destination = props.destinations.find(
       (candidate) => candidate.profileId === profileId && candidate.selectable,
     );
@@ -308,29 +332,66 @@ export function ProfileRateLimitSwitchBanner(
             destinations={props.destinations}
             primaryTarget={props.primaryTarget}
             usagePresentation={usagePresentation}
+            switchPending={switchPending}
             onSwitchProfile={executeSwitch}
           />
           {canIncludeOtherChats ? (
-            <div className="flex min-w-0 items-center gap-2 sm:col-start-2 sm:justify-self-end">
-              <Checkbox
-                id={checkboxId}
-                checked={includeOtherChats}
-                onCheckedChange={(checked) =>
-                  setIncludeOtherChats(checked === true)
-                }
-              />
-              <label
-                htmlFor={checkboxId}
-                className="min-w-0 cursor-pointer select-none text-foreground"
-              >
-                Also switch {props.affectedChatCount - 1} other chat
-                {props.affectedChatCount === 2 ? "" : "s"} in this task
-              </label>
-            </div>
+            <TaskScopeControl
+              scope={taskScope}
+              checked={includeOtherChats}
+              pending={switchPending}
+              onCheckedChange={(include) => {
+                setIncludeOtherChats(include);
+                if (include) props.onResolveTaskScope();
+              }}
+            />
           ) : null}
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The task-wide opt-in under the switch actions. Ticking it is what asks for
+ * the sibling reads; once they answer with no match it says so instead.
+ */
+function TaskScopeControl(props: {
+  readonly scope: TaskChatScope;
+  readonly checked: boolean;
+  readonly pending: boolean;
+  readonly onCheckedChange: (include: boolean) => void;
+}): ReactNode {
+  const checkboxId = useId();
+  if (props.scope.kind === "resolved" && props.scope.otherChatCount === 0) {
+    return (
+      <p className="min-w-0 text-muted-foreground sm:col-start-2 sm:justify-self-end">
+        No other chats in this task use this profile.
+      </p>
+    );
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-2 sm:col-start-2 sm:justify-self-end">
+      <Checkbox
+        id={checkboxId}
+        checked={props.checked}
+        onCheckedChange={(checked) => props.onCheckedChange(checked === true)}
+      />
+      <label
+        htmlFor={checkboxId}
+        className="min-w-0 cursor-pointer select-none text-foreground"
+      >
+        {taskScopeLabel(props.scope)}
+      </label>
+      {props.pending ? (
+        <AgentSpinningDots
+          testId="task-scope-resolving"
+          variant={undefined}
+          className={undefined}
+          tone="muted"
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -397,6 +458,7 @@ function ProfileRateLimitDestinationMenu(
         harnessId={props.harnessId}
         primaryTarget={props.primaryTarget}
         readOnly={readOnly}
+        pending={props.switchPending}
         onSwitchProfile={props.onSwitchProfile}
       />
       <ProfileRateLimitMenuContent
@@ -430,11 +492,13 @@ function ProfileRateLimitMenuTrigger({
   harnessId,
   primaryTarget,
   readOnly,
+  pending,
   onSwitchProfile,
 }: {
   readonly harnessId: GuiHarnessId;
   readonly primaryTarget: ProfileRateLimitDestination | null;
   readonly readOnly: boolean;
+  readonly pending: boolean;
   readonly onSwitchProfile: (profileId: string | null) => void;
 }): ReactNode {
   if (primaryTarget === null) {
@@ -446,6 +510,7 @@ function ProfileRateLimitMenuTrigger({
           size="sm"
           variant="outline"
           aria-label={label}
+          disabled={pending}
           className="w-full min-w-0 sm:w-auto sm:justify-self-end"
         >
           <span className="min-w-0 truncate">{label}</span>
@@ -470,6 +535,7 @@ function ProfileRateLimitMenuTrigger({
         size="sm"
         variant="outline"
         aria-label={label}
+        disabled={pending}
         className="min-w-0 max-w-full flex-1"
         onClick={() => onSwitchProfile(primaryTarget.profileId)}
       >
@@ -491,6 +557,7 @@ function ProfileRateLimitMenuTrigger({
             size="icon-sm"
             variant="outline"
             aria-label="Choose another profile"
+            disabled={pending}
           >
             <ChevronDown className="size-3.5" aria-hidden />
           </Button>

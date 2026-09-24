@@ -76,7 +76,8 @@ describe("F4: hostile profile labels in the rate-limit banner", () => {
             probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
-            affectedChatCount={1}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={() => undefined}
           />

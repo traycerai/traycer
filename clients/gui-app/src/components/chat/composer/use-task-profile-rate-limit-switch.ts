@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -15,16 +15,30 @@ interface AffectedTaskChat {
   readonly settings: ChatRunSettings;
 }
 
+/**
+ * What the banner knows about the OTHER chats a task-wide switch would move.
+ *
+ * Which siblings match is a host read per sibling, so it is made only once the
+ * person asks for task scope (`resolveScope`), never merely because the banner
+ * is showing:
+ *
+ * - `none`: no candidate sibling at all (no epic, or no other live chat of this
+ *   task on this tab's host), so there is nothing to offer.
+ * - `unresolved`: candidates exist and nothing has been read yet.
+ * - `resolving`: the reads are in flight.
+ * - `resolved`: `otherChatCount` siblings pin the same harness, profile and
+ *   model, and `switchOtherTaskChats` moves exactly those.
+ */
+export type TaskChatScope =
+  | { readonly kind: "none" }
+  | { readonly kind: "unresolved" }
+  | { readonly kind: "resolving" }
+  | { readonly kind: "resolved"; readonly otherChatCount: number };
+
 export interface TaskProfileRateLimitSwitch {
-  /**
-   * How many chats in this task (epic) a task-wide switch would move off the
-   * limited profile - every registry-backed chat on this tab's host whose
-   * persisted settings pin the same harness + profile, always counting this
-   * chat itself. `1`
-   * (just this chat) whenever the epic store is unavailable, so the banner
-   * simply hides the task-wide affordance on surfaces without an epic.
-   */
-  readonly affectedChatCount: number;
+  readonly scope: TaskChatScope;
+  /** Starts the sibling reads for the current warning episode. */
+  readonly resolveScope: () => void;
   /**
    * Switches every OTHER affected chat to `nextProfileId` via the narrow
    * `epic.updateChatProfile` RPC (best-effort - an old host rejects the
@@ -40,6 +54,10 @@ export interface TaskProfileRateLimitSwitch {
 }
 
 const NO_AFFECTED: ReadonlyArray<AffectedTaskChat> = [];
+const NO_CANDIDATES: ReadonlyArray<string> = [];
+const SCOPE_NONE: TaskChatScope = { kind: "none" };
+const SCOPE_UNRESOLVED: TaskChatScope = { kind: "unresolved" };
+const SCOPE_RESOLVING: TaskChatScope = { kind: "resolving" };
 
 /**
  * Whether a sibling chat's persisted settings make it eligible for a task-wide
@@ -77,11 +95,22 @@ export function taskChatInheritsProfileSwitch(
  * limited profile so the banner can offer "switch all N chats in this task",
  * not just the current session. The record projection establishes which new
  * chats belong to this tab's host; authoritative run settings are then read
- * from that host. Legacy doc-only chats and chats on other hosts are outside
- * this operation by design.
+ * from that host. Legacy doc-only chats, archived chats and chats on other
+ * hosts are outside this operation by design.
+ *
+ * The reads are one request per candidate sibling, so they wait for
+ * `resolveScope` rather than following the banner: every mounted composer of
+ * a task with a limited profile would otherwise read every sibling each time
+ * its banner appeared.
  */
 export function useTaskProfileRateLimitSwitch(input: {
   readonly enabled: boolean;
+  /**
+   * The banner's warning episode (`null` while no banner is showing). A
+   * `resolveScope` answers only the episode it was made in, so a new warning
+   * asks again instead of inheriting an old request.
+   */
+  readonly episodeKey: string | null;
   readonly harnessId: GuiHarnessId;
   readonly profileId: string | null;
   /** The composer's selected model, or `null` when unresolved. Gates which
@@ -90,8 +119,15 @@ export function useTaskProfileRateLimitSwitch(input: {
   readonly epicId: string | null;
   readonly chatId: string;
 }): TaskProfileRateLimitSwitch {
-  const { enabled, harnessId, profileId, selectedModel, epicId, chatId } =
-    input;
+  const {
+    enabled,
+    episodeKey,
+    harnessId,
+    profileId,
+    selectedModel,
+    epicId,
+    chatId,
+  } = input;
   const selectedModelSlug = selectedModel?.slug ?? null;
   const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
@@ -115,26 +151,41 @@ export function useTaskProfileRateLimitSwitch(input: {
   );
 
   const candidateChatIds = useMemo<ReadonlyArray<string>>(() => {
-    if (!enabled || chatRecords === null || epicId === null) return [];
+    if (!enabled || chatRecords === null || epicId === null) {
+      return NO_CANDIDATES;
+    }
     return chatRecords.allIds.filter((candidateChatId) => {
       const chat = chatRecords.byId[candidateChatId];
-      return chat.hostId === tabHostId && candidateChatId !== chatId;
+      return (
+        chat.hostId === tabHostId &&
+        candidateChatId !== chatId &&
+        chat.archivedAt === null
+      );
     });
   }, [chatId, chatRecords, enabled, epicId, tabHostId]);
 
-  const settingsQueries = useChatRunSettingsBatch({
+  const [requestedEpisodeKey, setRequestedEpisodeKey] = useState<string | null>(
+    null,
+  );
+  const requested =
+    enabled && episodeKey !== null && requestedEpisodeKey === episodeKey;
+  const resolveScope = useCallback(() => {
+    setRequestedEpisodeKey(episodeKey);
+  }, [episodeKey]);
+
+  const batch = useChatRunSettingsBatch({
     client: tabHostClient,
     epicId: epicId ?? "",
     chatIds: candidateChatIds,
-    enabled: enabled && epicId !== null && selectedModelSlug !== null,
+    enabled: requested && epicId !== null && selectedModelSlug !== null,
   });
 
   const affected = useMemo<ReadonlyArray<AffectedTaskChat>>(() => {
-    if (!enabled || epicId === null) {
+    if (!requested || epicId === null) {
       return NO_AFFECTED;
     }
     return candidateChatIds.flatMap((candidateChatId, index) => {
-      const settings = settingsQueries[index]?.data?.settings ?? null;
+      const settings = batch.settings[index] ?? null;
       if (
         settings === null ||
         !taskChatInheritsProfileSwitch(settings, {
@@ -148,19 +199,22 @@ export function useTaskProfileRateLimitSwitch(input: {
       return [{ chatId: candidateChatId, settings }];
     });
   }, [
-    enabled,
+    requested,
     epicId,
     candidateChatIds,
-    settingsQueries,
+    batch.settings,
     harnessId,
     profileId,
     selectedModelSlug,
   ]);
 
-  // The current chat always counts (its composer holds the limited profile
-  // even when its persisted record lags, e.g. never-sent or pre-capability
-  // records).
-  const affectedChatCount = affected.length + 1;
+  const otherChatCount = affected.length;
+  const scope = useMemo<TaskChatScope>(() => {
+    if (candidateChatIds.length === 0) return SCOPE_NONE;
+    if (!requested) return SCOPE_UNRESOLVED;
+    if (batch.resolving) return SCOPE_RESOLVING;
+    return { kind: "resolved", otherChatCount };
+  }, [batch.resolving, candidateChatIds.length, otherChatCount, requested]);
 
   const updateChatProfile = useEpicUpdateChatProfile();
   const updateChatProfileMutate = updateChatProfile.mutate;
@@ -205,5 +259,5 @@ export function useTaskProfileRateLimitSwitch(input: {
     [affected, chatId, epicId, tabHostId, updateChatProfileMutate],
   );
 
-  return { affectedChatCount, switchOtherTaskChats };
+  return { scope, resolveScope, switchOtherTaskChats };
 }
