@@ -5,6 +5,7 @@ import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
 import { dirname, join } from "node:path";
+import { windowsRenameRetryDelayMs } from "@traycer/protocol/config/credentials-fs";
 import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
@@ -762,7 +763,29 @@ export async function rewriteLockLivenessIfToken(
       } finally {
         await temporary.close().catch(() => undefined);
       }
-      await rename(temporaryPath, path);
+      // Retried on win32: any process reading the canonical lock at this
+      // instant (a contender's poll, a `readLockHolder`, the host's holder
+      // probe) holds a handle on it, and `MoveFileExW` will not replace a file
+      // with an open handle. One failed rebind at the hand-back leaves a
+      // retain-on-death record that `release` refuses to unlink - a lock no
+      // one can break. Ownership is re-proven before EVERY retry: the rename
+      // replaces whatever is at `path`, so a reader's EPERM and a genuine
+      // ownership change must never be confused - the first is retried, the
+      // second is the same refusal as a token mismatch above.
+      for (let retryIndex = 0; ; retryIndex += 1) {
+        try {
+          await rename(temporaryPath, path);
+          break;
+        } catch (err) {
+          const retryDelay = windowsRenameRetryDelayMs(err, retryIndex);
+          if (retryDelay === null) throw err;
+          await sleep(retryDelay);
+          const again = await readLockRaw(path);
+          if (again.kind !== "present") return false;
+          const owner = parseLockMetadata(again.raw);
+          if (owner === null || owner.token !== expectedToken) return false;
+        }
+      }
       // The temp fsync above makes the CONTENT durable; the directory entry
       // the rename swapped is separate metadata with its own flush. On a
       // power loss before the directory flushes, the entry reverts to the
@@ -870,6 +893,25 @@ async function tryAcquireOnce(
     }
     throw err;
   }
+  // Closed as soon as the record is written, never held for the lock's life.
+  // Nothing reads through this handle - it is write-only, and `release` and
+  // every break decision re-read the PATH - and on win32 an open handle is
+  // exactly what makes `rewriteLockLivenessIfToken`'s rename onto this path
+  // fail with EPERM: `MoveFileExW` will not replace a file that has an open
+  // handle, the caller's own included. Holding it excluded nothing there
+  // either. Measured on Windows Server 2022 / NTFS with Node 24 (libuv 1.52):
+  // another process can unlink the path and create a new file at it while the
+  // handle is open, just as on POSIX. So holding it bought only that failure.
+  try {
+    await handle.close();
+  } catch (err) {
+    try {
+      await unlink(path);
+    } catch {
+      // Best effort.
+    }
+    throw err;
+  }
   let released = false;
   return {
     path,
@@ -877,11 +919,6 @@ async function tryAcquireOnce(
     release: async () => {
       if (released) return;
       released = true;
-      try {
-        await handle.close();
-      } catch {
-        // Closing twice is a no-op for callers; ignore.
-      }
       // Compare-and-delete: unlink ONLY on positive proof this handle
       // still owns the file - a successful, parseable read whose token
       // matches the one this handle wrote. Every lock this code writes

@@ -3,6 +3,7 @@ import { link, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { readRegularFileNoFollow } from "@traycer-clients/shared/host-update";
+import { renameWithWindowsRetry } from "@traycer/protocol/config/credentials-fs";
 import {
   desktopPresencePath,
   parseDesktopPresenceText,
@@ -271,7 +272,11 @@ async function writeTextAtomically(
   );
   try {
     await writeFile(temporary, text, { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, destination);
+    // Retried on win32: a watcher re-reading this file on its last change
+    // holds a handle on it for the length of that read, and `MoveFileExW`
+    // will not replace a file with an open handle. Without the retry, that
+    // collision fails the write, and a policy or presence change is lost.
+    await renameWithWindowsRetry(temporary, destination, 0);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;

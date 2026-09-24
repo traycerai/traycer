@@ -105,12 +105,14 @@ async function isRegularFile(filePath: string): Promise<boolean> {
  * Ordering matters: the rename is attempted FIRST, so a rotation that cannot
  * happen never destroys the evidence it was supposed to preserve. On POSIX that
  * single call atomically replaces the destination, so the old backup is dropped
- * only once the new one is safely in place. Windows `rename` refuses an existing
- * destination, so that (and only that) case falls back to moving the previous
- * backup aside and retrying - by which point we already know the destination
- * exists and the source is intact. The displaced backup is restored if the
- * retry fails, so an unrelated source/permission failure cannot destroy the
- * previous generation.
+ * only once the new one is safely in place. Windows `rename` (`MoveFileExW`
+ * with REPLACE_EXISTING) replaces an existing destination too, but not one
+ * that any process holds open - a reader, or a logger still writing the old
+ * backup - so that (and only that) case falls back to moving the previous
+ * backup aside, which an open handle does not block, and retrying - by which
+ * point we already know the destination exists and the source is intact. The
+ * displaced backup is restored if the retry fails, so an unrelated
+ * source/permission failure cannot destroy the previous generation.
  */
 async function rotate(
   logPath: string,
