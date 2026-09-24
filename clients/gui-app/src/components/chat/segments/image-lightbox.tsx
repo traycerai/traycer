@@ -154,7 +154,11 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
             </div>
           </div>
         ) : (
-          <ZoomableImageDialogBody src={props.src} alt={alt} actions={actions} />
+          <ZoomableImageDialogBody
+            src={props.src}
+            alt={alt}
+            actions={actions}
+          />
         )}
       </DialogContent>
     </Dialog>

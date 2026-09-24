@@ -116,7 +116,12 @@ describe("usePinchZoom", () => {
     const callbacks = createCallbacks();
     render(<Probe callbacks={callbacks} />);
 
-    dispatchTouchEvent(target(), "touchstart", [{ clientX: 0, clientY: 0 }], true);
+    dispatchTouchEvent(
+      target(),
+      "touchstart",
+      [{ clientX: 0, clientY: 0 }],
+      true,
+    );
 
     expect(callbacks.onPinchStart).not.toHaveBeenCalled();
     expect(callbacks.onPinchMove).not.toHaveBeenCalled();

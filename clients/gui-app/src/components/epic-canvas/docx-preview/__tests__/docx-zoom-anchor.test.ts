@@ -5,10 +5,7 @@
  * property worth pinning down, not just the worked example.
  */
 import { describe, expect, it } from "vitest";
-import {
-  documentPointUnder,
-  scrollOffsetPlacing,
-} from "../docx-zoom-anchor";
+import { documentPointUnder, scrollOffsetPlacing } from "../docx-zoom-anchor";
 
 describe("documentPointUnder", () => {
   it("computes the worked example", () => {
@@ -28,7 +25,13 @@ interface RoundTripCase {
 const ROUND_TRIP_CASES: readonly RoundTripCase[] = [
   { scrollOffset: 100, focal: 50, contentOffset: 16, scale: 2, newScale: 3 },
   { scrollOffset: 0, focal: 200, contentOffset: 0, scale: 1, newScale: 1.5 },
-  { scrollOffset: 340, focal: 12, contentOffset: 40, scale: 1.5, newScale: 0.75 },
+  {
+    scrollOffset: 340,
+    focal: 12,
+    contentOffset: 40,
+    scale: 1.5,
+    newScale: 0.75,
+  },
   { scrollOffset: 900, focal: 480, contentOffset: 24, scale: 2.5, newScale: 1 },
 ];
 
