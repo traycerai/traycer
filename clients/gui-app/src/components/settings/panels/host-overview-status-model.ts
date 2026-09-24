@@ -124,8 +124,9 @@ export function inFlightUpdateKind(
  *
  * In order: an unreachable host's version is only "Last reported"; a host
  * whose updates are not managed here wears no tag, because every tag is a
- * claim about updates; an update in flight says what it is doing; otherwise
- * the answer decides.
+ * claim about updates; an update in flight says what it is doing, unless the
+ * page can no longer vouch for the phase, when it says nothing; otherwise the
+ * answer decides.
  */
 export function deriveHostOverviewVersionTag(input: {
   /** The host can't be reached, for a reason other than a restart. */
@@ -146,6 +147,17 @@ export function deriveHostOverviewVersionTag(input: {
     // tools".
     if (inFlight === "waiting-for-work" && input.cliFloorBlocked) {
       return "needs-cli";
+    }
+    // A phase the page can no longer vouch for (retained on an `unknown`
+    // view, or `qualified`) still hides the buttons, but it is not a
+    // present-tense claim: the pill reads "Last seen: …" and the operation
+    // card goes neutral, so the card wears no tag. The floor above stays,
+    // because it is a live fact about the catalog, not about the phase.
+    if (
+      input.view !== null &&
+      (input.view.kind === "unknown" || input.view.qualified)
+    ) {
+      return null;
     }
     return IN_FLIGHT_TAG[inFlight];
   }

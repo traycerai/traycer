@@ -278,7 +278,12 @@ const OPERATION_CARD_TONE: Record<FleetUpdateViewKind, string> = {
 };
 
 function operationCardTone(view: FleetUpdateView): string {
-  if (view.qualified && view.kind !== "failed") return NEUTRAL_TONE;
+  // A failure keeps its red however the page holds it: read live, qualified,
+  // or retained as the last phase of a view that aged into `unknown`. The
+  // picker's retained word for it ("update failed") is the same claim.
+  const described = view.kind === "unknown" ? view.lastKnownKind : view.kind;
+  if (described === "failed") return OPERATION_CARD_TONE.failed;
+  if (view.qualified) return NEUTRAL_TONE;
   return OPERATION_CARD_TONE[view.kind];
 }
 

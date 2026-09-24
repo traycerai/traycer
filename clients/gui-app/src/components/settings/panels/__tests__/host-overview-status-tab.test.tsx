@@ -122,6 +122,9 @@ import type { HostUpdateCompletion } from "@/hooks/host/use-host-update-completi
 
 afterEach(() => {
   cleanup();
+  // Two tests below switch to fake timers; without this every later test
+  // would inherit them and its result would depend on file order.
+  vi.useRealTimers();
 });
 
 /**
@@ -318,6 +321,43 @@ describe("deriveHostOverviewVersionTag", () => {
         offline: false,
         unmanaged: false,
         view: view("waiting-for-work", {}),
+        cliFloorBlocked: true,
+        answerKind: null,
+      }),
+    ).toBe("needs-cli");
+  });
+
+  it("wears no tag for a phase the page can no longer vouch for, though the phase still counts as in flight", () => {
+    const retained: FleetUpdateView = {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      lastKnownKind: "downloading",
+    };
+    const qualifiedPark = view("waiting-to-activate", { qualified: true });
+    for (const demoted of [retained, qualifiedPark]) {
+      // Still in flight: the buttons stay hidden...
+      expect(inFlightUpdateKind(demoted)).not.toBeNull();
+      // ...but the card makes no present-tense claim about it.
+      expect(
+        derive({
+          offline: false,
+          unmanaged: false,
+          view: demoted,
+          cliFloorBlocked: false,
+          answerKind: "available",
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps needs-cli for a retained park, because the floor is a live fact about the catalog", () => {
+    expect(
+      derive({
+        offline: false,
+        unmanaged: false,
+        view: {
+          ...UNKNOWN_FLEET_UPDATE_VIEW,
+          lastKnownKind: "waiting-for-work",
+        },
         cliFloorBlocked: true,
         answerKind: null,
       }),
@@ -572,6 +612,49 @@ describe("<HostOverviewOperationCard/> force controls are destructive, Restart s
     const button = screen.getByTestId("host-overview-operation-force-restart");
     expect(button.getAttribute("data-variant")).toBe("destructive");
     expect(button.textContent).toBe("Force restart…");
+  });
+});
+
+describe("<HostOverviewOperationCard/> tone", () => {
+  const completion: HostUpdateCompletion = { dismissed: false, dismiss: null };
+
+  function cardFor(v: FleetUpdateView): HTMLElement {
+    render(
+      <HostOverviewOperationCard
+        view={v}
+        hostName="host-a"
+        onForceRestart={null}
+        onRestart={null}
+        onForceUpdate={null}
+        cliFloorBlocked={false}
+        completion={completion}
+      />,
+    );
+    return screen.getByTestId("host-overview-operation-card");
+  }
+
+  it("keeps a failure red once it is only retained on an aged-out view", () => {
+    const card = cardFor({
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      lastKnownKind: "failed",
+      targetVersion: "1.6.0",
+    });
+    expect(card.className).toContain("bg-destructive/10");
+  });
+
+  it("goes neutral for any other retained phase, which is no longer a present-tense claim", () => {
+    const card = cardFor({
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      lastKnownKind: "downloading",
+      targetVersion: "1.6.0",
+    });
+    expect(card.className).toContain("bg-foreground/5");
+    expect(card.className).not.toContain("bg-info/10");
+  });
+
+  it("reads a live failure red, as before", () => {
+    const card = cardFor(view("failed", { targetVersion: "1.6.0" }));
+    expect(card.className).toContain("bg-destructive/10");
   });
 });
 

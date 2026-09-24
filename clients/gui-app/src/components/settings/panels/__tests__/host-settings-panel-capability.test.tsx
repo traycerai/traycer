@@ -123,17 +123,21 @@ describe("Overview capability split without host management", () => {
     expect(
       screen.getByRole("switch", { name: "Turn on auto-update" }),
     ).not.toBeNull();
-    // ...while the genuinely RPC-dependent ROW stays gated — concealed (the
-    // gate preserves it hidden through the outage) or absent — and the gate
-    // says why. The zone itself still renders: its other row (Remove Traycer)
-    // runs over the local CLI bridge, so the gate belongs around the
-    // snapshots row, not around the region. The Danger Zone is on the
-    // Installation tab, so it has to be visited for this to be a real
-    // assertion rather than "never mounted, so trivially absent".
-    await selectHostOverviewTab("installation");
+    // ...while the genuinely RPC-dependent ROW stays gated: the snapshots row
+    // lives on the Data tab, which keeps it mounted but concealed through the
+    // outage (so a pending confirm survives a blip) and says why in one line.
+    // Data has to be visited for this to be a real assertion rather than
+    // "never mounted, so trivially absent".
+    await selectHostOverviewTab("data");
     const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
     expect(clearRow === null || isConcealed(clearRow)).toBe(true);
-    // The tab's own line says why its host reads are missing.
+    expect(
+      screen.getByText(
+        "These live on Studio Linux's disk, so they need a connection to it.",
+      ),
+    ).not.toBeNull();
+    // Installation's own line says why its host reads are missing.
+    await selectHostOverviewTab("installation");
     expect(
       screen.getByTestId("host-overview-installation-needs-connection")
         .textContent,

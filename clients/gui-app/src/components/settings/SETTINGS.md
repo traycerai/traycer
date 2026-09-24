@@ -5482,7 +5482,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
        in today's words, and Update now (only when installable) / Check now.
        - **In flight, no buttons.** While an update runs, waits or restarts
          (`inFlightUpdateKind`, retained phase included) the card is its version
-         and tag: Update now and Check now are HIDDEN, not disabled, and come
+         and tag - no tag when the page can no longer vouch for the phase
+         (retained, or `qualified`), since the pill and the update card already
+         say "Last seen", though a command-line-tools floor keeps "Needs newer
+         CLI tools": Update now and Check now are HIDDEN, not disabled, and come
          back when the update finishes or fails. The answer goes with them -
          the catalog's "v1.5.1 is available." mid-download contradicts the card
          above - except activation debt's "v1.5.1 is installed — restart host
