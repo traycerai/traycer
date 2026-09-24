@@ -317,6 +317,11 @@ describe("<PdfPreview /> document lifecycle", () => {
 
     await waitFor(() => expect(screen.getByText("/ 2")).not.toBeNull());
 
+    // The fake's page-width fit already sits at scale 1, so leave it first
+    // or a no-op Actual size would pass.
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(state.viewerInstances[0]?.currentScale).not.toBe(1);
+
     fireEvent.click(screen.getByRole("button", { name: "Actual size" }));
 
     expect(state.viewerInstances[0]?.currentScale).toBe(1);

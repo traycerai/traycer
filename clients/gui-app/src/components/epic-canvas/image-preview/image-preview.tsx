@@ -661,7 +661,11 @@ export function ImagePreview(props: ImagePreviewProps) {
           <div className="flex shrink-0 items-center gap-1">
             <ZoomControls
               ready={!zoomDisabled}
-              scalePercent={readoutScalePercent(zoomDisabled, transform.scale)}
+              scalePercent={readoutScalePercent(
+                zoomDisabled,
+                liveFit,
+                transform.scale,
+              )}
               canZoomIn={!zoomInDisabled}
               canZoomOut={!zoomOutDisabled}
               onZoomIn={handleZoomIn}
@@ -710,12 +714,19 @@ export function ImagePreview(props: ImagePreviewProps) {
   );
 }
 
-/** Nothing to read until the image is on the stage - a `{scale: 1}` default would show a false 100%. */
+/**
+ * Nothing to read until the image is on the stage under a real transform:
+ * before the asset is ready, and while the stage is still measuring or has
+ * no dimensions to fit against (`liveFit === null`), `transform` still holds
+ * its `{scale: 1}` default and would show a false 100%.
+ */
 function readoutScalePercent(
   zoomDisabled: boolean,
+  liveFit: ImagePreviewTransformState | null,
   scale: number,
 ): number | null {
-  return zoomDisabled ? null : Math.round(scale * 100);
+  if (zoomDisabled || liveFit === null) return null;
+  return Math.round(scale * 100);
 }
 
 function imagePreviewAspectRatio(meta: FileAssetMeta | null): number | null {

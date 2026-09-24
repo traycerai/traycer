@@ -113,6 +113,10 @@ export function ZoomControls(props: ZoomControlsProps): ReactNode {
           </Button>
         </TooltipWrapper>
         <span
+          // A status region: it gives the readout a valid accessible name
+          // (a generic span may not carry one) and announces zoom changes
+          // politely, so a keyboard or screen-reader zoom is confirmed.
+          role="status"
           aria-label="Zoom level"
           className="min-w-9 whitespace-nowrap text-center text-ui-xs font-medium tabular-nums"
         >
