@@ -83,6 +83,48 @@ export function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
   }
 }
 
+/**
+ * Does `pid` name a running process, answered WITHOUT spawning anything?
+ *
+ * `process.kill(pid, 0)` everywhere: on Windows libuv opens the process and
+ * reads its exit code, so it answers without the `tasklist` spawn
+ * `probeProcessLiveness` pays there. Measured on the Windows VM
+ * (LIVENESS-WIN, ×20 per case at the desktop's own Medium integrity): a live
+ * pid succeeds and an exited or reaped one throws ESRCH in about 0.005 ms,
+ * flat under a load that timed `tasklist` out on every call.
+ *
+ * - `exists` - the call succeeded, or on POSIX threw EPERM (the kernel found
+ *   the pid to check permissions against).
+ * - `gone` - ESRCH: no process at this pid.
+ * - `unknown` - anything else, including EPERM on Windows. libuv opens the
+ *   process BEFORE it reads the exit code, so there EPERM only says an
+ *   object exists that this token cannot open - and a higher-integrity (or
+ *   another user's) process that has EXITED while some handle still holds
+ *   it answers exactly that (measured: tasklist said dead). Not evidence of
+ *   life; a caller that needs one takes the full probe.
+ *
+ * Existence, not identity: a pid the OS has handed to another process reads
+ * `exists`. So `exists` may only KEEP an identity answer a full probe already
+ * gave (the desktop's cached verdict), never stand in for one; `gone` and
+ * `unknown` both send the caller back to the full probe.
+ */
+export type SpawnFreeProcessExistence = "exists" | "gone" | "unknown";
+
+export function probeProcessExistenceWithoutSpawn(
+  pid: number,
+): SpawnFreeProcessExistence {
+  if (!Number.isInteger(pid) || pid <= 0) return "gone";
+  try {
+    process.kill(pid, 0);
+    return "exists";
+  } catch (err) {
+    const code = isErrnoException(err) ? err.code : null;
+    if (code === "ESRCH") return "gone";
+    if (code === "EPERM" && process.platform !== "win32") return "exists";
+    return "unknown";
+  }
+}
+
 // Public boolean liveness check for legacy callers (`host/busy-check.ts`,
 // service controllers, doctor) that only need "is *something* running
 // here" with no identity-verdict fallback to route a probe failure to.

@@ -766,6 +766,222 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  /*
+   * DESKTOP-DEAD-HOST-CACHED-ALIVE: `isBusyRatherThanDown`'s long-stall coast
+   * and the null-snapshot recovery throttle each had the SAME shape of
+   * shield as `HostLifecycle`'s cached identity verdict
+   * (`host-lifecycle-reachability-retry.test.ts`'s "process-identity
+   * throttle" / "identity-verdict cache" suites) - up to `ALIVE_RECHECK_INTERVAL_MS`
+   * (120s) reused on nothing but age. Both now also require
+   * `probeProcessExistenceWithoutSpawn` to find the SAME pid still there
+   * before coasting/throttling; M1/M3 pin the pid dying inside that window
+   * forcing a fresh read, M2/M4 pin the pid staying alive keeping the
+   * coast/throttle in place.
+   */
+  it("M1: coast defect - a pid that dies inside the long-stall throttle window forces a fresh liveness read instead of coasting busy", async () => {
+    const MONITOR_TEST_PID = 33221;
+    const monitorSnapshot: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: MONITOR_TEST_PID,
+    };
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let liveness: HostProcessLiveness = "alive";
+    const readLiveness = vi.fn((): Promise<HostProcessLiveness> =>
+      Promise.resolve(liveness),
+    );
+    const respawn = vi.fn(async () => {});
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => monitorSnapshot,
+        reloadSnapshotFromDisk: vi.fn(async () => null),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => monitorSnapshot),
+      respawn,
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+    });
+
+    try {
+      // Settle into the long-stall hold (past `UNREACHABLE_WARN_MS` = 600s),
+      // which is what arms `nextLivenessCheckAt` and makes the coast
+      // reachable at all.
+      await ticks(700);
+      const atHold = readLiveness.mock.calls.length;
+      expect(respawn).not.toHaveBeenCalled();
+
+      // The pid dies inside the throttle window: `process.kill` now reports
+      // ESRCH, and a fresh liveness read would find the same pid gone too.
+      killSpy.mockImplementation(() => {
+        throw Object.assign(new Error("simulated ESRCH"), { code: "ESRCH" });
+      });
+      liveness = "dead";
+
+      // Before the fix, `now < nextLivenessCheckAt` alone let the coast
+      // return `true` (busy) without asking again - the exact
+      // "reachable three times over 114s for a dead pid" finding. The probe
+      // now gates the coast too, so this tick asks fresh, finds the death,
+      // and the tick proceeds to recovery instead of holding busy.
+      await ticks(2);
+      expect(readLiveness.mock.calls.length).toBeGreaterThan(atHold);
+      expect(respawn).toHaveBeenCalledTimes(1);
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  it("M2: coast control - a pid that stays alive keeps coasting inside the throttle window (no extra liveness read)", async () => {
+    const MONITOR_TEST_PID = 33222;
+    const monitorSnapshot: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: MONITOR_TEST_PID,
+    };
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const readLiveness = vi.fn((): Promise<HostProcessLiveness> =>
+      Promise.resolve("alive"),
+    );
+    const respawn = vi.fn(async () => {});
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => monitorSnapshot,
+        reloadSnapshotFromDisk: vi.fn(async () => null),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => monitorSnapshot),
+      respawn,
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+    });
+
+    try {
+      await ticks(700);
+      const atHold = readLiveness.mock.calls.length;
+
+      // Unlike M1, the pid keeps existing for the rest of the window: the
+      // coast must keep serving from it, with no further liveness read and
+      // no respawn.
+      await ticks(2);
+      expect(readLiveness.mock.calls.length).toBe(atHold);
+      expect(respawn).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  it("M3: recovery-throttle defect - a pid that dies within the null-snapshot throttle window forces attemptRecovery on the next tick", async () => {
+    // Kept different from `snapshot`'s pid for as long as `snapshot` is
+    // non-null, so `isCurrentPublishedSnapshot` never matches and
+    // `isBusyRatherThanDown` is never reached - this test isolates the
+    // NULL-SNAPSHOT recovery throttle alone, not the coast M1/M2 already
+    // cover.
+    const METADATA_PID = 55221;
+    const metadataSnapshot: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: METADATA_PID,
+    };
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let governorLiveness: HostProcessLiveness = "alive";
+    const readLiveness = vi.fn((): Promise<HostProcessLiveness> =>
+      Promise.resolve(governorLiveness),
+    );
+    const respawn = vi.fn(async () => {});
+    const reload = vi.fn(async () => {
+      snapshot = null;
+      return null;
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => metadataSnapshot),
+      respawn,
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+    });
+
+    try {
+      // Two confirmed failures demote the snapshot; the governor denies
+      // "alive", which is what arms `nextRecoveryAttemptAt` and retains
+      // recovery ownership (`recoveryPending`).
+      await ticks(2);
+      expect(snapshot).toBeNull();
+      expect(respawn).not.toHaveBeenCalled();
+
+      // Still within the throttle window, and the pid exists: the next tick
+      // must stay throttled - the control half of this test.
+      await ticks(1);
+      expect(respawn).not.toHaveBeenCalled();
+
+      // The pid dies inside the window.
+      killSpy.mockImplementation(() => {
+        throw Object.assign(new Error("simulated ESRCH"), { code: "ESRCH" });
+      });
+      governorLiveness = "dead";
+
+      await ticks(1);
+      expect(respawn).toHaveBeenCalledTimes(1);
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  it("M4: recovery-throttle control - a pid that stays alive keeps the null-snapshot throttle in place", async () => {
+    const METADATA_PID = 55222;
+    const metadataSnapshot: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: METADATA_PID,
+    };
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const readLiveness = vi.fn((): Promise<HostProcessLiveness> =>
+      Promise.resolve("alive"),
+    );
+    const respawn = vi.fn(async () => {});
+    const reload = vi.fn(async () => {
+      snapshot = null;
+      return null;
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => metadataSnapshot),
+      respawn,
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+    });
+
+    try {
+      await ticks(2);
+      expect(snapshot).toBeNull();
+      expect(respawn).not.toHaveBeenCalled();
+
+      // The pid keeps existing for several more ticks inside the window:
+      // the throttle must hold, with no recovery attempt at all.
+      await ticks(5);
+      expect(respawn).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
   it("stops probing after dispose", async () => {
     const probe = vi.fn(async () => true);
     const monitor = startMonitor({

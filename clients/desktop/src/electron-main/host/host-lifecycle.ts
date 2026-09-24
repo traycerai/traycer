@@ -32,6 +32,7 @@ import {
 } from "./host-endpoint-reachability";
 import {
   getPublishedProcessIdentityVerdict,
+  probeProcessExistenceWithoutSpawn,
   type PublishedProcessIdentityVerdict,
 } from "./process-identity";
 import {
@@ -111,6 +112,16 @@ const REACHABILITY_RETRY_MAX_MS = 5_000;
  *     (`readPublishedHostPresence` maps them to `absent`), and a positive death
  *     must never be served from a cache. They are also free to re-read: a dead
  *     pid loses the liveness probe before any child process is spawned.
+ *   - a pid that has DIED since the cached read. Not caching deaths was not
+ *     enough on its own: the cache held the LAST verdict, the live one, so a
+ *     host SIGKILLed with `pid.json` left behind was served `current` - and
+ *     published `busy`, and called reachable by the health monitor - until the
+ *     entry aged out (DESKTOP-DEAD-HOST-CACHED-ALIVE: "reachable" three times
+ *     over 114 s for a dead pid). So a cached verdict is served only while a
+ *     spawn-free existence check still finds the pid; `gone` or `unknown`
+ *     takes the full read. The residual is pid reuse: a pid the OS hands to
+ *     another process inside the window keeps the cached answer until it
+ *     ages out, as it did before - existence is not identity.
  */
 const IDENTITY_VERDICT_REUSE_MS = 120_000;
 
@@ -707,7 +718,13 @@ export class HostLifecycle extends EventEmitter {
     // died — for the whole skew plus the TTL. Negative age = re-probe.
     if (!query.answered && cached !== null && cached.pid === query.pid) {
       const reuseAgeMs = Date.now() - cached.readAt;
-      if (reuseAgeMs >= 0 && reuseAgeMs < IDENTITY_VERDICT_REUSE_MS) {
+      if (
+        reuseAgeMs >= 0 &&
+        reuseAgeMs < IDENTITY_VERDICT_REUSE_MS &&
+        // The pid must still exist, asked without a spawn - see
+        // IDENTITY_VERDICT_REUSE_MS. Anything else is re-read in full.
+        probeProcessExistenceWithoutSpawn(query.pid) === "exists"
+      ) {
         return cached.verdict;
       }
     }

@@ -7,6 +7,7 @@ import {
 } from "./host-lifecycle";
 import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
 import { readPublishedHostProcessLiveness } from "./host-process-liveness";
+import { probeProcessExistenceWithoutSpawn } from "./process-identity";
 import type {
   HostProcessLiveness,
   HostRecoveryGovernor,
@@ -124,8 +125,12 @@ const UNREACHABLE_WARN_MS = 600_000;
  * CAN change on their own, and any reachable observation clears the throttle
  * so a fresh outage is judged on fresh evidence.
  *
- * The cost of the wait is bounded and small - a host that dies while wedged is
- * picked up within this window rather than within one tick.
+ * The wait never outlives the process it is about: both paths first ask,
+ * without a spawn, whether the pid still exists
+ * (`probeProcessExistenceWithoutSpawn`), and a host that has died since is
+ * judged on the next tick rather than at the end of the window - the same
+ * rule, and the same defect, as the lifecycle's cached identity verdict
+ * (DESKTOP-DEAD-HOST-CACHED-ALIVE).
  */
 const ALIVE_RECHECK_INTERVAL_MS = 120_000;
 
@@ -327,7 +332,11 @@ export function startHostHealthMonitor(
     // the answer has been the same for ten minutes and each re-ask spawns a
     // child process, so it coasts and picks up a death within one interval.
     const longStall = unreachableForMs >= UNREACHABLE_WARN_MS;
-    if (longStall && now < nextLivenessCheckAt) {
+    if (
+      longStall &&
+      now < nextLivenessCheckAt &&
+      probeProcessExistenceWithoutSpawn(snapshot.pid) === "exists"
+    ) {
       return true;
     }
     const liveness = await readLiveness(deps.host.pidMetadataFile);
@@ -391,14 +400,20 @@ export function startHostHealthMonitor(
           await deps.host.reloadSnapshotFromDisk();
           return;
         }
-        // Throttled only after an `alive` denial (see
-        // ALIVE_RECHECK_INTERVAL_MS). Lock-deferred and failed respawns leave
-        // this at 0 and so still retry on the next tick.
-        if (Date.now() < nextRecoveryAttemptAt) return;
         const metadata = await readMetadata(deps.host.pidMetadataFile);
         if (isDisposed()) return;
         if (metadata === null) {
           recoveryPending = false;
+          return;
+        }
+        // Throttled only after an `alive` denial (see
+        // ALIVE_RECHECK_INTERVAL_MS), and only while the process that denial
+        // was about still exists. Lock-deferred and failed respawns leave
+        // this at 0 and so still retry on the next tick.
+        if (
+          Date.now() < nextRecoveryAttemptAt &&
+          probeProcessExistenceWithoutSpawn(metadata.pid) === "exists"
+        ) {
           return;
         }
         await attemptRecovery(metadata);

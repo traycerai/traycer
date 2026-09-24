@@ -15,6 +15,7 @@ export {
   getPublishedProcessIdentityVerdict,
   isProcessAlive,
   ownProcessStartIdentityAsync,
+  probeProcessExistenceWithoutSpawn,
   readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,
