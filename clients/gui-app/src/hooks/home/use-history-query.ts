@@ -1,3 +1,7 @@
+import {
+  taskOrganization,
+  useOrganizationTasks,
+} from "@/hooks/organization/organization-context";
 import type {
   HistoryItem,
   HistoryOwnershipScope,
@@ -186,6 +190,19 @@ export function useHistoryQuery(
       ),
     [currentUserId, nowMs, tasks],
   );
+  const organization = useOrganizationTasks([
+    ...baseItems
+      .filter(
+        (item) =>
+          item.taskType === "epic" &&
+          !item.isLocalHome &&
+          !item.isPreservedOrphan,
+      )
+      .map((item) => item.epicId),
+    ...[...taskContexts.tasksById.keys()].filter(
+      (id) => !taskContexts.localHomedTaskIds.has(id),
+    ),
+  ]);
   const contextItems = useMemo(
     () =>
       filterHistoryItemsLocally(
@@ -198,7 +215,14 @@ export function useHistoryQuery(
           // through this path - matched by worktree branch, path, or PR
           // number - has no other source for it.
           taskContexts.localHomedTaskIds,
-        ),
+        ).map((item) => ({
+          ...item,
+          organization: taskOrganization(
+            organization?.view,
+            item.epicId,
+            item.organization,
+          ),
+        })),
         params.search,
       ),
     [
@@ -207,6 +231,7 @@ export function useHistoryQuery(
       params.search,
       taskContexts.tasksById,
       taskContexts.localHomedTaskIds,
+      organization,
     ],
   );
   // Locally matched tasks are unioned under the cloud page: the cloud rows
@@ -231,8 +256,19 @@ export function useHistoryQuery(
   const worktreeMetadata = useTaskWorktreeMetadata(historyEpicIds);
   const worktreesByEpicId = worktreeMetadata.worktreesByEpicId;
   const allItems = useMemo(
-    () => withHistoryItemWorktreeMetadata(allBaseItems, worktreesByEpicId),
-    [allBaseItems, worktreesByEpicId],
+    () =>
+      withHistoryItemWorktreeMetadata(
+        allBaseItems.map((item) => ({
+          ...item,
+          organization: taskOrganization(
+            organization?.view,
+            item.epicId,
+            item.organization,
+          ),
+        })),
+        worktreesByEpicId,
+      ),
+    [allBaseItems, worktreesByEpicId, organization],
   );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
@@ -563,6 +599,24 @@ function filterHistoryItemsLocally(
     chatHosts: search.chatHosts,
     chatHostMatchMode: search.chatHostMode,
     ownershipScopes: search.ownershipScopes,
+  }).filter((item) => {
+    const labels = search.labelNames ?? [];
+    const names = new Set(
+      item.organization?.labels.map((label) => label.name.toLowerCase()) ?? [],
+    );
+    const labelMatches =
+      labels.length === 0 ||
+      (search.labelMode === "all"
+        ? labels.every((name) => names.has(name.toLowerCase()))
+        : labels.some((name) => names.has(name.toLowerCase())));
+    const groups = search.groupIds ?? [];
+    const groupId = item.organization?.group?.groupId;
+    return (
+      labelMatches &&
+      ((groups.length === 0 && !search.includeUngrouped) ||
+        (groupId !== undefined && groups.includes(groupId)) ||
+        (groupId === undefined && !!search.includeUngrouped))
+    );
   });
 }
 

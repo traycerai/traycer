@@ -20,6 +20,17 @@ vi.mock("@/lib/tab-navigation", () => ({
 vi.mock("@/lib/commands/actions/new-epic", () => ({
   openNewEpicIntent: () => ({ kind: "new-epic" }),
 }));
+vi.mock("@/hooks/organization/organization-context", () => ({
+  useOrganization: () => null,
+}));
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(),
+    localHomedTaskIds: new Set(),
+    isFetching: false,
+    error: null,
+  }),
+}));
 
 const TAB: HeaderTab = {
   kind: "epic",
@@ -68,10 +79,6 @@ describe("tab appearance and grouping controls", () => {
     renderMenu();
     fireEvent.click(screen.getByText("Tab appearance"));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Blue" }));
-    fireEvent.click(screen.getByText("Edit icon…"));
-    expect(document.activeElement).toBe(
-      screen.getByRole("textbox", { name: "Tab icon" }),
-    );
     fireEvent.change(screen.getByRole("textbox", { name: "Tab icon" }), {
       target: { value: "★" },
     });
@@ -90,6 +97,26 @@ describe("tab appearance and grouping controls", () => {
     expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
       "#123456",
     );
+  });
+
+  it("keeps a group's color unchanged when editing personal tab appearance", () => {
+    useTabsStore.setState({
+      customizations: {
+        "epic:tab-a": { color: null, icon: null, groupId: "existing" },
+      },
+    });
+    renderMenu();
+    fireEvent.click(screen.getByText("Tab appearance"));
+    fireEvent.change(screen.getByLabelText("Custom tab color"), {
+      target: { value: "#123456" },
+    });
+
+    expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
+      "#123456",
+    );
+    const groups = useTabsStore.getState().groups;
+    if (groups === undefined) throw new Error("Expected the existing group");
+    expect(groups.existing.color).toBe("#81c995");
   });
 
   it("creates a group and supports removing the tab from it", () => {
@@ -132,10 +159,13 @@ describe("tab appearance and grouping controls", () => {
     fireEvent.click(chip);
     expect(useTabsStore.getState().groups?.group.collapsed).toBe(true);
     fireEvent.contextMenu(chip);
-    fireEvent.change(screen.getByRole("textbox", { name: "Group name" }), {
+    const groupName = screen.getByRole("textbox", { name: "Group name" });
+    fireEvent.change(groupName, {
       target: { value: "Renamed" },
     });
+    fireEvent.keyDown(groupName, { key: "Enter" });
     expect(useTabsStore.getState().groups?.group.name).toBe("Renamed");
+    fireEvent.contextMenu(chip);
     fireEvent.click(screen.getByRole("button", { name: "Ungroup" }));
     expect(
       useTabsStore.getState().customizations?.["epic:tab-a"]?.groupId,

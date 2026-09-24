@@ -1,5 +1,10 @@
+import { useOrganization } from "@/hooks/organization/organization-context";
+import { TaskOrganizationMenu } from "@/components/organization/task-organization-menu";
+import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { isEditableRole } from "@/lib/epic-permissions";
+import { Label } from "@/components/ui/label";
 import type { CSSProperties } from "react";
-import { useId, useRef } from "react";
+import { useId } from "react";
 import { Check, Group, Palette, Pipette } from "lucide-react";
 import {
   ContextMenuItem,
@@ -20,6 +25,7 @@ export function TabColorPicker(props: {
   readonly menu: boolean;
   readonly color: string | null;
   readonly onChange: (color: string) => void;
+  readonly onDefault?: () => void;
 }) {
   const customColorId = useId();
   const selectedColor = props.color?.toLowerCase() ?? null;
@@ -38,6 +44,27 @@ export function TabColorPicker(props: {
   );
   return (
     <div role="group" aria-label="Color" className="flex flex-wrap gap-1 p-1">
+      {props.onDefault ? (
+        <button
+          type="button"
+          aria-label="Default"
+          aria-pressed={selectedColor === null}
+          onClick={props.onDefault}
+          className={cn(
+            "flex size-6 items-center justify-center rounded-full border border-input bg-popover text-foreground ring-offset-2 ring-offset-popover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            selectedColor === null && "ring-2 ring-ring",
+          )}
+        >
+          {selectedColor === null ? (
+            <Check className="size-3.5" aria-hidden />
+          ) : (
+            <span
+              className="size-3 rounded-full border border-current"
+              aria-hidden
+            />
+          )}
+        </button>
+      ) : null}
       {TAB_COLORS.map(({ name, value }) => {
         const button = (
           <button
@@ -110,12 +137,42 @@ export function TabColorPicker(props: {
 }
 
 export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
-  const iconInput = useRef<HTMLInputElement>(null);
+  if (props.tab.kind !== "epic") return null;
+  return <EpicOrganizationMenu tab={props.tab} />;
+}
+function EpicOrganizationMenu(props: {
+  readonly tab: Extract<HeaderTab, { kind: "epic" }>;
+}) {
+  const organization = useOrganization();
+  const contexts = useEpicGetTaskContexts(
+    [props.tab.epicId],
+    organization?.userId ?? null,
+    { enabled: organization?.supported ?? false },
+  );
+  const task = contexts.tasksById.get(props.tab.epicId);
+  if (
+    organization?.supported &&
+    !contexts.localHomedTaskIds.has(props.tab.epicId)
+  ) {
+    if (task?.epic === undefined || task.epic === null) return null;
+    return (
+      <TaskOrganizationMenu
+        taskId={props.tab.epicId}
+        title={props.tab.name}
+        canEdit={
+          task.epic.light?.createdBy === organization.userId ||
+          isEditableRole(task.epic.permission?.role ?? null)
+        }
+      />
+    );
+  }
+  return <LocalTabAppearanceMenu tab={props.tab} />;
+}
+function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
   const key = tabRefKey(props.tab);
   const customization = useTabsStore((state) => state.customizations?.[key]);
   const groups = useTabsStore((state) => state.groups);
   const groupId = customization?.groupId ?? null;
-  const group = groupId === null ? undefined : groups?.[groupId];
   const actions = useTabsStore.getState();
   return (
     <>
@@ -127,28 +184,13 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
         <ContextMenuSubContent layout="panel" className="max-w-xs">
           <TabColorPicker
             menu
-            color={group?.color ?? customization?.color ?? null}
+            color={customization?.color ?? null}
             onChange={(color) => {
-              if (groupId !== null) actions.updateGroup(groupId, { color });
-              else actions.setTabCustomization(props.tab, { color });
+              actions.setTabCustomization(props.tab, { color });
             }}
           />
-          {group !== undefined ? (
-            <p className="mt-2 text-ui-xs text-muted-foreground">
-              Color applies to this group.
-            </p>
-          ) : null}
-          <ContextMenuItem
-            className="mt-2"
-            onSelect={(event) => {
-              event.preventDefault();
-              iconInput.current?.focus();
-            }}
-          >
-            Edit icon…
-          </ContextMenuItem>
+          <Label className="mt-3 mb-1.5">Icon</Label>
           <Input
-            ref={iconInput}
             aria-label="Tab icon"
             placeholder="Emoji or initials"
             maxLength={32}
@@ -165,17 +207,21 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
           <p className="mt-1 text-ui-xs text-muted-foreground">
             Displays up to two characters.
           </p>
-          <ContextMenuSeparator className="my-2" />
-          <ContextMenuItem
-            onSelect={() =>
-              actions.setTabCustomization(props.tab, {
-                color: null,
-                icon: null,
-              })
-            }
-          >
-            Reset tab appearance
-          </ContextMenuItem>
+          {customization?.color || customization?.icon ? (
+            <>
+              <ContextMenuSeparator className="my-2" />
+              <ContextMenuItem
+                onSelect={() =>
+                  actions.setTabCustomization(props.tab, {
+                    color: null,
+                    icon: null,
+                  })
+                }
+              >
+                Reset tab appearance
+              </ContextMenuItem>
+            </>
+          ) : null}
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSub>
@@ -187,19 +233,21 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
           <ContextMenuItem onSelect={() => actions.createGroup(props.tab)}>
             New group
           </ContextMenuItem>
-          {Object.entries(groups ?? {}).map(([id, entry]) => (
-            <ContextMenuItem
-              key={id}
-              onSelect={() => actions.setTabGroup(props.tab, id)}
-            >
-              <span
-                className="size-3 rounded-full bg-[var(--swatch)]"
-                style={{ "--swatch": entry.color } as CSSProperties}
-              />
-              {entry.name || "Unnamed group"}
-              {id === groupId ? <Check className="ml-auto" /> : null}
-            </ContextMenuItem>
-          ))}
+          {Object.entries(groups ?? {})
+            .filter(([, entry]) => !entry.organizationOwnerId)
+            .map(([id, entry]) => (
+              <ContextMenuItem
+                key={id}
+                onSelect={() => actions.setTabGroup(props.tab, id)}
+              >
+                <span
+                  className="size-3 rounded-full bg-[var(--swatch)]"
+                  style={{ "--swatch": entry.color } as CSSProperties}
+                />
+                {entry.name || "Unnamed group"}
+                {id === groupId ? <Check className="ml-auto" /> : null}
+              </ContextMenuItem>
+            ))}
         </ContextMenuSubContent>
       </ContextMenuSub>
       {groupId !== null ? (

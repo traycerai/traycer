@@ -17,6 +17,18 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     refetch: () => Promise.resolve(),
   }),
 }));
+
+vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/organization/organization-context")
+    >();
+  return {
+    ...actual,
+    useOrganization: () => null,
+    useOrganizationTasks: () => null,
+  };
+});
 import {
   Outlet,
   RouterProvider,
@@ -55,7 +67,10 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 import { harnessDisplayName } from "@/components/session-import/session-import-model";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  type HistorySearchState,
+} from "@/lib/history-search";
 import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
 import { setLandingPlacementHostReader } from "@/lib/drafts/draft-local-edits";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
@@ -3522,6 +3537,47 @@ describe("<EpicsListPanel />", () => {
 
     fireEvent.keyDown(hitRow, { key: "ArrowUp" });
     expect(document.activeElement).toBe(taskRow);
+  });
+
+  it.each([
+    ["labels", { labelNames: ["Review"] }],
+    ["groups", { groupIds: ["group-1"] }],
+    ["No group", { includeUngrouped: true }],
+  ] as const)(
+    "marks message hits as not filtered when the History %s filter is active",
+    async (_filterName, filter) => {
+      seedMessageHits([messageMatch("chat-hit")]);
+      useHistorySearchStore.setState({
+        search: {
+          ...DEFAULT_HISTORY_SEARCH,
+          query: "matching",
+          ...filter,
+        } satisfies HistorySearchState,
+      });
+
+      renderPanel("page", "/");
+      fireEvent.click(await screen.findByRole("tab", { name: /^Messages/ }));
+
+      const messageRegion = await screen.findByRole("region", {
+        name: /Message matches/,
+      });
+      expect(
+        within(messageRegion).getByText("Filters apply to tasks only."),
+      ).toBeTruthy();
+    },
+  );
+
+  it("does not mark message hits as filtered for the query alone", async () => {
+    seedMessageHits([messageMatch("chat-hit")]);
+    renderPanel("page", "/");
+    fireEvent.click(await screen.findByRole("tab", { name: /^Messages/ }));
+
+    const messageRegion = await screen.findByRole("region", {
+      name: /Message matches/,
+    });
+    expect(
+      within(messageRegion).queryByText("Filters apply to tasks only."),
+    ).toBeNull();
   });
 
   it("withholds the message hits while tasks are being selected", async () => {

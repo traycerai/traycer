@@ -354,6 +354,26 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
+  "organization.read": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.refresh": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.history": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.command": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Settings > Browser's saved-logins list. A bounded read that can coalesce,
   // and no cadence: the list changes only when the person on this screen
   // clears a row or a site writes a cookie, and the group refetches on the

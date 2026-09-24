@@ -1,3 +1,4 @@
+import { useOrganization } from "@/hooks/organization/organization-context";
 import { batchHeaderTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -34,6 +35,7 @@ export interface CloseTabFlow {
 
 export function useCloseTabFlow(): CloseTabFlow {
   const navigate = useNavigate();
+  const organization = useOrganization();
   const closeTab = useTabCloseCommand();
   const picker = useNeighborTabPicker();
   const dialog = useUnsyncedCloseDialog();
@@ -62,11 +64,26 @@ export function useCloseTabFlow(): CloseTabFlow {
 
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
-      const finalize = () => finalizeCloseTab(tab);
+      const finalize = () => {
+        const grouped =
+          tab.kind === "epic" &&
+          organization?.view?.groups.memberships.some(
+            (member) => member.taskId === tab.epicId,
+          );
+        if (grouped) {
+          void organization
+            ?.command({
+              kind: "groups",
+              operations: [{ operation: "removeTask", taskId: tab.epicId }],
+            })
+            .then(() => finalizeCloseTab(tab))
+            .catch(() => undefined);
+        } else finalizeCloseTab(tab);
+      };
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
     },
-    [dialog, finalizeCloseTab],
+    [dialog, finalizeCloseTab, organization],
   );
 
   const closeOtherTabs = useCallback(
