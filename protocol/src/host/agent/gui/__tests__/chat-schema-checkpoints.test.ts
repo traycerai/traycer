@@ -97,7 +97,7 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // approval card's judge-reason tier, and re-verified after that freeze:
 // identical.
 //
-// 1.16 is captured ON TIME, from the tree at OSS 0014b742d before 1.17 opened
+// 1.16 is captured ON TIME, from the tree at OSS 0014b742d before 1.18 opened
 // above it for the Claude-parity surfaces, and re-verified after that freeze:
 // identical.
 const SERVER_FRAME_DIGESTS = {

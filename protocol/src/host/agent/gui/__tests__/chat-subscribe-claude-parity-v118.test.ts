@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatSubscribeV116,
-  chatSubscribeV117,
+  chatSubscribeV118,
   chatThinkingTokensEstimateSchema,
   backgroundItemSchema,
   backgroundItemKindSchema,
@@ -9,7 +9,7 @@ import {
 import { runtimeApprovalRequestSchema } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 /**
- * `chat.subscribe@1.17`: the Claude-parity surfaces. Every addition is
+ * `chat.subscribe@1.18`: the Claude-parity surfaces. Every addition is
  * accepted by the live line; the frozen `1.16` line rejects the two closed
  * unions it cannot carry (the `thinkingTokens` frame, a `cron` background
  * item) and strips the optional keys it never declared.
@@ -154,8 +154,8 @@ const BLOCK_DELTA_FRAME = {
   },
 } as const;
 
-describe("chat.subscribe@1.17 accepts every Claude-parity addition", () => {
-  const live = chatSubscribeV117.serverFrameSchema;
+describe("chat.subscribe@1.18 accepts every Claude-parity addition", () => {
+  const live = chatSubscribeV118.serverFrameSchema;
 
   it("windowed snapshot: suggestedPrompt, thinkingTokensEstimate, cron item, card facts", () => {
     const parsed = live.parse(snapshotFrame(windowedSnapshot()));
@@ -303,19 +303,19 @@ describe("the cron background item", () => {
 describe("thinkingTokens estimate", () => {
   it("rejects a negative estimate and a non-integer, accepts zero", () => {
     expect(
-      chatSubscribeV117.serverFrameSchema.safeParse({
+      chatSubscribeV118.serverFrameSchema.safeParse({
         ...THINKING_FRAME,
         estimate: -1,
       }).success,
     ).toBe(false);
     expect(
-      chatSubscribeV117.serverFrameSchema.safeParse({
+      chatSubscribeV118.serverFrameSchema.safeParse({
         ...THINKING_FRAME,
         estimate: 1.5,
       }).success,
     ).toBe(false);
     expect(
-      chatSubscribeV117.serverFrameSchema.safeParse({
+      chatSubscribeV118.serverFrameSchema.safeParse({
         ...THINKING_FRAME,
         estimate: 0,
       }).success,

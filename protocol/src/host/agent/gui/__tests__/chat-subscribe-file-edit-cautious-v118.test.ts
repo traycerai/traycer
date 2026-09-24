@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   chatSubscribeV116,
-  chatSubscribeV117,
+  chatSubscribeV118,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * `chat.subscribe@1.17`: the file-edit approval card carries `cautious` and
+ * `chat.subscribe@1.18`: the file-edit approval card carries `cautious` and
  * `displayFacts`, as the command card does on the same line - an edit a user's
  * ask rule forced to a person must not be approvable by "Approve all". The
  * frozen `1.16` line never declared either key and strips both, on the frame
@@ -90,8 +90,8 @@ function snapshotFrame(cautious: boolean): unknown {
   };
 }
 
-describe("chat.subscribe@1.17 carries cautious and displayFacts on the file-edit card", () => {
-  const live = chatSubscribeV117.serverFrameSchema;
+describe("chat.subscribe@1.18 carries cautious and displayFacts on the file-edit card", () => {
+  const live = chatSubscribeV118.serverFrameSchema;
 
   it("fileEditApprovalRequested keeps both keys", () => {
     const parsed = live.parse(fileEditRequestedFrame(true));

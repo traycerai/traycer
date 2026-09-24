@@ -460,7 +460,7 @@ type DeferredWindowedSnapshotAux = Pick<
   // consumer that must speak it EXACTLY ONCE. A stale replay is not a stale
   // card there, it is a false announcement of a result that was superseded.
   | "lastFallbackOutcome"
-  // The two `1.17` live-only keys, under this type's own rule: a
+  // The two `1.18` live-only keys, under this type's own rule: a
   // `turnStateChanged` supersedes the suggestion (an absent key clears it, and
   // nothing re-sends a cleared chip), and a `thinkingTokens` frame or a turn
   // end supersedes the estimate. Replaying either would put back a chip for a
@@ -1416,18 +1416,18 @@ export interface ChatSessionState {
    */
   readonly lastFallbackOutcome: LastFallbackOutcome | undefined;
   /**
-   * The provider's predicted next prompt (`chat.subscribe@1.17`), for the
+   * The provider's predicted next prompt (`chat.subscribe@1.18`), for the
    * composer's click-to-fill chip - which fills and never sends.
    *
    * Carried like {@link lastFallbackOutcome}: on every snapshot and every
    * `turnStateChanged`, where an ABSENT key CLEARS. The host drops it on any
    * send, any run opening and teardown, so a renderer that kept its last value
    * would offer a prompt for a conversation that has moved on. `undefined`
-   * against a host below `1.17`, which never suggests anything.
+   * against a host below `1.18`, which never suggests anything.
    */
   readonly suggestedPrompt: string | undefined;
   /**
-   * The active turn's thinking-token estimate (`chat.subscribe@1.17`), for the
+   * The active turn's thinking-token estimate (`chat.subscribe@1.18`), for the
    * streaming "Thinking" label. Seeded by the snapshot's
    * `thinkingTokensEstimate` (so a reconnect mid-thought is not blank), moved
    * by the light `thinkingTokens` frame, and cleared on the turn-end state
@@ -8428,7 +8428,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingReturn: frame.pendingReturn,
             lastFailedAttempt: frame.lastFailedAttempt,
             lastFallbackOutcome: frame.lastFallbackOutcome,
-            // Same no-`??` rule: a live `1.17` host sets the key on every
+            // Same no-`??` rule: a live `1.18` host sets the key on every
             // frame, and `undefined` is the clear (a send, a run opening).
             suggestedPrompt: frame.suggestedPrompt,
             // The turn-end state this frame already carries is the estimate's

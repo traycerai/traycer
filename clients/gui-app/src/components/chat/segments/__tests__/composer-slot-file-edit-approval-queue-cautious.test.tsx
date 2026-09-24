@@ -5,7 +5,7 @@ import type { ChatFileEditApprovalState } from "@traycer/protocol/host/agent/gui
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 
 /**
- * A `cautious` file-edit card (`chat.subscribe@1.17`) - an edit a user's ask
+ * A `cautious` file-edit card (`chat.subscribe@1.18`) - an edit a user's ask
  * rule forced to a person - is treated as a cautious command card is: never
  * approved by "Approve all", which says how many it left, and marked on its
  * own row. Its rule line shows as the command card's facts do.

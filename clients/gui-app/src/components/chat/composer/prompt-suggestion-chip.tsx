@@ -15,7 +15,7 @@ interface ComposerPromptSuggestionProps {
 
 /**
  * The provider's predicted next prompt as one dismissible chip in the
- * composer's banner portal (`chat.subscribe@1.17`).
+ * composer's banner portal (`chat.subscribe@1.18`).
  *
  * Click fills the composer with the text and focuses it - it NEVER sends; the
  * user still presses Enter. Absence draws nothing, and the host owns the

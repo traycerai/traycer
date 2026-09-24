@@ -267,7 +267,7 @@ export interface ChatLowerComposerState {
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
-  /** The host's `suggestedPrompt` (`chat.subscribe@1.17`), for the chip. */
+  /** The host's `suggestedPrompt` (`chat.subscribe@1.18`), for the chip. */
   readonly suggestedPrompt: string | undefined;
 }
 

@@ -378,7 +378,7 @@ function ApprovalRow(props: ApprovalRowProps) {
 /**
  * What the provider said about the ask beside the request itself - its own
  * reason for asking, the path it blocked on, where an MCP server came from,
- * that a rule forced the prompt (`chat.subscribe@1.17`).
+ * that a rule forced the prompt (`chat.subscribe@1.18`).
  *
  * Its own list rather than more `input` keys, and that is why it shows on a
  * Bash or grep card at all: the input panel renders those tools as a single

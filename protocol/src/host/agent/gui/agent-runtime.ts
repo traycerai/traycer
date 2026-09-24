@@ -208,7 +208,7 @@ export type RuntimeApprovalDecision = z.infer<
 
 /**
  * One labelled fact the approval card shows beside the request
- * (`chat.subscribe@1.17`): the provider's own reason for asking, the path it
+ * (`chat.subscribe@1.18`): the provider's own reason for asking, the path it
  * blocked on, where an MCP server came from, that a rule forced the prompt.
  * The `{ label, value }` pair provider notices already use.
  *
@@ -232,9 +232,9 @@ export type RuntimeApprovalDisplayFact = z.infer<
 >;
 
 // Card-only facts shared by the approval request, the `approval.requested`
-// event and the live approval card (`chat.subscribe@1.17`). Optional rather
+// event and the live approval card (`chat.subscribe@1.18`). Optional rather
 // than defaulted: absent is "the provider said nothing", which is every
-// approval an older host or another harness produces. A peer below `1.17`
+// approval an older host or another harness produces. A peer below `1.18`
 // never receives either key - the host deletes them by name
 // (`chat-frame-projection.ts`).
 const runtimeApprovalCardFactFields = {
@@ -661,7 +661,7 @@ export type ToolCallProgressEvent = z.infer<typeof toolCallProgressEventSchema>;
 
 // Wire-freeze copy of `approval.requested` as every `chat.subscribe` line
 // through `@1.16` ships it: before the card's display facts, `cautious` and
-// `ruleForced` (`1.17`). Every frozen runtime-event union below binds this
+// `ruleForced` (`1.18`). Every frozen runtime-event union below binds this
 // copy; only the live union reaches the widened event. Hand-frozen, not
 // derived from the live shape.
 export const approvalRequestedEventSchemaPreDisplayFacts = lazySchema(() =>
@@ -674,7 +674,7 @@ export const approvalRequestedEventSchemaPreDisplayFacts = lazySchema(() =>
   }),
 );
 
-// Live (`chat.subscribe@1.17`): the frozen event plus the card's facts and
+// Live (`chat.subscribe@1.18`): the frozen event plus the card's facts and
 // `ruleForced`.
 export const approvalRequestedEventSchema = lazySchema(() =>
   approvalRequestedEventSchemaPreDisplayFacts.extend({
@@ -689,7 +689,7 @@ export const approvalRequestedEventSchema = lazySchema(() =>
      * race, and a fact carried only by the callback loses whenever the event
      * wins. Optional: absent is "no rule forced it" (or the SDK did not say).
      *
-     * A live-only key on a frame clients also receive, so it joins the `1.17`
+     * A live-only key on a frame clients also receive, so it joins the `1.18`
      * strip list like the two fields above.
      */
     ruleForced: z.boolean().optional(),
@@ -2001,9 +2001,9 @@ export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
 // Wire-freeze copy of the runtime-event union as `chat.subscribe@1.13`-`@1.16`
 // ship it: every live member, with `approval.requested` swapped for its
-// pre-`1.17` freeze so none of those lines can observe the approval card's
+// pre-`1.18` freeze so none of those lines can observe the approval card's
 // display facts, `cautious` or `ruleForced`. It is exactly what the live union
-// was when `1.17` opened above it. Explicitly listed rather than derived from
+// was when `1.18` opened above it. Explicitly listed rather than derived from
 // the live union, for the reason `runtimeEventSchemaPreImage` gives: a future
 // event must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>

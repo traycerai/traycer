@@ -48,7 +48,7 @@ export function humanActionableApprovals(
 
 /**
  * True when the provider stamped this ask as one a person answers on its own
- * (`cautious`, `chat.subscribe@1.17`): Claude's "no one-key approve" or a
+ * (`cautious`, `chat.subscribe@1.18`): Claude's "no one-key approve" or a
  * user's ask rule that forced the prompt.
  *
  * Not the judge's `tier`, which says why Traycer's judge escalated; this

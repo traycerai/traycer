@@ -1,7 +1,7 @@
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * One reading of the provider's thinking-token estimate (`chat.subscribe@1.17`),
+ * One reading of the provider's thinking-token estimate (`chat.subscribe@1.18`),
  * keyed by the turn it measures. The estimate is turn-scoped on the wire, so a
  * reading that outlives its turn is not "stale", it is somebody else's number.
  */
@@ -31,7 +31,7 @@ function turnIsLive(turn: ChatActiveTurn | null): turn is ChatActiveTurn {
 
 /**
  * The reading a snapshot seeds: its `thinkingTokensEstimate` paired with its
- * own active turn, or none. A host below `1.17` omits the key, and a snapshot
+ * own active turn, or none. A host below `1.18` omits the key, and a snapshot
  * taken between turns has no live turn to pair it with.
  */
 export function thinkingTokensFromSnapshot(

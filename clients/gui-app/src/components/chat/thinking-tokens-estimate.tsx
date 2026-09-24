@@ -7,7 +7,7 @@ import {
 /**
  * The thinking-token estimate beside a STREAMING "Thinking" label, and
  * nowhere else. Draws nothing without an estimate for the live turn - a host
- * below `chat.subscribe@1.17`, a provider that sends none, or a turn that has
+ * below `chat.subscribe@1.18`, a provider that sends none, or a turn that has
  * ended.
  *
  * Skipped by chat find: it is a live counter, not transcript text.

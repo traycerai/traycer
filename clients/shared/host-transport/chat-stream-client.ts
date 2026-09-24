@@ -161,9 +161,9 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   /**
-   * The active turn's thinking-token estimate moved (`chat.subscribe@1.17`),
+   * The active turn's thinking-token estimate moved (`chat.subscribe@1.18`),
    * coalesced host-side to at most one a second. Turn-scoped: apply it only
-   * while `turnId` is the active turn. A host below `1.17` never sends it, so
+   * while `turnId` is the active turn. A host below `1.18` never sends it, so
    * against an older host this is simply never called.
    */
   readonly onThinkingTokens: (
