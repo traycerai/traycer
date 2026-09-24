@@ -91,7 +91,7 @@ interface QueuedMessageRowActionStateInput {
   readonly canAct: boolean;
   readonly readOnly: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
-  readonly hasSteerInFlight: boolean;
+  readonly hasSteerRestartPending: boolean;
 }
 
 interface QueuedMessageRowChrome {
@@ -157,8 +157,14 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     [items],
   );
   const queueStatus = props.queue.status;
-  const hasSteerInFlight = useMemo(
-    () => items.some((item) => queueItemSteerLocked(item)),
+  const hasSteerRestartPending = useMemo(
+    () =>
+      items.some(
+        (item) =>
+          item.kind === "prompt" &&
+          item.status === "steer_requested" &&
+          item.steerRequest?.mode === "interrupt_restart",
+      ),
     [items],
   );
   const { hasPausableHumanItems, hasPausedItems } = useQueuePauseState(items);
@@ -258,7 +264,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                       canAct={props.canAct}
                       readOnly={props.readOnly}
                       activeTurnStatus={props.activeTurnStatus}
-                      hasSteerInFlight={hasSteerInFlight}
+                      hasSteerRestartPending={hasSteerRestartPending}
                       editing={props.editingQueueItemId === item.queueItemId}
                       dropPreview={reorderDnd.dropPreview}
                       itemCount={items.length}
@@ -537,7 +543,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly canAct: boolean;
   readonly readOnly: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
-  readonly hasSteerInFlight: boolean;
+  readonly hasSteerRestartPending: boolean;
   readonly editing: boolean;
   readonly dropPreview: QueuedMessageDropPreview | null;
   readonly itemCount: number;
@@ -559,7 +565,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     canAct,
     readOnly,
     activeTurnStatus,
-    hasSteerInFlight,
+    hasSteerRestartPending,
     editing,
     dropPreview,
     itemCount,
@@ -576,7 +582,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     canAct,
     readOnly,
     activeTurnStatus,
-    hasSteerInFlight,
+    hasSteerRestartPending,
   });
   const rowSortable = useQueuedMessageRowSortable({
     queueItemId: item.queueItemId,
@@ -770,7 +776,19 @@ function QueuedMessageRowContent(props: {
           <span className="text-muted-foreground">{item.description}</span>
         )}
       </div>
+      <QueuedMessageFallbackReason item={item} />
     </div>
+  );
+}
+
+function QueuedMessageFallbackReason(props: { readonly item: ChatQueuedItem }) {
+  if (props.item.kind !== "prompt") return null;
+  const reason = props.item.fallbackReason?.trim();
+  if (!reason) return null;
+  return (
+    <p className="mt-1 text-ui-xs text-muted-foreground wrap-break-word">
+      {reason}
+    </p>
   );
 }
 
@@ -976,7 +994,7 @@ function queuedMessageRowActionState(
       isOptimistic ||
       input.item.status === "paused" ||
       isTransient ||
-      input.hasSteerInFlight,
+      input.hasSteerRestartPending,
   };
 }
 
