@@ -43,6 +43,34 @@ export function humanActionableApprovals(
   );
 }
 
+/**
+ * True when the provider stamped this ask as one a person answers on its own
+ * (`cautious`, `chat.subscribe@1.17`): Claude's "no one-key approve" or a
+ * user's ask rule that forced the prompt.
+ *
+ * Not the judge's `tier`, which says why Traycer's judge escalated; this
+ * exists in every mode, judge or none. An older host never sends it, and then
+ * every row is bulk-approvable as before.
+ */
+export function approvalNeedsIndividualDecision(
+  approval: ChatApprovalState,
+): boolean {
+  return approval.cautious === true;
+}
+
+/**
+ * The rows "Approve all" acts on: answerable by a person, and not stamped for
+ * an individual decision. "Deny all" still acts on every answerable row -
+ * refusing is never the risky direction.
+ */
+export function bulkApprovableApprovals(
+  approvals: ReadonlyArray<ChatApprovalState>,
+): ReadonlyArray<ChatApprovalState> {
+  return humanActionableApprovals(approvals).filter(
+    (approval) => !approvalNeedsIndividualDecision(approval),
+  );
+}
+
 // Plan approvals are owned by the inline plan card (its Implement/Reject
 // actions) and are hidden from the generic composer approval queue. They must
 // therefore NOT gate composer submit either - otherwise a plan-only approval
