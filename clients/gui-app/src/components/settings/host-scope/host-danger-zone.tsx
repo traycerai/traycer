@@ -1,35 +1,17 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDeregisterHostFromAccount } from "@/hooks/auth/use-deregister-host-mutation";
 import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
-import { toastFromHostError } from "@/lib/host-error-toast";
-import { hostQueryKeys, snapshotsMutationKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
-import {
-  HostScopeConnecting,
-  HostScopeGate,
-} from "@/components/settings/host-scope/host-scope-gate";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-
-const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
-
-interface ClearLocalSnapshotsMutationContext {
-  readonly hostId: string | null;
-  readonly userId: string | null;
-}
 
 /**
  * Destructive actions that belong to a MACHINE.
@@ -46,17 +28,13 @@ export function HostDangerZone(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
+  const { hostManagement } = useRunnerHost();
   if (scope.host === null) return null;
-  // The two rows sit on DIFFERENT capability planes, and one gate around both
-  // was the last place this branch still confused them.
-  //
-  // Clearing snapshots is host RPC and needs a live route, so it stays behind
-  // the gate — which also keeps the gate's explanation of WHY it is missing.
-  // Removing Traycer is the local CLI bridge (`hostManagement.uninstallTraycer()`)
-  // and needs no route at all; the moment someone reaches for it is precisely
-  // the moment there isn't one, on a host that is stopped, broken or wedged.
-  // Gating it too took the only way to remove a broken install out of the app
-  // that installed it, in the one state anyone wants it.
+  if (scope.host.isLocalMachine && hostManagement === null) return null;
+  if (!scope.host.isLocalMachine && !scope.host.registered) return null;
+  // Both removal paths stay available when the host cannot answer RPCs.
+  // Local uninstall uses the CLI bridge; remote account removal writes to the
+  // account. File edit snapshots are host RPC and now live in the Data tab.
   return (
     <SettingsGroup
       group={HOST_OVERVIEW.definitions.dangerZone}
@@ -65,16 +43,6 @@ export function HostDangerZone(props: {
       dataTestId="host-danger-zone"
       fill={false}
     >
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
-        <ClearFileEditSnapshotsRow scope={scope} />
-      </HostScopeGate>
-      {/* The remote counterpart sits on a THIRD capability plane: not host RPC
-          and not the local CLI bridge, but an account write. So it is outside
-          the gate for the same reason "Remove Traycer" is — it needs no route,
-          and a host you cannot reach is a common reason to want it gone. */}
       <HostRemovalRow host={scope.host} />
     </SettingsGroup>
   );
@@ -190,128 +158,6 @@ function RemoveFromAccountRow(props: {
               toast.success(`Removed ${hostName} from this account`);
             },
           });
-        }}
-      />
-    </>
-  );
-}
-
-function ClearFileEditSnapshotsRow(props: {
-  readonly scope: HostScope;
-}): ReactNode {
-  const { scope } = props;
-  // The scope moving to another host underneath this open dialog is handled
-  // at the boundary, not here: `HostScopeGate` keys this subtree by host, so
-  // a host switch unmounts the dialog with everything else. A confirmation
-  // armed against one machine cannot survive to be retargeted at another.
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const queryClient = useQueryClient();
-  const currentUserId = useAuthStore(
-    (state) => state.contextMetadata?.userId ?? state.profile?.userId ?? null,
-  );
-  const hostLabel = scope.hostLabel;
-  const client = scope.client;
-
-  const storageSizeQuery = useHostQuery<
-    HostRpcRegistry,
-    "snapshots.getLocalStorageSize"
-  >({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "snapshots.getLocalStorageSize",
-    params: SNAPSHOTS_LOCAL_STORAGE_PARAMS,
-    options: null,
-  });
-
-  const clearSnapshotsMutation = useHostMutation<
-    HostRpcRegistry,
-    "snapshots.clearLocalSnapshots",
-    ClearLocalSnapshotsMutationContext
-  >({
-    client,
-    method: "snapshots.clearLocalSnapshots",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: snapshotsMutationKeys.clearLocalSnapshots(),
-      onMutate: () => ({
-        hostId: client === null ? null : client.getActiveHostId(),
-        userId: currentUserId,
-      }),
-      onSuccess: (result, _variables, context) => {
-        if (context.hostId !== null) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.method<
-              HostRpcRegistry,
-              "snapshots.getLocalStorageSize"
-            >(
-              context.hostId,
-              "snapshots.getLocalStorageSize",
-              SNAPSHOTS_LOCAL_STORAGE_PARAMS,
-            ),
-          });
-        }
-        if (context.hostId !== null && context.userId !== null) {
-          useLocalSnapshotClearStore
-            .getState()
-            .markCleared(context.userId, context.hostId, Date.now());
-        }
-        setConfirmOpen(false);
-        toast.success("Cleared file edit snapshots", {
-          description: `${formatSnapshotBytes(result.clearedBytes)} removed.`,
-        });
-      },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't clear file edit snapshots."),
-    },
-  });
-
-  return (
-    <>
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.fileEditSnapshots}
-        status={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that host and is never synced.`}
-        control={
-          <div className="flex flex-col items-end gap-2">
-            <div
-              className="font-mono text-code-xs text-muted-foreground"
-              data-testid="settings-local-snapshots-size"
-            >
-              <SnapshotsSize query={storageSizeQuery} />
-            </div>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={client === null || clearSnapshotsMutation.isPending}
-              data-testid="settings-clear-file-edit-snapshots"
-              onClick={() => {
-                setConfirmOpen(true);
-              }}
-            >
-              {clearSnapshotsMutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="settings-clear-file-edit-snapshots-spinner"
-                  variant={undefined}
-                />
-              ) : null}
-              Clear snapshots
-            </Button>
-          </div>
-        }
-      />
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={`Clear file edit snapshots on ${hostLabel}?`}
-        description={`Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that host.`}
-        cascadeSummary={null}
-        actionLabel="Clear snapshots"
-        isPending={clearSnapshotsMutation.isPending}
-        onConfirm={() => {
-          if (client === null) return;
-          clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);
         }}
       />
     </>
@@ -447,42 +293,4 @@ function RemoveTraycerRow(): ReactNode {
       />
     </>
   );
-}
-
-function SnapshotsSize(props: {
-  readonly query: {
-    readonly isPending: boolean;
-    readonly isError: boolean;
-    readonly data: { readonly bytes: number } | undefined;
-  };
-}): ReactNode {
-  const { query } = props;
-  if (query.isPending) {
-    return (
-      <span className="inline-flex items-center gap-1.5">
-        <AgentSpinningDots
-          className={undefined}
-          testId="settings-local-snapshots-size-spinner"
-          variant={undefined}
-          tone="muted"
-        />
-        Calculating
-      </span>
-    );
-  }
-  if (query.isError) return "Unavailable";
-  return formatSnapshotBytes(query.data?.bytes ?? 0);
-}
-
-function formatSnapshotBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"] as const;
-  const exponent = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = bytes / 1024 ** exponent;
-  const precision =
-    exponent === 0 || value >= 10 || Number.isInteger(value) ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[exponent] ?? "TB"}`;
 }

@@ -122,6 +122,17 @@ export function HostIdentityCard(props: {
    */
   readonly healthAction: ReactNode;
   /**
+   * The live update pill, last on the health line, or `null`.
+   *
+   * A SLOT like `healthAction`, for the same reason: the pill reads the
+   * page's update projection, its completion timer and the selected tab,
+   * and all three are the panel's. The panel withholds it on Status (the
+   * update card is the answer there), while the health word reads
+   * "Restarting…", and on a phone, where it is a strip above the section
+   * dropdown instead.
+   */
+  readonly updatePill: ReactNode;
+  /**
    * What sits under the header inside the same card: the Overview's tab bar
    * and tab bodies. The header is PINNED - it never shrinks - and the card is
    * a column that gives up its automatic floor (`min-h-0`), so under a bounded
@@ -241,6 +252,7 @@ export function HostIdentityCard(props: {
               busySessionCount={props.busySessionCount}
               busyBreakdown={props.busyBreakdown}
             />
+            {props.updatePill}
           </div>
         </div>
       </div>

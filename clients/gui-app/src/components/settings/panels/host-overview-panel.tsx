@@ -28,10 +28,29 @@ import {
   type HostOverviewSelectTab,
 } from "@/components/settings/panels/host-overview-tab-state";
 import { HostOverviewStatusTab } from "@/components/settings/panels/host-overview-status-tab";
-import { HostOverviewUpdatesTab } from "@/components/settings/panels/host-overview-updates-tab";
-import { HostOverviewPortsTab } from "@/components/settings/panels/host-overview-ports-tab";
+import {
+  describeHostOfflineNotice,
+  deriveHostOverviewVersionTag,
+  inFlightUpdateKind,
+} from "@/components/settings/panels/host-overview-status-model";
+import { deriveHostOverviewUpdatePill } from "@/components/settings/panels/host-overview-update-pill-model";
+import {
+  HostOverviewUpdatePillButton,
+  HostOverviewUpdateStrip,
+} from "@/components/settings/panels/host-overview-update-pill";
+import { useHostUpdateCompletion } from "@/hooks/host/use-host-update-completion";
+import {
+  HostOverviewUpdatesTab,
+  type HostOverviewUpdatesTabProps,
+} from "@/components/settings/panels/host-overview-updates-tab";
+import {
+  HostOverviewPortsCount,
+  HostOverviewPortsTab,
+} from "@/components/settings/panels/host-overview-ports-tab";
+import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
+import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
@@ -42,6 +61,7 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
+  formatLastSeen,
   liveBusyBreakdown,
   liveBusySessionCount,
   liveHostBusy,
@@ -350,6 +370,17 @@ export function HostOverviewPanel(props: {
     // `usable` half - see the note there.
     enabled: usable && installInfoDegrade === null,
     runningVersion: statusQuery.data?.hostVersion ?? null,
+  });
+  // Overview ▸ Ports' lists, read ONCE here for the tab body and the count on
+  // its trigger - so the read starts with the page, not at the tab's first
+  // visit, and re-reads every 15 seconds while the page is open. A host
+  // restarting waits in the connecting shape, as the rest of the page does.
+  const portForwards = useHostPortForwards({
+    client,
+    hostId: scope.hostId,
+    usable,
+    connecting:
+      scope.status === "connecting" || host?.health.state === "restarting",
   });
 
   const identitySet = useHostIdentitySet(client);
@@ -759,6 +790,14 @@ export function HostOverviewPanel(props: {
     hostId: scope.hostId,
     view: operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
   });
+  // The success acknowledgement, held HERE rather than in the Status tab's
+  // update card: the header's "Updated to vX" pill leaves on the same 8 s
+  // timer or dismissal, and Status mounts only once it is visited - so a timer
+  // living in the card would never start for someone who stayed on Ports, and
+  // the pill would never leave.
+  const completion = useHostUpdateCompletion(
+    operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
+  );
   // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
   // is a lockout bug, not a refinement.
   //
@@ -1402,14 +1441,18 @@ export function HostOverviewPanel(props: {
   // THE REMEDY ROW'S OWN RENDER DECISION, named once and read twice.
   //
   // The card's CLI-floor sentence ends in "see installation help", and that
-  // button belongs to the updates region — which does NOT render it merely
-  // because a floor exists. The region short-circuits to the degraded notice
-  // on `degrade` and the whole region sits behind `usable`, and the card is
+  // button belongs to the Status tab's version card — which does NOT render it
+  // merely because a floor exists. The card shows the degraded sentence on
+  // `degrade` and its answer only under `usable`, and the update card is
   // behind neither, so a floor read while healthy could leave the sentence
   // pointing at a button that had since gone: a scope that went unreachable
   // rendered "Last seen: … — see installation help" with no help anywhere on
   // the page. Deriving the sentence's precondition from the row's own
   // condition is what makes that unrepresentable rather than merely fixed.
+  //
+  // The version card hides Update now and Check now while an update is in
+  // flight, and a work park IS in flight - but it keeps the fix whenever the
+  // summary names one, so this precondition holds through the park too.
   const remedyRowRendered =
     usable && updates.degrade === null && updates.summary.remedy !== null;
 
@@ -1503,10 +1546,62 @@ export function HostOverviewPanel(props: {
     );
   }
 
+  // STATUS, top to bottom: the offline notice, the update card, the account's
+  // wait, the version card. The decisions behind each are stated here once.
+  //
+  // Offline is "can't be reached, for a reason other than a restart". A
+  // restart is the update card's to narrate ("Restarting host to v1.5.1") and
+  // the health word already reads "Restarting…"; a host still connecting has
+  // an answer coming, and waits in its loading shape.
+  const restarting = host.health.state === "restarting";
+  const offline = !usable && scope.status !== "connecting" && !restarting;
+  // The update in flight, retained phase included: the version card's
+  // in-flight rule and the one-wait rule both read it.
+  const inFlightKind = inFlightUpdateKind(operationView);
+  // The caption is account-backed, so it stays while the host can't be
+  // reached. It is withheld where it would contradict the card: a host whose
+  // updates are not managed here ignores the switch, and an update in flight
+  // on a reachable host is the card's whole story until it ends.
+  let autoUpdateCaption: "on" | "off" | null = null;
+  if (
+    registryItem !== null &&
+    updates.degrade === null &&
+    (offline || inFlightKind === null)
+  ) {
+    autoUpdateCaption = registryItem.updatePolicy === "auto" ? "on" : "off";
+  }
+  // The live update pill. Never on Status (the update card is the answer
+  // there), and never while the health word reads "Restarting…".
+  const updatePill = deriveHostOverviewUpdatePill({
+    view: operationView,
+    restarting,
+    completionDismissed: completion.dismissed,
+    cliFloorBlocked,
+  });
+  const pillShown = updatePill !== null && props.tab !== "status";
+  const operationShown =
+    !offline && operationView !== null && !isQuietUpdateView(operationView);
+
   // The five tab bodies, each handed what it draws. Built on every render
   // and cheap to build - a body MOUNTS only once its tab is first visited.
   const statusTab = (
     <HostOverviewStatusTab
+      // One notice carrying what the page last knew, in place of every other
+      // unreachable wording on this tab - including the update card's
+      // retained "Last seen: …", whose phase the notice carries instead.
+      offlineNotice={
+        offline
+          ? describeHostOfflineNotice({
+              hostName: displayName,
+              lastSeen: formatLastSeen(
+                registryItem?.status.lastSeenAt ?? null,
+                nowMs,
+              ),
+              view: operationView,
+              accountKnowsHost: registryItem !== null,
+            })
+          : null
+      }
       // The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
       // rather than sitting beside it — two update lines describing one
       // operation in different vocabularies is the drift the shared
@@ -1517,10 +1612,10 @@ export function HostOverviewPanel(props: {
       // date" — a sentence about the catalog from a projection that knows only
       // the attempt record — directly above the updates region saying
       // "v1.3.0-rc.2 is available." about the same host. The card is for an
-      // operation; when there is none, the updates region below is the whole
+      // operation; when there is none, the version card below is the whole
       // answer. Same predicate the landing banner hides on.
       operation={
-        operationView === null || isQuietUpdateView(operationView)
+        !operationShown
           ? null
           : {
               view: operationView,
@@ -1528,6 +1623,8 @@ export function HostOverviewPanel(props: {
               // Resolved above, where the three conditions behind it are
               // stated.
               cliFloorBlocked,
+              // Panel-level, shared with the header pill.
+              completion,
               // Restart cannot activate a stage. A floor gate must not turn a
               // staged wait's Force update into a different, ineffective
               // force - and a record leg that is not live does not vouch that
@@ -1599,22 +1696,45 @@ export function HostOverviewPanel(props: {
               onForceUpdate: parkForceControl,
             }
       }
-      // The update ANSWER — "is there an update, and install it" is a fact
-      // about this host in the same register as its version and its session
-      // count. Everything that is a decision rather than an answer is on
-      // Updates.
-      updates={
-        !usable
+      // The version card, always - except while the scope is still connecting
+      // with no update to show, when the loading shape stands in for it.
+      versionCard={
+        scope.status === "connecting" && !operationShown
           ? null
           : {
-              summary: updates.summary,
-              degrade: updates.degrade,
-              desktopBridge: desktopUpdates.bridge,
-              onInstallationHelp: () => setDoctorOpen(true),
+              // Same two-layer rule as the header's version.
+              version: view.hostVersion ?? host.version,
+              tag: deriveHostOverviewVersionTag({
+                offline,
+                unmanaged: updates.degrade !== null,
+                view: operationView,
+                cliFloorBlocked,
+                answerKind: usable ? updates.summary.answerKind : null,
+              }),
+              // The update ANSWER — "is there an update, and install it" is a
+              // fact about this host in the same register as its version and
+              // its session count. Everything that is a decision rather than
+              // an answer is on Updates. It needs the host, so an unreachable
+              // or restarting host's card is its version, tag and caption.
+              answer: !usable
+                ? null
+                : {
+                    summary: updates.summary,
+                    degrade: updates.degrade,
+                    desktopBridge: desktopUpdates.bridge,
+                    onInstallationHelp: () => setDoctorOpen(true),
+                  },
+              inFlight: inFlightKind !== null,
+              autoUpdate: autoUpdateCaption,
             }
       }
+      // ONE WAIT ON SCREEN. The account's wait shows only while the host has
+      // not reported one of its own: once the view is `waiting-for-work`
+      // (retained phase included), the update card above says it, with Force
+      // update… as its control. Withheld too while the host can't be reached:
+      // it names live work, so it needs the host's own count.
       drainGate={
-        registryItem === null
+        registryItem === null || !usable || inFlightKind === "waiting-for-work"
           ? null
           : {
               item: registryItem,
@@ -1630,6 +1750,25 @@ export function HostOverviewPanel(props: {
       connectingHostName={scope.status === "connecting" ? displayName : null}
     />
   );
+  const versionConnecting =
+    scope.status === "connecting" ||
+    restarting ||
+    (usable &&
+      (operationView?.kind === "restarting" ||
+        operationView?.kind === "reconnecting" ||
+        operationView?.kind === "verifying"));
+  let versionFallback: HostOverviewUpdatesTabProps["versionFallback"] = null;
+  if (versionConnecting) {
+    versionFallback = { kind: "connecting", hostName: displayName };
+  } else if (!usable) {
+    versionFallback = { kind: "unreachable", hostName: displayName };
+  } else if (updates.degrade !== null) {
+    versionFallback = {
+      kind: "degraded",
+      hostName: displayName,
+      reason: updates.degrade,
+    };
+  }
   const updatesTab = (
     <HostOverviewUpdatesTab
       // An account write: no route needed, so it survives an outage.
@@ -1642,22 +1781,27 @@ export function HostOverviewPanel(props: {
       // asking the host which ones exist, so an unreachable host gets no
       // picker at all rather than a checkbox and an invitation to press a
       // Check now that is not on screen.
-      versions={usable && updates.degrade === null ? updates.picker : null}
+      versions={versionFallback === null ? updates.picker : null}
+      versionFallback={versionFallback}
     />
   );
   const portsTab = (
     <HostOverviewPortsTab
+      ports={portForwards}
       client={client}
       hostId={host.hostId}
       hostName={displayName}
       hosts={scope.hosts}
-      usable={usable}
     />
   );
   const dataTab = (
     <HostOverviewDataTab
       client={client}
       hostId={scope.hostId}
+      hostName={displayName}
+      connecting={
+        scope.status === "connecting" || host.health.state === "restarting"
+      }
       usable={usable}
     />
   );
@@ -1665,12 +1809,24 @@ export function HostOverviewPanel(props: {
     <HostOverviewInstallationTab
       usable={usable}
       hostName={displayName}
+      // The account's record, so it reads with or without a route. "Online
+      // now" follows the header's own live evidence, on the scope's clock.
+      about={
+        registryItem === null
+          ? null
+          : { item: registryItem, live: host.health.live, nowMs: scope.nowMs }
+      }
       installInfoDegrade={installInfoDegrade}
       record={
         managedInstallation(installationQuery.data)?.installRecord ?? null
       }
       recordLoading={installationQuery.isPending}
       recordReadFailed={installationQuery.isError}
+      // A host restarting to finish an update waits in the connecting shape,
+      // as Ports does - not the unreachable line, and not stale host groups.
+      connecting={
+        scope.status === "connecting" || host.health.state === "restarting"
+      }
       // The FULL gate at render time, not the hook-time `corePending`: the
       // service verbs must also lock during the install-request window, and
       // `anyPending` only exists after the updates hook the service adapter
@@ -1746,6 +1902,13 @@ export function HostOverviewPanel(props: {
         healthAction={
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
+        // Last on the health line, off Status. A phone draws it as the strip
+        // above the section dropdown instead.
+        updatePill={
+          pillShown && !isMobile ? (
+            <HostOverviewUpdatePillButton pill={updatePill} />
+          ) : null
+        }
       >
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
@@ -1753,7 +1916,21 @@ export function HostOverviewPanel(props: {
           tab={props.tab}
           onSelectTab={props.onSelectTab}
           isMobile={isMobile}
-          badges={NO_HOST_OVERVIEW_TAB_BADGES}
+          phoneStrip={
+            pillShown ? <HostOverviewUpdateStrip pill={updatePill} /> : null
+          }
+          badges={{
+            ...NO_HOST_OVERVIEW_TAB_BADGES,
+            ports:
+              portForwards.count === null ? null : (
+                <HostOverviewPortsCount count={portForwards.count} />
+              ),
+            // Same gate and same query as the Command-line tools hint on
+            // the tab, so the dot and the hint come and go together.
+            installation: props.hasLocalBridge ? (
+              <LocalPackageManagerUpgradeDot />
+            ) : null,
+          }}
           bodies={{
             status: statusTab,
             updates: updatesTab,
@@ -1875,6 +2052,7 @@ export function HostOverviewPanel(props: {
         // deliberately, so a second respawn cannot be stacked on the first.
         isForcing={forceRestartInFlight}
         forceLabel="Force restart"
+        forceDestructive
         onForce={() => {
           if (forceRestartOffer === null) return;
           // Refuse on a POSITIVE mismatch only. `null` here is "cannot tell"
@@ -1924,6 +2102,7 @@ export function HostOverviewPanel(props: {
         }
         isForcing={updates.summary.installing}
         forceLabel="Force update"
+        forceDestructive
         onForce={() => {
           if (forceUpdateOffer === null) return;
           // Closed on the ANSWER, whatever it is: an accepted force is now
@@ -1972,6 +2151,10 @@ export function HostOverviewPanel(props: {
             ? "Force update"
             : boundDispatchForceLabel(boundOffer)
         }
+        // Force update ends the work it names; the activation offer's
+        // "Restart host" stays an ordinary button, as Restart does everywhere
+        // on this page.
+        forceDestructive={boundOffer?.intent !== "activate"}
         onForce={() => {
           if (boundOffer === null) return;
           const dispatch =

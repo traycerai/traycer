@@ -511,6 +511,26 @@ export function useHostOverviewUpdates(input: {
     supportsDowngrade,
     storeRestrictionForVersion: storeFloor.restrictionForVersion,
   });
+  const answer = describeCheckState({
+    manifest,
+    checking,
+    unreachable: checkQuery.isError,
+    checkFailed: check.transient !== null,
+    hostName,
+    upToDate,
+    activationDebt: input.activationDebt,
+    remedy,
+    offerable: updatableVersion !== null,
+    // What the BUTTON will install, when it can install anything. The two
+    // differ whenever the best candidate is unusable: with a yanked
+    // `2.0.0` on the line the offer walks down to `2.0.0-rc.3`, and a
+    // sentence still naming `2.0.0` would advertise a version Update now
+    // does not install. Falls back to the bare target so the
+    // "available, but can't install it" case still names what it means.
+    targetVersion: updatableVersion ?? targetVersion,
+    strandedOnLine,
+    installedVersion,
+  });
   return {
     degrade,
     cliFloor,
@@ -555,26 +575,8 @@ export function useHostOverviewUpdates(input: {
     },
     summary: {
       hostName,
-      description: describeCheckState({
-        manifest,
-        checking,
-        failure: failureDescription,
-        unreachable: checkQuery.isError,
-        hostName,
-        upToDate,
-        activationDebt: input.activationDebt,
-        remedy,
-        offerable: updatableVersion !== null,
-        // What the BUTTON will install, when it can install anything. The two
-        // differ whenever the best candidate is unusable: with a yanked
-        // `2.0.0` on the line the offer walks down to `2.0.0-rc.3`, and a
-        // sentence still naming `2.0.0` would advertise a version Update now
-        // does not install. Falls back to the bare target so the
-        // "available, but can't install it" case still names what it means.
-        targetVersion: updatableVersion ?? targetVersion,
-        strandedOnLine,
-        installedVersion,
-      }),
+      description: answer.text,
+      answerKind: answer.kind,
       failureDescription,
       remedy,
       checking,
@@ -625,6 +627,8 @@ export function useHostOverviewUpdates(input: {
         install(version, false, acceptStoreFormatLoss, null),
       awaitingFirstCheck: actionableManifest === null,
       checking,
+      onCheck: runCheck,
+      failureDescription,
     },
   };
 }
@@ -950,7 +954,11 @@ function useBoundUpdateDispatches(input: {
 
 export interface HostOverviewUpdatesSummary {
   readonly hostName: string;
+  /** The update answer. Never a failure: that is `failureDescription`. */
   readonly description: string;
+  /** Which answer `description` gives; the version card's tag reads it. */
+  readonly answerKind: HostOverviewAnswerKind;
+  /** A refused or failed attempt, drawn as one line under the answer. */
   readonly failureDescription: string | null;
   readonly remedy: CliFloorRemedy | null;
   readonly checking: boolean;
@@ -2080,12 +2088,60 @@ function handleBoundDispatchOutcome(input: {
   toast.error(`${describeCliShellFailure("cli-failed", hostName)} (${reason})`);
 }
 
+/**
+ * The words the version card uses for "Pick it in Updates", which select the
+ * Updates tab. Exported so the card can find them in the sentence and draw
+ * them as the link they are. The sentence stays one string for everything
+ * that reads it as text: the live region, and every test pinning it.
+ */
+export const PICK_IN_UPDATES = "Pick it in Updates";
+
+/**
+ * Which answer the update sentence gives, for the version card's tag. One
+ * value per arm of {@link describeCheckState}, so the tag and the sentence
+ * cannot describe two different states.
+ */
+export type HostOverviewAnswerKind =
+  | "restart-to-finish"
+  | "needs-cli"
+  | "checking"
+  | "unreachable"
+  | "check-failed"
+  | "latest"
+  | "stranded"
+  | "not-installable"
+  | "available";
+
+interface CheckStateAnswer {
+  readonly text: string;
+  readonly kind: HostOverviewAnswerKind;
+}
+
+/**
+ * The update answer: one sentence about this host's version against the
+ * catalog.
+ *
+ * A failed or refused attempt is NOT one of its arms. It used to be the first,
+ * and the region drew the same text again as the failed-attempt line under it,
+ * so a failure read twice. The version card now states the answer and puts the
+ * failure on the one line under it (`failureDescription`), which clears on the
+ * next try. The answer beside it is whatever is still true of the catalog.
+ *
+ * With no catalog at all, what is still true is only that the check settled
+ * without one (`check-failed`): a short sentence that the failure line under
+ * it explains, never "Checking for updates…" with nothing running.
+ */
 function describeCheckState(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly checking: boolean;
-  readonly failure: string | null;
   /** The RPC itself failed — a transport fault, not an answer from the host. */
   readonly unreachable: boolean;
+  /**
+   * The host answered the check with a failure (`cli-failed`,
+   * `invalid-output`) and so with no catalog. The check has SETTLED, which is
+   * what separates this from a first load still on its way.
+   */
+  readonly checkFailed: boolean;
   readonly hostName: string;
   readonly upToDate: boolean;
   /** The install record is ahead of the running host; see the hook's input. */
@@ -2104,63 +2160,90 @@ function describeCheckState(input: {
    */
   readonly strandedOnLine: string | null;
   readonly installedVersion: string | null;
-}): string {
+}): CheckStateAnswer {
   // Ordered so a stale answer never outranks what is happening NOW: a refetch
   // keeps the previous manifest on screen, so "vX is available." would otherwise
-  // sit there unchanged while a re-check ran, or failed.
-  if (input.failure !== null) {
-    return input.failure;
-  }
+  // sit there unchanged while a re-check ran.
+  //
   // Debt outranks everything the CATALOG can say, including "checking": it is
   // a fact about this host's own disk, true whether or not the registry
-  // answers, and the sentence names the one action that resolves it. Only a
-  // failed install attempt sits above it - that is the answer to something
-  // the person just pressed. When the catalog additionally offers something
-  // newer than the INSTALLED version, Update now stays beside this sentence
-  // (see the hook's `installedVersion`); the button speaks for itself.
+  // answers, and the sentence names the one action that resolves it. The
+  // catalog is still compared against the INSTALLED version (see the hook's
+  // `installedVersion`), so `updatableVersion` names only something newer than
+  // the bytes on disk; the version card hides Update now while the restart is
+  // pending, and offers it once the update has finished.
   if (input.activationDebt !== null) {
     // Qualified when the record read behind it is not live: the debt was
     // read, and still sets the baseline, but the page is not vouching for it
     // right now (and withholds the Restart until it can).
-    return input.activationDebt.live
-      ? `v${input.activationDebt.installedVersion} is installed — restart host to finish.`
-      : `v${input.activationDebt.installedVersion} is installed (last known) — restart host to finish.`;
+    return {
+      text: input.activationDebt.live
+        ? `v${input.activationDebt.installedVersion} is installed — restart host to finish.`
+        : `v${input.activationDebt.installedVersion} is installed (last known) — restart host to finish.`,
+      kind: "restart-to-finish",
+    };
   }
   // Like debt, the remedy stays useful during the next check. The hook drops
   // it when that check fails or returns a catalog that clears the refusal.
-  if (input.remedy !== null) return input.remedy.sentence;
-  if (input.checking) return "Checking for updates…";
+  if (input.remedy !== null) {
+    return { text: input.remedy.sentence, kind: "needs-cli" };
+  }
+  if (input.checking) {
+    return { text: "Checking for updates…", kind: "checking" };
+  }
   if (input.unreachable) {
     // Deliberately NOT a toast, which is what the imperative check's `onError`
     // raised. This read now fires on its own, and an automatic request that
     // toasts on failure turns an unreachable host into a notification nobody
     // asked for, once per visit to this page.
-    return `Couldn't ask ${input.hostName} which versions it can install.`;
+    return {
+      text: `Couldn't ask ${input.hostName} which versions it can install.`,
+      kind: "unreachable",
+    };
+  }
+  // Settled with no catalog. The reason is the failure line's alone; this
+  // sentence only says there is no answer, so the reason is read once.
+  if (input.checkFailed) {
+    return {
+      text: `Couldn't check for updates on ${input.hostName}.`,
+      kind: "check-failed",
+    };
   }
   // No answer yet and nothing wrong: the first load, which now starts by itself.
-  if (input.manifest === null) return "Checking for updates…";
+  if (input.manifest === null) {
+    return { text: "Checking for updates…", kind: "checking" };
+  }
   if (input.upToDate) {
     // Honest about BOTH halves: the newer version exists, and this host will
     // not take it on its own. Naming the installed version names the line, and
-    // pointing at the list is not decoration — those rows are enabled, and
-    // they are the only way across.
+    // pointing at the Updates list is not decoration — those rows are enabled,
+    // and they are the only way across. The version card draws
+    // `PICK_IN_UPDATES` as a link to that tab.
     if (input.strandedOnLine !== null && input.installedVersion !== null) {
-      return `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. Pick it below to move.`;
+      return {
+        text: `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. ${PICK_IN_UPDATES} to move.`,
+        kind: "stranded",
+      };
     }
-    return "This host is running the latest version.";
+    return { text: "This host is running the latest version.", kind: "latest" };
   }
   // Nothing strictly newer to name — an unknown installed version leaves the
   // comparison undecidable, so the catalog is reported without a claim about
   // whether this host is behind it.
   const target = input.targetVersion;
-  if (target === null) return "This host is running the latest version.";
+  if (target === null) {
+    return { text: "This host is running the latest version.", kind: "latest" };
+  }
   // A target this host cannot act on — yanked, or no asset for its platform.
   // Claiming plain availability here would put the sentence at odds with the
   // absent button; the version list carries the specific reason.
   if (!input.offerable) {
-    return `v${target} is available, but ${input.hostName} can't install it.`;
+    return {
+      text: `v${target} is available, but ${input.hostName} can't install it.`,
+      kind: "not-installable",
+    };
   }
-  return `v${target} is available.`;
+  return { text: `v${target} is available.`, kind: "available" };
 }
 
 /**

@@ -89,6 +89,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     keywords: [
       "import your work",
       "import",
+      "data & migration",
       "migration",
       "migrate",
       "transfer",
@@ -169,7 +170,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
   dataAndMigration: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Data & migration",
+    label: "Import & migration",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
@@ -195,22 +196,60 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  installation: {
+  // The Installation tab's groups, top to bottom (the Danger zone is below).
+  // About this host is read from the account's record, not the host.
+  aboutThisHost: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Installation",
+    label: "About this host",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  // Rendered only on a host that serves `portForward.listForHost` AND has a
-  // forward or a held port to show, so like every card inside a tab body it
-  // folds into the page rather than being a destination of its own.
-  portForwards: {
+  installRecord: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Port forwards",
+    label: "Install record",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  osService: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "OS service",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  commandLineTools: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Command-line tools",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  // Ports' two groups. Each is drawn only while it has a row, so like every
+  // card inside a tab body they fold into the page; the tab trigger is the
+  // destination.
+  portForwardsOwned: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Forwards on this host",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  portForwardsHeld: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Ports other machines hold here",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
@@ -225,9 +264,18 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
+  fileEditSnapshotsGroup: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "File edit snapshots",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
   fileEditSnapshots: {
     kind: "row",
-    group: "dangerZone",
+    group: "fileEditSnapshotsGroup",
     search: { contributesTo: "page" },
     label: "File edit snapshots",
     // Names the host it is about, so it is a status.

@@ -133,7 +133,13 @@ describe("Overview capability split without host management", () => {
     await selectHostOverviewTab("installation");
     const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
     expect(clearRow === null || isConcealed(clearRow)).toBe(true);
-    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    // The tab's own line says why its host reads are missing.
+    expect(
+      screen.getByTestId("host-overview-installation-needs-connection")
+        .textContent,
+    ).toBe(
+      "The install record and OS service are read from Studio Linux, so they need a connection.",
+    );
   });
 
   it("offers no version control at all for a host it cannot reach", async () => {

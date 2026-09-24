@@ -1,7 +1,12 @@
 import type { ReactNode } from "react";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
 import { HostAutoUpdateRow } from "@/components/settings/host-scope/host-registry-updates";
 import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import {
+  describeOverviewDegrade,
+  type OverviewDegradeReason,
+} from "@/components/settings/panels/host-overview-model";
 import { HostOverviewTabSections } from "@/components/settings/panels/host-overview-tabs";
 import {
   VersionPicker,
@@ -29,11 +34,21 @@ export interface HostOverviewUpdatesTabProps {
     readonly mutation: UpdateHostVersionPolicyMutation;
   } | null;
   /**
-   * The version picker, or `null` while the host cannot be reached or its
-   * updates cannot be managed from here. Picking a version means asking the
-   * host which ones exist, so an unreachable host gets no picker at all.
+   * The version picker, or `null` while the host connects, restarts, cannot
+   * be reached, or cannot manage updates here. Picking a version means asking
+   * the host which ones exist, so an unreachable host gets no picker at all.
    */
   readonly versions: VersionPickerProps | null;
+  /** Why the version list is withheld; the account switch remains available. */
+  readonly versionFallback:
+    | { readonly kind: "connecting"; readonly hostName: string }
+    | { readonly kind: "unreachable"; readonly hostName: string }
+    | {
+        readonly kind: "degraded";
+        readonly hostName: string;
+        readonly reason: OverviewDegradeReason;
+      }
+    | null;
 }
 
 export function HostOverviewUpdatesTab(
@@ -42,13 +57,31 @@ export function HostOverviewUpdatesTab(
   return (
     <HostOverviewTabSections>
       {props.autoUpdate === null ? null : (
-        <HostAutoUpdateRow
-          item={props.autoUpdate.item}
-          mutation={props.autoUpdate.mutation}
-          className=""
-        />
+        <div className="rounded-md border border-border/40 px-4 py-3">
+          <HostAutoUpdateRow
+            item={props.autoUpdate.item}
+            mutation={props.autoUpdate.mutation}
+            className=""
+          />
+        </div>
       )}
       {props.versions === null ? null : <VersionPicker {...props.versions} />}
+      {props.versionFallback?.kind === "connecting" ? (
+        <HostScopeConnecting hostName={props.versionFallback.hostName} />
+      ) : null}
+      {props.versionFallback?.kind === "unreachable" ? (
+        <p className="text-ui-sm text-muted-foreground">
+          Connect to {props.versionFallback.hostName} to choose a version.
+        </p>
+      ) : null}
+      {props.versionFallback?.kind === "degraded" ? (
+        <p className="text-ui-sm text-muted-foreground">
+          {describeOverviewDegrade(
+            props.versionFallback.reason,
+            props.versionFallback.hostName,
+          )}
+        </p>
+      ) : null}
     </HostOverviewTabSections>
   );
 }

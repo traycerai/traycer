@@ -482,8 +482,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         expectedHostId: HOST_ID,
       });
     });
+    // The Install record is shown open: no disclosure to expand first.
     await selectHostOverviewTab("installation");
-    fireEvent.click(await screen.findByText("Installation details"));
     const installVersion = await screen.findByTestId(
       "settings-host-install-version",
     );

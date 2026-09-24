@@ -31,9 +31,46 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
 
 // A host RPC, faked like every other network boundary in these suites. What the
 // import row does with a cold status answer is the wizard suite's subject.
+const importStatusProbe = vi.hoisted((): { calls: number } => ({ calls: 0 }));
 vi.mock("@/hooks/session-import/use-session-import-status-query", () => ({
-  useSessionImportStatus: () => ({ data: undefined }),
+  useSessionImportStatus: () => {
+    importStatusProbe.calls += 1;
+    return { data: undefined };
+  },
 }));
+
+const dataTabQueryProbe = vi.hoisted(() => ({
+  calls: [] as Array<{
+    readonly client: unknown;
+    readonly method: string;
+    readonly options: unknown;
+  }>,
+}));
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...actual,
+    useHostQuery: <
+      Registry extends import("@/lib/host").HostRpcRegistry,
+      Method extends keyof Registry &
+        keyof import("@/lib/host").HostRpcRegistry &
+        string,
+    >(
+      args: import("@/hooks/host/use-host-query").UseHostQueryOptions<
+        Registry,
+        Method
+      >,
+    ) => {
+      dataTabQueryProbe.calls.push({
+        client: args.client,
+        method: args.method,
+        options: args.options,
+      });
+      return actual.useHostQuery(args);
+    },
+  };
+});
 
 const migrationStart = vi.hoisted(() => ({ fn: vi.fn() }));
 vi.mock("@/components/migration/migration-run-handle", () => ({
@@ -54,7 +91,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -67,6 +110,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
@@ -82,7 +126,7 @@ import {
 } from "@/stores/tabs/settings-open-intent-store";
 
 /**
- * Data & migration moved off General and onto the Overview of the host it
+ * Import & migration moved off General and onto the Overview of the host it
  * acts on, because both rows move ONE MACHINE'S local data and General names no
  * machine.
  *
@@ -227,8 +271,23 @@ function renderPanel(): void {
   );
 }
 
+function isVisible(element: HTMLElement): boolean {
+  return element.closest("[hidden]") === null;
+}
+
+function hasDisabledQueryOption(options: unknown): boolean {
+  return (
+    typeof options === "object" &&
+    options !== null &&
+    "enabled" in options &&
+    options.enabled === false
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  importStatusProbe.calls = 0;
+  dataTabQueryProbe.calls.length = 0;
   useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
   useSessionImportRunStore.setState({ runs: new Map() });
   scopedStreamMock.current = fakeStreamBinding({
@@ -247,13 +306,82 @@ afterEach(() => {
   scopedStreamMock.current = null;
 });
 
-describe("Host Overview · Data & migration", () => {
+describe("Host Overview · Import & migration", () => {
   it("renders both rows in one group on the Data tab", () => {
     renderPanel();
 
-    expect(screen.getByTestId("host-import-migration")).toBeTruthy();
+    const group = screen.getByTestId("host-import-migration");
+    expect(
+      within(group).getByRole("heading", { name: "Import & migration" }),
+    ).not.toBeNull();
     expect(screen.getByTestId("settings-import-sessions")).toBeTruthy();
     expect(screen.getByTestId("settings-reattempt-migration")).toBeTruthy();
+  });
+
+  it("shows the connecting shape for an unreachable host that is restarting", () => {
+    const restartingHost: HostScopeOption = hostScopeOptionFixture({
+      hostId: PICKED_HOST,
+      name: "Office Linux",
+      isLocalMachine: false,
+      health: {
+        state: "restarting",
+        label: "Restarting…",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+    });
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: restartingHost,
+      status: "unreachable",
+      client: null,
+    };
+    recordNegotiatedHostMethods(PICKED_HOST, [
+      ...ALL_OVERVIEW_METHODS,
+      "epic.artifactVersionSettings.get",
+      "epic.artifactVersionSettings.setEnabled",
+      "epic.artifactVersionSettings.setRetentionPolicy",
+      "epic.artifactVersionSettings.clearHistory",
+    ]);
+
+    renderPanel();
+
+    const pane = within(screen.getByTestId("host-overview-tab-panel-data"));
+    const connecting = pane.getByTestId("host-scope-connecting");
+    expect(connecting.textContent).toContain("Connecting to Office Linux…");
+    expect(isVisible(connecting)).toBe(true);
+    expect(
+      pane.queryByText(
+        "These live on Office Linux's disk, so they need a connection to it.",
+      ),
+    ).toBeNull();
+    expect(pane.queryByTestId("host-import-migration")).toBeNull();
+    expect(isVisible(pane.getByTestId("artifact-version-settings"))).toBe(
+      false,
+    );
+    expect(isVisible(pane.getByTestId("host-file-edit-snapshots"))).toBe(false);
+    expect(pane.queryByTestId("settings-import-sessions")).toBeNull();
+    expect(pane.queryByTestId("settings-reattempt-migration")).toBeNull();
+    expect(isVisible(pane.getByTestId("settings-local-snapshots-size"))).toBe(
+      false,
+    );
+    expect(importStatusProbe.calls).toBe(0);
+    expect(
+      dataTabQueryProbe.calls.some(
+        (call) =>
+          call.method === "epic.artifactVersionSettings.get" &&
+          call.client === null &&
+          hasDisabledQueryOption(call.options),
+      ),
+    ).toBe(true);
+    expect(
+      dataTabQueryProbe.calls.some(
+        (call) =>
+          call.method === "snapshots.getLocalStorageSize" &&
+          call.client === null,
+      ),
+    ).toBe(true);
   });
 
   it("hands the picked host's own stream binding to the migration run", () => {

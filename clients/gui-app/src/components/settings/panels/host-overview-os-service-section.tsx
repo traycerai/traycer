@@ -4,11 +4,16 @@ import { describeHostBusy } from "@/components/host/host-restart-copy";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { HostOverviewNotice } from "@/components/settings/panels/host-overview-status-card";
 import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import { SettingsGroup } from "@/components/settings/settings-group";
+import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
+import { cn } from "@/lib/utils";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 
 /**
  * The OS service registration, restored — and for every host, not just the one
@@ -69,22 +74,39 @@ export interface OsServiceSectionProps {
 }
 
 export function OsServiceSection(props: OsServiceSectionProps): ReactNode {
-  const [confirmDeregister, setConfirmDeregister] = useState(false);
-  const [confirmRegister, setConfirmRegister] = useState(false);
-
-  // One gate for the whole section: without a trustworthy description there is
-  // nothing to act on, and acting on a registration you cannot see is how
-  // someone deregisters a host they believed was already unmanaged.
-  if (props.degrade !== null) {
-    return (
-      <div className="flex flex-col gap-3">
-        <OsServiceHeading description={null} />
+  return (
+    <SettingsGroup
+      group={HOST_OVERVIEW.definitions.osService}
+      showTitle
+      tone="default"
+      dataTestId="host-overview-service"
+      fill={false}
+    >
+      {/* One gate for the whole group: without a trustworthy description
+          there is nothing to act on, and acting on a registration you cannot
+          see is how someone deregisters a host they believed was already
+          unmanaged. The standard sentence replaces the group's contents; the
+          label stays, since "doesn't support this yet" needs a "this". */}
+      {props.degrade === null ? (
+        <OsServiceRow {...props} />
+      ) : (
         <HostOverviewNotice testId="host-overview-service-degraded">
           {describeOverviewDegrade(props.degrade, props.hostName)}
         </HostOverviewNotice>
-      </div>
-    );
-  }
+      )}
+    </SettingsGroup>
+  );
+}
+
+/**
+ * The registration in a sentence, the manifest line under it, and the two
+ * repair verbs at the row's trailing edge - a settings row's geometry, so the
+ * verbs drop under the sentence on a narrow pane rather than squeeze it.
+ */
+function OsServiceRow(props: OsServiceSectionProps): ReactNode {
+  const compact = useSettingsDensity() === "compact";
+  const [confirmDeregister, setConfirmDeregister] = useState(false);
+  const [confirmRegister, setConfirmRegister] = useState(false);
 
   const anyPending =
     props.registerPending || props.deregisterPending || props.busy;
@@ -104,17 +126,40 @@ export function OsServiceSection(props: OsServiceSectionProps): ReactNode {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <OsServiceHeading description={props.description} />
-      {props.manifestLine === null ? null : (
-        <p
-          className="font-mono text-code-xs break-all text-muted-foreground"
-          data-testid="host-overview-service-manifest"
-        >
-          {props.manifestLine}
-        </p>
+    <div
+      className={cn(
+        "flex flex-wrap items-start justify-between gap-x-6 gap-y-2",
+        SETTINGS_ROW_STACK.container,
+        compact ? "px-4 py-2.5" : "px-5 py-4",
       )}
-      <div className="flex flex-wrap items-center gap-2">
+    >
+      <div
+        className={cn(
+          "flex min-w-[50%] flex-1 flex-col gap-1",
+          SETTINGS_ROW_STACK.label,
+        )}
+      >
+        <p
+          className="text-ui-sm text-foreground"
+          data-testid="host-overview-service-description"
+        >
+          {props.description}
+        </p>
+        {props.manifestLine === null ? null : (
+          <p
+            className="font-mono text-code-xs break-all text-muted-foreground"
+            data-testid="host-overview-service-manifest"
+          >
+            {props.manifestLine}
+          </p>
+        )}
+      </div>
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-2",
+          SETTINGS_ROW_STACK.control,
+        )}
+      >
         {!props.canRegister ? null : (
           <Button
             type="button"
@@ -221,22 +266,4 @@ function describeRegisterConfirm(input: {
     return `${restart} Any work running on it right now will be interrupted.`;
   }
   return `${restart} ${copy.sentence}`;
-}
-
-function OsServiceHeading(props: {
-  readonly description: string | null;
-}): ReactNode {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <div className="font-medium text-foreground">OS service</div>
-      {props.description === null ? null : (
-        <p
-          className="text-ui-sm text-muted-foreground"
-          data-testid="host-overview-service-description"
-        >
-          {props.description}
-        </p>
-      )}
-    </div>
-  );
 }

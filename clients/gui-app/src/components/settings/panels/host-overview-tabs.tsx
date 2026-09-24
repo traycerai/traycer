@@ -72,6 +72,13 @@ export function HostOverviewTabs(props: {
   readonly isMobile: boolean;
   readonly badges: HostOverviewTabBadges;
   readonly bodies: HostOverviewTabBodies;
+  /**
+   * The live update pill as a phone's full-width strip, drawn directly above
+   * the section dropdown, or `null`. The panel passes it only while a section
+   * other than Status is selected and the pill would show; on desktop it is
+   * never drawn here, since the pill sits on the header's health line.
+   */
+  readonly phoneStrip: ReactNode;
 }): ReactNode {
   const { tab, isMobile } = props;
   const [visited, setVisited] = useState<ReadonlySet<HostOverviewTab>>(
@@ -97,13 +104,18 @@ export function HostOverviewTabs(props: {
       }}
       className="gap-0 md:min-h-0"
     >
-      <div className={cn("shrink-0 px-5", isMobile && "pb-3")}>
+      <div
+        className={cn("shrink-0 px-5", isMobile && "flex flex-col gap-2 pb-3")}
+      >
         {isMobile ? (
-          <HostOverviewTabSelect
-            tab={tab}
-            onSelect={props.onSelectTab}
-            badges={props.badges}
-          />
+          <>
+            {props.phoneStrip}
+            <HostOverviewTabSelect
+              tab={tab}
+              onSelect={props.onSelectTab}
+              badges={props.badges}
+            />
+          </>
         ) : (
           <TabsList
             variant="line"

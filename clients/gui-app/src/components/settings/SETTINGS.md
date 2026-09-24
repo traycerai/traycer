@@ -962,13 +962,14 @@ styles on purpose because its regions sit on three different capability planes:
   `vanished`. The reason is the one that motivates the gate at all: a `null`
   scoped host that defaulted to "local" once put this computer's service
   console under a host that no longer exists.
-- **Installation** is pure host RPC, so it mounts the gate itself and the gate
-  says why it is missing. The status card's ACTIONS (Restart / Run doctor / Use
+- the **install record and OS service** (Installation tab) are pure host RPC,
+  so without a route they are withheld and one line says they need a
+  connection. The status card's ACTIONS (Restart / Run doctor / Use
   in this window), the rename pencil, and the host's own update check are
   withheld outright without a route rather than rendered disabled - "disabled"
   would read as a capability verdict when the fact is connectivity.
-- the **account-backed** half - update policy, drain-gate force, and Remove
-  from account - needs no route and keeps rendering for a host that cannot be
+- the **account-backed** half - update policy, drain-gate force, About this
+  host, and Remove from account - needs no route and keeps rendering for a host that cannot be
   reached, which is a common moment to want exactly those. The danger zone
   gates its own rows for the same reason. The version PIN used to sit here and
   no longer does: picking a version means picking one the host listed, so it
@@ -5411,8 +5412,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     outside anything that withholds a body, and each body decides what it
     can show (the per-region `usable` gates it carried before the split).
     While the host connects, Status shows the loading shape
-    (`HostScopeConnecting`) where the update answer goes - unless its update
-    progress is retained, which is then the answer. The header's own states are unchanged: this computer's host down gets
+    (`HostScopeConnecting`) where the version card goes - unless an update is
+    retained, which then shows with the version card under it. The header's own states are unchanged: this computer's host down gets
     Run doctor (and Reinstall Traycer after a removal), an unreachable host
     gets no Activate or `⋯`. The two page states with NO header and no tabs
     are unchanged too - a host removed from the account while you look at
@@ -5445,6 +5446,116 @@ set-state-in-effect` forbids the effect form, and an effect would also
     by the panel through `HostOverviewSelectTabProvider`, `null` outside it.
     The header's update pill and the "Change in Updates" / "Pick it in
     Updates" links use it.
+  - **Status, top to bottom, drawing only what applies**
+    (`host-overview-status-tab.tsx`; its decisions are in
+    `host-overview-status-model.ts`, and the panel resolves each piece):
+    1. **The offline notice**, while the host can't be reached for a reason
+       other than a restart (`!usable`, not connecting, the health word not
+       "Restarting…"): "Can't reach build-box — last seen 3h ago, while
+       downloading update to v1.5.1. Auto-update settings still apply at its
+       next check-in; everything else here needs a connection."
+       (`describeHostOfflineNotice`). The phase clause comes from
+       `describeLastSeenUpdateClause` and drops when no update was in flight;
+       the last-seen half drops when the account holds no check-in; the
+       auto-update half drops for a host the account does not know. It is the
+       tab's ONLY unreachable wording, so the update card is withheld under it
+       and its retained "Last seen: …" rides in the clause instead.
+    2. **The update card** (`HostOverviewOperationCard`), the host's own
+       report: progress with measured bytes, the restart phases, a wait on
+       work, failure, success. Info while it runs, warning while it waits on
+       someone, destructive on failure, success when done, neutral for a view
+       the page can no longer vouch for (a retained failure stays red). Its one
+       control is Restart, Force update… or Force restart…. Success reads
+       "Updated to v1.5.1" and collapses after 8 s or on dismiss.
+    3. **The account's wait** (`HostUpdateDrainGateRow`: "Waiting for 2
+       agents", Apply now — ends 2 agents), a warning callout. **One wait on
+       screen**: it is withheld once the host's update view is
+       `waiting-for-work` (retained phase included), where the update card
+       says it with Force update…, and while the host can't be reached,
+       because it names live work. Its confirm and its refusal when the work
+       changes under the open dialog are unchanged.
+    4. **The version card** (`HostOverviewVersionCard`), always - except while
+       the scope connects with no update retained. The running version at the
+       name's size (`text-title-sm`), one tag (Latest · Update available ·
+       Checking… · Updating… · Waiting on work · Restart to finish · Needs newer
+       CLI tools · Last reported; `deriveHostOverviewVersionTag`), the answer
+       in today's words, and Update now (only when installable) / Check now.
+       - **In flight, no buttons.** While an update runs, waits or restarts
+         (`inFlightUpdateKind`, retained phase included) the card is its version
+         and tag: Update now and Check now are HIDDEN, not disabled, and come
+         back when the update finishes or fails. The answer goes with them -
+         the catalog's "v1.5.1 is available." mid-download contradicts the card
+         above - except activation debt's "v1.5.1 is installed — restart host
+         to finish." and the command-line-tools fix's sentence.
+       - **The command-line-tools fix** (Copy command, Show installation help,
+         or the Desktop steps) replaces Update now here and nowhere else, and is
+         NOT held to the in-flight rule: it is a fix for the tools rather than a
+         control over the update, a work park can be waiting on exactly it (the
+         update card's floor sentence points at its Show installation help), and
+         the page's 30 s floor recheck runs for as long as a floor applies,
+         which is only honest while the fix it is for is on screen.
+       - **A refused or failed attempt** is ONE line under the answer
+         (`failureDescription`), clearing on the next try. It is no longer the
+         answer too: `describeCheckState` lost its failure-first arm, so the
+         answer beside it is what the catalog still says. It is not held to
+         the in-flight rule: a refused Force update… is answered during the
+         very park that counts as in flight, and its dialog closes on the
+         refusal expecting this line to say why.
+       - **A check that settled with no catalog** (the host's CLI failed, or
+         answered in a format this app can't read) answers "Couldn't check for
+         updates on build-box." with no tag and Check now, and the line under
+         it carries the reason. It never falls through to "Checking for
+         updates…", which is the first load's alone: that sentence and its
+         Checking… tag would stay with nothing running.
+       - **The stranded answer** ends "…Pick it in Updates to move."
+         (`PICK_IN_UPDATES`), and those words are a link that selects Updates.
+       - **Not manageable here** (too old, no Traycer CLI, managed outside
+         Traycer): one sentence in place of the buttons, no tag, no caption.
+       - **The caption**, when the account knows the host: "Auto-update is on —
+         applied at this host's next check-in, only when no sessions are
+         running. Change in Updates" or "Auto-update is off. Change in
+         Updates"; the link selects Updates. It stays while the host can't be
+         reached, and is withheld while an update is in flight on a reachable
+         host and when updates are not manageable here.
+  - **The destructive rule.** Force update…, Force restart… and Apply now end
+    running work, so they are destructive-styled wherever they appear: the
+    update card, the drain-gate row, and the busy dialogs
+    (`HostBusyForceDeferDialog`'s required `forceDestructive`, true at every
+    caller but the bound activation offer, whose button is "Restart host").
+    Restart and Update now stay ordinary buttons. Every confirmation still
+    names the count.
+  - **The live update pill** (`host-overview-update-pill-model.ts`, drawn by
+    `host-overview-update-pill.tsx`), last on the header's health line
+    (`HostIdentityCard`'s `updatePill` slot), on every tab but Status - Status
+    draws the update card itself. Clicking it selects Status through
+    `useHostOverviewSelectTab()`; it never performs an action. An exhaustive
+    `Record<FleetUpdateViewKind, …>` (the `LIVE_BADGE_WORD` construct), so a
+    new kind is a type error:
+
+    | Update view                                                        | Pill                                                                                              | Tone        |
+    | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------- |
+    | `updating`                                                         | "Updating…"                                                                                       | info        |
+    | `downloading`                                                      | "Downloading 45%" with a measured percentage, else "Downloading…"                                 | info        |
+    | `preparing` / `applying` / `verifying`                             | "Preparing…" / "Installing…" / "Verifying…"                                                       | info        |
+    | `waiting-to-activate`                                              | "Restart to finish update"                                                                        | warning     |
+    | `waiting-for-work`                                                 | "Update waiting on work" (no count); "Update waiting on CLI tools" when `cliFloorBlocked`         | warning     |
+    | `failed`                                                           | "Update failed"                                                                                   | destructive |
+    | `complete`                                                         | "Updated to v1.5.1", until the success card's 8 s or its dismissal                                | success     |
+    | `restarting`, `reconnecting`                                       | none - the health word reads "Restarting…"                                                        | -           |
+    | `finalizing-record`, `verification-refused`, `unavailable`, `idle` | none - Status explains the first three                                                            | -           |
+    | `unknown` with a retained phase, or any `qualified` view           | the picker's retained words: "Last seen: updating" / "Last seen: update failed"; none without one | muted       |
+    - **Hidden** on Status, and whenever the health word reads "Restarting…",
+      whatever the view says.
+    - **One acknowledgement.** `useHostUpdateCompletion` runs at PANEL level
+      and feeds both the success card and the pill, so "Updated to vX" leaves
+      after 8 s or a dismissal even if Status was never visited.
+    - **Phone.** The header draws no pill. When a section other than Status is
+      selected and the pill would show, it becomes a slim full-width strip
+      directly above the section dropdown (`HostOverviewTabs`' `phoneStrip`);
+      tapping it selects Status, and it scrolls with the page.
+
+  - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
+    stays at panel level, so it opens over whichever tab is showing.
   - **One component per tab**, each drawing what the panel hands it; the
     queries, the mutations and every dialog stay in `host-overview-panel.tsx`,
     so the update answer on Status and the version list on Updates are still
@@ -5456,13 +5567,53 @@ set-state-in-effect` forbids the effect form, and an effect would also
     (the Ports count, the Installation dot) hang on `HostOverviewTabs`'
     `badges`.
 
-    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                         |
-    | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Status       | `host-overview-status-tab.tsx`       | The update operation card, the update answer (Update now / Check now, the command-line-tools remedy, the failed-attempt line), the drain-gate row                                                                                                        |
-    | Updates      | `host-overview-updates-tab.tsx`      | The auto-update switch and the version picker (`host-overview-version-picker.tsx`), shown open - the Advanced disclosure is gone                                                                                                                         |
-    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`                                                                                                                                                                                                                                   |
-    | Data         | `host-overview-data-tab.tsx`         | Data & migration (`HostImportMigrationSection`), then Version history (`ArtifactVersionSettingsSection`)                                                                                                                                                 |
-    | Installation | `host-overview-installation-tab.tsx` | The Installation group (Installation details, then the OS service, `host-overview-os-service-section.tsx`; withheld while the host cannot be reached), the CLI upgrade hint (this computer only), the Danger zone last (File edit snapshots still in it) |
+    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+    | ------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Status       | `host-overview-status-tab.tsx`       | The offline notice, the update card (`host-overview-operation-card.tsx`), the account's wait (`HostUpdateDrainGateRow`), and the version card (`host-overview-updates.tsx`: version and tag, the update answer, Update now / Check now or the command-line-tools fix, the failed-attempt line, the auto-update caption)                                                                                                                                         |
+    | Updates      | `host-overview-updates-tab.tsx`      | A single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with its release-candidate choice, version list and inline refusal; the Advanced disclosure is gone                                                                                                                                                                                                                                    |
+    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                               |
+    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                              |
+    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last |
+
+  - **Ports is on every host, in every state.** There used to be a card that
+    was absent whenever nothing was forwarded and on hosts without port
+    forwarding. That rule is gone: the tab always has a body, and it says what
+    it can't show. `useHostPortForwards` (`host-port-forwards-state.ts`)
+    resolves one view in this order: the scope is connecting or the host is
+    restarting → the loading shape (`HostScopeConnecting`); the host can't be
+    reached → "Port forwards run on build-box, so they need a connection to
+    it."; the handshake lacks `portForward.listForHost` → the page's standard
+    `describeOverviewDegrade("unsupported")` sentence; the last settled read
+    failed → "Couldn't read build-box's port forwards." with Refresh below it;
+    nothing is forwarded or held → "Nothing is forwarded through build-box.
+    When an agent forwards a port on this host, or another machine holds one
+    of its ports, it shows up here so you can stop or cut it."; otherwise two
+    groups. **Forwards on this host** (`owned`) lists description, port, state
+    and route with the counters: Forwarding or Binding → Stop, Interrupted or
+    Stopped → Clear. **Ports other machines hold here** (`held`) shows
+    "Listening for laptop" or "Reached by laptop", the open connections and
+    Cut, confirmed with the same dialog as before. A group with no rows isn't
+    drawn. **Refresh** sits below the lists and re-reads them at once. The
+    Stop and Cut mutations and the Cut confirm stay in the card, where they
+    were before: the Cut confirm is modal, so no tab switch can happen under
+    it.
+    - **The count.** The Ports trigger and the phone dropdown's Ports item
+      carry owned plus held (`HostOverviewPortsCount`) when there is at least
+      one. There is no count at zero, on a host too old for port forwarding,
+      or while the list can't be read (connecting, restarting, unreachable, a
+      failed read).
+    - **One read, re-read every 15 seconds.** The panel reads
+      `portForward.listForHost` ONCE, for both the body and the count, so the
+      read starts with the page rather than at the tab's first visit. The read
+      keeps today's gates: nothing while the host is unusable or before its
+      handshake names the method. The host has no change signal for port
+      forwards, so the count would go stale without polling. The cadence is
+      the method's `HOST_METHOD_POLL_TABLE` entry (`fixed`, 15 s; the user's
+      call), which `usePortForwardListFor`'s required `poll` opts into. It
+      runs only while the window is visible, never in the background. A
+      forward that stops therefore drops out of the count within 15 seconds.
+      Window focus, Refresh and a Stop, Clear or Cut still re-read it
+      immediately.
 
   **The page reads the scoped host's OWN RPC** (`host-overview-panel.tsx`):
   `host.status` for what it is running, `host.identity.get` for what it is
@@ -5551,8 +5702,21 @@ set-state-in-effect` forbids the effect form, and an effect would also
   - **Updates**: one hook, two tabs. The host's own answer and "Check now"
     (`host.update.*`) and the drain-gate force sit on Status; the VERSION LIST
     and the account registry's auto-update policy sit on Updates
-    (`HostRegistryUpdates`, keyed by `hostId`, controls capture their target
-    when armed).
+    (`HostAutoUpdateRow`, keyed by `hostId`, controls capture their target when
+    armed). The auto-update switch is a single-row group with no group label:
+    its row title says Auto-update, and the Updates search entry remains on the
+    tab trigger. Its pending tag says only "Update pending", with no version.
+    The row works while the host is unreachable because it writes the account,
+    and says the setting is applied at the host's next check-in (within about
+    10 minutes, when no sessions are running).
+    - **Pick a different version** is a separate group. Its introduction says
+      it can install a release candidate, hotfix or earlier release; the
+      Include release candidates checkbox re-asks the host and explains when
+      the host chose inclusion from its installed release-candidate line.
+      Above older rows that cannot open newer chat stores, it warns about the
+      access lost until this host updates again. The list can say it is asking,
+      say no versions are available, or say the host returned no list; the
+      last state offers Check now through the same action as Status.
     - **The version list replaced a free-text pin.** `host.update.check` returns
       the whole manifest, not just `latest`, so the Overview renders the same
       per-row-Install list the local recovery console has always had - for a
@@ -5589,9 +5753,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
       pinned; the auto-update policy beside it still works without a route.
       `isValidHostVersion` (the client mirror of authn-v3's server-side regex)
       went with the input it validated.
-    - Check stays a MUTATION, not a query: it spawns a process on the host and
-      reaches the registry, so it runs when someone asks and not because a
-      settings pane mounted.
+    - Check is one shared query for the Status answer and Updates list. It
+      populates on its own; Check now in either place forces a refetch.
     - The RPC half degrades away WHOLE - Check-now and the list with it,
       leaving the auto-update policy as the only update control, plus one line
       saying why - without the methods, without a
@@ -5603,7 +5766,17 @@ set-state-in-effect` forbids the effect form, and an effect would also
       the one action the host has just said can never lead anywhere.
       `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
       going wrong with the mechanism intact - so the controls stay and an inline
-      `host-overview-update-attempt-failed` notice clears on the next try.
+      `host-overview-update-attempt-failed` notice clears on the next try. A
+      transient refused Install appears under the list in Updates and under
+      the answer on Status from that one failure state; the version rows
+      unfreeze and the page stays on Updates. A structural refusal (for
+      example, a CLI that disappeared after the list was read) replaces the
+      list with its not-manageable reason and the inline refusal goes with it.
+      Connecting or restarting shows a loading shape in the list's place.
+      An unreachable host keeps the auto-update row and says "Connect to
+      <host name> to choose a version." A structurally unmanageable host
+      (too old, no CLI, or managed outside Traycer) also keeps the auto-update
+      row and shows its reason in the list's place.
       Progress after an accepted install comes from `host.status.updateProgress`,
       not from the install response, because the swap is detached and outlives
       it.
@@ -5971,9 +6144,15 @@ set-state-in-effect` forbids the effect form, and an effect would also
       Desktop bundles, the answer to "your npm CLI is older than Desktop's";
       this remedy pins the host's required floor, the answer to "this host
       refuses the CLI it has". Version rows on Updates retain their reasons.
-      Sentence precedence preserves the record-derived parks: **failure →
-      activation debt → CLI remedy → checking → unreachable → no manifest →
-      stranded on its release line / up to date → unavailable / available**.
+      Sentence precedence preserves the record-derived parks: **activation
+      debt → CLI remedy → checking → unreachable → check failed → no
+      manifest → stranded on its release line / up to date → unavailable /
+      available**. A failed or refused attempt is not in this chain: it is the
+      one line under the answer (`failureDescription`), so the answer beside
+      it stays what the catalog says instead of repeating the failure. "Check
+      failed" is the chain's one step about a failure, and only as a fact
+      about the catalog: the check settled with none, so the step says so and
+      leaves the reason to that line.
       A failed catalog read drops the remedy along with the actionable catalog.
 
     - **Repair rechecks while the Overview is open.** The Overview re-asks
@@ -6016,10 +6195,48 @@ set-state-in-effect` forbids the effect form, and an effect would also
       than disabled, since the card reports the park and the header's menu
       item carries the reason - and an open confirm closes when its method
       is withdrawn or its region retires.
-  - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
-    state, not an error - a host run from a checkout has no install record - and
-    it says so rather than claiming nothing is installed.
-  - **Data & migration** (`panels/host-import-migration-section.tsx`), on the
+  - **Installation**, top to bottom: About this host, Install record, OS
+    service, Command-line tools, Danger zone.
+    - **About this host** (`host-overview-about-this-host.tsx`) reads the
+      ACCOUNT's host record - the `HostListItem` the panel already holds
+      (`scope.host.item`), never a host RPC - so it reads the same while the
+      host connects or cannot be reached, which is when people come for the
+      host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
+      `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
+      version (`status.appVersion`) and Platform (`formatPlatform` plus the
+      architecture, as the header words it). Last seen reads "Online now"
+      while the header's live evidence holds (`health.live`); otherwise
+      `status.lastSeenAt` on the header's own ladder and clock
+      (`formatElapsed`, `scope.nowMs`), so the two never disagree on one
+      screen. A host the account has no record of gets no group, as it gets
+      no Danger zone.
+    - **Install record** (`host-settings-installation-details.tsx`) is shown
+      open - it was a collapsed "Installation details" disclosure - and reads
+      `host.getInstallationInfo`: Version, Build (only when it differs),
+      Source, Installed, Verification, SHA-256 (shortened, with copy),
+      Platform. `unmanaged` is a real state, not an error - a host run from a
+      checkout has no install record - and it says so rather than claiming
+      nothing is installed; a failed read and an unsupported host each keep
+      their own sentence.
+    - **OS service** (`host-overview-os-service-section.tsx`) is its own
+      group: the registration sentence and manifest line, Re-register and
+      Deregister with their confirms. A host that cannot report its service
+      gets the standard unsupported sentence in place of the group's
+      contents, under its label.
+    - Those two are the tab's host reads. While the host connects they are
+      the loading shape; when it cannot be reached one line replaces both -
+      "The install record and OS service are read from <host>, so they need
+      a connection." - and About this host, Command-line tools and the Danger
+      zone stay.
+    - **Command-line tools** (this computer only, behind the panel's
+      `hasLocalBridge`) is the package-manager upgrade hint with its command
+      and a copy button. The tab trigger and the phone Select's Installation
+      item carry a warning dot (`LocalPackageManagerUpgradeDot`, hung on
+      `badges`) that reads the SAME query as the hint -
+      `useRunnerHostCliManifestQuery` (`runnerQueryKeys.hostCliManifest`) -
+      under the same gate, so the dot and the group appear together and clear
+      together, on the read that finds the tools current.
+  - **Import & migration** (`panels/host-import-migration-section.tsx`), on the
     Data tab above Version history: **Import your work** (opens the session
     import wizard for the sessions on THIS host's disk) and **Data migration**
     (retry moving this host's local SQLite tasks and epics to cloud). Both came
@@ -6043,6 +6260,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
       context, so the row cannot offer an import host A negotiated and submit
       it to host B. An empty titled card reads as a page that failed to load,
       which is why the whole group goes rather than its contents.
+  - **File edit snapshots** (`panels/host-file-edit-snapshots-section.tsx`) is
+    the single-row group after Version history, without a repeated group
+    label. Its host RPC reads the stored size and clears snapshots behind the
+    existing confirmation. While the host connects or restarts, Data shows
+    `HostScopeConnecting`; if it cannot be reached, the tab replaces all three
+    groups with "These live on <host name>'s disk, so they need a connection to
+    it."
   - **Doctor** (`host-doctor-rpc-card.tsx`) has the host shell its own CLI. Two
     things make the report trustworthy over a connection, and both come from the
     host: the structured failure arms (`cli-unavailable` / `cli-failed` /
@@ -6060,12 +6284,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
     to the copy-command affordance for a remote host. That is not a missing RPC:
     they repair a host that is typically not answering RPCs at all, so remote
     verbs for them were dropped from the plan on purpose.
-  - **Danger zone** (`host-scope/host-danger-zone.tsx`), three planes, each
-    gating itself: File edit snapshots (host RPC, behind the scope gate), Remove
-    Traycer (local CLI bridge, local host only, never gated on reachability), and
-    **Remove from account** (an account write, remote + registered only). That
-    last one is NEVER called "deregister" in copy - this app already uses that
-    word for OS-SERVICE deregistration in the OS service section on the same tab,
+  - **Danger zone** (`host-scope/host-danger-zone.tsx`) contains only removal:
+    Remove Traycer (local CLI bridge, local host only, never gated on
+    reachability), or **Remove from account** (an account write, remote +
+    registered only). Without an available removal action, the group is absent.
+    The account removal action is NEVER called "deregister" in copy - this app
+    already uses that word for OS-SERVICE deregistration on the same tab,
     and two destructive controls sharing a verb is how someone reaches for the
     wrong one. Its confirmation is written against what the route actually does:
     `POST /api/v3/hosts/:id/deregister` stamps `deregisteredAt` and clears the

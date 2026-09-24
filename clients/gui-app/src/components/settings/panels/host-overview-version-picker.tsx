@@ -1,10 +1,13 @@
 import { useState, type ReactNode } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   HostVersionRows,
   type HostVersionRow,
 } from "@/components/settings/panels/host-version-rows";
+import { cn } from "@/lib/utils";
 
 export interface VersionPickerProps {
   readonly rows: readonly HostVersionRow[];
@@ -30,6 +33,10 @@ export interface VersionPickerProps {
   /** True before the first check has answered — no list to show yet. */
   readonly awaitingFirstCheck: boolean;
   readonly checking: boolean;
+  /** The same forced check used by the Status answer. */
+  readonly onCheck: () => void;
+  /** One failure state shared with the Status answer. */
+  readonly failureDescription: string | null;
 }
 
 /**
@@ -60,82 +67,66 @@ export function VersionPicker(props: VersionPickerProps): ReactNode {
   }
   return (
     <div
-      className="flex flex-col gap-3"
+      className="flex flex-col gap-2"
       data-testid="host-overview-version-picker"
     >
-      <div className="flex flex-col gap-0.5">
-        <div className="font-medium text-foreground">
-          Pick a different version
+      <div className="font-medium text-foreground">
+        Pick a different version
+      </div>
+      <div className="overflow-hidden rounded-md border border-border/40">
+        <div className="flex flex-col gap-3 px-4 py-3">
+          <p className="text-ui-sm text-muted-foreground">
+            Install a specific host version — upgrade to a release candidate or
+            hotfix, or downgrade to an earlier release.
+          </p>
+          <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">
+            <Checkbox
+              id="host-overview-include-pre-releases"
+              aria-label="Include release candidates"
+              checked={props.includePreReleases}
+              // The page-wide gate too, not only the in-flight check: toggling
+              // changes the query key and immediately spawns another
+              // `host.update.check` CLI process - against a host that may be
+              // restarting, shutting down, or mid-swap while the gate is up.
+              disabled={props.checking || props.disabled}
+              onCheckedChange={(value) =>
+                props.onIncludePreReleasesChange(value === true)
+              }
+            />
+            <label
+              htmlFor="host-overview-include-pre-releases"
+              className="flex min-w-0 cursor-pointer flex-col gap-0.5 select-none"
+            >
+              <span className="text-foreground">
+                Include release candidates
+              </span>
+              <span>Show RC host versions when choosing a version.</span>
+              {/* Provenance, and worded as a fact about the host rather than a
+                  setting: there is no stored preference behind this state, so copy
+                  implying one would point at a switch that does not exist. */}
+              {props.includePreReleasesExplanation !== null ? (
+                <span data-testid="host-overview-include-pre-releases-reason">
+                  {props.includePreReleasesExplanation}
+                </span>
+              ) : null}
+            </label>
+          </div>
         </div>
-        <p className="text-ui-sm text-muted-foreground">
-          Install a specific host version — upgrade to a release candidate or
-          hotfix, or downgrade to an earlier release.
-        </p>
-      </div>
-      <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">
-        <Checkbox
-          id="host-overview-include-pre-releases"
-          aria-label="Include release candidates"
-          checked={props.includePreReleases}
-          // The page-wide gate too, not only the in-flight check: toggling
-          // changes the query key and immediately spawns another
-          // `host.update.check` CLI process - against a host that may be
-          // restarting, shutting down, or mid-swap while the gate is up.
-          disabled={props.checking || props.disabled}
-          onCheckedChange={(value) =>
-            props.onIncludePreReleasesChange(value === true)
-          }
-        />
-        <label
-          htmlFor="host-overview-include-pre-releases"
-          className="flex min-w-0 cursor-pointer flex-col gap-0.5 select-none"
-        >
-          <span className="text-foreground">Include release candidates</span>
-          <span>Show RC host versions when choosing a version.</span>
-          {/* Provenance, and worded as a fact about the host rather than a
-              setting: there is no stored preference behind this state, so copy
-              implying one would point at a switch that does not exist. */}
-          {props.includePreReleasesExplanation !== null ? (
-            <span data-testid="host-overview-include-pre-releases-reason">
-              {props.includePreReleasesExplanation}
-            </span>
-          ) : null}
-        </label>
-      </div>
-      {props.storeFloorNotice ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Older versions that can't open this device's chat stores can still be
-          installed with Install anyway, at the cost of access to those chats
-          until the host is updated again.
-        </p>
-      ) : null}
-      {props.awaitingFirstCheck ? (
-        <p className="text-ui-sm text-muted-foreground">
-          {props.checking
-            ? "Asking this host which versions it can install…"
-            : // Not "Check for updates to see…" any more. The list asks by
-              // itself now, so reaching this line means the ask came back
-              // without one — and pointing at a button that has already run is
-              // how the empty state read as the user's fault. The summary row
-              // above carries the actual reason.
-              "This host didn't return a list of installable versions."}
-        </p>
-      ) : (
-        <HostVersionRows
-          rows={props.rows}
-          totalCount={props.totalCount}
-          showAll={props.showAll}
-          onToggleShowAll={props.onToggleShowAll}
-          installingVersion={props.installingVersion}
-          // `checking` too, not only the page-wide busy: while a filter toggle
-          // refetches, `keepPreviousData` keeps the OLD filter's rows on
-          // screen — freezing them is what stops an excluded RC from being
-          // installable in the gap after unchecking the option.
-          disabled={props.disabled || props.checking}
-          onInstall={(version) => props.onInstall(version, false)}
+        {props.storeFloorNotice ? (
+          <p
+            role="status"
+            className="border-t border-border/40 px-4 py-3 text-ui-sm text-muted-foreground"
+          >
+            Older versions that can't open this device's chat stores can still
+            be installed with Install anyway, at the cost of access to those
+            chats until the host is updated again.
+          </p>
+        ) : null}
+        <VersionPickerList
+          picker={props}
           onInstallAnyway={setConfirmingVersion}
         />
-      )}
+      </div>
       <ConfirmDestructiveDialog
         open={confirmingVersion !== null && confirmationBody !== null}
         onOpenChange={(open) => {
@@ -157,6 +148,81 @@ export function VersionPicker(props: VersionPickerProps): ReactNode {
           setConfirmingVersion(null);
         }}
       />
+    </div>
+  );
+}
+
+function VersionPickerList(input: {
+  readonly picker: VersionPickerProps;
+  readonly onInstallAnyway: (version: string) => void;
+}): ReactNode {
+  const { picker } = input;
+  const noListState = picker.checking ? (
+    <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
+      <AgentSpinningDots
+        className="size-3"
+        testId={undefined}
+        variant={undefined}
+      />
+      Asking this host which versions it can install…
+    </div>
+  ) : (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p className="text-ui-sm text-muted-foreground">
+        This host didn't return a list of installable versions.
+      </p>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={picker.disabled}
+        onClick={picker.onCheck}
+        data-testid="host-overview-version-check"
+      >
+        Check now
+      </Button>
+    </div>
+  );
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 border-t border-border/40 px-4 py-3",
+        // HostVersionRows includes Show all after its list. Keep the
+        // refusal against the rows, before that secondary list control.
+        !picker.awaitingFirstCheck &&
+          picker.rows.length > 0 &&
+          "[&>div]:order-2",
+      )}
+    >
+      {picker.awaitingFirstCheck ? (
+        noListState
+      ) : (
+        <HostVersionRows
+          rows={picker.rows}
+          totalCount={picker.totalCount}
+          showAll={picker.showAll}
+          onToggleShowAll={picker.onToggleShowAll}
+          installingVersion={picker.installingVersion}
+          // `checking` too, not only the page-wide busy: while a filter toggle
+          // refetches, `keepPreviousData` keeps the OLD filter's rows on
+          // screen — freezing them is what stops an excluded RC from being
+          // installable in the gap after unchecking the option.
+          disabled={picker.disabled || picker.checking}
+          onInstall={(version) => picker.onInstall(version, false)}
+          onInstallAnyway={input.onInstallAnyway}
+        />
+      )}
+      {picker.awaitingFirstCheck ||
+      picker.rows.length === 0 ||
+      picker.failureDescription === null ? null : (
+        <p
+          role="alert"
+          className="order-1 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive-foreground"
+          data-testid="host-overview-version-install-refused"
+        >
+          {picker.failureDescription}
+        </p>
+      )}
     </div>
   );
 }
