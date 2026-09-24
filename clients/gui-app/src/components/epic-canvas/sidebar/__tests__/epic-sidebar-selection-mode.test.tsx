@@ -1015,6 +1015,10 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicConnectionStatus: () => "open",
   useEpicNodeArchived: (nodeId: string) =>
     testState.archivedIds.includes(nodeId),
+  // The row's PRESENTATION follows the partition it is listed in; these
+  // fixtures carry no evolution chats, so it agrees with the archive flag.
+  useEpicNodeListedAsArchived: (nodeId: string) =>
+    testState.archivedIds.includes(nodeId),
   useEpicNodeHostId: () => testState.rowHostId,
   useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
     nodeIds.map(() => testState.rowHostId ?? "host-1"),
