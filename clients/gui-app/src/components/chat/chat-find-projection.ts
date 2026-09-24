@@ -159,7 +159,9 @@ function chatFindUnitsForMessage(
   promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
-    const turnState = message.runState === null ? "complete" : "active";
+    const turnComplete =
+      message.turnComplete ?? (message.runState === null);
+    const turnState = turnComplete ? "complete" : "active";
     const timeline = buildChatActivityTimeline(message.segments, {
       turnState,
       promotedToolBlockIds,
@@ -180,7 +182,7 @@ function chatFindUnitsForMessage(
         tileInstanceId,
         finalTextIndex,
         hasLaterAssistantText,
-        isComplete: turnState === "complete",
+        isComplete: turnComplete,
         earlierActivityKey,
       }),
     );

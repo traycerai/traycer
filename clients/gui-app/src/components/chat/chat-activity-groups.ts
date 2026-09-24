@@ -258,10 +258,14 @@ export function isCollapsedIntermediateTimelineItem(
     return hasLaterAssistantText || item.group.followedByText;
   }
   if (item.kind === "promoted_subagent") {
-    return hasLaterAssistantText || finalTextIndex >= 0;
+    return (
+      hasLaterAssistantText || (finalTextIndex >= 0 && index < finalTextIndex)
+    );
   }
   if (item.segment.kind === "tool" && item.segment.agentMessageSend !== null) {
-    return hasLaterAssistantText || finalTextIndex >= 0;
+    return (
+      hasLaterAssistantText || (finalTextIndex >= 0 && index < finalTextIndex)
+    );
   }
   if (item.segment.kind !== "text") return false;
   return (

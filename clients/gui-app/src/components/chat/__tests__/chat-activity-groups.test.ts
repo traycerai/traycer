@@ -3,6 +3,7 @@ import {
   activityGroupSummary,
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  isCollapsedIntermediateTimelineItem,
   lastAssistantTextSegmentId,
   latestActivityLabel,
   reasoningSummaryLabel,
@@ -1149,6 +1150,46 @@ describe("chat activity grouping", () => {
     ]);
     expect(timeline[0]?.id).toBe("promoted:subagent-1");
     expect(timeline[2]?.id).toBe("promoted:subagent-2");
+  });
+
+  it("collapses promoted items before final text and keeps those after it visible", () => {
+    const segments: ReadonlyArray<MessageSegment> = [
+      subagentSegment("subagent-before-final", false),
+      a2aToolSegment("a2a-before-final", "traycer_a2a/traycer_send_message", {
+        receiverAgentId: "agent-before",
+        message: "Before final",
+        responseId: null,
+        expectReply: false,
+      }),
+      textSegment("final-text", "Final answer"),
+      subagentSegment("subagent-after-final", false),
+      a2aToolSegment("a2a-after-final", "traycer_a2a/traycer_send_message", {
+        receiverAgentId: "agent-after",
+        message: "After final",
+        responseId: null,
+        expectReply: false,
+      }),
+    ];
+    const timeline = buildCompleteTimeline(segments);
+    const finalTextIndex = timeline.findIndex(
+      (item) => item.kind === "segment" && item.id === "final-text",
+    );
+    const collapsed = (id: string) => {
+      const index = timeline.findIndex((item) => item.id === id);
+      if (index < 0) throw new Error(`Missing timeline item ${id}`);
+      const item = timeline[index];
+      return isCollapsedIntermediateTimelineItem(
+        item,
+        index,
+        finalTextIndex,
+        false,
+      );
+    };
+
+    expect(collapsed("promoted:subagent-before-final")).toBe(true);
+    expect(collapsed("a2a-before-final")).toBe(true);
+    expect(collapsed("promoted:subagent-after-final")).toBe(false);
+    expect(collapsed("a2a-after-final")).toBe(false);
   });
 
   it("promotes A2A send-message tools out of generic activity groups", () => {

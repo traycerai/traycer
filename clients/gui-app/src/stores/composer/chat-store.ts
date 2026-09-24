@@ -705,6 +705,7 @@ export interface ChatMessage {
    * row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
+  turnComplete?: boolean;
   /**
    * The host turn this assistant row belongs to. Absent on user rows, on
    * synthesized event rows, and on records persisted before `turnId` existed.

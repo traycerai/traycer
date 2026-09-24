@@ -103,6 +103,7 @@ interface AssistantBodyProps {
    * message and every multi-turn send) and flips to "Stopping…" on stop.
    */
   runState: ChatMessageRunState | null;
+  turnComplete: boolean;
   /**
    * Stable per-turn id (e.g. `assistant:<turnKey>`). Seeds the elapsed
    * footer's verb so each turn gets its own verb even when sibling turns
@@ -168,6 +169,7 @@ export function AssistantMessageBody({
   hasLaterAssistantText,
   backgroundToolBlockIds,
   runState,
+  turnComplete,
   messageId,
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
@@ -203,7 +205,7 @@ export function AssistantMessageBody({
     },
     [earlierActivityKey, setActivityGroupOpen, setFindForcedOpen],
   );
-  const activityTimelineTurnState = runState === null ? "complete" : "active";
+  const activityTimelineTurnState = turnComplete ? "complete" : "active";
   const timeline = useMemo(
     () =>
       buildChatActivityTimeline(segments, {
@@ -303,7 +305,7 @@ export function AssistantMessageBody({
       className="flex w-full max-w-none flex-col gap-2 py-1 @container"
       data-assistant-turn
     >
-      {runState === null && hasIntermediateContent ? (
+      {turnComplete && hasIntermediateContent ? (
         <IntermediateContentDisclosure
           open={showIntermediateContent}
           onOpenChange={setShowIntermediateContent}
@@ -318,7 +320,7 @@ export function AssistantMessageBody({
           hasLaterAssistantText,
         );
         const isHidden = isIntermediateTimelineItemHidden(
-          runState,
+          turnComplete,
           isIntermediate,
           showIntermediateContent,
         );
@@ -432,11 +434,11 @@ function isFinalAssistantTextTimelineItem(
 }
 
 function isIntermediateTimelineItemHidden(
-  runState: ChatMessageRunState | null,
+  turnComplete: boolean,
   isIntermediate: boolean,
   showIntermediateContent: boolean,
 ): boolean {
-  return runState === null && isIntermediate && !showIntermediateContent;
+  return turnComplete && isIntermediate && !showIntermediateContent;
 }
 
 interface AssistantTimelineItemRenderArgs {

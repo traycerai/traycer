@@ -490,6 +490,31 @@ describe("chat find projection", () => {
     expect(rowSearchText(row)).not.toContain("private chain of thought");
   });
 
+  it("keeps an active split assistant slice searchable when runState is null", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      runState: null,
+      turnComplete: false,
+      hasLaterAssistantText: true,
+      segments: [
+        {
+          id: "text-before-steer",
+          kind: "text",
+          markdown: "Early update",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    expect(rowSearchText(row)).toContain("Early update");
+    expect(
+      row.units.find((unit) => unit.unitId === "segment:text-before-steer")
+        ?.owningChain,
+    ).toEqual([]);
+  });
+
   it("indexes only the Thinking label for streaming reasoning, not the live tail", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),

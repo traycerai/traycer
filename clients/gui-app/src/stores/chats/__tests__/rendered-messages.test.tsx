@@ -11,6 +11,7 @@ import type {
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import type {
   ChatActiveTurn,
   ChatQueuedPromptItem,
@@ -1695,6 +1696,11 @@ describe("useRenderedMessages", () => {
 
     const { result } = renderRenderedMessages({
       messages: [assistant, steered],
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        turnId: assistantTurnKey(assistant),
+      },
+      runStatus: "running",
     });
 
     expect(result.current.map((message) => message.role)).toEqual([
@@ -1707,6 +1713,7 @@ describe("useRenderedMessages", () => {
       { kind: "text", markdown: "Before steer result" },
     ]);
     expect(result.current[0]?.hasLaterAssistantText).toBe(true);
+    expect(result.current[0]?.turnComplete).toBe(false);
     expect(result.current[1]).toMatchObject({
       id: "message-queue-1",
       role: "user",
@@ -1717,6 +1724,7 @@ describe("useRenderedMessages", () => {
     expect(result.current[2]?.segments).toMatchObject([
       { kind: "text", markdown: "After steer" },
     ]);
+    expect(result.current[2]?.turnComplete).toBe(false);
     expect(result.current[2]?.hasLaterAssistantText).toBe(false);
   });
 

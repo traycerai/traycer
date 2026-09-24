@@ -201,6 +201,7 @@ interface BodyPropsOverrides {
   readonly segments?: ReadonlyArray<MessageSegment>;
   readonly hasLaterAssistantText?: boolean;
   readonly runState?: ChatMessageRunState | null;
+  readonly turnComplete?: boolean;
   readonly elapsedStartedAt?: number;
   readonly turnHasOnlyAutonomousResumeSegments?: boolean;
   readonly showCompletionFooter?: boolean;
@@ -215,6 +216,8 @@ function bodyProps(overrides: BodyPropsOverrides) {
     hasLaterAssistantText: overrides.hasLaterAssistantText ?? false,
     backgroundToolBlockIds: new Set<string>(),
     runState: overrides.runState ?? null,
+    turnComplete:
+      overrides.turnComplete ?? (overrides.runState ?? null) === null,
     messageId: "assistant:turn-1",
     elapsedStartedAt: overrides.elapsedStartedAt ?? 0,
     turnHasOnlyAutonomousResumeSegments:
@@ -354,7 +357,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
 });
 
 describe("AssistantMessageBody intermediate text", () => {
-  it("keeps early text visible while the turn is active without a nested response disclosure", () => {
+  it("keeps early text visible while a split turn is active without a nested response disclosure", () => {
     const early: MessageSegment = {
       ...TEXT_SEGMENT,
       id: "text-early",
@@ -370,7 +373,11 @@ describe("AssistantMessageBody intermediate text", () => {
         <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
           <AssistantMessageBody
             turnId={null}
-            {...bodyProps({ segments, runState: "running" })}
+            {...bodyProps({
+              segments,
+              runState: null,
+              turnComplete: false,
+            })}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -527,7 +534,11 @@ describe("AssistantMessageBody intermediate text", () => {
           <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
             <AssistantMessageBody
               turnId={null}
-              {...bodyProps({ segments, runState: "running" })}
+              {...bodyProps({
+                segments,
+                runState: null,
+                turnComplete: false,
+              })}
             />
           </ChatExpansionTestProviders>
         </WithTestQueryClient>

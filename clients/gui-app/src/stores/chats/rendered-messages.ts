@@ -3399,6 +3399,7 @@ function renderAssistantTurnSlice(
     // Stamped onto the turn's last slice by `withTurnCompletion`; null on
     // every other slice and while the turn is still live.
     completedAt: null,
+    turnComplete: input.turnComplete,
     stopped: null,
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
