@@ -32,6 +32,7 @@ import {
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import { registerLocalAuthSessionRestore } from "./local-auth-session";
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
@@ -69,6 +70,7 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
  * happens only inside `tokenStore.rotate`, under the file lock.
  */
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
+  registerLocalAuthSessionRestore(bridge);
   let retainedStepUpCredential: RetainedStepUpCredential | null = null;
   /**
    * The retained step-up bearer if it is still usable, dropping an expired one

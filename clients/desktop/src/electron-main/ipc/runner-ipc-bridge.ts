@@ -228,6 +228,7 @@ type IpcAuthSessionChangeListener = (
 export interface IpcDesktopAuthSession {
   get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
+  setLocal(snapshot: DesktopAuthSessionSnapshot, generation: number): boolean;
   /**
    * Begins a deferred (verified) set; the generation it returns fences that
    * set's commit against any set begun after it. See
