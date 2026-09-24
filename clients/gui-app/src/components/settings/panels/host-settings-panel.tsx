@@ -155,7 +155,15 @@ function HostSettingsPanelInner() {
     compact,
     hasLocalBridge: management !== null && scopedIsLocalMachine,
     localRecoveryZone,
-    onLocalDoctorFix: (issue) => localDoctorFix.mutate(issue),
+    // `onApplied` rides the per-call `onSuccess`, and only an APPLIED outcome
+    // reaches it: a declined repair changed nothing, so the report still
+    // describes the machine, and a failed one lands in `onError` instead.
+    onLocalDoctorFix: (issue, onApplied) =>
+      localDoctorFix.mutate(issue, {
+        onSuccess: (outcome) => {
+          if (outcome.applied) onApplied();
+        },
+      }),
     localDoctorFixPendingCode: localDoctorFix.isPending
       ? localDoctorFix.variables.code
       : null,
@@ -248,7 +256,10 @@ function renderOverviewBody(input: {
   readonly hasLocalBridge: boolean;
   /** The empty-account uninstall carve-out; `null` in every other state. */
   readonly localRecoveryZone: ReactNode | null;
-  readonly onLocalDoctorFix: (issue: RpcDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: RpcDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
 }): ReactNode {
   const { scope } = input;

@@ -187,7 +187,10 @@ export function HostOverviewPanel(props: {
   readonly scope: HostScope;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
-  readonly onLocalDoctorFix: (issue: HostDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: HostDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
 }): ReactNode {
   const { scope } = props;

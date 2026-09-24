@@ -105,8 +105,15 @@ export function HostDoctorRpcCard(props: {
   readonly onBridgeLogs: () => Promise<readonly string[]>;
   /** True while that bridge read is in flight. */
   readonly bridgeLogsPending: boolean;
-  /** Runs the local-only repair actions on this computer. */
-  readonly onLocalFix: (issue: HostDoctorIssue) => void;
+  /**
+   * Runs the local-only repair actions on this computer. `onApplied` is
+   * called once, and only when the repair was applied - never for one that
+   * was declined or failed. The card passes its own `run`, so the report is
+   * re-read rather than left showing an issue the fix just changed, beside a
+   * fix button that is still live. That is the bridge card's contract
+   * (`host-doctor-card.tsx` invalidates its report on "Fix applied").
+   */
+  readonly onLocalFix: (issue: HostDoctorIssue, onApplied: () => void) => void;
   readonly localFixPendingCode: string | null;
 }): ReactNode {
   const { client, hostName } = props;
@@ -354,7 +361,7 @@ export function HostDoctorRpcCard(props: {
               props.onBridgeRestart();
               return;
             }
-            props.onLocalFix(issue);
+            props.onLocalFix(issue, run);
           }}
         />
       ))}
@@ -411,7 +418,7 @@ export function HostDoctorRpcCard(props: {
           // restart landing after the competing write - the one outcome this
           // gate exists to prevent.
           if (props.bridgeRestartPending) return;
-          props.onLocalFix(freePortIssue);
+          props.onLocalFix(freePortIssue, run);
           setFreePortIssue(null);
         }}
       />
