@@ -1163,10 +1163,17 @@ export async function runHostStart(
   // This is the POSIX half of the deliberate-stop guard. Windows needs the
   // other half (`host/stop-intent.ts`): there the supervisor is an orphaned
   // grandchild that `schtasks /End` never signals at all.
+  //
+  // On Windows the latch is all the handler does: the forward would be a
+  // `TerminateProcess` (see `leaveConsoleStopToChild` below).
   const shutdownHandlers = FORWARDED_SHUTDOWN_SIGNALS.map((sig) => {
     const handler = (): void => {
       shuttingDown = true;
       markShutdownRequested();
+      if (deps.lifecycle.teardown.platform === "win32") {
+        leaveConsoleStopToChild(sig);
+        return;
+      }
       const child = currentChild;
       logger.debug("Host supervisor forwarding signal to child", {
         environment: opts.environment,
@@ -1283,6 +1290,107 @@ export async function runHostStart(
     for (const resolve of waiters) resolve();
   };
 
+  // ---- Windows console stop -----------------------------------------------
+  //
+  // On Windows the only shutdown signals this process can observe are console
+  // events - Ctrl-C (SIGINT) and closing the console (SIGHUP); a SIGTERM from
+  // another process is a `TerminateProcess` of THIS process, and no handler
+  // runs for it. Forwarding such an event with `child.kill(sig)` is also a
+  // `TerminateProcess`: it ended the host with none of its teardown - its
+  // ConPTY conhosts orphaned, `pid.json` left naming a dead host (measured,
+  // the host's own graceful line never logged).
+  //
+  // The host does not need the forward. It is spawned on this console (not
+  // detached, with an inherited stdio slot, so no CREATE_NO_WINDOW; measured:
+  // both processes are in the console's process list), so the same event
+  // reaches it and runs its own graceful shutdown, busy or not - what a
+  // terminal Ctrl-C does on POSIX too. The handler therefore only latches,
+  // and this bounds the wait: a host that has not ended after the raced-stop
+  // grace (its own force-exit watchdog plus the stop margin) never armed that
+  // watchdog, or never saw the event, and is forced through the lifecycle
+  // teardown's actuators - the verified tree kill rooted at the child this
+  // supervisor spawned, then `pid.json` purged on an exact instance match,
+  // since a forced host cannot remove its own record.
+  //
+  // Not the cooperative claim: a busy host denies it, and an operator's Ctrl-C
+  // must stop a busy host.
+  let consoleStopArmed = false;
+  let cancelConsoleStopForce: (() => void) | null = null;
+  let consoleStopForce: Promise<void> | null = null;
+  const forceConsoleStoppedChild = async (
+    child: OwnedHostChild,
+  ): Promise<void> => {
+    if (child.ended()) return;
+    logger.warn("Host supervisor forcing a host that outlived a console stop", {
+      environment: opts.environment,
+      graceMs: RACED_STOP_KILL_GRACE_MS,
+    });
+    try {
+      // No lifecycle lock, as for the POSIX forward: the kill is rooted at
+      // this supervisor's own child, and a concurrent stop that holds the
+      // lock is waiting for this process to exit.
+      await deps.lifecycle.teardown.killHostTree(
+        opts.environment,
+        child.pid,
+        () => Promise.resolve(),
+      );
+    } catch (cause) {
+      logger.warn("Host supervisor could not prove the host tree down", {
+        environment: opts.environment,
+        errorName: errorFromUnknown(cause).name,
+        errorMessage: errorFromUnknown(cause).message,
+      });
+      // The handle cannot reach a recycled pid, and it ends the root at
+      // least, so this wait is never unbounded.
+      child.signal("SIGKILL");
+    }
+    if (!(await child.waitForEnd(STOP_EXIT_GRACE_MARGIN_MS))) {
+      logger.warn("Host supervisor's forced host has not exited", {
+        environment: opts.environment,
+      });
+      return;
+    }
+    const teardownPlatform = deps.lifecycle.teardown;
+    try {
+      const record = await teardownPlatform.readPidMetadata(opts.environment);
+      if (record === null || record.pid !== child.pid) return;
+      // Ours by pid, and the handle has seen our child exit. A record whose
+      // pid is alive AND wears that start identity is somebody else's on a
+      // recycled pid; anything short of that proof is our own dead host's.
+      const verdict = await teardownPlatform.verifyPublishedInstance(
+        record.pid,
+        record.processStartIdentity,
+      );
+      if (verdict === "current") return;
+      await teardownPlatform.removePidMetadataIfUnchanged(
+        opts.environment,
+        record,
+      );
+    } catch (cause) {
+      logger.warn("Host supervisor could not settle the forced host's record", {
+        environment: opts.environment,
+        errorName: errorFromUnknown(cause).name,
+        errorMessage: errorFromUnknown(cause).message,
+      });
+    }
+  };
+  const leaveConsoleStopToChild = (sig: NodeJS.Signals): void => {
+    const child = ownedChild;
+    if (consoleStopArmed || child === null || child.ended()) return;
+    consoleStopArmed = true;
+    logger.info("Host supervisor leaving a console stop to its host", {
+      environment: opts.environment,
+      signal: sig,
+      graceMs: RACED_STOP_KILL_GRACE_MS,
+    });
+    cancelConsoleStopForce = deps.escalateAfter(
+      RACED_STOP_KILL_GRACE_MS,
+      () => {
+        consoleStopForce = forceConsoleStoppedChild(child);
+      },
+    );
+  };
+
   // Every exit below goes through here, so `supervisor.json` never outlives
   // the supervisor it describes: a desktop that finds one reads it as "a
   // supervisor that enforces the lifecycle policy is running". The records
@@ -1304,6 +1412,11 @@ export async function runHostStart(
   // and commit: either the teardown committed first and this exit waits for
   // it, or this exit stopped the observer first and the teardown stands down.
   const exitSupervisor = async (code: number): Promise<void> => {
+    // A forced console stop that is still settling the record its host could
+    // not remove finishes first; a pending one is moot once we are leaving.
+    cancelConsoleStopForce?.();
+    cancelConsoleStopForce = null;
+    if (consoleStopForce !== null) await consoleStopForce;
     const ownedByTeardown = teardown.committed();
     if (ownedByTeardown && !teardownComplete) {
       const waiting = new Promise<void>((resolve) => {

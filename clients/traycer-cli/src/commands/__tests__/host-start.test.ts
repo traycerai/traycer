@@ -54,6 +54,8 @@ import type {
 } from "../../host/lifecycle-files";
 import type { DesktopPresence } from "@traycer/protocol/config/desktop-presence";
 import type { HostPidMetadata } from "../../host/pid-metadata";
+import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
+import type { PublishedProcessIdentityVerdict } from "../../store/process-identity";
 import {
   LIFECYCLE_OBSERVER_POLL_MS,
   LIFECYCLE_PRESENCE_CRASH_GRACE_MS,
@@ -1636,13 +1638,16 @@ describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
       throw new Error("test spawn dependency missing");
     }
     const child = makeStubChild();
-    // The stub's twin of `$process.Kill()`: the forwarded signal does not
-    // kill the child with a POSIX signal, it ends it with the Windows exit
-    // code the real handle-bound kill leaves behind.
+    // On win32 the shutdown handler no longer forwards through `child.kill`
+    // at all - it leaves the console stop to the host itself (see
+    // `leaveConsoleStopToChild` in host-start.ts, and the console-stop describe
+    // block below). The host is on the same console and receives the same
+    // Ctrl-C event, so it ends on its own; this stub stands in for that
+    // ending, wearing the same exit code the OLD handle-bound kill used to
+    // leave behind (`$process.Kill()`).
+    let killCalled = false;
     child.kill = () => {
-      setImmediate(() => {
-        child.emit("exit", WIN32_KILL_EXIT_CODE, null);
-      });
+      killCalled = true;
       return true;
     };
 
@@ -1655,9 +1660,13 @@ describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
             spawn: (command, args, options) => {
               originalSpawn(command, args, options);
               setImmediate(() => {
-                // `currentChild` is assigned once spawn() returns, so by now
-                // the handler has a child to forward to.
+                // `ownedChild` is assigned once spawn() returns, so by now
+                // the handler has a child to latch the stop against.
                 process.emit("SIGTERM");
+                // The console event reaches the host directly; the
+                // supervisor never calls `child.kill` for it, so the ending
+                // is driven here rather than by a forwarded kill.
+                child.emit("exit", WIN32_KILL_EXIT_CODE, null);
               });
               return asChildProcess(child);
             },
@@ -1666,6 +1675,9 @@ describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
       recorded,
     );
 
+    // The evidence this test is named for is the SIGNAL latch, never a
+    // supervisor-forwarded kill - win32 leaves the stop to the child now.
+    expect(killCalled).toBe(false);
     const killed = recorded.markers.find((m) => m.phase === "killed");
     expect(killed).toBeDefined();
     expect(killed?.fields.exitCode).toBe(WIN32_KILL_EXIT_CODE);
@@ -1938,6 +1950,509 @@ describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
         rmSync(devHome, { recursive: true, force: true });
       }
     });
+  });
+});
+
+/**
+ * The harness for the console-stop describe block below: win32 platform, a
+ * captured `escalateAfter` standing in for the real ~35s
+ * `RACED_STOP_KILL_GRACE_MS` timer, and counting fakes for the four
+ * actuators `forceConsoleStoppedChild` drives once that escalation fires -
+ * `killHostTree`, `readPidMetadata`, `verifyPublishedInstance` and
+ * `removePidMetadataIfUnchanged`. Mirrors `makeLifecycleRig` further below,
+ * scoped to this one code path.
+ *
+ * `child.kill` is wired once here too, for every test in the block: it is
+ * the ONE handle `OwnedHostChild.signal("SIGKILL")` (the
+ * `killHostTree`-rejected fallback, W4) reaches the stub through. Win32's
+ * shutdown handler itself never calls it - a test that observes a call here
+ * has exercised the fallback, never the ordinary forward.
+ */
+interface ConsoleStopRig {
+  deps: Partial<RunHostStartDeps>;
+  readonly escalateCalls: number[];
+  escalateRun: (() => void) | null;
+  cancelCount: number;
+  readonly killCalls: NodeJS.Signals[];
+  readonly killHostTreeCalls: Array<{
+    environment: Environment;
+    pid: number;
+    verify: () => Promise<void>;
+  }>;
+  killHostTreeRejects: boolean;
+  readonly readPidMetadataCalls: Environment[];
+  pidRecord: HostPidMetadata | null;
+  readonly verifyPublishedInstanceCalls: Array<{
+    pid: number;
+    identity: ProcessStartIdentity | null;
+  }>;
+  verifyVerdict: PublishedProcessIdentityVerdict;
+  readonly removePidMetadataCalls: Array<
+    Pick<HostPidMetadata, "pid" | "processStartIdentity">
+  >;
+  removeResult: boolean;
+  /**
+   * Token log across the four actuators plus `deps.exit`, in call order -
+   * W2's proof that the exit happens only after the record is settled.
+   */
+  readonly order: string[];
+}
+
+function makeConsoleStopRig(
+  base: Partial<RunHostStartDeps>,
+  child: StubChild,
+): ConsoleStopRig {
+  const baseLifecycle = base.lifecycle;
+  if (baseLifecycle === undefined) {
+    throw new Error("test lifecycle dependency missing");
+  }
+  const baseExit = base.exit;
+  if (baseExit === undefined) {
+    throw new Error("test exit dependency missing");
+  }
+  const rig: ConsoleStopRig = {
+    deps: base,
+    escalateCalls: [],
+    escalateRun: null,
+    cancelCount: 0,
+    killCalls: [],
+    killHostTreeCalls: [],
+    killHostTreeRejects: false,
+    readPidMetadataCalls: [],
+    pidRecord: null,
+    verifyPublishedInstanceCalls: [],
+    verifyVerdict: "dead",
+    removePidMetadataCalls: [],
+    removeResult: true,
+    order: [],
+  };
+  // The `killHostTree`-rejected fallback (`OwnedHostChild.signal`) is the
+  // only path to this: SIGKILL always ends the stub, matching what a real
+  // handle-bound kill does to a process that ignored the tree kill.
+  child.kill = (signal) => {
+    rig.killCalls.push(signal);
+    if (signal === "SIGKILL") {
+      setImmediate(() => {
+        child.emit("exit", 0, null);
+      });
+    }
+    return true;
+  };
+  rig.deps = {
+    ...base,
+    escalateAfter: (ms, run) => {
+      rig.escalateCalls.push(ms);
+      rig.escalateRun = run;
+      return () => {
+        rig.cancelCount += 1;
+      };
+    },
+    exit: (code) => {
+      rig.order.push("exit");
+      baseExit(code);
+    },
+    lifecycle: {
+      ...baseLifecycle,
+      teardown: {
+        ...baseLifecycle.teardown,
+        platform: "win32",
+        killHostTree: async (environment, rootPid, verify) => {
+          rig.killHostTreeCalls.push({ environment, pid: rootPid, verify });
+          rig.order.push("killHostTree");
+          if (rig.killHostTreeRejects) {
+            throw new Error("injected killHostTree failure");
+          }
+          // The verified tree kill succeeding IS the host ending; the real
+          // actuator only resolves once the tree is proved down.
+          setImmediate(() => {
+            child.emit("exit", 0, null);
+          });
+        },
+        readPidMetadata: async (environment) => {
+          rig.readPidMetadataCalls.push(environment);
+          rig.order.push("readPidMetadata");
+          return rig.pidRecord;
+        },
+        verifyPublishedInstance: async (pid, identity) => {
+          rig.verifyPublishedInstanceCalls.push({ pid, identity });
+          rig.order.push("verifyPublishedInstance");
+          return rig.verifyVerdict;
+        },
+        removePidMetadataIfUnchanged: async (_environment, instance) => {
+          rig.removePidMetadataCalls.push(instance);
+          rig.order.push("removePidMetadataIfUnchanged");
+          return rig.removeResult;
+        },
+      },
+    },
+  };
+  return rig;
+}
+
+// The fix under test (uncommitted `host-start.ts`): on win32 the shutdown
+// handler no longer forwards `child.kill(sig)` - that is a `TerminateProcess`
+// on Windows, which skips the host's own teardown entirely (orphaned ConPTY
+// conhosts, a stale `pid.json`). Instead it leaves the console event to reach
+// the host directly (`leaveConsoleStopToChild`) and arms ONE escalation
+// (`RACED_STOP_KILL_GRACE_MS`) through `deps.escalateAfter`. If that fires
+// while the owned child has not ended, `forceConsoleStoppedChild` runs the
+// verified tree kill, falls back to a handle-bound SIGKILL if that throws,
+// and purges `pid.json` only on an exact pid + identity match once the
+// verdict is not `"current"`. POSIX is unchanged (O-WIN-1 above already
+// covers `child.kill` there); W6 below is this block's control.
+describe("runHostStart - a Windows console stop is left to the host, then forced", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+  // `makeStubChild()` fixes the stub's pid at 4242 - used as a literal so
+  // every test below can name "the child's own pid" without threading
+  // `child.pid` (typed `number | undefined`) through each assertion.
+  const CHILD_PID = 4242;
+
+  it("W1: win32 SIGINT while the child runs only arms the escalation; a clean exit needs no force", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const rig = makeConsoleStopRig(win32Deps, child);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...rig.deps,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                // `ownedChild` is assigned once spawn() returns, so by now
+                // `leaveConsoleStopToChild` has a child to arm against.
+                process.emit("SIGINT");
+                expect(rig.killCalls).toEqual([]);
+                expect(rig.killHostTreeCalls).toEqual([]);
+                expect(rig.escalateCalls).toEqual([RACED_STOP_KILL_GRACE_MS]);
+                // The console event reached the host directly and it ended
+                // on its own - a graceful host exit, well inside the grace.
+                child.emit("exit", 0, null);
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(rig.cancelCount).toBe(1);
+    expect(rig.removePidMetadataCalls).toEqual([]);
+  });
+
+  it("W2: win32 SIGINT, the child outlives the grace, and the verified tree kill purges its own dead record", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const rig = makeConsoleStopRig(win32Deps, child);
+    rig.pidRecord = hostPidRecord(CHILD_PID);
+    rig.verifyVerdict = "dead";
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...rig.deps,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                process.emit("SIGINT");
+                // The child does not exit on its own; only invoking the
+                // captured escalation below ends it.
+                const run = rig.escalateRun;
+                if (run === null) {
+                  throw new Error("escalateAfter was never called");
+                }
+                run();
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(rig.killHostTreeCalls).toEqual([
+      {
+        environment: "production",
+        pid: CHILD_PID,
+        verify: expect.any(Function),
+      },
+    ]);
+    expect(rig.readPidMetadataCalls).toEqual(["production"]);
+    expect(rig.verifyPublishedInstanceCalls).toEqual([
+      { pid: CHILD_PID, identity: "child-ident" },
+    ]);
+    expect(rig.removePidMetadataCalls).toEqual([hostPidRecord(CHILD_PID)]);
+    // The order proves the exit waits on the settled record, not the other
+    // way around: `exitSupervisor` awaits the in-flight force before it
+    // calls `deps.exit`.
+    expect(rig.order).toEqual([
+      "killHostTree",
+      "readPidMetadata",
+      "verifyPublishedInstance",
+      "removePidMetadataIfUnchanged",
+      "exit",
+    ]);
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "a record naming another pid is left alone",
+      hostPidRecord(CHILD_PID + 1),
+      "dead" as const,
+      false,
+    ],
+    [
+      "a live current instance is left alone",
+      hostPidRecord(CHILD_PID),
+      "current" as const,
+      false,
+    ],
+    ["no pid record on disk", null, "dead" as const, false],
+    [
+      "an indeterminate verdict still purges",
+      hostPidRecord(CHILD_PID),
+      "indeterminate" as const,
+      true,
+    ],
+    [
+      "a mismatch verdict still purges",
+      hostPidRecord(CHILD_PID),
+      "mismatch" as const,
+      true,
+    ],
+  ] as const)("W3: %s", async (_label, pidRecord, verdict, expectPurge) => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const rig = makeConsoleStopRig(win32Deps, child);
+    rig.pidRecord = pidRecord;
+    rig.verifyVerdict = verdict;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...rig.deps,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                process.emit("SIGINT");
+                const run = rig.escalateRun;
+                if (run === null) {
+                  throw new Error("escalateAfter was never called");
+                }
+                run();
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // The force ran in every row - what differs is only the record it
+    // leaves behind.
+    expect(rig.killHostTreeCalls).toHaveLength(1);
+    expect(rig.removePidMetadataCalls).toHaveLength(expectPurge ? 1 : 0);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("W4: a failed tree kill falls back to a handle-bound SIGKILL, then purges as W2 does", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const rig = makeConsoleStopRig(win32Deps, child);
+    rig.killHostTreeRejects = true;
+    rig.pidRecord = hostPidRecord(CHILD_PID);
+    rig.verifyVerdict = "dead";
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...rig.deps,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                process.emit("SIGINT");
+                const run = rig.escalateRun;
+                if (run === null) {
+                  throw new Error("escalateAfter was never called");
+                }
+                run();
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(rig.killHostTreeCalls).toHaveLength(1);
+    // The handle cannot reach a recycled pid, and it ends the root at least -
+    // the fallback the tree-kill throw leaves behind.
+    expect(rig.killCalls).toEqual(["SIGKILL"]);
+    expect(rig.removePidMetadataCalls).toEqual([hostPidRecord(CHILD_PID)]);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("W5: SIGHUP behaves like SIGINT on win32, and a second signal arms no second escalation", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const originalSpawn = win32Deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const rig = makeConsoleStopRig(win32Deps, child);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...rig.deps,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                process.emit("SIGHUP");
+                expect(rig.killCalls).toEqual([]);
+                expect(rig.escalateCalls).toEqual([RACED_STOP_KILL_GRACE_MS]);
+                // `consoleStopArmed` is already latched, so a second console
+                // signal arms nothing further.
+                process.emit("SIGINT");
+                expect(rig.escalateCalls).toEqual([RACED_STOP_KILL_GRACE_MS]);
+                child.emit("exit", 0, null);
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(rig.killCalls).toEqual([]);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("W6 (control): a non-win32 platform still forwards SIGINT directly, arming no escalation", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const linuxDeps = withLifecyclePlatform(deps, "linux");
+    const originalSpawn = linuxDeps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const escalateCalls: number[] = [];
+    const killCalls: NodeJS.Signals[] = [];
+    child.kill = (signal) => {
+      killCalls.push(signal);
+      setImmediate(() => {
+        child.emit("exit", null, signal);
+      });
+      return true;
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...linuxDeps,
+            escalateAfter: (ms) => {
+              escalateCalls.push(ms);
+              return () => undefined;
+            },
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              setImmediate(() => {
+                process.emit("SIGINT");
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(killCalls).toEqual(["SIGINT"]);
+    expect(escalateCalls).toEqual([]);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("W7: win32 SIGINT before any child exists arms no escalation and does not throw", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const escalateCalls: number[] = [];
+    let admissionEntered = false;
+
+    // `leaveConsoleStopToChild` is reachable with `ownedChild === null` only
+    // in the admission-wait window: the handler still latches `shuttingDown`
+    // unconditionally, which is itself enough for the SAME re-check Q13's
+    // "a stop that lands DURING the admission wait" table exercises - so no
+    // spawn happens at all here, and `leaveConsoleStopToChild` never gets a
+    // child to arm against in the first place. That is the shape this test
+    // pins: the win32 branch's null-child guard costs nothing extra and
+    // throws nothing, it simply has no escalation left to arm.
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...win32Deps,
+            escalateAfter: (ms) => {
+              escalateCalls.push(ms);
+              return () => undefined;
+            },
+            admitHostStartSpawn: async (_environment, run) => {
+              admissionEntered = true;
+              // No `ownedChild` exists yet - spawn happens only inside
+              // `run()` below. This is the one window a console signal can
+              // land in before this supervisor owns a child to leave a stop
+              // to.
+              process.emit("SIGINT");
+              return { kind: "ran", result: await run() };
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(admissionEntered).toBe(true);
+    expect(escalateCalls).toEqual([]);
+    // The pre-spawn re-check inside admission caught the latch first, so no
+    // host process was ever created.
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(
+      recorded.markers.some(
+        (marker) =>
+          marker.phase === "failed-to-spawn" &&
+          String(marker.fields.error) === "stop requested during admission",
+      ),
+    ).toBe(true);
+    expect(recorded.exited).toBe(0);
   });
 });
 
