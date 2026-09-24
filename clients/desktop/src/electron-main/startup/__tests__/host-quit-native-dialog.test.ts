@@ -12,15 +12,11 @@ vi.mock("../../app/logger", () => ({
   describeLogError: (cause: unknown) => String(cause),
 }));
 
-const INITIAL: HostQuitPrompt = {
-  mode: "ask",
-  round: "initial",
-  busyMessage: null,
-};
+const INITIAL: HostQuitPrompt = { mode: "ask", round: "initial" };
+const BUSY: HostQuitPrompt = { mode: "stop-if-idle", round: "busy" };
 const BUSY_RETRY: HostQuitPrompt = {
   mode: "stop-if-idle",
   round: "busy-retry",
-  busyMessage: "2 agents",
 };
 
 function boxReturning(
@@ -93,6 +89,33 @@ describe("askHostQuitNatively", () => {
       () => Promise.reject(new Error("no display")),
     );
     expect(decision).toEqual({ kind: "keep", remember: false });
+  });
+
+  it("the busy round: message, detail (no 'Something started'), Stop label, and Stop answers force:true", async () => {
+    const signal = new AbortController().signal;
+    const stop = boxReturning(1, false);
+    const decision = await askHostQuitNatively(BUSY, signal, stop.show);
+    expect(decision).toEqual({ kind: "stop", force: true, remember: false });
+    const [seen] = stop.seen;
+    expect(seen.message).toBe("The host is still working");
+    expect(seen.detail).toBe(
+      "Keep it running so that work carries on, or stop it now, which ends it.",
+    );
+    expect(seen.detail).not.toContain("Something started");
+    expect(seen.buttons).toEqual([
+      "Keep Running and Quit",
+      "Stop Host and Quit",
+      "Cancel",
+    ]);
+  });
+
+  it("the busy-retry round's detail DOES say something started meanwhile", async () => {
+    const signal = new AbortController().signal;
+    const keep = boxReturning(0, false);
+    await askHostQuitNatively(BUSY_RETRY, signal, keep.show);
+    const [seen] = keep.seen;
+    expect(seen.message).toBe("The host is still working");
+    expect(seen.detail).toContain("Something started");
   });
 });
 

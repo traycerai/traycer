@@ -47,8 +47,13 @@ import type { HostQuitPrompt } from "../ipc/runner-ipc-bridge";
 //                                        at the deadline.
 //                     ask                the host quit modal ("initial").
 //                     stop-if-idle       `host stop --if-idle` with no prompt;
-//                                        E_HOST_BUSY asks ("busy-retry"), an
+//                                        E_HOST_BUSY asks ("busy"), an
 //                                        unknown outcome asks ("initial").
+//
+// A Stop chosen over an idle list runs `--if-idle` too; E_HOST_BUSY there
+// asks again ("busy-retry": something started meanwhile). Both busy rounds'
+// Stop is the force. The host's refusal text is the CLI's instruction to its
+// own caller and never reaches a prompt; `HostController` logs its code.
 //
 // Force happens only under Linked or after the user pressed Stop on a list
 // that disclosed busy work (R5). The one deadline is a budget over VISIBLE
@@ -418,7 +423,7 @@ class QuitTransaction {
         await this.runLinked();
         return;
       case "ask":
-        await this.prompt("ask", "initial", null);
+        await this.prompt("ask", "initial");
         return;
       case "stop-if-idle":
         await this.runStopIfIdle();
@@ -444,7 +449,8 @@ class QuitTransaction {
   private async runLinked(): Promise<void> {
     this.stopCommitted = true;
     await this.writeVerdict("stop");
-    this.beginStopping();
+    // Not idle-only: the mode is the consent to force a busy host.
+    this.beginStopping(false);
     let outcome = await this.runStop("if-idle");
     if (outcome.kind === "host-busy") {
       outcome = await this.runStop("force");
@@ -460,7 +466,7 @@ class QuitTransaction {
    * the host kept - nothing is ever stopped silently.
    */
   private async runStopIfIdle(): Promise<void> {
-    this.beginStopping();
+    this.beginStopping(true);
     const outcome = await this.runStop("if-idle");
     if (this.superseded) return;
     switch (outcome.kind) {
@@ -469,7 +475,8 @@ class QuitTransaction {
         this.commitQuit();
         return;
       case "host-busy":
-        await this.prompt("stop-if-idle", "busy-retry", outcome.message);
+        // The first thing this quit shows: nothing "started meanwhile".
+        await this.prompt("stop-if-idle", "busy");
         return;
       case "deadline":
       case "withdrawn":
@@ -481,7 +488,7 @@ class QuitTransaction {
       case "update-active":
       case "failed":
         this.logStopOutcome("stop-if-idle", outcome);
-        await this.prompt("stop-if-idle", "initial", null);
+        await this.prompt("stop-if-idle", "initial");
         return;
     }
   }
@@ -489,9 +496,8 @@ class QuitTransaction {
   private async prompt(
     mode: HostQuitDecisionMode,
     round: HostQuitDecisionRequest["round"],
-    busyMessage: string | null,
   ): Promise<void> {
-    const answered = await this.ask({ mode, round, busyMessage });
+    const answered = await this.ask({ mode, round });
     if (this.superseded) return;
     await this.applyDecision({ mode, promptMode: mode, round }, answered);
   }
@@ -535,12 +541,14 @@ class QuitTransaction {
   ): Promise<void> {
     const { decision } = answered;
     if (answered.requestId !== null) this.requestId = answered.requestId;
-    // Force on a busy-retry round whatever the answer says: that round's list
+    // Force on a busy round whatever the answer says: that round's list
     // disclosed the busy work, and its Stop is the force (a second if-idle
     // would only loop).
     const forced =
       decision.kind === "stop" &&
-      (decision.force || context.round === "busy-retry");
+      (decision.force ||
+        context.round === "busy" ||
+        context.round === "busy-retry");
     log.info("[host-quit] decision", {
       mode: context.mode,
       round: context.round,
@@ -562,7 +570,7 @@ class QuitTransaction {
         this.stopCommitted = true;
         await this.writeVerdict("stop");
         if (decision.remember) await this.remember("linked", answered);
-        this.beginStopping();
+        this.beginStopping(!forced);
         const outcome = await this.runStop(forced ? "force" : "if-idle");
         if (
           outcome.kind === "host-busy" &&
@@ -572,7 +580,7 @@ class QuitTransaction {
           // Something started between the idle list and the stop: show the
           // new list once more; that round's Stop is the force.
           this.stopCommitted = false;
-          await this.prompt(context.promptMode, "busy-retry", outcome.message);
+          await this.prompt(context.promptMode, "busy-retry");
           return;
         }
         this.logStopOutcome(context.mode, outcome);
@@ -687,12 +695,18 @@ class QuitTransaction {
    * Enter the stopping phase: the renderer's progress state, the tray line,
    * and - if the stop is still running after `revealDelayMs` - a hidden
    * window shown for it. Ended by a prompt, the quit, or staying open.
+   * `idleOnly`: the stop is `--if-idle` and cannot end work, so no surface
+   * may say it is ending any.
    */
-  private beginStopping(): void {
+  private beginStopping(idleOnly: boolean): void {
     // Never after the ending: a reveal timer must not outlive the quit.
     if (this.ended || this.quitting) return;
     this.announced = true;
-    this.deps.publishState({ requestId: this.requestId, phase: "stopping" });
+    this.deps.publishState({
+      requestId: this.requestId,
+      phase: "stopping",
+      idleOnly,
+    });
     if (!this.stopping) {
       this.stopping = true;
       this.deps.setStoppingIndicator(true);

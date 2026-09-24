@@ -34,6 +34,11 @@ export interface HostQuitDialogProps {
   readonly request: HostQuitDecisionRequest;
   /** Main reported `stopping` for this request. */
   readonly stopping: boolean;
+  /**
+   * The stop main reported is idle-only (`--if-idle`): it ends no work, so
+   * the progress names none. Meaningful only while `stopping`.
+   */
+  readonly idleOnly: boolean;
   /** The Remember checkbox, carried across a busy-retry round of one quit. */
   readonly remember: boolean;
   readonly onRememberChange: (remember: boolean) => void;
@@ -155,6 +160,11 @@ function HostQuitPrompt(
 
   const stopping = props.stopping || answeredStop !== null;
   if (stopping) {
+    // Main's word on the running stop wins: an idle-only stop ends nothing,
+    // whatever the live list has turned to since.
+    const displayed =
+      answeredStop === null ? model.breakdown : answeredStop.breakdown;
+    const endingBreakdown = props.stopping && props.idleOnly ? null : displayed;
     return (
       <HostQuitDialogView
         open
@@ -164,9 +174,7 @@ function HostQuitPrompt(
         detail={null}
         countsLine={null}
         sessionsHostId={null}
-        stoppingLine={hostQuitStoppingLine(
-          answeredStop === null ? model.breakdown : answeredStop.breakdown,
-        )}
+        stoppingLine={hostQuitStoppingLine(endingBreakdown)}
         remember={null}
         keepLabel={HOST_QUIT_KEEP_LABEL}
         stopLabel={model.stopLabel}
@@ -214,11 +222,18 @@ function HostQuitPrompt(
 /**
  * Progress for a stop no prompt preceded - Linked mode, or Stop-if-idle's
  * automatic attempt - which main announces with `requestId: null`. Names the
- * work being ended when this machine's host can still say.
+ * work being ended when this machine's host can still say, and only when the
+ * stop can end work: Stop-if-idle's idle-only attempt is refused rather than
+ * end anything, so naming the host's work there would announce an ending
+ * that does not happen.
  */
-export function HostQuitStoppingDialog(): ReactNode {
+export function HostQuitStoppingDialog(props: {
+  readonly idleOnly: boolean;
+}): ReactNode {
   const binding = useHostBinding();
-  if (binding === null) return <StoppingOnly breakdown={null} />;
+  if (props.idleOnly || binding === null) {
+    return <StoppingOnly breakdown={null} />;
+  }
   return <BoundHostQuitStoppingDialog />;
 }
 

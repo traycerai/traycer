@@ -12,6 +12,43 @@ const KEEP = 0;
 const STOP = 1;
 const CANCEL = 2;
 
+interface NativeQuitCopy {
+  readonly message: string;
+  readonly detail: string;
+  readonly stopLabel: string;
+}
+
+/**
+ * One copy per round. Only `busy-retry` says something started meanwhile:
+ * `busy` is Stop-if-idle's first ask, after a stop nobody was shown was
+ * refused, so there was no earlier moment for the work to have started after.
+ */
+function nativeQuitCopy(round: HostQuitPrompt["round"]): NativeQuitCopy {
+  switch (round) {
+    case "busy":
+      return {
+        message: "The host is still working",
+        detail:
+          "Keep it running so that work carries on, or stop it now, which ends it.",
+        stopLabel: "Stop Host and Quit",
+      };
+    case "busy-retry":
+      return {
+        message: "The host is still working",
+        detail:
+          "Something started on the host while it was being stopped. Keep it running so that work carries on, or stop it now, which ends it.",
+        stopLabel: "Stop Host and Quit",
+      };
+    case "initial":
+      return {
+        message: "Can't tell what's running on the host",
+        detail:
+          "Traycer can't check the host right now. Keep it running so any agents, terminals and shells carry on, or stop it, which ends anything still running.",
+        stopLabel: "Stop Host Anyway and Quit",
+      };
+  }
+}
+
 /**
  * The quit prompt when no renderer can answer it: no window is open (a tray
  * quit on macOS), or the MRU window is not listening, never acknowledged, or
@@ -28,23 +65,15 @@ export async function askHostQuitNatively(
   signal: AbortSignal,
   showMessageBox: ShowMessageBox,
 ): Promise<HostQuitDecision> {
-  const busyRetry = prompt.round === "busy-retry";
+  const copy = nativeQuitCopy(prompt.round);
   let response: number;
   try {
     ({ response } = await showMessageBox({
       type: "question",
       title: "Quit Traycer",
-      message: busyRetry
-        ? "The host is still working"
-        : "Can't tell what's running on the host",
-      detail: busyRetry
-        ? "Something started on the host while it was being stopped. Keep it running so that work carries on, or stop it now, which ends it."
-        : "Traycer can't check the host right now. Keep it running so any agents, terminals and shells carry on, or stop it, which ends anything still running.",
-      buttons: [
-        "Keep Running and Quit",
-        busyRetry ? "Stop Host and Quit" : "Stop Host Anyway and Quit",
-        "Cancel",
-      ],
+      message: copy.message,
+      detail: copy.detail,
+      buttons: ["Keep Running and Quit", copy.stopLabel, "Cancel"],
       defaultId: KEEP,
       cancelId: CANCEL,
       noLink: true,

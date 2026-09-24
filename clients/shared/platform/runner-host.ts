@@ -806,23 +806,27 @@ export type HostQuitDecisionMode = "ask" | "stop-if-idle";
 /**
  * Main's question to the renderer while a quit is held open.
  *
- * `round: "initial"` is the first ask of this quit. `round: "busy-retry"`
- * follows an idle-only stop the host refused because something started in
- * the meantime: the renderer shows the NEW list, and its Stop is a force.
- * `busyMessage` is the refusal main received on that retry, `null` otherwise.
+ * `round: "initial"` is the first ask of this quit, over a list the renderer
+ * has not been shown yet. `round: "busy"` is Stop-if-idle's first ask after
+ * its silent idle-only stop was refused: nothing was shown before it, so it
+ * is a first ask too, over a list the host has just called busy. `round:
+ * "busy-retry"` follows an idle-only stop the person had ALREADY chosen, over
+ * an idle list, that the host refused because something started in the
+ * meantime. On both busy rounds the renderer shows the fresh list and its
+ * Stop is a force. The host's refusal text never crosses: it is the CLI's
+ * instruction to its own caller, and main logs its code.
  */
 export interface HostQuitDecisionRequest {
   readonly requestId: string;
   readonly mode: HostQuitDecisionMode;
-  readonly round: "initial" | "busy-retry";
-  readonly busyMessage: string | null;
+  readonly round: "initial" | "busy" | "busy-retry";
 }
 
 /**
  * The person's answer. `remember` is the "Remember my choice" checkbox; main
  * maps it (Keep → `background`, Stop → `linked`). `force` on Stop is `true`
- * only after the renderer DISPLAYED a busy or unknown list (or on a
- * `busy-retry` round) - force only after disclosure. Cancel carries nothing:
+ * only after the renderer DISPLAYED a busy or unknown list (or on a `busy`
+ * or `busy-retry` round) - force only after disclosure. Cancel carries nothing:
  * it abandons the quit and ignores the checkbox.
  */
 export type HostQuitDecision =
@@ -843,14 +847,27 @@ export interface HostQuitDecisionResponse {
  * Where main's quit transaction is: `stopping` while a stop runs (the modal
  * shows progress with its buttons disabled), then `quitting`, or `cancelled`
  * when the quit was abandoned. `requestId` names the decision request the
- * phase belongs to, `null` for a stop no request preceded (Linked mode).
+ * phase belongs to, `null` for a stop no request preceded (Linked mode, and
+ * Stop-if-idle's silent attempt).
+ *
+ * `stopping` carries `idleOnly`, whether the stop running can end work:
+ * `true` for an idle-only stop, which the host refuses rather than end
+ * anything (Stop-if-idle's silent attempt, a Stop chosen over an idle list);
+ * `false` for Linked and for a forced stop. A surface names the work being
+ * ended only when it is `false`.
  */
 export type HostQuitPhase = "stopping" | "quitting" | "cancelled";
 
-export interface HostQuitStateEvent {
-  readonly requestId: string | null;
-  readonly phase: HostQuitPhase;
-}
+export type HostQuitStateEvent =
+  | {
+      readonly requestId: string | null;
+      readonly phase: "stopping";
+      readonly idleOnly: boolean;
+    }
+  | {
+      readonly requestId: string | null;
+      readonly phase: "quitting" | "cancelled";
+    };
 
 /**
  * The renderer half of the desktop's quit round-trip. A sub-capability of

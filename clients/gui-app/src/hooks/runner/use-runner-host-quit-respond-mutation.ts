@@ -9,8 +9,9 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
- * The list state the modal DISPLAYED when the person chose. A busy-retry round
- * counts as busy; `unknown` is a list the modal could not read.
+ * The list state the modal DISPLAYED when the person chose. A busy or
+ * busy-retry round counts as busy; `unknown` is a list the modal could not
+ * read.
  */
 export type HostQuitDecisionVerdict = "idle" | "busy" | "unknown";
 

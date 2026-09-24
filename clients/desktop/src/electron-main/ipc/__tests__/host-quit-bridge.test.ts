@@ -331,11 +331,7 @@ const VIEW: HostLifecycleView = {
   pending: "none",
 };
 
-const ASK_PROMPT: HostQuitPrompt = {
-  mode: "ask",
-  round: "initial",
-  busyMessage: null,
-};
+const ASK_PROMPT: HostQuitPrompt = { mode: "ask", round: "initial" };
 
 interface Fixture {
   readonly bridge: RunnerIpcBridge;
@@ -517,11 +513,7 @@ describe("requestHostQuitDecision through the real bridge", () => {
       true,
     );
     fixture.bridge
-      .requestHostQuitDecision({
-        mode: "stop-if-idle",
-        round: "busy-retry",
-        busyMessage: "3 shells running",
-      })
+      .requestHostQuitDecision({ mode: "stop-if-idle", round: "busy-retry" })
       .catch(() => undefined);
     const sent = fixture.w1.sentOn(RunnerHostEvent.hostQuitRequest);
     expect(sent).toEqual([
@@ -531,12 +523,30 @@ describe("requestHostQuitDecision through the real bridge", () => {
           requestId: expect.any(String),
           mode: "stop-if-idle",
           round: "busy-retry",
-          busyMessage: "3 shells running",
         },
       },
     ]);
     // Only the MRU window was asked.
     expect(fixture.w2.sentOn(RunnerHostEvent.hostQuitRequest)).toEqual([]);
+  });
+
+  it("the request payload for a 'busy' round is exactly {requestId, mode, round} - no busyMessage key", async () => {
+    const fixture = await newFixture(true);
+    fixture.listen(101);
+    fixture.bridge
+      .requestHostQuitDecision({ mode: "stop-if-idle", round: "busy" })
+      .catch(() => undefined);
+    const [sent] = fixture.w1.sentOn(RunnerHostEvent.hostQuitRequest);
+    expect(sent?.payload).toEqual({
+      requestId: expect.any(String),
+      mode: "stop-if-idle",
+      round: "busy",
+    });
+    expect(Object.keys(sent?.payload as object).sort()).toEqual([
+      "mode",
+      "requestId",
+      "round",
+    ]);
   });
 
   it("shows and focuses the target window BEFORE the request is sent", async () => {
@@ -867,7 +877,7 @@ describe("quit transaction over the real bridge: the native fallback", () => {
       .sentOn(RunnerHostEvent.hostQuitState)
       .map((message) => message.payload);
     expect(states).toEqual([
-      { requestId, phase: "stopping" },
+      { requestId, phase: "stopping", idleOnly: false },
       { requestId, phase: "quitting" },
     ]);
   });

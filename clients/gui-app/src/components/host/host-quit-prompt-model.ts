@@ -51,10 +51,15 @@ export interface HostQuitPromptModel {
  * | busy          | The host is still working           | "Stop host and quit", force       |
  * | idle          | Keep the host running?              | "Stop host and quit", if-idle     |
  * | unknown       | Can't tell what's running on the host | "Stop host anyway and quit", force |
+ * | busy (round)  | The host is still working           | "Stop host and quit", force       |
  * | busy-retry    | The host is still working           | "Stop host and quit", force       |
  *
- * A busy-retry round is busy whatever the fresh list says: the host has just
- * refused an idle-only stop, and its refusal is the disclosure.
+ * Both busy rounds are busy whatever the fresh list says: the host has just
+ * refused an idle-only stop, and its refusal is the disclosure. They differ
+ * only in why: a `busy` round is Stop-if-idle's FIRST ask (its silent stop
+ * was refused, nothing was shown before it), so it reads as the plain busy
+ * state; only `busy-retry` - the person had chosen Stop over an idle list -
+ * says something started meanwhile.
  */
 export function describeHostQuitPrompt(
   request: HostQuitDecisionRequest,
@@ -73,19 +78,20 @@ export function describeHostQuitPrompt(
           statusMinor: facts.statusMinor,
         });
   const breakdown = facts === null ? null : facts.breakdown;
-  if (request.round === "busy-retry") {
+  if (request.round !== "initial") {
+    const retry = request.round === "busy-retry";
+    const stateKind = retry ? "busy-retry" : "busy-round";
     return {
       stateKind:
-        verdict.kind === "checking" ? "busy-retry-checking" : "busy-retry",
+        verdict.kind === "checking" ? `${stateKind}-checking` : stateKind,
       title: HOST_QUIT_TITLE_BUSY,
-      description: HOST_QUIT_DESCRIPTION_BUSY_RETRY,
+      description: retry
+        ? HOST_QUIT_DESCRIPTION_BUSY_RETRY
+        : HOST_QUIT_DESCRIPTION_BUSY,
       detail:
         verdict.kind === "unknown"
-          ? joinDetail(
-              request.busyMessage,
-              hostQuitUnknownDescription(verdict.reason),
-            )
-          : request.busyMessage,
+          ? hostQuitUnknownDescription(verdict.reason)
+          : null,
       countsLine,
       sessionsHostId: localHostId,
       stopLabel: HOST_QUIT_STOP_LABEL,
@@ -156,10 +162,6 @@ export function describeHostQuitPrompt(
   }
 }
 
-function joinDetail(first: string | null, second: string): string {
-  return first === null ? second : `${first} ${second}`;
-}
-
 /**
  * The answer this modal gives WITHOUT asking, or `null` to ask.
  *
@@ -170,15 +172,16 @@ function joinDetail(first: string | null, second: string): string {
  *   instant quit when nothing is running, so it answers Stop (if-idle) and
  *   never shows the list. A busy race comes back as a busy-retry round.
  *
- * Never on a busy-retry round: the host has just refused an idle-only stop,
- * so an automatic answer there is either a second idle-only stop main would
- * refuse again, or a force nobody chose. That round is always the person's.
+ * Never on a busy or busy-retry round: the host has just refused an
+ * idle-only stop, so an automatic answer there is either a second idle-only
+ * stop main would refuse again, or a force nobody chose. That round is always
+ * the person's.
  */
 export function automaticHostQuitDecision(
   request: HostQuitDecisionRequest,
   verdict: HostQuitVerdict,
 ): HostQuitDecision | null {
-  if (request.round === "busy-retry") return null;
+  if (request.round !== "initial") return null;
   if (verdict.kind === "no-local-host") {
     return request.mode === "ask"
       ? { kind: "keep", remember: false }
@@ -193,13 +196,14 @@ export function automaticHostQuitDecision(
 /**
  * Stop-if-idle's first round stays hidden while the host is being asked: a
  * mode that promises an instant quit when idle must not flash a dialog on the
- * way to that quit. It shows once the list is busy or unreadable.
+ * way to that quit. It shows once the list is busy or unreadable. A busy
+ * round always shows: the host's refusal already said it is working.
  */
 export function hostQuitPromptVisible(
   request: HostQuitDecisionRequest,
   verdict: HostQuitVerdict,
 ): boolean {
-  if (request.round === "busy-retry") return true;
+  if (request.round !== "initial") return true;
   if (verdict.kind === "no-local-host") return false;
   if (request.mode === "stop-if-idle") {
     return verdict.kind === "busy" || verdict.kind === "unknown";

@@ -377,7 +377,6 @@ const HOST_QUIT_DECISION_MESSAGES: RendererDecisionMessages = {
 export interface HostQuitPrompt {
   readonly mode: HostQuitDecisionMode;
   readonly round: HostQuitDecisionRequest["round"];
-  readonly busyMessage: string | null;
 }
 
 /**
@@ -1061,7 +1060,6 @@ export class RunnerIpcBridge {
             requestId,
             mode: prompt.mode,
             round: prompt.round,
-            busyMessage: prompt.busyMessage,
           } satisfies HostQuitDecisionRequest,
         );
       },

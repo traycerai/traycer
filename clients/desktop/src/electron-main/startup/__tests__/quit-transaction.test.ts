@@ -234,9 +234,7 @@ function buildRig(scenario: Scenario): Rig {
       },
       requestDecision: (prompt) => {
         prompts.push(prompt);
-        events.push(
-          `prompt:${prompt.mode}:${prompt.round}:${String(prompt.busyMessage)}`,
-        );
+        events.push(`prompt:${prompt.mode}:${prompt.round}`);
         const script = promptScripts.shift();
         if (script === undefined) {
           throw new Error("test fixture: no scripted prompt answer");
@@ -262,9 +260,7 @@ function buildRig(scenario: Scenario): Rig {
         pendingReject = null;
       },
       askNatively: (prompt) => {
-        events.push(
-          `native:${prompt.mode}:${prompt.round}:${String(prompt.busyMessage)}`,
-        );
+        events.push(`native:${prompt.mode}:${prompt.round}`);
         // The promptScripts entry was consumed by requestDecision, which
         // rejected for a native script; its decision is looked up here.
         const answer = nativeAnswers.shift();
@@ -275,7 +271,11 @@ function buildRig(scenario: Scenario): Rig {
       },
       publishState: (event) => {
         states.push(event);
-        events.push(`state:${event.phase}:${String(event.requestId)}`);
+        events.push(
+          event.phase === "stopping"
+            ? `state:stopping:${String(event.requestId)}:idleOnly=${String(event.idleOnly)}`
+            : `state:${event.phase}:${String(event.requestId)}`,
+        );
       },
       unsyncedEditsGate: () => {
         counts.gate += 1;
@@ -370,7 +370,7 @@ describe("user quit: linked", () => {
     expect(rig.events).toEqual([
       ...USER_START,
       "verdict:stop",
-      "state:stopping:null",
+      "state:stopping:null:idleOnly=false",
       "stop:if-idle:detached",
       ...QUITTING_TAIL,
       "state:quitting:null",
@@ -387,7 +387,7 @@ describe("user quit: linked", () => {
     expect(rig.events).toEqual([
       ...USER_START,
       "verdict:stop",
-      "state:stopping:null",
+      "state:stopping:null:idleOnly=false",
       "stop:if-idle:detached",
       "stop:force:detached",
       ...QUITTING_TAIL,
@@ -408,7 +408,7 @@ describe("user quit: linked", () => {
       expect(rig.events).toEqual([
         ...USER_START,
         "verdict:stop",
-        "state:stopping:null",
+        "state:stopping:null:idleOnly=false",
         "stop:if-idle:detached",
         ...QUITTING_TAIL,
         "state:quitting:null",
@@ -420,7 +420,7 @@ describe("user quit: linked", () => {
 });
 
 describe("user quit: ask", () => {
-  const ASK_PROMPT = "prompt:ask:initial:null";
+  const ASK_PROMPT = "prompt:ask:initial";
 
   it("keep without remember: verdict keep, no stop, no mode change, authorize", async () => {
     const rig = buildRig(
@@ -485,7 +485,7 @@ describe("user quit: ask", () => {
       ASK_PROMPT,
       "verdict:stop",
       "setMode:linked:null",
-      "state:stopping:req-1",
+      "state:stopping:req-1:idleOnly=false",
       "stop:force:detached",
       ...QUITTING_TAIL,
       "state:quitting:req-1",
@@ -509,6 +509,12 @@ describe("user quit: ask", () => {
     await quit(rig);
     expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
     expect(rig.counts.authorize).toBe(1);
+    // A non-forced Stop over an idle list is idle-only: it cannot end work.
+    expect(rig.states[0]).toEqual({
+      requestId: "req-1",
+      phase: "stopping",
+      idleOnly: true,
+    });
   });
 
   it("stop{force:false} then host-busy: a busy-retry prompt whose Stop is force even with force:false", async () => {
@@ -530,8 +536,8 @@ describe("user quit: ask", () => {
     );
     await quit(rig);
     expect(rig.prompts).toEqual([
-      { mode: "ask", round: "initial", busyMessage: null },
-      { mode: "ask", round: "busy-retry", busyMessage: "2 agents running" },
+      { mode: "ask", round: "initial" },
+      { mode: "ask", round: "busy-retry" },
     ]);
     expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle", "force"]);
     expect(rig.stopRequests.every((r) => r.spawn === "detached")).toBe(true);
@@ -539,11 +545,11 @@ describe("user quit: ask", () => {
       ...USER_START,
       ASK_PROMPT,
       "verdict:stop",
-      "state:stopping:req-1",
+      "state:stopping:req-1:idleOnly=true",
       "stop:if-idle:detached",
-      "prompt:ask:busy-retry:2 agents running",
+      "prompt:ask:busy-retry",
       "verdict:stop",
-      "state:stopping:req-2",
+      "state:stopping:req-2:idleOnly=false",
       "stop:force:detached",
       ...QUITTING_TAIL,
       "state:quitting:req-2",
@@ -604,7 +610,7 @@ describe("user quit: ask", () => {
     expect(rig.events).toEqual([
       ...USER_START,
       ASK_PROMPT,
-      "native:ask:initial:null",
+      "native:ask:initial",
       "holdRelease",
       "releaseVerdict",
       "stayOpen",
@@ -629,9 +635,9 @@ describe("user quit: ask", () => {
     expect(rig.events).toEqual([
       ...USER_START,
       ASK_PROMPT,
-      "native:ask:initial:null",
+      "native:ask:initial",
       "verdict:stop",
-      "state:stopping:null",
+      "state:stopping:null:idleOnly=false",
       "stop:force:detached",
       ...QUITTING_TAIL,
       "state:quitting:null",
@@ -648,7 +654,7 @@ describe("user quit: stop-if-idle", () => {
     await quit(rig);
     expect(rig.events).toEqual([
       ...USER_START,
-      "state:stopping:null",
+      "state:stopping:null:idleOnly=true",
       "stop:if-idle:detached",
       ...QUITTING_TAIL,
       "state:quitting:null",
@@ -657,7 +663,7 @@ describe("user quit: stop-if-idle", () => {
     expect(rig.prompts).toEqual([]);
   });
 
-  it("auto host-busy: prompts round busy-retry with the busy message; its Stop is the force", async () => {
+  it("auto host-busy: prompts round 'busy' (Stop-if-idle's own first ask, nothing shown before it); its Stop is the force", async () => {
     const rig = buildRig(
       scenario({
         mode: "stop-if-idle",
@@ -671,15 +677,16 @@ describe("user quit: stop-if-idle", () => {
       }),
     );
     await quit(rig);
-    expect(rig.prompts).toEqual([
-      {
-        mode: "stop-if-idle",
-        round: "busy-retry",
-        busyMessage: "2 agents running",
-      },
-    ]);
+    expect(rig.prompts).toEqual([{ mode: "stop-if-idle", round: "busy" }]);
     expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle", "force"]);
     expect(rig.counts.authorize).toBe(1);
+    // Answered with force:false, but the busy round's Stop is the force
+    // regardless: its own second stopping state is not idle-only.
+    expect(rig.states[1]).toEqual({
+      requestId: "req-1",
+      phase: "stopping",
+      idleOnly: false,
+    });
   });
 
   const unknown: ReadonlyArray<readonly [string, StopHostOutcome]> = [
@@ -699,9 +706,7 @@ describe("user quit: stop-if-idle", () => {
         }),
       );
       await quit(rig);
-      expect(rig.prompts).toEqual([
-        { mode: "stop-if-idle", round: "initial", busyMessage: null },
-      ]);
+      expect(rig.prompts).toEqual([{ mode: "stop-if-idle", round: "initial" }]);
       expect(rig.counts.authorize).toBe(1);
     });
   }
@@ -718,7 +723,7 @@ describe("user quit: stop-if-idle", () => {
     expect(rig.stopRequests[0].withdrawal?.aborted).toBe(true);
     expect(rig.events).toEqual([
       ...USER_START,
-      "state:stopping:null",
+      "state:stopping:null:idleOnly=true",
       "stop:if-idle:detached",
       "verdict:keep",
       ...QUITTING_TAIL,
@@ -726,6 +731,130 @@ describe("user quit: stop-if-idle", () => {
       "authorize",
     ]);
     expect(rig.prompts).toEqual([]);
+  });
+});
+
+describe("stop-if-idle busy round naming and force (Q-SII-COPY)", () => {
+  it("the silent stop's host-busy prompt carries no busyMessage key", async () => {
+    const rig = buildRig(
+      scenario({
+        mode: "stop-if-idle",
+        stops: [BUSY, FORCE_STOP],
+        prompts: [
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: false, remember: false },
+          },
+        ],
+      }),
+    );
+    await quit(rig);
+    expect(rig.prompts).toHaveLength(1);
+    expect(Object.keys(rig.prompts[0])).toEqual(["mode", "round"]);
+  });
+
+  it("a Stop answer with force:false on the busy round still runs a FORCE stop", async () => {
+    const rig = buildRig(
+      scenario({
+        mode: "stop-if-idle",
+        stops: [BUSY, FORCE_STOP],
+        prompts: [
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: false, remember: false },
+          },
+        ],
+      }),
+    );
+    await quit(rig);
+    expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle", "force"]);
+  });
+
+  it("an ask-mode non-forced Stop refused host-busy re-prompts with round 'busy-retry' (not 'busy')", async () => {
+    const rig = buildRig(
+      scenario({
+        mode: "ask",
+        stops: [BUSY, FORCE_STOP],
+        prompts: [
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: false, remember: false },
+          },
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: false, remember: false },
+          },
+        ],
+      }),
+    );
+    await quit(rig);
+    expect(rig.prompts.map((p) => p.round)).toEqual(["initial", "busy-retry"]);
+  });
+});
+
+describe("stopping event idleOnly (Q-SII-COPY)", () => {
+  it("stop-if-idle's silent attempt publishes idleOnly:true", async () => {
+    const rig = buildRig(
+      scenario({ mode: "stop-if-idle", stops: [IDLE_STOP] }),
+    );
+    await quit(rig);
+    expect(rig.states[0]).toEqual({
+      requestId: null,
+      phase: "stopping",
+      idleOnly: true,
+    });
+  });
+
+  it("Linked publishes stopping with idleOnly:false", async () => {
+    const rig = buildRig(scenario({ mode: "linked", stops: [IDLE_STOP] }));
+    await quit(rig);
+    expect(rig.states[0]).toEqual({
+      requestId: null,
+      phase: "stopping",
+      idleOnly: false,
+    });
+  });
+
+  it("an ask-mode non-forced Stop publishes idleOnly:true", async () => {
+    const rig = buildRig(
+      scenario({
+        mode: "ask",
+        stops: [IDLE_STOP],
+        prompts: [
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: false, remember: false },
+          },
+        ],
+      }),
+    );
+    await quit(rig);
+    expect(rig.states[0]).toEqual({
+      requestId: "req-1",
+      phase: "stopping",
+      idleOnly: true,
+    });
+  });
+
+  it("an ask-mode forced Stop publishes idleOnly:false", async () => {
+    const rig = buildRig(
+      scenario({
+        mode: "ask",
+        stops: [FORCE_STOP],
+        prompts: [
+          {
+            via: "renderer",
+            decision: { kind: "stop", force: true, remember: false },
+          },
+        ],
+      }),
+    );
+    await quit(rig);
+    expect(rig.states[0]).toEqual({
+      requestId: "req-1",
+      phase: "stopping",
+      idleOnly: false,
+    });
   });
 });
 
@@ -806,7 +935,7 @@ describe("tray preset: quitAndStopHost", () => {
         "requestQuit",
         ...USER_START,
         "verdict:stop",
-        "state:stopping:null",
+        "state:stopping:null:idleOnly=false",
         "stop:force:detached",
         ...QUITTING_TAIL,
         "state:quitting:null",
@@ -969,7 +1098,9 @@ describe("supersede by an update install", () => {
   it("publishes cancelled when a stop phase was shown (stop-if-idle's automatic attempt)", async () => {
     const rig = buildRig(scenario({ mode: "stop-if-idle", stops: ["hang"] }));
     await quit(rig);
-    expect(rig.states).toEqual([{ requestId: null, phase: "stopping" }]);
+    expect(rig.states).toEqual([
+      { requestId: null, phase: "stopping", idleOnly: true },
+    ]);
 
     rig.state.installing = true;
     expect(rig.txs.onBeforeQuit()).toBe("prevent");
@@ -978,7 +1109,7 @@ describe("supersede by an update install", () => {
     expect(rig.stopRequests[0].withdrawal?.aborted).toBe(true);
     expect(rig.withdrawals).toHaveLength(1);
     expect(rig.states).toEqual([
-      { requestId: null, phase: "stopping" },
+      { requestId: null, phase: "stopping", idleOnly: true },
       { requestId: null, phase: "cancelled" },
     ]);
     expect(rig.events).toContain("verdict:handoff");
@@ -992,7 +1123,7 @@ describe("supersede by an update install", () => {
   it("does NOT supersede once a user stop has been committed (Linked, stopping)", async () => {
     const rig = buildRig(scenario({ mode: "linked", stops: ["hang"] }));
     await quit(rig);
-    expect(rig.events).toContain("state:stopping:null");
+    expect(rig.events).toContain("state:stopping:null:idleOnly=false");
 
     rig.state.installing = true;
     expect(rig.txs.onBeforeQuit()).toBe("prevent");
@@ -1067,13 +1198,7 @@ describe("stopping phase: indicator and delayed reveal", () => {
     );
     rig.txs.onBeforeQuit();
     await settle();
-    expect(rig.prompts).toEqual([
-      {
-        mode: "stop-if-idle",
-        round: "busy-retry",
-        busyMessage: "2 agents running",
-      },
-    ]);
+    expect(rig.prompts).toEqual([{ mode: "stop-if-idle", round: "busy" }]);
     vi.advanceTimersByTime(REVEAL_MS * 3);
     expect(rig.counts.reveal).toBe(0);
     expect(rig.indicator).toEqual([true, false]);

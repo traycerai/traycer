@@ -150,7 +150,6 @@ describe("host quit round-trip", () => {
     requestId: "req-1",
     mode: "ask",
     round: "initial",
-    busyMessage: null,
   };
 
   function requestListeners(): readonly Listener[] {
@@ -245,7 +244,11 @@ describe("host quit round-trip", () => {
       ...(fake.listeners.get(RunnerHostEvent.hostQuitState) ?? []),
     ];
     expect(listeners).toHaveLength(1);
-    const event: HostQuitStateEvent = { requestId: "req-1", phase: "stopping" };
+    const event: HostQuitStateEvent = {
+      requestId: "req-1",
+      phase: "stopping",
+      idleOnly: true,
+    };
     for (const listener of listeners) listener({}, event);
     expect(received).toEqual([event]);
     subscription.dispose();

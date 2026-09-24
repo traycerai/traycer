@@ -1121,7 +1121,7 @@ export interface AnalyticsEventProperties {
   };
   /**
    * One answer the quit modal gave main. `verdict` is the list state the modal
-   * DISPLAYED when the person chose (a busy-retry round counts as busy;
+   * DISPLAYED when the person chose (a busy or busy-retry round counts as busy;
    * `unknown` is a list it could not read). `forced` is the stop's `force`,
    * `false` for keep and cancel.
    */

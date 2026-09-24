@@ -71,6 +71,7 @@ vi.mock("@/hooks/home-focus/use-focus-model", async () => {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { HostBusyBreakdownV2 } from "@traycer/protocol/host/status/index";
 import type {
   HostQuitDecisionRequest,
   HostQuitDecisionResponse,
@@ -154,16 +155,15 @@ function renderBridge(quit: FakeQuit): void {
 }
 
 function initialAskRequest(): HostQuitDecisionRequest {
-  return {
-    requestId: "req-1",
-    mode: "ask",
-    round: "initial",
-    busyMessage: null,
-  };
+  return { requestId: "req-1", mode: "ask", round: "initial" };
 }
 
-function busyRetryRequest(busyMessage: string | null): HostQuitDecisionRequest {
-  return { requestId: "req-1", mode: "ask", round: "busy-retry", busyMessage };
+function busyRequest(): HostQuitDecisionRequest {
+  return { requestId: "req-1", mode: "stop-if-idle", round: "busy" };
+}
+
+function busyRetryRequest(): HostQuitDecisionRequest {
+  return { requestId: "req-1", mode: "ask", round: "busy-retry" };
 }
 
 afterEach(() => {
@@ -300,7 +300,7 @@ describe("<HostQuitDecisionBridge /> - state table rendering", () => {
     renderBridge(quit);
 
     act(() => {
-      quit.fireRequest(busyRetryRequest("Something is holding the host."));
+      quit.fireRequest(busyRetryRequest());
     });
 
     const dialog = await screen.findByTestId("host-quit-dialog");
@@ -494,7 +494,7 @@ describe("<HostQuitDecisionBridge /> - respond payloads", () => {
     localHostQuitStatusMock.current = idleStatus();
     renderBridge(quit);
     act(() => {
-      quit.fireRequest(busyRetryRequest(null));
+      quit.fireRequest(busyRetryRequest());
     });
     await screen.findByTestId("host-quit-dialog");
 
@@ -610,7 +610,6 @@ describe("<HostQuitDecisionBridge /> - analytics", () => {
         requestId: "req-auto",
         mode: "stop-if-idle",
         round: "initial",
-        busyMessage: null,
       });
     });
 
@@ -681,6 +680,15 @@ describe("<HostQuitDecisionBridge /> - host-changed refusal", () => {
   });
 });
 
+/** A breakdown naming one busy terminal, so `hostQuitStoppingLine` says "ending 1 terminal". */
+const BUSY_ONE_TERMINAL_BREAKDOWN: HostBusyBreakdownV2 = {
+  workingAgents: 0,
+  activeTerminalAgents: 0,
+  busyTerminals: 1,
+  shells: null,
+  scheduledWakes: null,
+};
+
 describe("<HostQuitDecisionBridge /> - phase transitions", () => {
   it("a stopping state for the active request renders a locked, progress-only dialog", async () => {
     const quit = createFakeQuit();
@@ -702,7 +710,11 @@ describe("<HostQuitDecisionBridge /> - phase transitions", () => {
     await screen.findByTestId("host-quit-dialog");
 
     act(() => {
-      quit.fireState({ requestId: "req-1", phase: "stopping" });
+      quit.fireState({
+        requestId: "req-1",
+        phase: "stopping",
+        idleOnly: false,
+      });
     });
 
     const dialog = await screen.findByTestId("host-quit-dialog");
@@ -715,18 +727,124 @@ describe("<HostQuitDecisionBridge /> - phase transitions", () => {
     );
   });
 
+  it("idleOnly:false names the work the live list shows (e.g. 'ending 1 terminal')", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = {
+      localHostId: "host-a",
+      verdict: {
+        kind: "busy",
+        busySessionCount: 1,
+        breakdown: BUSY_ONE_TERMINAL_BREAKDOWN,
+        statusMinor: 6,
+      },
+      liveLocalHostIdNow: () => "host-a",
+      recheck: vi.fn(),
+    };
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(initialAskRequest());
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    act(() => {
+      quit.fireState({
+        requestId: "req-1",
+        phase: "stopping",
+        idleOnly: false,
+      });
+    });
+
+    const stopping = await screen.findByTestId("host-quit-stopping");
+    expect(stopping.textContent).toContain("ending 1 terminal");
+  });
+
+  it("idleOnly:true names NO work for the active request, even though the live list is busy", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = {
+      localHostId: "host-a",
+      verdict: {
+        kind: "busy",
+        busySessionCount: 1,
+        breakdown: BUSY_ONE_TERMINAL_BREAKDOWN,
+        statusMinor: 6,
+      },
+      liveLocalHostIdNow: () => "host-a",
+      recheck: vi.fn(),
+    };
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(initialAskRequest());
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    act(() => {
+      quit.fireState({ requestId: "req-1", phase: "stopping", idleOnly: true });
+    });
+
+    const stopping = await screen.findByTestId("host-quit-stopping");
+    expect(stopping.textContent).toContain("Stopping host…");
+    expect(stopping.textContent).not.toContain("ending");
+  });
+
   it("a stopping state with requestId: null (unprompted) renders a progress-only dialog with no active request", async () => {
     const quit = createFakeQuit();
     renderBridge(quit);
     expect(screen.queryByTestId("host-quit-dialog")).toBeNull();
 
     act(() => {
-      quit.fireState({ requestId: null, phase: "stopping" });
+      quit.fireState({ requestId: null, phase: "stopping", idleOnly: true });
     });
 
     const dialog = await screen.findByTestId("host-quit-dialog");
     expect(dialog.dataset.quitState).toBe("stopping");
     expect(screen.getByTestId("host-quit-stopping")).not.toBeNull();
+  });
+
+  it("unprompted stopping with idleOnly:true names no work, even while the local host status is busy", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = {
+      localHostId: "host-a",
+      verdict: {
+        kind: "busy",
+        busySessionCount: 1,
+        breakdown: BUSY_ONE_TERMINAL_BREAKDOWN,
+        statusMinor: 6,
+      },
+      liveLocalHostIdNow: () => "host-a",
+      recheck: vi.fn(),
+    };
+    renderBridge(quit);
+
+    act(() => {
+      quit.fireState({ requestId: null, phase: "stopping", idleOnly: true });
+    });
+
+    const stopping = await screen.findByTestId("host-quit-stopping");
+    expect(stopping.textContent).toContain("Stopping host…");
+    expect(stopping.textContent).not.toContain("ending");
+  });
+
+  it("unprompted stopping with idleOnly:false names the live work (e.g. 'ending 1 terminal')", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = {
+      localHostId: "host-a",
+      verdict: {
+        kind: "busy",
+        busySessionCount: 1,
+        breakdown: BUSY_ONE_TERMINAL_BREAKDOWN,
+        statusMinor: 6,
+      },
+      liveLocalHostIdNow: () => "host-a",
+      recheck: vi.fn(),
+    };
+    renderBridge(quit);
+
+    act(() => {
+      quit.fireState({ requestId: null, phase: "stopping", idleOnly: false });
+    });
+
+    const stopping = await screen.findByTestId("host-quit-stopping");
+    expect(stopping.textContent).toContain("ending 1 terminal");
   });
 
   it("quitting ends the transaction and unmounts the dialog", async () => {
@@ -806,7 +924,11 @@ describe("<HostQuitDecisionBridge /> - phase transitions", () => {
     expect(dialogBefore.dataset.quitState).toBe("busy");
 
     act(() => {
-      quit.fireState({ requestId: "some-other-request", phase: "stopping" });
+      quit.fireState({
+        requestId: "some-other-request",
+        phase: "stopping",
+        idleOnly: false,
+      });
     });
 
     const dialogAfter = screen.getByTestId("host-quit-dialog");
@@ -845,7 +967,7 @@ describe("<HostQuitDecisionBridge /> - remember carried across busy-retry, reset
     );
 
     act(() => {
-      quit.fireRequest(busyRetryRequest("Still holding the host."));
+      quit.fireRequest(busyRetryRequest());
     });
 
     const dialog = await screen.findByTestId("host-quit-dialog");
@@ -892,12 +1014,54 @@ describe("<HostQuitDecisionBridge /> - remember carried across busy-retry, reset
     });
 
     act(() => {
-      quit.fireRequest({
-        requestId: "req-2",
-        mode: "ask",
-        round: "initial",
-        busyMessage: null,
-      });
+      quit.fireRequest({ requestId: "req-2", mode: "ask", round: "initial" });
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    expect(screen.getByTestId("host-quit-remember")).toHaveProperty(
+      "dataset.state",
+      "unchecked",
+    );
+  });
+
+  it("a fresh quit's 'busy' round (Stop-if-idle's own first ask) ALSO resets Remember, unlike 'busy-retry'", async () => {
+    const quit = createFakeQuit();
+    localHostQuitStatusMock.current = {
+      localHostId: "host-a",
+      verdict: {
+        kind: "busy",
+        busySessionCount: 1,
+        breakdown: null,
+        statusMinor: 6,
+      },
+      liveLocalHostIdNow: () => "host-a",
+      recheck: vi.fn(),
+    };
+    renderBridge(quit);
+    act(() => {
+      quit.fireRequest(initialAskRequest());
+    });
+    await screen.findByTestId("host-quit-dialog");
+
+    act(() => {
+      screen.getByTestId("host-quit-remember").click();
+    });
+    expect(screen.getByTestId("host-quit-remember")).toHaveProperty(
+      "dataset.state",
+      "checked",
+    );
+
+    // Cancel closes this quit; a brand-new request - even a 'busy' round - is
+    // a NEW quit, and 'busy' is not 'busy-retry'.
+    act(() => {
+      screen.getByTestId("host-quit-cancel").click();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-quit-dialog")).toBeNull();
+    });
+
+    act(() => {
+      quit.fireRequest(busyRequest());
     });
     await screen.findByTestId("host-quit-dialog");
 
@@ -915,12 +1079,7 @@ describe("<HostQuitDecisionBridge /> - handlers never throw on malformed input",
 
     expect(() => {
       act(() => {
-        quit.fireRequest({
-          requestId: "",
-          mode: "ask",
-          round: "initial",
-          busyMessage: null,
-        });
+        quit.fireRequest({ requestId: "", mode: "ask", round: "initial" });
       });
     }).not.toThrow();
 
@@ -937,4 +1096,53 @@ describe("<HostQuitDecisionBridge /> - handlers never throw on malformed input",
       });
     }).not.toThrow();
   });
+});
+
+describe("<HostQuitDecisionBridge /> - no CLI text ever reaches the dialog", () => {
+  const REQUESTS: ReadonlyArray<readonly [string, HostQuitDecisionRequest]> = [
+    ["initial", initialAskRequest()],
+    ["busy", busyRequest()],
+    ["busy-retry", busyRetryRequest()],
+  ];
+  const VERDICTS: ReadonlyArray<readonly [string, LocalHostQuitStatus]> = [
+    [
+      "busy",
+      {
+        localHostId: "host-a",
+        verdict: {
+          kind: "busy",
+          busySessionCount: 1,
+          breakdown: BUSY_ONE_TERMINAL_BREAKDOWN,
+          statusMinor: 6,
+        },
+        liveLocalHostIdNow: () => "host-a",
+        recheck: vi.fn(),
+      },
+    ],
+    [
+      "unknown",
+      {
+        localHostId: "host-a",
+        verdict: { kind: "unknown", reason: "unreachable" },
+        liveLocalHostIdNow: () => "host-a",
+        recheck: vi.fn(),
+      },
+    ],
+  ];
+
+  for (const [requestLabel, request] of REQUESTS) {
+    for (const [verdictLabel, status] of VERDICTS) {
+      it(`round=${requestLabel}, verdict=${verdictLabel}: no "--force" or "Re-run" anywhere in the dialog`, async () => {
+        const quit = createFakeQuit();
+        localHostQuitStatusMock.current = status;
+        renderBridge(quit);
+        act(() => {
+          quit.fireRequest(request);
+        });
+        const dialog = await screen.findByTestId("host-quit-dialog");
+        expect(dialog.textContent).not.toContain("--force");
+        expect(dialog.textContent).not.toContain("Re-run");
+      });
+    }
+  }
 });
