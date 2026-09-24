@@ -40,6 +40,9 @@ const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
 
+/** `"page-width"` while the automatic fit is in force, `null` once the user has zoomed by hand. */
+type ScaleMode = "page-width" | null;
+
 /** Gutter around the pages, in CSS px - what fit-to-width leaves on each side. */
 const PAGE_GUTTER_PX = 16;
 
@@ -120,8 +123,15 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
 
   // Which automatic scale mode is in force: `"page-width"` until the user
   // zooms manually, then `null`. A resize observer re-applies the mode so
-  // fit-to-width survives tile resizes.
-  const scaleModeRef = useRef<"page-width" | null>("page-width");
+  // fit-to-width survives tile resizes. Held twice on purpose: the ref is
+  // what the observer callback reads, the state is what presses the
+  // toolbar's fit button.
+  const scaleModeRef = useRef<ScaleMode>("page-width");
+  const [scaleMode, setScaleModeState] = useState<ScaleMode>("page-width");
+  const setScaleMode = useCallback((mode: ScaleMode): void => {
+    scaleModeRef.current = mode;
+    setScaleModeState(mode);
+  }, []);
   const scaleRef = useRef(1);
 
   const onRenderFailureRef = useRef(props.onRenderFailure);
@@ -302,16 +312,21 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
 
   const zoomBy = useCallback(
     (factor: number) => {
-      scaleModeRef.current = null;
+      setScaleMode(null);
       applyScale(scaleRef.current * factor);
     },
-    [applyScale],
+    [applyScale, setScaleMode],
   );
 
   const handleFitWidth = useCallback(() => {
-    scaleModeRef.current = "page-width";
+    setScaleMode("page-width");
     applyFitWidth();
-  }, [applyFitWidth]);
+  }, [applyFitWidth, setScaleMode]);
+
+  const handleActualSize = useCallback(() => {
+    setScaleMode(null);
+    applyScale(1);
+  }, [applyScale, setScaleMode]);
 
   // Live search, debounced, the way every findbar behaves; an emptied query
   // clears the highlights. Enter stays "next match" via `stepMatch`.
@@ -392,10 +407,19 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
         pageNumber={pageNumber}
         pageCount={pageCount}
         onGoToPage={goToPage}
-        scalePercent={scalePercent}
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
-        onFitWidth={handleFitWidth}
+        zoom={{
+          ready: documentReady,
+          scalePercent,
+          canZoomIn: scalePercent === null || scalePercent < MAX_SCALE * 100,
+          canZoomOut: scalePercent === null || scalePercent > MIN_SCALE * 100,
+          onZoomIn: handleZoomIn,
+          onZoomOut: handleZoomOut,
+          fitKind: "width",
+          fitActive: scaleMode === "page-width",
+          onFit: handleFitWidth,
+          actualSizeActive: scalePercent === 100,
+          onActualSize: handleActualSize,
+        }}
         onRotate={null}
         outline={null}
         searchSupported={searchSupported}
