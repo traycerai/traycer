@@ -38,6 +38,6 @@ export const BACKGROUND_KIND_ICONS: Readonly<
   // A paused chat waiting out a provider limit: the one kind whose row is a
   // countdown rather than a task, so the glyph is time rather than an actor.
   "fallback-wait": Hourglass,
-  // Placeholder - the crons panel work (T15) owns the real row.
+  // A scheduled Claude job is a calendar event, not a running task.
   cron: CalendarClock,
 };

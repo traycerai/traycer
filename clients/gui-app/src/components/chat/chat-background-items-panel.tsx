@@ -86,12 +86,33 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
     // DOING, the same as every label above it.
     case "fallback-wait":
       return "Waiting";
-    // Placeholder - the crons panel work (T15) owns the real row.
     case "cron":
       return "Scheduled job";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
+}
+
+function cronStopControlState(
+  items: ReadonlyArray<BackgroundItem>,
+  managedCommandCount: number,
+  stoppable: boolean,
+  stopAllPending: boolean,
+): {
+  scheduledJobCount: number;
+  harnessStopAllReady: boolean;
+  showStopAll: boolean;
+  stopAllLabel: string;
+} {
+  const scheduledJobCount = items.filter((item) => item.kind === "cron").length;
+  const hasHarnessStopTarget = items.some((item) => item.kind !== "cron");
+  const onlyCronItems = scheduledJobCount > 0 && !hasHarnessStopTarget;
+  return {
+    scheduledJobCount,
+    harnessStopAllReady: !onlyCronItems && stoppable && !stopAllPending,
+    showStopAll: !onlyCronItems || managedCommandCount > 0,
+    stopAllLabel: scheduledJobCount > 0 ? "Stop other items" : "Stop all",
+  };
 }
 
 function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
@@ -510,7 +531,7 @@ function BackgroundTreeRow(props: {
           paddingLeft: `${props.depth * INDENT_PX + BASE_PAD_LEFT}px`,
         }}
       >
-        {item === null ? (
+        {item === null && (
           <TooltipWrapper
             label={displayTitle}
             side="top"
@@ -527,7 +548,35 @@ function BackgroundTreeRow(props: {
               </span>
             </div>
           </TooltipWrapper>
-        ) : (
+        )}
+        {item?.kind === "cron" && (
+          <div
+            data-testid={`cron-background-row-${item.taskId}`}
+            className="min-w-0 flex-1 py-1"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <BackgroundKindIcon kind="cron" />
+              <span className="min-w-0 flex-1 text-ui-xs font-medium text-foreground/85">
+                {item.humanSchedule}
+              </span>
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+                {backgroundKindLabel(item.kind)}
+              </span>
+            </div>
+            <p className="mt-1 break-words text-ui-xs text-muted-foreground">
+              Schedule · <code>{item.schedule}</code>
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-ui-xs text-foreground/85">
+              {item.prompt}
+            </p>
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              scheduled jobs run while the session is otherwise alive, and stop
+              ten minutes after the last real activity — a job already running
+              at that moment finishes first
+            </p>
+          </div>
+        )}
+        {item !== null && item.kind !== "cron" && (
           <>
             <TooltipWrapper
               label={titleNode}
@@ -683,6 +732,17 @@ export function BackgroundItemsPanel(props: {
     chatId: props.chatId,
     hostId,
   });
+  const {
+    scheduledJobCount,
+    harnessStopAllReady,
+    showStopAll,
+    stopAllLabel,
+  } = cronStopControlState(
+    items,
+    managedCommands.length,
+    stoppable,
+    props.stopAllPending,
+  );
   const heldManagedCommands = useHeldManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
@@ -721,6 +781,7 @@ export function BackgroundItemsPanel(props: {
     runningCount: runningGroupCount + runningOnlyManagedCommands.length,
     heldCount: heldManagedCommands.length,
     waitingWakeCount,
+    scheduledJobCount,
     portForwardCount: portForwards.length,
   });
   const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
@@ -747,7 +808,6 @@ export function BackgroundItemsPanel(props: {
   // leaving it out here would be a "Stop all" that knowingly left a process
   // alive. That is why the header's running total is a floor on this button's
   // reach rather than an equality - see `backgroundHeaderSummary`.
-  const harnessStopAllReady = stoppable && !props.stopAllPending;
   const managedStopAllReady =
     managedStoppable && managedCommands.length > 0 && !stopAllManagedPending;
   // The version gate, read off the items themselves: any command the host
@@ -806,7 +866,8 @@ export function BackgroundItemsPanel(props: {
   // stop (the handler never touches them), so counting them would be a
   // false promise.
   const panelItemCount =
-    items.filter((item) => item.kind !== "wakeup").length +
+    items.filter((item) => item.kind !== "wakeup" && item.kind !== "cron")
+      .length +
     managedCommands.length;
 
   return (
@@ -891,13 +952,15 @@ export function BackgroundItemsPanel(props: {
               </span>
             </TooltipWrapper>
           ) : null}
-          <BackgroundStopButton
-            label="Stop all"
-            iconOnly={false}
-            disabled={stopAllDisabled}
-            testId="background-stop-all"
-            onClick={stopAll}
-          />
+          {showStopAll ? (
+            <BackgroundStopButton
+              label={stopAllLabel}
+              iconOnly={false}
+              disabled={stopAllDisabled}
+              testId="background-stop-all"
+              onClick={stopAll}
+            />
+          ) : null}
         </div>
       </div>
       <CollapsibleContent>
