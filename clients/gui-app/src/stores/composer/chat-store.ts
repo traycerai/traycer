@@ -722,6 +722,7 @@ export interface ChatMessage {
    * renders no actions rather than the wrong ones.
    */
   turnId?: string;
+  hasLaterAssistantText?: boolean;
   /**
    * The id of the ONE error segment on this row that carries the manual
    * recovery actions (Retry / Switch… / Wait), or absent when this row carries

@@ -11,9 +11,11 @@ import {
   type ChatFindRow,
 } from "@/components/chat/chat-find";
 import {
+  deriveActivityGroupCollapsibleKey,
   deriveActivityGroupRenderId,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
+  deriveTextCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
@@ -1253,9 +1255,91 @@ describe("chat find projection", () => {
     expect(countOccurrences(rowSearchText(row), "app")).toBe(2);
   });
 
-  // Guard the fix's exception: a synthesized single-special-segment row
-  // (setup-card / forked-chat-link) renders that segment's OWN anchor and no
-  // content block, so the projection must keep emitting the segment unit.
+  it("owns an intermediate assistant text unit by its text disclosure", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(34, "assistant"),
+      segments: [
+        {
+          id: "assistant-text-early",
+          kind: "text",
+          markdown: "intermediate update",
+          isStreaming: false,
+        },
+        {
+          id: "assistant-text-final",
+          kind: "text",
+          markdown: "final answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const early = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("assistant-text-early"),
+    );
+    const final = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("assistant-text-final"),
+    );
+
+    expect(early?.owningChain).toEqual([
+      deriveTextCollapsibleKey(TILE_INSTANCE_ID, "assistant-text-early"),
+    ]);
+    expect(final?.owningChain).toEqual([]);
+  });
+
+  it("owns a hidden activity summary by its group", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(35, "assistant"),
+      segments: [
+        {
+          id: "assistant-reasoning-early",
+          kind: "reasoning",
+          markdown: "private reasoning",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+        {
+          id: "assistant-text-final",
+          kind: "text",
+          markdown: "final answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const groupId = deriveActivityGroupRenderId("assistant-reasoning-early");
+    const summary = row.units.find(
+      (unit) => unit.unitId === chatFindActivityGroupSummaryUnitId(groupId),
+    );
+
+    expect(summary?.owningChain).toEqual([
+      deriveActivityGroupCollapsibleKey(TILE_INSTANCE_ID, groupId),
+    ]);
+  });
+
+  it("owns a text unit when a later assistant row has text", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(35, "assistant"),
+      hasLaterAssistantText: true,
+      segments: [
+        {
+          id: "assistant-text-only",
+          kind: "text",
+          markdown: "earlier row answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    expect(row.units[0]?.owningChain).toEqual([
+      deriveTextCollapsibleKey(TILE_INSTANCE_ID, "assistant-text-only"),
+    ]);
+  });
+
   it("still projects a synthesized single forked-chat-link segment as its own unit", () => {
     const synthesized: ChatMessageModel = {
       ...makeMessage(33, "system"),

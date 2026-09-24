@@ -12,7 +12,9 @@ interface ActivityGroupOpenStoreProviderProps {
 export function ActivityGroupOpenStoreProvider(
   props: ActivityGroupOpenStoreProviderProps,
 ) {
-  const [fallbackStore] = useState(() => createActivityGroupOpenStore(null));
+  const [fallbackStore] = useState(() =>
+    createActivityGroupOpenStore(null, null),
+  );
   const store = props.store ?? fallbackStore;
   return (
     <ActivityGroupOpenStoreContext.Provider value={store}>

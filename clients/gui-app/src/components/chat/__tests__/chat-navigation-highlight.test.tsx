@@ -55,6 +55,32 @@ describe("scrollChatBlockIntoView", () => {
       "row-absent",
     );
   });
+
+  it("opens Earlier activity before scrolling a collapsed block", () => {
+    const scroller = document.createElement("div");
+    const row = document.createElement("div");
+    row.dataset.messageId = "assistant:turn";
+    const turn = document.createElement("div");
+    turn.setAttribute("data-assistant-turn", "");
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-chat-intermediate-trigger", "true");
+    const triggerClick = vi.fn();
+    trigger.addEventListener("click", triggerClick);
+    const block = document.createElement("div");
+    block.dataset.blockId = "text-early";
+    block.dataset.chatBlockCollapsed = "true";
+    const blockScrollIntoView = vi.fn();
+    block.scrollIntoView = blockScrollIntoView;
+    turn.append(trigger, block);
+    row.append(turn);
+    scroller.append(row);
+
+    expect(
+      scrollChatBlockIntoView(scroller, "assistant:turn", "text-early"),
+    ).toBe("block-absent");
+    expect(triggerClick).toHaveBeenCalledTimes(1);
+    expect(blockScrollIntoView).not.toHaveBeenCalled();
+  });
 });
 
 describe("useChatNavigationBlockReveal", () => {

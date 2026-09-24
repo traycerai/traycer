@@ -3,6 +3,7 @@ import {
   activityGroupSummary,
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  lastAssistantTextSegmentId,
   latestActivityLabel,
   reasoningSummaryLabel,
 } from "@/components/chat/chat-activity-groups";
@@ -39,6 +40,19 @@ function toolInputFields(toolName: string, input: unknown) {
 }
 
 describe("chat activity grouping", () => {
+  it("identifies the last non-empty assistant text segment", () => {
+    expect(
+      lastAssistantTextSegmentId([
+        textSegment("text-1", "First"),
+        textSegment("text-2", "  "),
+        textSegment("text-3", "Final"),
+      ]),
+    ).toBe("text-3");
+    expect(lastAssistantTextSegmentId([textSegment("text-1", "Only")])).toBe(
+      "text-1",
+    );
+  });
+
   it("summarizes the Traycer browser REPL as browser activity", () => {
     const timeline = buildCompleteTimeline([
       toolSegment("browser-1", "traycer-browser/repl", {
@@ -192,6 +206,50 @@ describe("chat activity grouping", () => {
       throw new Error("Expected the trailing text segment");
     }
     expect(timeline[1].segment.kind).toBe("text");
+  });
+
+  it("marks an activity run followed by assistant text", () => {
+    const withText = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+      textSegment("text-1", "Done"),
+    ]);
+    const withoutText = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+    ]);
+
+    expect(soleGroup(withText, 0).followedByText).toBe(true);
+    expect(soleGroup(withoutText, 0).followedByText).toBe(false);
+  });
+
+  it("does not treat browser or whitespace text as a result boundary", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+      {
+        id: "browser-text",
+        kind: "text",
+        markdown: "Browser session",
+        browserSession: {
+          hostId: "host-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          profile: "primary",
+        },
+        isStreaming: false,
+      },
+      textSegment("whitespace-text", "  "),
+    ]);
+
+    expect(soleGroup(timeline, 0).followedByText).toBe(false);
+  });
+
+  it("marks a thought run followed by a notice and later text", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+      providerNoticeSegment("notice-1"),
+      textSegment("text-1", "Done"),
+    ]);
+
+    expect(soleGroup(timeline, 0).followedByText).toBe(true);
   });
 
   // The invariant the whole design rests on: a reasoning block occupies the

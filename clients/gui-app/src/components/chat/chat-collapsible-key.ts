@@ -1,6 +1,7 @@
 export type ChatCollapsibleKind =
   | "subagent"
   | "activity-group"
+  | "text"
   | "a2a-send"
   | "a2a-received"
   | "interview";
@@ -45,6 +46,13 @@ export function deriveActivityGroupCollapsibleKey(
   groupId: string,
 ): ChatCollapsibleKey {
   return createChatCollapsibleKey(tileInstanceId, "activity-group", groupId);
+}
+
+export function deriveTextCollapsibleKey(
+  tileInstanceId: string,
+  segmentId: string,
+): ChatCollapsibleKey {
+  return createChatCollapsibleKey(tileInstanceId, "text", `text:${segmentId}`);
 }
 
 export function deriveA2ASendCollapsibleKey(

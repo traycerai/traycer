@@ -91,6 +91,7 @@ function Body({
   return (
     <AssistantMessageBody
       segments={segments}
+      hasLaterAssistantText={false}
       backgroundToolBlockIds={new Set()}
       runState={null}
       messageId="assistant:turn-fallback"

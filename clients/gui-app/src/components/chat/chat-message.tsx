@@ -201,6 +201,7 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
     >
       <AssistantMessageBody
         segments={message.segments}
+        hasLaterAssistantText={message.hasLaterAssistantText ?? false}
         backgroundToolBlockIds={backgroundToolBlockIds}
         runState={message.runState}
         messageId={message.id}

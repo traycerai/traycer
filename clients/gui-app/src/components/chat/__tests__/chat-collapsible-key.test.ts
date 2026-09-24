@@ -6,6 +6,7 @@ import {
   deriveActivityGroupRenderId,
   derivePromotedSubagentRenderId,
   deriveSubagentCollapsibleKey,
+  deriveTextCollapsibleKey,
   serializeChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 
@@ -36,6 +37,11 @@ describe("chat collapsible keys", () => {
       tileInstanceId,
       kind: "a2a-send",
       id: "tool-1",
+    });
+    expect(deriveTextCollapsibleKey(tileInstanceId, "text-1")).toEqual({
+      tileInstanceId,
+      kind: "text",
+      id: "text:text-1",
     });
     expect(
       deriveA2AReceivedCollapsibleKey(tileInstanceId, "message-1"),

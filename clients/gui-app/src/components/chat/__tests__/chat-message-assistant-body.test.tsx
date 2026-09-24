@@ -11,7 +11,13 @@ import type { Mock } from "vitest";
 import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
+import { deriveTextCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  useChatCollapsibleTileInstanceId,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
   AssistantTurnMeta,
@@ -134,6 +140,7 @@ const META: AssistantTurnMeta = {
 
 interface BodyPropsOverrides {
   readonly segments?: ReadonlyArray<MessageSegment>;
+  readonly hasLaterAssistantText?: boolean;
   readonly runState?: ChatMessageRunState | null;
   readonly elapsedStartedAt?: number;
   readonly turnHasOnlyAutonomousResumeSegments?: boolean;
@@ -146,6 +153,7 @@ interface BodyPropsOverrides {
 function bodyProps(overrides: BodyPropsOverrides) {
   return {
     segments: overrides.segments ?? [],
+    hasLaterAssistantText: overrides.hasLaterAssistantText ?? false,
     backgroundToolBlockIds: new Set<string>(),
     runState: overrides.runState ?? null,
     messageId: "assistant:turn-1",
@@ -167,6 +175,42 @@ function bodyProps(overrides: BodyPropsOverrides) {
     forkAction: null,
     interviewDeliveryRetry: null,
   };
+}
+
+function ForceTextButton(props: { readonly segmentId: string }) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        setFindForcedOpen(
+          deriveTextCollapsibleKey(tileInstanceId, props.segmentId),
+          true,
+        )
+      }
+    >
+      Force text
+    </button>
+  );
+}
+
+function ReleaseTextButton(props: { readonly segmentId: string }) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        setFindForcedOpen(
+          deriveTextCollapsibleKey(tileInstanceId, props.segmentId),
+          false,
+        )
+      }
+    >
+      Release text
+    </button>
+  );
 }
 
 describe("AssistantMessageBody autonomous resume rendering", () => {
@@ -220,6 +264,356 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     const footer = screen.getByTestId("assistant-elapsed-footer");
     expect(footer.textContent).toMatch(/ for 5s$/);
     expect(footer.textContent).not.toContain("Resumed · no response");
+  });
+});
+
+describe("AssistantMessageBody intermediate text", () => {
+  it("keeps an earlier response disclosure while the turn is active", () => {
+    const early: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-early",
+      markdown: "Earlier update",
+    };
+    const final: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-final",
+      markdown: "Final answer",
+    };
+    const view = (segments: ReadonlyArray<MessageSegment>) => (
+      <TooltipProvider delayDuration={0}>
+        <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+          <AssistantMessageBody
+            turnId={null}
+            {...bodyProps({ segments, runState: "running" })}
+          />
+        </ChatExpansionTestProviders>
+      </TooltipProvider>
+    );
+    const { rerender } = rtlRender(view([early]));
+
+    expect(screen.getByText("Earlier update")).toBeTruthy();
+
+    rerender(view([early, final]));
+
+    const trigger = screen.getByRole("button", { name: "Earlier response" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Earlier update")).toBeNull();
+    expect(screen.getByText("Final answer")).toBeTruthy();
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Earlier update")).toBeTruthy();
+  });
+
+  it("hides intermediate text after the turn completes", () => {
+    const early: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-early",
+      markdown: "Earlier update",
+    };
+    const final: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-final",
+      markdown: "Final answer",
+    };
+    const view = (segments: ReadonlyArray<MessageSegment>) => (
+      <TooltipProvider delayDuration={0}>
+        <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+          <AssistantMessageBody
+            turnId={null}
+            {...bodyProps({ segments, runState: null })}
+          />
+        </ChatExpansionTestProviders>
+      </TooltipProvider>
+    );
+    const { rerender } = rtlRender(view([early]));
+
+    expect(screen.getByText("Earlier update")).toBeTruthy();
+
+    rerender(view([early, final]));
+
+    expect(
+      screen.queryByRole("button", { name: "Earlier response" }),
+    ).toBeNull();
+    expect(screen.queryByText("Earlier update")).toBeNull();
+    expect(screen.getByText("Final answer")).toBeTruthy();
+    expect(
+      document
+        .querySelector('[data-block-id="text-early"]')
+        ?.classList.contains("empty:hidden"),
+    ).toBe(true);
+    expect(
+      document.querySelector('[data-block-id="text-final"]')?.textContent,
+    ).toContain("Final answer");
+  });
+
+  it("shows intermediate labels on demand after the turn completes", () => {
+    const early: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-early",
+      markdown: "Earlier update",
+    };
+    const final: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-final",
+      markdown: "Final answer",
+    };
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({ segments: [early, final], runState: null })}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Earlier response" }),
+    ).toBeNull();
+    const activityToggle = screen.getByRole("button", {
+      name: "Show earlier activity",
+    });
+    const finalText = screen.getByText("Final answer");
+    expect(
+      activityToggle.compareDocumentPosition(finalText) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(activityToggle);
+
+    const trigger = screen.getByRole("button", { name: "Earlier response" });
+    expect(
+      activityToggle.compareDocumentPosition(trigger) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+    expect(screen.getByText("Earlier update")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide earlier activity" }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Earlier response" }),
+    ).toBeNull();
+  });
+
+  it("moves focus from text that becomes intermediate to its trigger", () => {
+    const early: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-early",
+      markdown: "[Open detail](https://example.test)",
+    };
+    const final: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-final",
+      markdown: "Final answer",
+    };
+    const view = (segments: ReadonlyArray<MessageSegment>) => (
+      <TooltipProvider delayDuration={0}>
+        <WithTestQueryClient>
+          <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+            <AssistantMessageBody
+              turnId={null}
+              {...bodyProps({ segments, runState: "running" })}
+            />
+          </ChatExpansionTestProviders>
+        </WithTestQueryClient>
+      </TooltipProvider>
+    );
+    const { rerender } = rtlRender(view([early]));
+    const link = screen.getByRole("link", { name: "Open detail" });
+    link.focus();
+
+    rerender(view([early, final]));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Earlier response" }),
+    );
+  });
+
+  it("hands focus to Earlier activity when completion hides focused text", () => {
+    const early: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-early",
+      markdown: "[Open detail](https://example.test)",
+    };
+    const final: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-final",
+      markdown: "Final answer",
+    };
+    const view = (
+      segments: ReadonlyArray<MessageSegment>,
+      runState: ChatMessageRunState | null,
+    ) => (
+      <TooltipProvider delayDuration={0}>
+        <WithTestQueryClient>
+          <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+            <AssistantMessageBody
+              turnId={null}
+              {...bodyProps({ segments, runState })}
+            />
+          </ChatExpansionTestProviders>
+        </WithTestQueryClient>
+      </TooltipProvider>
+    );
+    const { rerender } = rtlRender(view([early], "running"));
+    screen.getByRole("link", { name: "Open detail" }).focus();
+
+    rerender(view([early, final], null));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Show earlier activity" }),
+    );
+  });
+
+  it("hands focus to Earlier activity when a later row hides split text", () => {
+    const early: MessageSegment = {
+      ...TEXT_SEGMENT,
+      id: "text-early",
+      markdown: "[Open detail](https://example.test)",
+    };
+    const view = (hasLaterAssistantText: boolean) => (
+      <TooltipProvider delayDuration={0}>
+        <WithTestQueryClient>
+          <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+            <AssistantMessageBody
+              turnId={null}
+              {...bodyProps({
+                segments: [early],
+                hasLaterAssistantText,
+                runState: null,
+              })}
+            />
+          </ChatExpansionTestProviders>
+        </WithTestQueryClient>
+      </TooltipProvider>
+    );
+    const { rerender } = rtlRender(view(false));
+    screen.getByRole("link", { name: "Open detail" }).focus();
+
+    rerender(view(true));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Show earlier activity" }),
+    );
+  });
+
+  it("collapses a row's only text while a later row is active", () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [
+            {
+              ...TEXT_SEGMENT,
+              id: "text-only",
+              markdown: "Earlier row answer",
+            },
+          ],
+          hasLaterAssistantText: true,
+          runState: "running",
+        })}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Earlier response" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Earlier row answer")).toBeNull();
+  });
+
+  it("hides a row's only text after a later row completes", () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [
+            {
+              ...TEXT_SEGMENT,
+              id: "text-only",
+              markdown: "Earlier row answer",
+            },
+          ],
+          hasLaterAssistantText: true,
+          runState: null,
+        })}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Earlier response" }),
+    ).toBeNull();
+    expect(screen.queryByText("Earlier row answer")).toBeNull();
+  });
+
+  it("opens intermediate text through the find owning chain", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+          <ForceTextButton segmentId="text-early" />
+          <AssistantMessageBody
+            turnId={null}
+            {...bodyProps({
+              segments: [
+                {
+                  ...TEXT_SEGMENT,
+                  id: "text-early",
+                  markdown: "Findable update",
+                },
+                {
+                  ...TEXT_SEGMENT,
+                  id: "text-final",
+                  markdown: "Final answer",
+                },
+              ],
+            })}
+          />
+        </ChatExpansionTestProviders>
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Findable update")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Force text" }));
+    expect(screen.getByText("Findable update")).toBeTruthy();
+  });
+
+  it("does not move focus when find releases a manually opened text body", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <WithTestQueryClient>
+          <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+            <ForceTextButton segmentId="text-early" />
+            <ReleaseTextButton segmentId="text-early" />
+            <AssistantMessageBody
+              turnId={null}
+              {...bodyProps({
+                segments: [
+                  {
+                    ...TEXT_SEGMENT,
+                    id: "text-early",
+                    markdown: "[Open detail](https://example.test)",
+                  },
+                  {
+                    ...TEXT_SEGMENT,
+                    id: "text-final",
+                    markdown: "Final answer",
+                  },
+                ],
+                runState: "running",
+              })}
+            />
+          </ChatExpansionTestProviders>
+        </WithTestQueryClient>
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Earlier response" }));
+    const link = screen.getByRole("link", { name: "Open detail" });
+    link.focus();
+    expect(document.activeElement).toBe(link);
+
+    fireEvent.click(screen.getByRole("button", { name: "Force text" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release text" }));
+
+    expect(document.activeElement).toBe(link);
   });
 });
 
@@ -821,5 +1215,33 @@ describe("AssistantMessageBody shared block ids", () => {
     );
     expect(sameKey).toEqual([]);
     errors.mockRestore();
+  });
+
+  it("reveals hidden activity labels from the final-only toggle", () => {
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [SHARED_TOOL, TEXT_SEGMENT],
+          runState: null,
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Ran 1 command/ })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show earlier activity" }),
+    );
+    const activityTrigger = screen.getByRole("button", {
+      name: /Ran 1 command/,
+    });
+    expect(activityTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(activityTrigger);
+    expect(screen.getByText("echo tool-row-text")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide earlier activity" }),
+    );
+    expect(screen.queryByRole("button", { name: /Ran 1 command/ })).toBeNull();
   });
 });

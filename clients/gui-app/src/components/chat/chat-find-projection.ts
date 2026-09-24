@@ -2,6 +2,7 @@ import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  lastAssistantTextSegmentId,
   reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
@@ -10,6 +11,7 @@ import {
   deriveActivityGroupCollapsibleKey,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
+  deriveTextCollapsibleKey,
   deriveSubagentCollapsibleKey,
   type ChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
@@ -157,10 +159,19 @@ function chatFindUnitsForMessage(
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
+    const finalTextId = lastAssistantTextSegmentId(message.segments);
+    const hasLaterAssistantText = message.hasLaterAssistantText ?? false;
     return buildChatActivityTimeline(message.segments, {
       turnState,
       promotedToolBlockIds,
-    }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
+    }).flatMap((item) =>
+      timelineItemSearchUnits(
+        item,
+        tileInstanceId,
+        finalTextId,
+        hasLaterAssistantText,
+      ),
+    );
   }
 
   if (message.role === "user" && message.agentSenderInfo !== null) {
@@ -182,7 +193,7 @@ function chatFindUnitsForMessage(
   // singleSpecialSegment predicate), so index the segment.
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
-    return segmentSearchUnits(specialSegment, tileInstanceId);
+    return segmentSearchUnits(specialSegment, tileInstanceId, []);
   }
 
   // Every other user/system message renders its whole body as ONE anchor
@@ -209,9 +220,22 @@ function chatFindUnitsForMessage(
 function timelineItemSearchUnits(
   item: ChatActivityTimelineItem,
   tileInstanceId: string,
+  finalTextId: string | null,
+  hasLaterAssistantText: boolean,
 ): ReadonlyArray<ChatFindUnit> {
   if (item.kind === "segment") {
-    return segmentSearchUnits(item.segment, tileInstanceId);
+    const isIntermediateText =
+      item.segment.kind === "text" &&
+      item.segment.browserSession === undefined &&
+      item.segment.markdown.trim().length > 0 &&
+      (hasLaterAssistantText || item.id !== finalTextId);
+    return segmentSearchUnits(
+      item.segment,
+      tileInstanceId,
+      isIntermediateText
+        ? [deriveTextCollapsibleKey(tileInstanceId, item.id)]
+        : [],
+    );
   }
   if (item.kind === "promoted_subagent") {
     const renderId = derivePromotedSubagentRenderId(item.segment.id);
@@ -223,12 +247,17 @@ function timelineItemSearchUnits(
       tileInstanceId,
     });
   }
-  return activityGroupSearchUnits(item.group, tileInstanceId);
+  return activityGroupSearchUnits(
+    item.group,
+    tileInstanceId,
+    hasLaterAssistantText || item.group.followedByText,
+  );
 }
 
 function activityGroupSearchUnits(
   group: ActivityGroupModel,
   tileInstanceId: string,
+  summaryOwnedByGroup: boolean,
 ): ReadonlyArray<ChatFindUnit> {
   const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
   // Hoisted: a group property, not a per-child one, and computing it inside the
@@ -238,7 +267,7 @@ function activityGroupSearchUnits(
     chatFindUnit({
       unitId: chatFindActivityGroupSummaryUnitId(group.id),
       text: group.label,
-      owningChain: [],
+      owningChain: summaryOwnedByGroup ? [groupKey] : [],
     }),
     // A reveal force-opens the group, and every child that renders a header
     // renders it in both the live window and the expanded body, so each of
@@ -328,6 +357,7 @@ function compactUnits(
 function segmentSearchUnits(
   segment: MessageSegment,
   tileInstanceId: string,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   if (segment.kind === "interview") {
     return interviewSearchUnits(segment, tileInstanceId);
@@ -356,7 +386,7 @@ function segmentSearchUnits(
     chatFindUnit({
       unitId: chatFindSegmentUnitId(segment.id),
       text: segmentSearchText(segment).join("\n"),
-      owningChain: [],
+      owningChain,
     }),
   ]);
 }

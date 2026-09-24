@@ -3,6 +3,7 @@ import { addWithFifoEviction } from "@/lib/bounded-set";
 import {
   MAX_ACTIVITY_GROUP_OPEN_IDS,
   type ActivityGroupOpenState,
+  type ActivityGroupTextCollapseState,
 } from "./activity-group-open-store-context";
 import { createChatDurableCache } from "@/stores/chats/chat-durable-cache";
 import {
@@ -10,22 +11,74 @@ import {
   type ChatTabPersistenceIdentity,
 } from "@/stores/chats/chat-tab-persistence-key";
 
+interface ActivityGroupOpenDurableState {
+  readonly openIds: ReadonlySet<string>;
+  readonly textCollapseStates: ReadonlyMap<
+    string,
+    ActivityGroupTextCollapseState
+  >;
+}
+
 export function createActivityGroupOpenStore(
   initialOpenIds: ReadonlySet<string> | null,
+  initialTextCollapseStates: ReadonlyMap<
+    string,
+    ActivityGroupTextCollapseState
+  > | null,
 ): StoreApi<ActivityGroupOpenState> {
   return createStore<ActivityGroupOpenState>((set) => ({
     openIds: initialOpenIds ?? new Set<string>(),
     setOpen: (groupId, open) =>
       set((state) => {
         const wasOpen = state.openIds.has(groupId);
-        if (wasOpen === open) return state;
-        const next = new Set(state.openIds);
-        if (open) {
-          addWithFifoEviction(next, groupId, MAX_ACTIVITY_GROUP_OPEN_IDS);
-        } else {
-          next.delete(groupId);
+        const currentTextState = state.textCollapseStates.get(groupId);
+        let nextTextState = currentTextState;
+        if (open && currentTextState === "text-collapsed") {
+          nextTextState = "user-open-after-text";
+        } else if (!open && currentTextState === "user-open-after-text") {
+          nextTextState = "text-collapsed";
         }
-        return { openIds: next };
+        if (wasOpen === open && nextTextState === currentTextState) {
+          return state;
+        }
+        const nextOpenIds = new Set(state.openIds);
+        if (open) {
+          addWithFifoEviction(
+            nextOpenIds,
+            groupId,
+            MAX_ACTIVITY_GROUP_OPEN_IDS,
+          );
+        } else {
+          nextOpenIds.delete(groupId);
+        }
+        if (nextTextState === currentTextState) {
+          return { openIds: nextOpenIds };
+        }
+        const nextTextCollapseStates = new Map(state.textCollapseStates);
+        if (nextTextState === undefined) {
+          nextTextCollapseStates.delete(groupId);
+        } else {
+          nextTextCollapseStates.set(groupId, nextTextState);
+        }
+        return {
+          openIds: nextOpenIds,
+          textCollapseStates: nextTextCollapseStates,
+        };
+      }),
+    textCollapseStates: new Map<string, ActivityGroupTextCollapseState>(
+      initialTextCollapseStates ?? [],
+    ),
+    collapseForText: (groupId) =>
+      set((state) => {
+        if (state.textCollapseStates.has(groupId)) return state;
+        const nextTextCollapseStates = new Map(state.textCollapseStates);
+        nextTextCollapseStates.set(groupId, "text-collapsed");
+        const nextOpenIds = new Set(state.openIds);
+        nextOpenIds.delete(groupId);
+        return {
+          openIds: nextOpenIds,
+          textCollapseStates: nextTextCollapseStates,
+        };
       }),
     // Deliberately NOT seeded from the durable mirror, and entries are never
     // deleted or evicted once added.
@@ -81,7 +134,7 @@ const activityGroupOpenStoreRegistry = new Map<
 // a2a-open-store-context.ts for why (covers active AND inactive/
 // never-mounted views alike).
 const durableActivityGroupOpenCache =
-  createChatDurableCache<ReadonlySet<string>>(200);
+  createChatDurableCache<ActivityGroupOpenDurableState>(200);
 
 export function getOrCreateActivityGroupOpenStore(
   identity: ChatTabPersistenceIdentity,
@@ -89,8 +142,10 @@ export function getOrCreateActivityGroupOpenStore(
   const tabKey = chatTabPersistenceTabKey(identity);
   const existing = activityGroupOpenStoreRegistry.get(tabKey);
   if (existing !== undefined) return existing;
+  const durable = durableActivityGroupOpenCache.get(identity);
   const store = createActivityGroupOpenStore(
-    durableActivityGroupOpenCache.get(identity) ?? null,
+    durable?.openIds ?? null,
+    durable?.textCollapseStates ?? null,
   );
   activityGroupOpenStoreRegistry.set(tabKey, store);
   return store;
@@ -113,7 +168,11 @@ export function promoteActivityGroupOpenStoreToDurable(
     chatTabPersistenceTabKey(identity),
   );
   if (store === undefined) return;
-  durableActivityGroupOpenCache.set(identity, store.getState().openIds);
+  const state = store.getState();
+  durableActivityGroupOpenCache.set(identity, {
+    openIds: state.openIds,
+    textCollapseStates: state.textCollapseStates,
+  });
 }
 
 /** Drops the durable chat-key entry - called when the CHAT itself is

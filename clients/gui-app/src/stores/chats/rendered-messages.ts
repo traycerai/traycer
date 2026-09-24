@@ -3056,6 +3056,20 @@ function renderAssistantTurnRows(
   const blocks = resolveResumeDeliveryPlacements(input.acc.blocks);
   const plan = planAssistantTurnRows(blocks);
   const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
+  const hasLaterTextFrom: boolean[] = [];
+  let sawText = false;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    hasLaterTextFrom[index] = sawText;
+    const block = blocks[index];
+    if (
+      block.type === "text" &&
+      block.browserSession === undefined &&
+      block.text.trim().length > 0 &&
+      block.providerNotice === null
+    ) {
+      sawText = true;
+    }
+  }
 
   const hiddenSliceIds = new Set<string>();
   const rows = plan.entries.map((entry): ChatMessageModel => {
@@ -3102,6 +3116,9 @@ function renderAssistantTurnRows(
         assistantSliceRowId(input.turnKey, entry.chunkIndex, plan.split),
       );
     }
+    const lastBlockIndex = entry.blockIndices.at(-1);
+    const hasLaterAssistantText =
+      lastBlockIndex !== undefined && hasLaterTextFrom[lastBlockIndex];
     return renderAssistantTurnSlice({
       acc: input.acc,
       turnKey: input.turnKey,
@@ -3116,6 +3133,7 @@ function renderAssistantTurnRows(
       epicId: input.epicId,
       chatId: input.chatId,
       blocks: sliceBlocks,
+      hasLaterAssistantText,
       chunkIndex: entry.chunkIndex,
       split: plan.split,
       rowAnchorAt: input.rowAnchorAt,
@@ -3311,6 +3329,7 @@ interface AssistantTurnSliceRenderInput {
   readonly pause: TurnPauseAccounting;
   readonly ctx: RenderedMessagesDisplayContext;
   readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly hasLaterAssistantText: boolean;
   readonly chunkIndex: number;
   readonly split: boolean;
   readonly rowAnchorAt: number | null;
@@ -3384,6 +3403,7 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    hasLaterAssistantText: input.hasLaterAssistantText,
     // Spread rather than set: `turnId` is absent when the record carries none,
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
@@ -3481,6 +3501,7 @@ function attachRunStateToTrailingAssistantSlice(
       epicId: input.epicId,
       chatId: input.chatId,
       blocks: [],
+      hasLaterAssistantText: false,
       chunkIndex: plan.nextChunkIndex,
       split: true,
       rowAnchorAt: createdAt,
