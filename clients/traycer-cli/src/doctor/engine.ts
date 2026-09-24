@@ -15,10 +15,14 @@ import {
   cliPostFinalizeMarkerPath,
   hostCredentialPath,
   hostDevIdentityPoolRoot,
+  hostHomeDir,
   hostIdentityNeedsReauthPath,
   hostNeedsReauthPath,
   hostUpdateProgressMarkerLockPath,
 } from "../store/paths";
+import { lockHolderLivenessGivenPublisher } from "@traycer-clients/shared/host-lock/cross-process-lock";
+import { verifyProcessIdentityAsync } from "@traycer-clients/shared/host-lock/process-identity";
+import { updateAttemptLockPath } from "@traycer-clients/shared/host-update";
 import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
@@ -61,6 +65,7 @@ import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
 import { probeUpdateMarkerLock } from "./update-marker-lock";
+import { probeUpdateAttemptLock } from "./update-attempt-lock";
 import {
   readHostLifecycleSnapshot,
   type HostLifecycleSnapshot,
@@ -833,6 +838,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   if (markerLockIssue !== null) issues.push(markerLockIssue);
+
+  // ---- 4f. Host update-attempt lock left by an interrupted install ----
+  // A maintenance lease whose supervisor died after handing liveness to the
+  // installer tree leaves a record that, on Windows, the lock's own rule can
+  // never judge stale - so every later scripted install and uninstall is
+  // refused as a live contender, and this file is the only trace. Read-only:
+  // removing it needs a person to confirm no installer is running.
+  const attemptLockIssue = await probeUpdateAttemptLock({
+    lockPath: updateAttemptLockPath(hostHomeDir(opts.environment)),
+    verifyPublisher: verifyProcessIdentityAsync,
+    livenessGivenPublisher: lockHolderLivenessGivenPublisher,
+  });
+  if (attemptLockIssue !== null) issues.push(attemptLockIssue);
 
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a

@@ -829,11 +829,28 @@ export async function rewriteLockLivenessIfToken(
 export function verifyLockHolderLiveness(
   holder: LockMetadata,
 ): ProcessIdentityVerdict {
-  const publisher = verifyProcessIdentity({
-    pid: holder.pid,
-    startedAtMs: holder.processStartedAtMs,
-    startIdentity: holder.processStartIdentity,
-  });
+  return lockHolderLivenessGivenPublisher(
+    holder,
+    verifyProcessIdentity({
+      pid: holder.pid,
+      startedAtMs: holder.processStartedAtMs,
+      startIdentity: holder.processStartIdentity,
+    }),
+  );
+}
+
+/**
+ * {@link verifyLockHolderLiveness} once the publisher's own verdict is known:
+ * the supplemental group and retain-on-death rules alone. Exported for a
+ * READER that already judged the publisher and needs to know whether this
+ * rule will ever let a contender break the record - `traycer host doctor`
+ * names a lock whose publisher is gone but which answers `indeterminate`
+ * here, because no acquisition will ever remove it.
+ */
+export function lockHolderLivenessGivenPublisher(
+  holder: LockMetadata,
+  publisher: ProcessIdentityVerdict,
+): ProcessIdentityVerdict {
   if (publisher === "alive-same" || publisher === "indeterminate") {
     return publisher;
   }

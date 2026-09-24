@@ -217,6 +217,21 @@ export const DOCTOR_ISSUE_CODES = {
   // different remedies: a held lock has a holder to stop; an unreadable one
   // has a file to inspect.
   HOST_UPDATE_MARKER_LOCK_UNREADABLE: "HOST_UPDATE_MARKER_LOCK_UNREADABLE",
+  // The update-attempt lock (`<host home>/update-attempt.lock`) was left by a
+  // publisher that has provably exited, but its record also names the
+  // installer tree that publisher supervised, and the lock's own liveness
+  // rule cannot verify that tree on this platform (Windows gives Node no
+  // process-group or Job-object membership proof). So it answers
+  // `indeterminate` forever and no acquisition breaks it: every
+  // `host maintenance-lease` - every scripted desktop install and uninstall -
+  // is refused as "another host update contender is in progress" until the
+  // file is removed. Fail-closed by design, because a reparented installer may
+  // still be mutating the install; this is the repair that design relies on.
+  //
+  // Warning, not error: the running host is not affected. Not reported for a
+  // publisher that is alive or unverifiable, nor for a record the rule WILL
+  // break once its publisher is gone - that lock heals on the next acquisition.
+  HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE: "HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE",
   // `lifecycle-policy.json` exists but is corrupt or cannot be read. It reads
   // as Background - the upgrade-safe default, so nothing parks - which is
   // exactly why it needs saying: a user who chose Linked or Ask gets
