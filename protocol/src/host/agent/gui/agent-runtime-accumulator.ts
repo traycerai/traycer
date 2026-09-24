@@ -372,20 +372,31 @@ function streamingDetachedBlockIds(
 
 function finalizeBlock(
   blocks: ContentBlock[],
-  blockId: string,
+  event: {
+    readonly blockId: string;
+    readonly timestamp: number;
+    readonly parentBlockId?: string | null;
+  },
   type: "text" | "reasoning",
-  timestamp: number,
 ): ContentBlock[] {
-  const existing = findBlockOfType(blocks, blockId, type);
-  if (!existing || existing.status === "completed") {
+  const existing = findBlockOfType(blocks, event.blockId, type);
+  if (!existing) {
+    return blocks;
+  }
+  const parentBlockId = resolveParentBlockId(event, existing);
+  if (
+    existing.status === "completed" &&
+    existing.parentBlockId === parentBlockId
+  ) {
     return blocks;
   }
   const updated = {
     ...existing,
     status: "completed" as const,
-    timestamp,
+    timestamp: event.timestamp,
+    parentBlockId,
   };
-  return replaceBlock(blocks, blockId, updated);
+  return replaceBlock(blocks, event.blockId, updated);
 }
 
 function nullableString(value: string | undefined): string | null {
@@ -782,6 +793,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           text: existing.text + event.delta,
+          parentBlockId: resolveParentBlockId(event, existing),
           ...(event.browserSession === undefined
             ? {}
             : { browserSession: event.browserSession }),
@@ -796,6 +808,7 @@ export function accumulateEvent(
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
           text: event.delta,
           ...(event.browserSession === undefined
             ? {}
@@ -806,7 +819,7 @@ export function accumulateEvent(
     }
 
     case "text.completed":
-      return finalizeBlock(blocks, event.blockId, "text", event.timestamp);
+      return finalizeBlock(blocks, event, "text");
 
     case "provider_notice.upsert": {
       // Upserts a compatibility-safe `text` block (see
@@ -856,6 +869,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           content: existing.content + event.delta,
+          parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -867,6 +881,7 @@ export function accumulateEvent(
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
           // First delta = start of thinking. The `...existing` spread on later
           // deltas and on finalize preserves this, while `timestamp` advances.
           startedAt: event.timestamp,
@@ -876,7 +891,7 @@ export function accumulateEvent(
     }
 
     case "reasoning.completed":
-      return finalizeBlock(blocks, event.blockId, "reasoning", event.timestamp);
+      return finalizeBlock(blocks, event, "reasoning");
 
     case "tool_call.started": {
       const startedAt = event.startedAt ?? event.timestamp;
@@ -1797,7 +1812,7 @@ export function accumulateEvent(
       if (existing) {
         const updated = {
           ...existing,
-          progressUpdates: [...existing.progressUpdates, event.update],
+          progressUpdates: [...existing.progressUpdates, event.update].slice(-50),
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
         };
@@ -1945,7 +1960,7 @@ export function accumulateEvent(
           ...existing,
           progressUpdates:
             progressLine !== null
-              ? [...existing.progressUpdates, progressLine]
+              ? [...existing.progressUpdates, progressLine].slice(-50)
               : existing.progressUpdates,
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
