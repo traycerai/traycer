@@ -111,6 +111,7 @@ afterEach(() => {
   useIdentityTabsStore.persist.setOptions({ name: identityTabsKey(null) });
   useAuthStore.setState({
     status: "signed-out",
+    signedOutCause: "retired",
     profile: null,
     contextMetadata: null,
   });
@@ -338,6 +339,86 @@ describe("HistoryPruneProvider", () => {
     ]);
     expect(controller.canGoBack()).toBe(true);
     expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps holding through a failed sign-in attempt until recovery restores the account", () => {
+    // A failed interactive attempt lands on `signed-out` with the credentials
+    // still on disk (`signedOutCause: "attempt-failed"`); recovery then
+    // re-admits the same account. Releasing the gate on that `signed-out`
+    // prunes the identity entry against the anonymous bucket before A is
+    // restored - the exact window the latch exists to close.
+    __resetIdentityTabsHydrationForTests();
+    const aliceId = "user:alice@example.com";
+    window.localStorage.setItem(
+      identityTabsKey(aliceId),
+      JSON.stringify({
+        state: {
+          tabsById: {
+            identity_a: {
+              id: "identity_a",
+              identityId: "identity_a",
+              hostId: "host-a",
+              title: "Soul",
+            },
+          },
+          openTabOrder: ["identity_a"],
+        },
+        version: 1,
+      }),
+    );
+    useAuthStore.setState({
+      status: "signing-in",
+      profile: null,
+      contextMetadata: null,
+    });
+    const history = seedPersistentHistory(
+      ["/identities/identity_a", "/epics"],
+      1,
+    );
+    const controller = controllerFor(history);
+    const router = makeRouter(history);
+
+    render(
+      <IdentityTabsPersistLifecycleBridge>
+        <HistoryPruneProvider router={router} />
+      </IdentityTabsPersistLifecycleBridge>,
+    );
+    flushFrames();
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-out",
+        signedOutCause: "attempt-failed",
+        profile: null,
+        contextMetadata: null,
+      });
+    });
+    flushFrames();
+    // Still held: the failed attempt is not the account's answer.
+    expect(controller.getEntries()).toEqual([
+      "/identities/identity_a",
+      "/epics",
+    ]);
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: aliceId,
+          userName: "alice@example.com",
+          email: "alice@example.com",
+        },
+        contextMetadata: { userId: aliceId, username: "alice@example.com" },
+      });
+    });
+    flushFrames();
+    expect(useIdentityTabsStore.getState().openTabOrder).toEqual([
+      "identity_a",
+    ]);
+    expect(controller.getEntries()).toEqual([
+      "/identities/identity_a",
+      "/epics",
+    ]);
   });
 
   it("prunes a deleted active draft's forward entry without a load (delete active draft)", () => {

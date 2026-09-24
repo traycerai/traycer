@@ -587,6 +587,116 @@ describe("<WindowsBridgeProvider />", () => {
     expect(getTabSplitCompatibility().supported).toBe(true);
   });
 
+  it("restores a newer layout without identity tabs while an earlier identity-bearing one is still waiting on auth", async () => {
+    // Revision 5 holds identity A and auth never settles; revision 7 arrives
+    // meanwhile with no identity tab at all. The persistence controller that
+    // admits later snapshots is installed only after the initial restore, so
+    // unless the wait itself re-evaluates against the newest snapshot the
+    // window's hydration - and every route gated on it - stays pending for
+    // as long as auth does.
+    const accountId = "user:alice@example.com";
+    const identityRef = { kind: "identity", id: "identity_a" } as const;
+    window.localStorage.setItem(
+      identityTabsKey(accountId),
+      JSON.stringify({
+        state: {
+          tabsById: {
+            identity_a: {
+              id: "identity_a",
+              identityId: "identity_a",
+              hostId: "host-a",
+              title: "Soul",
+            },
+          },
+          openTabOrder: ["identity_a"],
+        },
+        version: 1,
+      }),
+    );
+    useAuthStore.setState({
+      status: "signing-in",
+      profile: null,
+      contextMetadata: null,
+    });
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const fake = createDesktopWindowsBridge();
+    const systemTabs = {
+      history: {
+        id: "history",
+        kind: "history",
+        name: "History",
+        lastPath: "/epics",
+      },
+      settings: null,
+    } as const;
+    const identitySnapshot = {
+      ...emptyPerWindowSnapshot(),
+      revision: 5,
+      tabStripLayout: {
+        version: 2,
+        items: [{ kind: "tab", id: tabItemId(identityRef), ref: identityRef }],
+        activeItemId: tabItemId(identityRef),
+        systemTabs,
+      },
+      activeRoute: "/identities/identity_a",
+    } satisfies DesktopPerWindowSnapshot;
+    const restoringBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () => Promise.resolve(identitySnapshot),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 6 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(restoringBridge)}
+      >
+        <WindowsBridgeProvider>
+          <IdentityTabsPersistLifecycleBridge>
+            <HydrationProbe />
+          </IdentityTabsPersistLifecycleBridge>
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+    expect(screen.getByTestId("hydration-state").textContent).toBe("pending");
+
+    act(() => {
+      fake.emitPerWindowSnapshot({
+        ...emptyPerWindowSnapshot(),
+        revision: 7,
+        tabStripLayout: {
+          version: 2,
+          items: [],
+          activeItemId: null,
+          systemTabs,
+        },
+        activeRoute: "/epics",
+      });
+    });
+
+    // Released by the newer snapshot, not by auth - which is still held.
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    const strip = useTabsStore.getState();
+    expect(strip.items).toEqual([]);
+    expect(strip.systemTabs.history?.lastPath).toBe("/epics");
+    expect(getTabSplitCompatibility().supported).toBe(true);
+  });
+
   it("fails closed when the capability handshake acknowledges an older revision", async () => {
     const fake = createDesktopWindowsBridge();
     const capabilities = {

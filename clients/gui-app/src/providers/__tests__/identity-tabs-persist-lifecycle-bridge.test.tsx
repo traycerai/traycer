@@ -36,7 +36,22 @@ function resetAuth(
     });
     return;
   }
-  useAuthStore.setState({ status, profile: null, contextMetadata: null });
+  useAuthStore.setState({
+    status,
+    signedOutCause: "retired",
+    profile: null,
+    contextMetadata: null,
+  });
+}
+
+/** The `signed-out` a FAILED interactive attempt lands on: credentials still on disk. */
+function failAttempt(): void {
+  useAuthStore.setState({
+    status: "signed-out",
+    signedOutCause: "attempt-failed",
+    profile: null,
+    contextMetadata: null,
+  });
 }
 
 function resetIdentityTabsStore(): void {
@@ -218,6 +233,50 @@ describe("<IdentityTabsPersistLifecycleBridge />", () => {
   it("marks the store hydrated at once for an initially signed-out session", () => {
     renderBridge();
     expect(isIdentityTabsHydrated()).toBe(true);
+  });
+
+  it("keeps holding through a failed attempt and releases when recovery re-admits the account", async () => {
+    // `applyInteractiveFailure` lands on `signed-out` with the credentials
+    // file untouched; the auth classifier holds that edge and so must this
+    // latch - the anonymous bucket is still not the account's answer.
+    resetAuth("signing-in", null);
+    renderBridge();
+    expect(isIdentityTabsHydrated()).toBe(false);
+
+    act(() => {
+      failAttempt();
+    });
+    expect(isIdentityTabsHydrated()).toBe(false);
+
+    act(() => {
+      resetAuth("signed-in", ALICE_EMAIL);
+    });
+    await waitFor(() => {
+      expect(isIdentityTabsHydrated()).toBe(true);
+    });
+    expect(useIdentityTabsStore.persist.getOptions().name).toBe(
+      identityTabsKey(ALICE_ID),
+    );
+  });
+
+  it("releases after a failed attempt once the identity is actually retired", () => {
+    // `attempt-failed` -> `retired` keeps `status` at `signed-out` and moves
+    // only the cause; the classifier reports nothing for it (there was no
+    // identity to retire), so the latch has to observe the cause itself.
+    resetAuth("signing-in", null);
+    renderBridge();
+    act(() => {
+      failAttempt();
+    });
+    expect(isIdentityTabsHydrated()).toBe(false);
+
+    act(() => {
+      resetAuth("signed-out", null);
+    });
+    expect(isIdentityTabsHydrated()).toBe(true);
+    expect(useIdentityTabsStore.persist.getOptions().name).toBe(
+      identityTabsKey(null),
+    );
   });
 
   it("restores an account's own bucket on sign-in and drops it for the next account", async () => {

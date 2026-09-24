@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import {
   isIdentityTabsHydrated,
@@ -44,6 +44,13 @@ export function IdentityTabsPersistLifecycleBridge(
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  const signedOutCause = useAuthStore((state) => state.signedOutCause);
+  // An interactive attempt has been observed and no settled state has ended
+  // it - the same bookkeeping `useAuthIdentityTransition` keeps, for the same
+  // reason: a `signed-out` reached from an attempt that FAILED is not a
+  // settled answer (the credentials are still on disk and recovery may
+  // re-admit the account), so it must not release the latch either.
+  const attemptInFlight = useRef(false);
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
     try {
@@ -73,10 +80,28 @@ export function IdentityTabsPersistLifecycleBridge(
     // This bridge mounts after HostRuntimeProvider awaits auth.start(). An
     // initially signed-out session emits no identity transition, but the
     // anonymous bucket IS the account's answer then, so hydration completes.
-    // A held sign-in attempt (`signing-in`) is not a settled answer and waits.
+    // A held sign-in attempt is not a settled answer and waits - and "held"
+    // follows the auth classifier's semantics exactly: `signing-in`, and the
+    // `signed-out` a FAILED attempt lands on (`signedOutCause` is
+    // `attempt-failed`), which the classifier deliberately does not report as
+    // a sign-out. Marking there would open the desktop-layout and pruner
+    // gates against the anonymous bucket while the account's records are
+    // still to come. A retirement after such a failure keeps `status` at
+    // `signed-out` and moves only the cause, which is why the cause is a
+    // dependency here and not merely read.
+    if (status === "signing-in") {
+      attemptInFlight.current = true;
+      return;
+    }
+    const isHeldFailure =
+      status === "signed-out" &&
+      attemptInFlight.current &&
+      signedOutCause === "attempt-failed";
+    if (isHeldFailure) return;
+    attemptInFlight.current = false;
     if (status !== "signed-out" || isIdentityTabsHydrated()) return;
     markIdentityTabsHydrated();
-  }, [status]);
+  }, [status, signedOutCause]);
 
   return <>{props.children}</>;
 }

@@ -269,6 +269,17 @@ function installDesktopWindowsBridge(
 
   const snapshotObservation: DesktopSnapshotObservation = { latest: null };
   const isCancelled = (): boolean => lifecycle.cancelled;
+  // Set once verification has answered, before any identity wait can start;
+  // read by the supersession release below.
+  let legacyHistoryRoute: string | null = null;
+  // Non-null exactly while the initial restore is waiting on the account's
+  // identity records. A newer accepted snapshot that no longer holds an
+  // identity tab calls it, because that snapshot needs nothing the wait is
+  // for - and it cannot be applied by `applyDesktopTabsSnapshot` instead:
+  // the persistence controller that admits later snapshots is installed only
+  // after the initial restore, so a wait released by nothing but auth would
+  // hold the whole window's hydration on an account that may never settle.
+  let releaseIdentityWait: (() => void) | null = null;
 
   /**
    * A later snapshot from main is applied at once unless it holds an
@@ -305,6 +316,16 @@ function installDesktopWindowsBridge(
     }
     snapshotObservation.latest = snapshot;
     applyPerWindowSnapshot(snapshot);
+    if (
+      releaseIdentityWait !== null &&
+      !desktopSnapshotReferencesIdentityTabs(
+        snapshot,
+        tabsCompatible,
+        legacyHistoryRoute,
+      )
+    ) {
+      releaseIdentityWait();
+    }
     if (tabsCompatible && shouldApplyDesktopTabsSnapshot(snapshot)) {
       applyDesktopTabsSnapshot(snapshot);
     }
@@ -326,13 +347,17 @@ function installDesktopWindowsBridge(
       if (isCancelled()) return;
       tabsCompatible = verification.supported;
       configureDesktopTabsAuthority(tabsCompatible);
-      const legacyHistoryRoute = readPersistedCurrentRoute(bridge.windowId);
+      legacyHistoryRoute = readPersistedCurrentRoute(bridge.windowId);
       // The identity SOURCE records live in an account-bucketed store that
       // the lifecycle bridge retargets only once auth settles, beneath this
       // provider. A restore that holds an identity tab waits for that; one
       // that does not proceeds as before, so a strip without identity tabs
       // never waits on auth (the browser path always does, for its canvas).
-      if (
+      // Re-evaluated against the LATEST snapshot each time the wait is
+      // released - by hydration, or by a newer snapshot that dropped the
+      // identity tab (`releaseIdentityWait`) - so the restore follows the
+      // newest layout's needs rather than the first one's.
+      while (
         !isIdentityTabsHydrated() &&
         desktopSnapshotReferencesIdentityTabs(
           snapshotObservation.latest ?? snapshot,
@@ -340,7 +365,14 @@ function installDesktopWindowsBridge(
           legacyHistoryRoute,
         )
       ) {
-        await identityTabsHydration();
+        await new Promise<void>((resolve) => {
+          const release = (): void => {
+            if (releaseIdentityWait === release) releaseIdentityWait = null;
+            resolve();
+          };
+          releaseIdentityWait = release;
+          void identityTabsHydration().then(release);
+        });
         if (isCancelled()) return;
       }
       const hydrationSnapshot = snapshotObservation.latest ?? snapshot;
@@ -383,6 +415,9 @@ function installDesktopWindowsBridge(
 
   return () => {
     lifecycle.cancelled = true;
+    // Let a restore still waiting on the account observe the cancellation
+    // instead of holding its continuation for a sign-in that may never come.
+    releaseIdentityWait?.();
     uninstallCrossWindowVisibility();
     uninstallDesktopWindowVisibility();
     perWindowSubscription.dispose();
