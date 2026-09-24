@@ -78,23 +78,13 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  storage: {
-    kind: "row",
-    group: "versionHistory",
-    search: { contributesTo: "page" },
-    label: "Storage",
-    description:
-      "Referenced history is retained; reclaimable bytes can be cleared now.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
   clearVersionHistory: {
     kind: "row",
     group: "versionHistory",
     search: { contributesTo: "page" },
     label: "Clear version history",
     description:
-      "Remove all version-history records from this host; only unreferenced content bytes are reclaimed.",
+      "Remove every saved artifact version from this host. Undo for agent turns is unaffected.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },
