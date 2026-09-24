@@ -32,6 +32,7 @@ import type {
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
+import { messageIdForBlock } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -6827,5 +6828,365 @@ describe("assistant turn render cache invalidation", () => {
 
     const after = driver.result.current.find((row) => row.role === "assistant");
     expect(textOf(after)).toContain("corrected answer");
+  });
+});
+
+describe("useRenderedMessages: a subagent's own conversation nests under its card", () => {
+  type AssistantBlock = Extract<
+    Message,
+    { role: "assistant" }
+  >["blocks"][number];
+
+  function subagentBlock(
+    blockId: string,
+    spawnToolCallId: string | null,
+  ): AssistantBlock {
+    return {
+      type: "subagent",
+      agentType: null,
+      blockId,
+      name: "worker",
+      task: "Do the thing.",
+      progressUpdates: [],
+      result: null,
+      status: "completed",
+      timestamp: 2001,
+      startedAt: 2001,
+      spawnToolCallId,
+      stopped: false,
+      workflowMeta: null,
+    };
+  }
+
+  function childText(
+    blockId: string,
+    parentBlockId: string,
+    text: string,
+  ): AssistantBlock {
+    return { ...plainTextBlock(blockId, 2002, text), parentBlockId };
+  }
+
+  function childReasoning(
+    blockId: string,
+    parentBlockId: string,
+  ): AssistantBlock {
+    return {
+      type: "reasoning",
+      blockId,
+      status: "completed",
+      timestamp: 2003,
+      content: "thinking it over",
+      startedAt: null,
+      parentBlockId,
+    };
+  }
+
+  function childError(blockId: string, parentBlockId: string): AssistantBlock {
+    return {
+      type: "error",
+      blockId,
+      status: "completed",
+      timestamp: 2004,
+      parentBlockId,
+      message: "aborted",
+      recoverable: false,
+      code: null,
+      failure: null,
+    };
+  }
+
+  function toolBlock(
+    blockId: string,
+    toolName: string,
+    parentBlockId: string | null,
+    error: string | null,
+  ): AssistantBlock {
+    return {
+      type: "tool_call",
+      blockId,
+      toolName,
+      ...toolCallInputFields(toolName, { description: "run it" }),
+      error,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      stopped: false,
+      status: "completed",
+      timestamp: 2005,
+      startedAt: 2005,
+      endedAt: 2006,
+      imageResults: [],
+      ...(parentBlockId === null ? {} : { parentBlockId }),
+    };
+  }
+
+  function edit(
+    blockId: string,
+    parentBlockId: string,
+    beforeHash: string,
+    afterHash: string,
+  ): AssistantBlock {
+    return {
+      type: "file_change",
+      blockId,
+      filePath: "/repo/src/a.ts",
+      operation: "edit",
+      diffSource: "snapshot",
+      beforeHash: beforeHash.repeat(64),
+      afterHash: afterHash.repeat(64),
+      additions: 1,
+      deletions: 1,
+      reason: "snapshot",
+      status: "completed",
+      timestamp: 2007,
+      parentBlockId,
+    };
+  }
+
+  function segmentsFor(blocks: ReadonlyArray<AssistantBlock>) {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [...blocks],
+    };
+    return renderRenderedMessages({ messages: [assistant] }).result.current;
+  }
+
+  function onlyCard(segments: ReadonlyArray<MessageSegment>): SubagentSegment {
+    const card = segments.find((segment) => segment.kind === "subagent");
+    if (card === undefined) {
+      throw new Error("expected a subagent card");
+    }
+    return card;
+  }
+
+  it("nests a Claude live record's text, reasoning and tool children in block order", () => {
+    const rows = segmentsFor([
+      subagentBlock("task-1", null),
+      childText("t1", "task-1", "first words"),
+      childReasoning("r1", "task-1"),
+      toolBlock("tool-1", "Read", "task-1", null),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    const card = onlyCard(segments);
+    expect(card.children.map((child) => child.id)).toEqual([
+      "t1",
+      "r1",
+      "tool-1",
+    ]);
+    expect(card.children.map((child) => child.kind)).toEqual([
+      "text",
+      "reasoning",
+      "tool",
+    ]);
+    expect(segments.map((segment) => segment.kind)).toEqual(["subagent"]);
+  });
+
+  it("nests a Codex import's parented text and reasoning under the thread-id card", () => {
+    const rows = segmentsFor([
+      subagentBlock("thread-abc", null),
+      childReasoning("r1", "thread-abc"),
+      childText("t1", "thread-abc", "codex answer"),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(onlyCard(segments).children.map((child) => child.kind)).toEqual([
+      "reasoning",
+      "text",
+    ]);
+    expect(
+      segments.some((s) => s.kind === "text" || s.kind === "reasoning"),
+    ).toBe(false);
+  });
+
+  it("nests an OpenCode import's parented text and error under the card", () => {
+    const rows = segmentsFor([
+      subagentBlock("child-session", null),
+      childText("t1", "child-session", "partial work"),
+      childError("e1", "child-session"),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(onlyCard(segments).children.map((child) => child.kind)).toEqual([
+      "text",
+      "error",
+    ]);
+    expect(segments.some((s) => s.kind === "text" || s.kind === "error")).toBe(
+      false,
+    );
+  });
+
+  it("re-casts a Skill tool that owns children as a subagent card with the tool's id", () => {
+    const rows = segmentsFor([
+      toolBlock("toolu_skill", "Skill", null, null),
+      childText("t1", "toolu_skill", "skill prose"),
+      toolBlock("tool-1", "Read", "toolu_skill", null),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(segments.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const card = onlyCard(segments);
+    expect(card.id).toBe("toolu_skill");
+    expect(card.name).toBe("Skill");
+    expect(card.children.map((child) => child.id)).toEqual(["t1", "tool-1"]);
+  });
+
+  it("appends a failed Skill tool's error as the card's trailing error child", () => {
+    const rows = segmentsFor([
+      toolBlock("toolu_skill", "Skill", null, "boom"),
+      childText("t1", "toolu_skill", "skill prose"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    const last = card.children.at(-1);
+    expect(last?.kind).toBe("error");
+    expect(last?.id).toBe("toolu_skill:error");
+    if (last?.kind === "error") expect(last.message).toBe("boom");
+  });
+
+  it("serves the nested shape when only a text block's parentBlockId changes", () => {
+    const build = (textParent: string | null): Message => ({
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        subagentBlock("task-1", null),
+        textParent === null
+          ? plainTextBlock("t1", 2002, "same words")
+          : childText("t1", textParent, "same words"),
+      ],
+    });
+    const driver = renderRenderedMessages({ messages: [build(null)] });
+    expect(
+      (driver.result.current[0]?.segments ?? []).map((s) => s.kind),
+    ).toEqual(["subagent", "text"]);
+
+    driver.patch({ messages: [build("task-1")] });
+    const segments = driver.result.current[0]?.segments ?? [];
+    expect(segments.map((s) => s.kind)).toEqual(["subagent"]);
+    expect(onlyCard(segments).children.map((child) => child.id)).toEqual([
+      "t1",
+    ]);
+  });
+
+  it("still drops the Agent spawn row when the card has text children", () => {
+    const rows = segmentsFor([
+      toolBlock("toolu_1", "Agent", null, null),
+      subagentBlock("agent-1", "toolu_1"),
+      childText("t1", "agent-1", "prose"),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(segments.some((s) => s.kind === "tool" && s.id === "toolu_1")).toBe(
+      false,
+    );
+    expect(onlyCard(segments).children.map((c) => c.id)).toEqual(["t1"]);
+  });
+
+  it("still includes a subagent child's file change in the completed turn's Changes group", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+    ]);
+    const group = (rows[0]?.segments ?? []).find(
+      (segment) => segment.kind === "file_change_group",
+    );
+    if (group === undefined) {
+      throw new Error("expected a file change group");
+    }
+    expect(group.files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+    ]);
+  });
+
+  it("still merges two same-path file changes inside a card into one row", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    const files = card.children.filter((child) => child.kind === "file_change");
+    expect(files).toHaveLength(1);
+    expect(files[0]?.filePath).toBe("/repo/src/a.ts");
+  });
+
+  it("resolves a parented text child's block id to its row for jump-to-block", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      childText("t1", "agent-1", "prose"),
+    ]);
+    expect(messageIdForBlock(rows, "t1")).toBe(rows[0]?.id);
+    expect(messageIdForBlock(rows, "t1")).not.toBeNull();
+  });
+
+  function steerBlock(blockId: string, timestamp: number): AssistantBlock {
+    return {
+      blockId,
+      status: "completed",
+      timestamp,
+      parentBlockId: null,
+      type: "steer",
+      queueItemId: `queue:${blockId}`,
+      messageId: `steered:${blockId}`,
+      content: CONTENT,
+      mode: "safe_point",
+      sender: null,
+    };
+  }
+
+  it("homes a parented child into the first slice's card and hides the slice it emptied, renumbering nothing", () => {
+    const build = (childParent: string | null): Message => ({
+      ...assistantMessage("turn-steer", 2000),
+      blocks: [
+        subagentBlock("task-1", null),
+        steerBlock("S1", 2010),
+        childParent === null
+          ? plainTextBlock("child", 2011, "child prose")
+          : childText("child", childParent, "child prose"),
+        steerBlock("S2", 2020),
+        plainTextBlock("final", 2021, "final answer"),
+      ],
+    });
+    const withParent = renderRenderedMessages({ messages: [build("task-1")] })
+      .result.current;
+    const without = renderRenderedMessages({ messages: [build(null)] }).result
+      .current;
+
+    // (a) the same rows under the same ids, less the one slice homing emptied:
+    // the plan is not renumbered, the emptied slice hides like a slice of
+    // hidden retries.
+    const withoutAssistants = without.filter((row) => row.role === "assistant");
+    expect(withoutAssistants).toHaveLength(3);
+    const emptiedId = withoutAssistants[1]?.id;
+    expect(withParent.map((row) => row.id)).toEqual(
+      without.map((row) => row.id).filter((id) => id !== emptiedId),
+    );
+    expect(withParent.map((row) => row.role)).toEqual(
+      without.filter((row) => row.id !== emptiedId).map((row) => row.role),
+    );
+
+    const assistants = withParent.filter((row) => row.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    // (b) the child prose is inside the FIRST assistant row's card only.
+    const card = onlyCard(assistants[0]?.segments ?? []);
+    expect(card.children.map((child) => child.id)).toEqual(["child"]);
+    for (const row of withParent) {
+      expect(
+        row.segments.some(
+          (segment) => segment.kind === "text" && segment.id === "child",
+        ),
+      ).toBe(false);
+    }
+    // (c) no bare row between the two steers: they are adjacent.
+    const steerIndices = withParent.flatMap((row, index) =>
+      row.role === "assistant" ? [] : [index],
+    );
+    expect(steerIndices).toHaveLength(2);
+    expect(steerIndices[1]).toBe((steerIndices[0] ?? -2) + 1);
+    // (d) the unparented final answer stays top-level in the last row.
+    const last = assistants.at(-1);
+    expect(last?.id).toBe(withoutAssistants[2]?.id);
+    expect(
+      (last?.segments ?? []).some(
+        (segment) =>
+          segment.kind === "text" && segment.markdown === "final answer",
+      ),
+    ).toBe(true);
   });
 });

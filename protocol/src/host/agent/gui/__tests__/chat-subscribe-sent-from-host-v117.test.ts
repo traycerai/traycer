@@ -8,6 +8,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -40,20 +41,35 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 the head, 1.16 still installed", () => {
-  it("advances latestMinor to 17 and binds the new and previous lines", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18 head, 1.16 still installed", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.18", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(17);
+    expect(line.latestMinor).toBe(18);
+    expect(line.versions[18].contract).toBe(chatSubscribeV118);
     expect(line.versions[17].contract).toBe(chatSubscribeV117);
     expect(line.versions[16].contract).toBe(chatSubscribeV116);
   });
 
-  it("1.17 binds the live windowed schemas on both sides", () => {
-    expect(chatSubscribeV117.serverFrameSchema).toBe(
-      chatSubscribeWindowedServerFrameSchema,
-    );
+  it("1.17 keeps the live client frames and a frozen server frame since 1.18 opened above it", () => {
+    // `1.18` adds nothing a client sends, so both lines bind the live client
+    // schema; its server frames are host-authored, so `1.17`'s froze.
     expect(chatSubscribeV117.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV118.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV117.serverFrameSchema).not.toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV118.serverFrameSchema).toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+  });
+
+  it("1.18 still carries the sender host on its server frames", () => {
+    expect(schemaText(chatSubscribeV118.serverFrameSchema)).toContain(
+      SENT_FROM_HOST_NEEDLE,
     );
   });
 

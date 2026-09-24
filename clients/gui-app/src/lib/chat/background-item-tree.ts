@@ -194,7 +194,13 @@ export function buildBackgroundTree(
 }
 
 export function treeHasRunningTask(node: BackgroundTreeNode): boolean {
-  if (node.item !== null && node.item.kind !== "wakeup") return true;
+  if (
+    node.item !== null &&
+    node.item.kind !== "wakeup" &&
+    node.item.kind !== "cron"
+  ) {
+    return true;
+  }
   return node.children.some((child) => treeHasRunningTask(child));
 }
 
@@ -252,6 +258,7 @@ export function backgroundHeaderSummary(input: {
   readonly runningCount: number;
   readonly heldCount: number;
   readonly waitingWakeCount: number;
+  readonly scheduledJobCount?: number;
   /**
    * The agent's port forwards, in whatever state. Their own part, not folded
    * into `running`: "Stop all" does not reach a forward, and a header that
@@ -268,6 +275,9 @@ export function backgroundHeaderSummary(input: {
   }
   if (input.waitingWakeCount > 0) {
     parts.push(`${input.waitingWakeCount} waiting`);
+  }
+  if ((input.scheduledJobCount ?? 0) > 0) {
+    parts.push(`${input.scheduledJobCount} scheduled`);
   }
   if (input.portForwardCount > 0) {
     parts.push(

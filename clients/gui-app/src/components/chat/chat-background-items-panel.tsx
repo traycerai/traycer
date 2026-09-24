@@ -86,9 +86,50 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
     // DOING, the same as every label above it.
     case "fallback-wait":
       return "Waiting";
+    case "cron":
+      return "Scheduled job";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
+}
+
+function cronStopControlState(input: {
+  readonly items: ReadonlyArray<BackgroundItem>;
+  readonly managedCommandCount: number;
+  readonly stoppable: boolean;
+  readonly stopAllPending: boolean;
+  readonly hasSessionStopEscalation: boolean;
+}): {
+  scheduledJobCount: number;
+  harnessStopAllReady: boolean;
+  showStopAll: boolean;
+  stopAllLabel: string;
+} {
+  const {
+    items,
+    managedCommandCount,
+    stoppable,
+    stopAllPending,
+    hasSessionStopEscalation,
+  } = input;
+  const scheduledJobCount = items.filter((item) => item.kind === "cron").length;
+  const hasHarnessStopTarget = items.some((item) => item.kind !== "cron");
+  const onlyCronItems = scheduledJobCount > 0 && !hasHarnessStopTarget;
+  return {
+    scheduledJobCount,
+    harnessStopAllReady: !onlyCronItems && stoppable && !stopAllPending,
+    showStopAll: !onlyCronItems || managedCommandCount > 0,
+    // "Stop other items" promises the scheduled job survives the click. That
+    // is only true while the click stays a plain Stop all - once a gated
+    // command forces the session-stop escalation, confirming ends every
+    // harness item sharing the provider session, the cron job included, so
+    // the button has to carry the same "Stop all" label the plain, non-cron
+    // escalation path already uses.
+    stopAllLabel:
+      scheduledJobCount > 0 && !hasSessionStopEscalation
+        ? "Stop other items"
+        : "Stop all",
+  };
 }
 
 function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
@@ -507,7 +548,7 @@ function BackgroundTreeRow(props: {
           paddingLeft: `${props.depth * INDENT_PX + BASE_PAD_LEFT}px`,
         }}
       >
-        {item === null ? (
+        {item === null && (
           <TooltipWrapper
             label={displayTitle}
             side="top"
@@ -524,7 +565,35 @@ function BackgroundTreeRow(props: {
               </span>
             </div>
           </TooltipWrapper>
-        ) : (
+        )}
+        {item?.kind === "cron" && (
+          <div
+            data-testid={`cron-background-row-${item.taskId}`}
+            className="min-w-0 flex-1 py-1"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <BackgroundKindIcon kind="cron" />
+              <span className="min-w-0 flex-1 text-ui-xs font-medium text-foreground/85">
+                {item.humanSchedule}
+              </span>
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+                {backgroundKindLabel(item.kind)}
+              </span>
+            </div>
+            <p className="mt-1 break-words text-ui-xs text-muted-foreground">
+              Schedule · <code>{item.schedule}</code>
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-ui-xs text-foreground/85">
+              {item.prompt}
+            </p>
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              scheduled jobs run while the session is otherwise alive, and stop
+              ten minutes after the last real activity — a job already running
+              at that moment finishes first
+            </p>
+          </div>
+        )}
+        {item !== null && item.kind !== "cron" && (
           <>
             <TooltipWrapper
               label={titleNode}
@@ -672,6 +741,20 @@ export function BackgroundItemsPanel(props: {
     (item) => item.kind === "wakeup",
   ).length;
   const hostId = useTabHostId();
+  // The version gate, read off the items themselves: any command the host
+  // flagged as not individually stoppable turns "Stop all" into the
+  // session-scoped escalation, which asks first - the click would otherwise
+  // do more than the label says (kill the provider session, and a live turn
+  // with it). Computed ahead of `cronStopControlState` because the button's
+  // label depends on it too - see the comment there.
+  const sessionStopEscalation = useMemo(() => {
+    for (const item of items) {
+      if (item.kind === "command" && item.individualStopUnavailable !== null) {
+        return item.individualStopUnavailable;
+      }
+    }
+    return null;
+  }, [items]);
   // Read from the same store the rows below read, so the header can never
   // claim a count the list does not show. Scoped to the TAB's bound host,
   // which is the host this panel's chat session was opened under.
@@ -680,6 +763,14 @@ export function BackgroundItemsPanel(props: {
     chatId: props.chatId,
     hostId,
   });
+  const { scheduledJobCount, harnessStopAllReady, showStopAll, stopAllLabel } =
+    cronStopControlState({
+      items,
+      managedCommandCount: managedCommands.length,
+      stoppable,
+      stopAllPending: props.stopAllPending,
+      hasSessionStopEscalation: sessionStopEscalation !== null,
+    });
   const heldManagedCommands = useHeldManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
@@ -718,6 +809,7 @@ export function BackgroundItemsPanel(props: {
     runningCount: runningGroupCount + runningOnlyManagedCommands.length,
     heldCount: heldManagedCommands.length,
     waitingWakeCount,
+    scheduledJobCount,
     portForwardCount: portForwards.length,
   });
   const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
@@ -744,22 +836,8 @@ export function BackgroundItemsPanel(props: {
   // leaving it out here would be a "Stop all" that knowingly left a process
   // alive. That is why the header's running total is a floor on this button's
   // reach rather than an equality - see `backgroundHeaderSummary`.
-  const harnessStopAllReady = stoppable && !props.stopAllPending;
   const managedStopAllReady =
     managedStoppable && managedCommands.length > 0 && !stopAllManagedPending;
-  // The version gate, read off the items themselves: any command the host
-  // flagged as not individually stoppable turns "Stop all" into the
-  // session-scoped escalation, which asks first - the click would otherwise
-  // do more than the label says (kill the provider session, and a live turn
-  // with it).
-  const sessionStopEscalation = useMemo(() => {
-    for (const item of items) {
-      if (item.kind === "command" && item.individualStopUnavailable !== null) {
-        return item.individualStopUnavailable;
-      }
-    }
-    return null;
-  }, [items]);
   const [confirmingSessionStop, setConfirmingSessionStop] = useState(false);
   // One button, one rule: live while there is something it can do, dead while
   // anything it started is still in flight. Re-enabling as soon as one half
@@ -799,9 +877,9 @@ export function BackgroundItemsPanel(props: {
   };
   // Count every affected row, not just root tree groups - a parent command
   // with running children would otherwise understate the dialog's blast
-  // radius. Wakeup rows are excluded: host-owned wakes survive a session
-  // stop (the handler never touches them), so counting them would be a
-  // false promise.
+  // radius. Scheduled jobs share the provider session and end with it.
+  // Wakeup rows are excluded: host-owned wakes survive a session stop (the
+  // handler never touches them), so counting them would be a false promise.
   const panelItemCount =
     items.filter((item) => item.kind !== "wakeup").length +
     managedCommands.length;
@@ -888,13 +966,15 @@ export function BackgroundItemsPanel(props: {
               </span>
             </TooltipWrapper>
           ) : null}
-          <BackgroundStopButton
-            label="Stop all"
-            iconOnly={false}
-            disabled={stopAllDisabled}
-            testId="background-stop-all"
-            onClick={stopAll}
-          />
+          {showStopAll ? (
+            <BackgroundStopButton
+              label={stopAllLabel}
+              iconOnly={false}
+              disabled={stopAllDisabled}
+              testId="background-stop-all"
+              onClick={stopAll}
+            />
+          ) : null}
         </div>
       </div>
       <CollapsibleContent>
@@ -954,6 +1034,7 @@ export function BackgroundItemsPanel(props: {
         open={confirmingSessionStop}
         onOpenChange={setConfirmingSessionStop}
         itemCount={panelItemCount}
+        scheduledJobCount={scheduledJobCount}
         turnActive={props.turnActive}
         isPending={props.sessionStopPending}
         onConfirm={confirmSessionStop}
@@ -967,6 +1048,7 @@ function SessionStopConfirmDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly itemCount: number;
+  readonly scheduledJobCount: number;
   readonly turnActive: boolean;
   readonly isPending: boolean;
   readonly onConfirm: () => void;
@@ -981,6 +1063,7 @@ function SessionStopConfirmDialog(props: {
       description={sessionStopDialogDescription({
         providerLabel: props.escalation.providerLabel,
         itemCount: props.itemCount,
+        scheduledJobCount: props.scheduledJobCount,
         turnActive: props.turnActive,
       })}
       cascadeSummary={null}
@@ -999,6 +1082,7 @@ function SessionStopConfirmDialog(props: {
 function sessionStopDialogDescription(input: {
   readonly providerLabel: string;
   readonly itemCount: number;
+  readonly scheduledJobCount: number;
   readonly turnActive: boolean;
 }): string {
   const blastRadius =
@@ -1008,6 +1092,11 @@ function sessionStopDialogDescription(input: {
   return [
     `This ${input.providerLabel} version can't stop background commands individually.`,
     blastRadius,
+    ...(input.scheduledJobCount > 0
+      ? [
+          `This includes ${input.scheduledJobCount} scheduled ${input.scheduledJobCount === 1 ? "job" : "jobs"}.`,
+        ]
+      : []),
     ...(input.turnActive ? ["The active turn will also be stopped."] : []),
   ].join(" ");
 }

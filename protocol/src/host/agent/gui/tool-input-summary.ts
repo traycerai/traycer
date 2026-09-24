@@ -158,6 +158,25 @@ function summarizeCommentThreadStatus(
   return trim(`${threads} -> ${status}`);
 }
 
+function summarizeArtifact(record: Record<string, unknown>): string | null {
+  const title = asString(record["title"]);
+  if (title !== null) return trim(title);
+
+  const filePaths = record["file_paths"];
+  const firstFilePath =
+    asString(record["file_path"]) ??
+    (Array.isArray(filePaths) ? asString(filePaths[0]) : null);
+  if (firstFilePath !== null) {
+    const fileName = firstFilePath.split(/[\\/]/).filter(Boolean).at(-1);
+    if (fileName !== undefined) return trim(fileName);
+  }
+
+  const action = asString(record["action"]);
+  if (action === "list") return "Lists artifacts";
+  if (action === "list_types") return "Lists artifact types";
+  return null;
+}
+
 const TOOL_REGISTRY: Record<string, SummaryFn> = {
   read_file: (input) => {
     const r = asRecord(input);
@@ -211,6 +230,103 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     const r = asRecord(input);
     return r === null ? null : summarizeCommentThreadStatus(r);
   },
+  CronCreate: (input) => {
+    const r = asRecord(input);
+    if (r === null) return null;
+    const cron = asString(r["cron"]);
+    const prompt = asString(r["prompt"]);
+    if (cron !== null && prompt !== null) return trim(`${cron} · ${prompt}`);
+    if (cron !== null) return trim(cron);
+    return prompt === null ? null : trim(prompt);
+  },
+  CronList: () => "Lists scheduled tasks",
+  CronDelete: (input) => {
+    const r = asRecord(input);
+    const id = r === null ? null : asString(r["id"]);
+    return id === null
+      ? "Deletes a scheduled task"
+      : trim(`Deletes scheduled task ${id}`);
+  },
+  EnterWorktree: (input) => {
+    const r = asRecord(input);
+    if (r === null) return "Enters a worktree";
+    const path = asString(r["path"]);
+    if (path !== null) return trim(path);
+    const name = asString(r["name"]);
+    return name === null ? "Enters a worktree" : trim(name);
+  },
+  ExitWorktree: (input) => {
+    const r = asRecord(input);
+    const action = r === null ? null : asString(r["action"]);
+    if (action === "keep") return "Keeps the worktree";
+    if (action === "remove") return "Removes the worktree";
+    return null;
+  },
+  EnterPlanMode: () => "Enters plan mode",
+  TaskGet: (input) => {
+    const r = asRecord(input);
+    const taskId = r === null ? null : asString(r["taskId"]);
+    return taskId === null ? "Reads a task" : trim(`Reads task ${taskId}`);
+  },
+  ReportFindings: (input) => {
+    const r = asRecord(input);
+    const findings = r === null ? null : r["findings"];
+    if (!Array.isArray(findings)) return null;
+    const count = findings.length;
+    return `${count} ${count === 1 ? "finding" : "findings"}`;
+  },
+  Artifact: (input) => {
+    const r = asRecord(input);
+    return r === null ? null : summarizeArtifact(r);
+  },
+  PushNotification: (input) => {
+    const r = asRecord(input);
+    const message = r === null ? null : asString(r["message"]);
+    return message === null ? null : trim(message);
+  },
+  RemoteTrigger: (input) => {
+    const r = asRecord(input);
+    if (r === null) return null;
+    const action = asString(r["action"]);
+    if (action === null) return null;
+    const triggerId = asString(r["trigger_id"]);
+    return trim(
+      triggerId === null
+        ? `${action} trigger`
+        : `${action} trigger ${triggerId}`,
+    );
+  },
+  SendFeedback: (input) => {
+    const r = asRecord(input);
+    const title = r === null ? null : asString(r["title"]);
+    return title === null ? null : trim(title);
+  },
+  ProposeGoal: (input) => {
+    const r = asRecord(input);
+    const condition = r === null ? null : asString(r["condition"]);
+    return condition === null ? null : trim(condition);
+  },
+  ReadNotifications: () => "Reads notifications",
+  SubagentHandback: (input) => {
+    const r = asRecord(input);
+    const message = r === null ? null : asString(r["message"]);
+    return message === null
+      ? "Hands a report back to the caller"
+      : trim(`Hands a report back to the caller: ${message}`);
+  },
+};
+
+// Claude uses these exact built-in names for tools whose existing registry
+// entries use different spellings. Never match a suffix of an MCP name.
+const TOOL_ALIASES: Record<string, string> = {
+  Read: "read_file",
+  Write: "write_file",
+  Edit: "edit_file",
+  Glob: "glob",
+  Grep: "grep",
+  Bash: "bash",
+  WebFetch: "web_fetch",
+  WebSearch: "web_search",
 };
 
 // Most to least telling, first hit wins. See `deriveToolInputSummary`.
@@ -310,10 +426,9 @@ function genericSummary(input: unknown): string | null {
  * its own summarizer; anything else, or a registry miss, takes the generic
  * pass below. Returns null when no usable string can be derived.
  *
- * The registry matches exact lowercase names, so live approvals from Claude
- * (`Bash`, `Edit`, `Task`), ACP and Codex (`command`) all take the generic
- * pass, and its ranking is what the judge's transcript shows for them. A string
- * input is summarized as itself. A record takes the first ranked key with a
+ * Exact registry names win, followed by explicit Claude aliases. Other names
+ * (including MCP-prefixed names) take the generic pass. A string input is
+ * summarized as itself. A record takes the first ranked key with a
  * non-blank string, in this order:
  *
  * 1. The target file or directory: `path`, `filePath`, `file_path`,
@@ -339,8 +454,13 @@ export function deriveToolInputSummary(
   toolName: string,
   input: unknown,
 ): string | null {
-  if (Object.hasOwn(TOOL_REGISTRY, toolName)) {
-    const summary = TOOL_REGISTRY[toolName](input);
+  const registryName = Object.hasOwn(TOOL_REGISTRY, toolName)
+    ? toolName
+    : Object.hasOwn(TOOL_ALIASES, toolName)
+      ? TOOL_ALIASES[toolName]
+      : null;
+  if (registryName !== null) {
+    const summary = TOOL_REGISTRY[registryName](input);
     if (summary !== null) return summary;
   }
   return genericSummary(input);

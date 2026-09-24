@@ -299,9 +299,17 @@ const NO_DETAILS: readonly string[] = [];
 function summarizeBlock(block: SnapshotContentBlock): BlockSummary {
   switch (block.type) {
     case "text":
-      return { label: "Response", body: block.text, details: NO_DETAILS };
+      return {
+        label: subagentLabel(block.parentBlockId, "Response"),
+        body: block.text,
+        details: NO_DETAILS,
+      };
     case "reasoning":
-      return { label: "Thinking", body: block.content, details: NO_DETAILS };
+      return {
+        label: subagentLabel(block.parentBlockId, "Thinking"),
+        body: block.content,
+        details: NO_DETAILS,
+      };
     case "tool_call":
       return {
         label: `Tool · ${block.toolName}`,
@@ -383,6 +391,22 @@ function summarizeBlock(block: SnapshotContentBlock): BlockSummary {
         details: compact([block.operation, block.kind, block.title]),
       };
   }
+}
+
+/**
+ * This view flattens by design, so a subagent's prose and thinking arrive as
+ * ordinary rows. A parented row says whose words they are, or it reads as the
+ * parent agent's own reply.
+ */
+function subagentLabel(
+  parentBlockId: string | null | undefined,
+  label: string,
+): string {
+  return parentBlockId === null ||
+    parentBlockId === undefined ||
+    parentBlockId.length === 0
+    ? label
+    : `Subagent · ${label}`;
 }
 
 /** `null` while an approval is still pending - not yet decided is not "denied". */

@@ -579,6 +579,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onSettingsChange: null,
     workspaceControls: null,
     workspaceAvailability: WORKSPACE_COMPOSER_READY,
+    suggestedPrompt: undefined,
   };
 
   return {

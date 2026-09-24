@@ -66,6 +66,12 @@ import {
 import { createRecoveryLedger } from "@/stores/chats/recovery-ledger";
 import { nextTurnLifecycleRevision } from "@/stores/chats/chat-turn-lifecycle";
 import {
+  thinkingTokensAfterFrame,
+  thinkingTokensAfterTurnState,
+  thinkingTokensFromSnapshot,
+  type ChatThinkingTokensReading,
+} from "@/stores/chats/chat-thinking-tokens";
+import {
   applyIndexChange,
   applyRangeResponse,
   applySkeletonChunk,
@@ -460,6 +466,13 @@ type DeferredWindowedSnapshotAux = Pick<
   // consumer that must speak it EXACTLY ONCE. A stale replay is not a stale
   // card there, it is a false announcement of a result that was superseded.
   | "lastFallbackOutcome"
+  // The two `1.18` live-only keys, under this type's own rule: a
+  // `turnStateChanged` supersedes the suggestion (an absent key clears it, and
+  // nothing re-sends a cleared chip), and a `thinkingTokens` frame or a turn
+  // end supersedes the estimate. Replaying either would put back a chip for a
+  // conversation that moved on, or a number from before the newest one.
+  | "suggestedPrompt"
+  | "thinkingTokensEstimate"
 >;
 
 function deferredWindowedSnapshotAuxOf(
@@ -484,6 +497,8 @@ function deferredWindowedSnapshotAuxOf(
     pendingReturn: snapshot.pendingReturn,
     lastFailedAttempt: snapshot.lastFailedAttempt,
     lastFallbackOutcome: snapshot.lastFallbackOutcome,
+    suggestedPrompt: snapshot.suggestedPrompt,
+    thinkingTokensEstimate: snapshot.thinkingTokensEstimate,
   };
 }
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
@@ -1418,6 +1433,28 @@ export interface ChatSessionState {
    * never as a row readable from the frame that carried it.
    */
   readonly lastFallbackOutcome: LastFallbackOutcome | undefined;
+  /**
+   * The provider's predicted next prompt (`chat.subscribe@1.18`), for the
+   * composer's click-to-fill chip - which fills and never sends.
+   *
+   * Carried like {@link lastFallbackOutcome}: on every snapshot and every
+   * `turnStateChanged`, where an ABSENT key CLEARS. The host drops it on any
+   * send, any run opening and teardown, so a renderer that kept its last value
+   * would offer a prompt for a conversation that has moved on. `undefined`
+   * against a host below `1.18`, which never suggests anything.
+   */
+  readonly suggestedPrompt: string | undefined;
+  /**
+   * The active turn's thinking-token estimate (`chat.subscribe@1.18`), for the
+   * streaming "Thinking" label. Seeded by the snapshot's
+   * `thinkingTokensEstimate` (so a reconnect mid-thought is not blank), moved
+   * by the light `thinkingTokens` frame, and cleared on the turn-end state
+   * `turnStateChanged` already carries. Keyed by the turn it measures; readers
+   * go through {@link selectActiveThinkingTokensEstimate}.
+   *
+   * An estimate for a progress label, never usage.
+   */
+  readonly thinkingTokens: ChatThinkingTokensReading | null;
   /**
    * The shells this chat created, whatever state they are in - not a subset
    * of {@link backgroundItems}, since a shell outlives the turn that started
@@ -4218,6 +4255,17 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingReturn: frame.snapshot.pendingReturn,
           lastFailedAttempt: frame.snapshot.lastFailedAttempt,
           lastFallbackOutcome: frame.snapshot.lastFallbackOutcome,
+          // Straight across for the same reason as the four above: absent is
+          // "no suggestion", and it is the value that clears the chip. This is
+          // also the reconnect path - a chip the host still holds comes back
+          // from here.
+          suggestedPrompt: frame.snapshot.suggestedPrompt,
+          // Paired with the snapshot's OWN active turn, so a reconnect
+          // mid-thought seats the number under the turn it measured.
+          thinkingTokens: thinkingTokensFromSnapshot(
+            frame.snapshot.activeTurn,
+            frame.snapshot.thinkingTokensEstimate,
+          ),
           // NOT unconditionally cleared, and that was the blocker: a snapshot
           // is not a detach. See `reconcileFallbackChoiceLeaseWithFrame` for
           // the two facts that do end a lease.
@@ -5940,6 +5988,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingReturn: current.pendingReturn,
           lastFailedAttempt: current.lastFailedAttempt,
           lastFallbackOutcome: current.lastFallbackOutcome,
+          suggestedPrompt: current.suggestedPrompt,
+          thinkingTokensEstimate: current.thinkingTokensEstimate,
         },
       };
     };
@@ -7182,6 +7232,33 @@ export function createChatSessionStoreWithNotificationDependencies(
           portForwards: frame.portForwards,
         }));
       },
+      onThinkingTokens: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // Turn-scoped: applied only while `turnId` is the live active turn. A
+        // frame that races past its own turn's end is simply not applied - the
+        // turn-end `turnStateChanged` already cleared the number.
+        const reading = { turnId: frame.turnId, estimate: frame.estimate };
+        const current = get().thinkingTokens;
+        const next = thinkingTokensAfterFrame(
+          current,
+          get().activeTurn,
+          reading,
+        );
+        if (next !== current) set({ thinkingTokens: next });
+        advanceDeferredSnapshotAux((held) => ({
+          thinkingTokensEstimate:
+            thinkingTokensAfterFrame(
+              thinkingTokensFromSnapshot(
+                held.activeTurn,
+                held.thinkingTokensEstimate,
+              ),
+              held.activeTurn,
+              reading,
+            )?.estimate ?? held.thinkingTokensEstimate,
+        }));
+      },
       // ─── The windowed line (`chat.subscribe@1.8`) ────────────────────────
       //
       // Live: `chatSubscribeV18` is registered, so two `1.8`-capable peers
@@ -8376,6 +8453,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingReturn: frame.pendingReturn,
             lastFailedAttempt: frame.lastFailedAttempt,
             lastFallbackOutcome: frame.lastFallbackOutcome,
+            // Same no-`??` rule: a live `1.18` host sets the key on every
+            // frame, and `undefined` is the clear (a send, a run opening).
+            suggestedPrompt: frame.suggestedPrompt,
+            // The turn-end state this frame already carries is the estimate's
+            // clear: it survives only while the same turn is still live.
+            thinkingTokens: thinkingTokensAfterTurnState(
+              state.thinkingTokens,
+              frame.activeTurn,
+            ),
             // The settle usually arrives HERE rather than as a snapshot, and
             // this handler used not to touch the slot at all - so a traversal
             // that ended through the commoner frame type left a dead lease
@@ -8454,6 +8540,18 @@ export function createChatSessionStoreWithNotificationDependencies(
           // replays the outcome it was sent with even after this frame cleared
           // it, and the announcer speaks a result that was withdrawn.
           lastFallbackOutcome: frame.lastFallbackOutcome,
+          // Without this a held snapshot would put back a chip this frame
+          // cleared, and nothing re-sends a cleared chip.
+          suggestedPrompt: frame.suggestedPrompt,
+          // Kept only while the held snapshot's turn is still this frame's
+          // live turn; a turn end or a new turn drops the held number.
+          thinkingTokensEstimate: thinkingTokensAfterTurnState(
+            thinkingTokensFromSnapshot(
+              held.activeTurn,
+              held.thinkingTokensEstimate,
+            ),
+            frame.activeTurn,
+          )?.estimate,
         }));
       },
       onBlockDelta: (frame) => {
@@ -9130,6 +9228,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         onManagedCommandsChanged: guarded(callbacks.onManagedCommandsChanged),
         onHeldUpdatesChanged: guarded(callbacks.onHeldUpdatesChanged),
         onPortForwardsChanged: guarded(callbacks.onPortForwardsChanged),
+        onThinkingTokens: guarded(callbacks.onThinkingTokens),
         // Guarded like every frame above rather than passed through: whatever
         // binds these must not apply a hydration response from a stream
         // generation this store has already replaced.
@@ -9303,6 +9402,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingReturn: undefined,
       lastFailedAttempt: undefined,
       lastFallbackOutcome: undefined,
+      suggestedPrompt: undefined,
+      thinkingTokens: null,
       managedCommands: [],
       heldUpdates: [],
       portForwards: [],

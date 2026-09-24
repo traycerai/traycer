@@ -161,6 +161,18 @@ export interface ChatStreamCallbacks {
     >,
   ) => void;
   /**
+   * The active turn's thinking-token estimate moved (`chat.subscribe@1.18`),
+   * coalesced host-side to at most one a second. Turn-scoped: apply it only
+   * while `turnId` is the active turn. A host below `1.18` never sends it, so
+   * against an older host this is simply never called.
+   */
+  readonly onThinkingTokens: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "thinkingTokens" }
+    >,
+  ) => void;
+  /**
    * `retryCause` is the host's reason for a retryable close, on the
    * `reconnecting` transition it causes, and `null` otherwise (see
    * `StatusChangeHandler`).
@@ -566,6 +578,10 @@ export class ChatStreamClient {
         this.callbacks.onHeldUpdatesChanged(frame);
         return;
       }
+      case "thinkingTokens": {
+        this.callbacks.onThinkingTokens(frame);
+        return;
+      }
       case "pong": {
         return;
       }
@@ -820,6 +836,10 @@ export class ChatStreamClient {
       }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      case "thinkingTokens": {
+        this.callbacks.onThinkingTokens(frame);
         return;
       }
       case "pong": {

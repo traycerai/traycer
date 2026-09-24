@@ -29,7 +29,12 @@
  *   projection (written at every minor, dropped by an older decoder), so no
  *   needle can pin a boundary for it; its shape coverage lives in
  *   `chat-subscribe-approval-tier-v116.test.ts` and it is listed here for the
- *   same line-count and ceiling reason as `1.15`.
+ *   same line-count and ceiling reason as `1.15`;
+ * - `1.18` is the Claude-parity surface, minted above `1.16`: the suggested
+ *   prompt, the thinking-tokens estimate and frame, the cron background item
+ *   kind, and the approval card's display facts / cautious / rule-forced
+ *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
+ *   lines bind frozen schemas without them, so needles do pin the boundary.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -58,8 +63,25 @@ const AUTO_MINOR = 13;
 const PORT_FORWARD_MINOR = 14;
 // `1.15` (message delivery), `1.16` (approval tier) and `1.17` (sender host)
 // mint no boundary a needle below can pin, so only the ceiling names them.
+const APPROVAL_TIER_MINOR = 16;
 const SENT_FROM_HOST_MINOR = 17;
-const LIVE_MINOR = SENT_FROM_HOST_MINOR;
+// The Claude-parity surfaces: suggested prompt, thinking tokens, cron items,
+// approval display facts / cautious / rule-forced.
+const CLAUDE_PARITY_MINOR = 18;
+const LIVE_MINOR = CLAUDE_PARITY_MINOR;
+// Object keys carry their colon so a needle cannot hit an enum value or a
+// description that merely mentions the name; the two literals (`thinkingTokens`
+// frame kind, `cron` background kind) are matched with both quotes, which
+// `"thinkingTokensEstimate":` and `"cron..."` cannot satisfy by prefix.
+const CLAUDE_PARITY_NEEDLES = [
+  '"suggestedPrompt":',
+  '"thinkingTokensEstimate":',
+  '"thinkingTokens"',
+  '"displayFacts":',
+  '"cautious":',
+  '"ruleForced":',
+  '"cron"',
+];
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -186,12 +208,12 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.17 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.18 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -214,6 +236,22 @@ describe("chat.subscribe line surfaces", () => {
       const carriesPortForwards = minor >= PORT_FORWARD_MINOR;
       const carriesPlacement = minor >= 9;
       const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
+      const carriesClaudeParity = minor >= CLAUDE_PARITY_MINOR;
+
+      it(`server frames ${carriesClaudeParity ? "carry" : "hold back"} every Claude-parity surface`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = CLAUDE_PARITY_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(carriesClaudeParity ? CLAUDE_PARITY_NEEDLES : []);
+      });
+
+      it("client frames hold back the Claude-parity surface on every line (host-authored)", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          CLAUDE_PARITY_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
         const text = schemaText(contract.serverFrameSchema);

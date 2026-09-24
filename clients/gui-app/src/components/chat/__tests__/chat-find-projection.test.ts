@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
+  buildSubagentChatFindRows,
+  chatFindSubagentChatResultUnitId,
+  chatFindSubagentChatTaskUnitId,
+  subagentChatFindRowId,
   chatFindActivityGroupChildHeaderUnitId,
   chatFindActivityGroupSummaryUnitId,
   chatFindMessageContentUnitId,
   chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
+  chatFindSubagentResultUnitId,
   markdownToChatSearchText,
   type ChatFindRow,
 } from "@/components/chat/chat-find";
@@ -14,15 +19,21 @@ import {
   deriveActivityGroupRenderId,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
+  deriveSubagentCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ApprovalSegment,
   ChatMessage as ChatMessageModel,
   InterviewSegment,
   MessageSegment,
+  SubagentSegment,
+  TextSegment,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 import { makeMessage } from "./chat-message-fixtures";
 
@@ -810,10 +821,15 @@ describe("chat find projection", () => {
     expect(bodyUnit?.text.match(/Scanning/g)).toHaveLength(2);
     expect(bodyUnit?.text).toContain("Reading");
     expect(bodyUnit?.text).toContain("Investigate the flake");
-    expect(bodyUnit?.text).toContain("All clear.");
+    // The result is its own unit now: the body unit no longer holds it.
+    expect(bodyUnit?.text).not.toContain("All clear.");
+    const resultUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+    );
+    expect(resultUnit?.text).toBe("All clear.");
   });
 
-  it("indexes a workflow card's Intent/Activity/Result in the same order the card renders them", () => {
+  it("indexes a workflow card's Intent/Activity in card order and its Result as its own unit", () => {
     const subagentId = "workflow-projection";
     const assistant: ChatMessageModel = {
       ...makeMessage(6, "assistant"),
@@ -858,10 +874,14 @@ describe("chat find projection", () => {
     const text = bodyUnit?.text ?? "";
     const intentIndex = text.indexOf("Review the diff");
     const activityIndex = text.indexOf("Find");
-    const resultIndex = text.indexOf("3 findings");
     expect(intentIndex).toBeGreaterThanOrEqual(0);
     expect(activityIndex).toBeGreaterThan(intentIndex);
-    expect(resultIndex).toBeGreaterThan(activityIndex);
+    expect(text).not.toContain("3 findings");
+    expect(
+      row.units.find(
+        (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+      )?.text,
+    ).toBe("3 findings");
   });
 
   it("falls back to the rendered Subagent placeholder when the name is null", () => {
@@ -1171,6 +1191,123 @@ describe("chat find projection", () => {
     expect(noticeUnit?.owningChain).toHaveLength(1);
   });
 
+  describe("a promoted card's conversation", () => {
+    const CARD_ID = "card-conversation";
+    const renderId = derivePromotedSubagentRenderId(CARD_ID);
+
+    function card(patch: Partial<SubagentSegment>): SubagentSegment {
+      return {
+        id: CARD_ID,
+        kind: "subagent",
+        name: "Researcher",
+        agentType: null,
+        task: "Investigate",
+        progressUpdates: [],
+        result: null,
+        isStreaming: false,
+        endState: null,
+        stopped: false,
+        startedAt: 1,
+        durationMs: 10,
+        spawnToolCallId: null,
+        parentId: null,
+        workflowMeta: null,
+        children: [],
+        ...patch,
+      };
+    }
+
+    function rowFor(segment: SubagentSegment): ChatFindRow {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(40, "assistant"),
+        segments: [segment],
+      };
+      return buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    }
+
+    function childText(id: string, markdown: string): TextSegment {
+      return {
+        id,
+        kind: "text",
+        markdown,
+        isStreaming: false,
+        parentId: CARD_ID,
+      };
+    }
+
+    it("indexes a child text as its own segment unit chained through the card's collapsible key", () => {
+      const row = rowFor(
+        card({ children: [childText("child-text", "The parser is fine.")] }),
+      );
+      const unit = row.units.find(
+        (candidate) => candidate.unitId === chatFindSegmentUnitId("child-text"),
+      );
+      expect(unit?.text).toContain("The parser is fine.");
+      expect(unit?.owningChain).toEqual([
+        deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, renderId),
+      ]);
+    });
+
+    it("emits the result unit only when the card has no child text", () => {
+      const withText = rowFor(
+        card({
+          result: "Final answer",
+          children: [childText("child-text", "The parser is fine.")],
+        }),
+      );
+      expect(
+        withText.units.some(
+          (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+        ),
+      ).toBe(false);
+      expect(rowSearchText(withText)).not.toContain("Final answer");
+
+      const noProse = rowFor(
+        card({
+          result: "Final answer",
+          children: [
+            {
+              id: "notice-only",
+              kind: "provider_notice",
+              status: "completed",
+              noticeKind: "model_rerouted",
+              tone: "info",
+              title: "Model changed",
+              message: "Switched models.",
+              details: [],
+              parentId: CARD_ID,
+            },
+          ],
+        }),
+      );
+      const resultUnit = noProse.units.find(
+        (unit) => unit.unitId === chatFindSubagentResultUnitId(renderId),
+      );
+      expect(resultUnit?.text).toBe("Final answer");
+      expect(resultUnit?.owningChain).toEqual([
+        deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, renderId),
+      ]);
+    });
+
+    it("drops a progress line equal to a child text and keeps a line matching none", () => {
+      const row = rowFor(
+        card({
+          progressUpdates: ["The parser is fine.", "Summary: nothing found"],
+          children: [childText("child-text", "The parser is fine.")],
+        }),
+      );
+      const body = row.units.find(
+        (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
+      );
+      expect(body?.text).toContain("Summary: nothing found");
+      expect(body?.text).not.toContain("The parser is fine.");
+      // The prose is indexed once, in its own unit.
+      expect(countOccurrences(rowSearchText(row), "The parser is fine.")).toBe(
+        1,
+      );
+    });
+  });
+
   // A regular user message renders its whole body as ONE anchor
   // (message:{id}:content) via UserMessageBody - it never renders per-segment
   // anchors. Real user messages also carry a `text` segment mirroring their
@@ -1397,3 +1534,125 @@ function rowSearchText(row: ChatFindRow): string {
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+describe("buildSubagentChatFindRows", () => {
+  const OPEN_ID = "open-card";
+
+  function openCard(patch: Partial<SubagentSegment>): SubagentSegment {
+    return {
+      id: OPEN_ID,
+      kind: "subagent",
+      name: "Opener",
+      agentType: null,
+      task: "Open task words",
+      progressUpdates: [],
+      result: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      startedAt: 1,
+      durationMs: 10,
+      spawnToolCallId: null,
+      parentId: null,
+      workflowMeta: null,
+      children: [],
+      ...patch,
+    };
+  }
+
+  function nestedCard(): SubagentSegment {
+    return {
+      ...openCard({ id: "nested-card", name: "Nested", task: "Nested task" }),
+      parentId: OPEN_ID,
+      children: [
+        {
+          id: "nested-text",
+          kind: "text",
+          markdown: "nested words",
+          isStreaming: false,
+          parentId: "nested-card",
+        },
+      ],
+    };
+  }
+
+  function toolChild(): ToolSegment {
+    const input = { command: "ls" };
+    return {
+      id: "tool-1",
+      kind: "tool",
+      toolName: "Bash",
+      inputSummary: deriveToolInputSummary("Bash", input),
+      inputDetail: deriveToolInputDetail("Bash", input),
+      taskTodoItems: null,
+      error: null,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      imageResults: [],
+      startedAt: 0,
+      durationMs: null,
+      parentId: OPEN_ID,
+    };
+  }
+
+  const childText: TextSegment = {
+    id: "open-child-text",
+    kind: "text",
+    markdown: "Child prose.",
+    isStreaming: false,
+    parentId: OPEN_ID,
+  };
+
+  it("gives no rows for a card that left the transcript", () => {
+    expect(buildSubagentChatFindRows(null, TILE_INSTANCE_ID)).toEqual([]);
+  });
+
+  it("orders task, child text and nested header, rooted at the view", () => {
+    const rows = buildSubagentChatFindRows(
+      openCard({
+        result: "Ignored result",
+        children: [childText, nestedCard()],
+      }),
+      TILE_INSTANCE_ID,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].messageId).toBe(subagentChatFindRowId(OPEN_ID));
+    const ids = rows[0].units.map((unit) => unit.unitId);
+    expect(ids.slice(0, 3)).toEqual([
+      chatFindSubagentChatTaskUnitId(OPEN_ID),
+      chatFindSegmentUnitId("open-child-text"),
+      chatFindSubagentHeaderUnitId("nested-card"),
+    ]);
+    expect(rows[0].units[0].owningChain).toEqual([]);
+    expect(rows[0].units[1].owningChain).toEqual([]);
+    expect(rows[0].units[2].owningChain).toEqual([]);
+    expect(ids).not.toContain(chatFindSubagentChatResultUnitId(OPEN_ID));
+    expect(ids).not.toContain(chatFindSubagentHeaderUnitId(OPEN_ID));
+    expect(ids).not.toContain(chatFindSubagentBodyUnitId(OPEN_ID));
+    expect(ids).not.toContain(
+      chatFindSubagentHeaderUnitId(derivePromotedSubagentRenderId(OPEN_ID)),
+    );
+  });
+
+  it("emits the result unit last when the children hold no text", () => {
+    const rows = buildSubagentChatFindRows(
+      openCard({
+        result: "Final answer",
+        children: [toolChild()],
+      }),
+      TILE_INSTANCE_ID,
+    );
+    const units = rows[0].units;
+    const last = units[units.length - 1];
+    expect(last.unitId).toBe(chatFindSubagentChatResultUnitId(OPEN_ID));
+    expect(last.text).toBe("Final answer");
+    expect(last.owningChain).toEqual([]);
+  });
+});

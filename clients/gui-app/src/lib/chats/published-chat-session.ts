@@ -379,6 +379,10 @@ export function publishedChatSessionState(
     // no incident at all. A consumer that must speak an outcome exactly once
     // therefore says nothing here, which is correct.
     lastFallbackOutcome: undefined,
+    // Both are live-only state the host never publishes: a frozen copy has no
+    // next prompt to suggest and no turn to be thinking in.
+    suggestedPrompt: undefined,
+    thinkingTokens: null,
     fallbackChoiceLease: null,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,

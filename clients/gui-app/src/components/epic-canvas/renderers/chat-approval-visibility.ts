@@ -1,4 +1,7 @@
-import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatApprovalState,
+  ChatFileEditApprovalState,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 
 export function visibleComposerApprovals(
   approvals: ReadonlyArray<ChatApprovalState>,
@@ -40,6 +43,66 @@ export function humanActionableApprovals(
 ): ReadonlyArray<ChatApprovalState> {
   return visibleComposerApprovals(approvals).filter(
     (approval) => !approvalAwaitingJudge(approval),
+  );
+}
+
+/**
+ * True when the provider stamped this ask as one a person answers on its own
+ * (`cautious`, `chat.subscribe@1.18`): Claude's "no one-key approve" or a
+ * user's ask rule that forced the prompt.
+ *
+ * Not the judge's `tier`, which says why Traycer's judge escalated; this
+ * exists in every mode, judge or none. An older host never sends it, and then
+ * every row is bulk-approvable as before.
+ *
+ * The file-edit card carries the same stamp on the same line, for an edit a
+ * user's ask rule forced to a person, and is read by this same predicate.
+ */
+export function approvalNeedsIndividualDecision(
+  approval: Pick<ChatApprovalState, "cautious">,
+): boolean {
+  return approval.cautious === true;
+}
+
+/**
+ * The rows "Approve all" acts on: answerable by a person, and not stamped for
+ * an individual decision. "Deny all" still acts on every answerable row -
+ * refusing is never the risky direction.
+ */
+export function bulkApprovableApprovals(
+  approvals: ReadonlyArray<ChatApprovalState>,
+): ReadonlyArray<ChatApprovalState> {
+  return humanActionableApprovals(approvals).filter(
+    (approval) => !approvalNeedsIndividualDecision(approval),
+  );
+}
+
+/**
+ * The ids of the rows "Approve all" leaves out on purpose: answerable, and
+ * stamped for an individual decision. The header's count and each row's
+ * marker both read this, so they cannot disagree - a cautious row still with
+ * the judge has no Approve button yet, and is not one "left out" of it.
+ */
+export function approvalIdsLeftOutOfApproveAll(
+  approvals: ReadonlyArray<ChatApprovalState>,
+): ReadonlySet<string> {
+  return new Set(
+    humanActionableApprovals(approvals)
+      .filter(approvalNeedsIndividualDecision)
+      .map((approval) => approval.approvalId),
+  );
+}
+
+/**
+ * The file-edit rows "Approve all" acts on: every row not stamped for an
+ * individual decision. No judge ever holds a file-edit card, so every row is
+ * answerable; "Deny all" still acts on all of them.
+ */
+export function bulkApprovableFileEditApprovals(
+  approvals: ReadonlyArray<ChatFileEditApprovalState>,
+): ReadonlyArray<ChatFileEditApprovalState> {
+  return approvals.filter(
+    (approval) => !approvalNeedsIndividualDecision(approval),
   );
 }
 

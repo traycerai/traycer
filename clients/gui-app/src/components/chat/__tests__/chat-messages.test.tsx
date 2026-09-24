@@ -128,6 +128,8 @@ vi.mock("@/stores/epics/canvas/tile-instance-liveness", () => ({
 vi.mock("@/components/chat/chat-message", async () => {
   const { ChatBlockNavigationAnchor } =
     await import("@/components/chat/chat-navigation-highlight");
+  const { useOpenSubagentAsChat } =
+    await import("@/components/chat/segments/subagent-open-as-chat");
   return {
     ChatMessage: function MockChatMessage(props: {
       message: ChatMessageModel;
@@ -135,6 +137,7 @@ vi.mock("@/components/chat/chat-message", async () => {
       const interview = props.message.segments.find(
         (segment): segment is InterviewSegment => segment.kind === "interview",
       );
+      const openAsChat = useOpenSubagentAsChat();
       const answer = interview?.answers[0]?.values[0] ?? null;
       const interviewUnitId =
         interview === undefined || answer === null
@@ -152,6 +155,18 @@ vi.mock("@/components/chat/chat-message", async () => {
             props.message.content
           ) : (
             <span data-chat-find-unit={interviewUnitId}>{answer}</span>
+          )}
+          {props.message.segments.map((segment) =>
+            segment.kind === "subagent" ? (
+              <button
+                key={segment.id}
+                type="button"
+                data-subagent-open-as-chat={segment.id}
+                onClick={() => openAsChat?.(segment.id)}
+              >
+                open {segment.id}
+              </button>
+            ) : null,
           )}
         </div>
       );
@@ -2759,6 +2774,121 @@ describe("ChatMessages scroll policy", () => {
         expect(nextId).toBeTruthy();
         expect(messageIndex(nextId)).toBeGreaterThan(messageIndex(parkedId));
       });
+    });
+  });
+
+  describe("open-as-chat wiring", () => {
+    const CARD_ID = "drill-card";
+
+    function transcriptWithCard(): ReadonlyArray<ChatMessageModel> {
+      const [first, second, ...rest] = makeCompletedTranscript(6);
+      const withCard: ChatMessageModel = {
+        ...second,
+        segments: [
+          {
+            id: CARD_ID,
+            kind: "subagent",
+            name: "Drill",
+            agentType: null,
+            task: "Drill task",
+            progressUpdates: [],
+            result: null,
+            isStreaming: false,
+            endState: null,
+            stopped: false,
+            startedAt: 1,
+            durationMs: 10,
+            spawnToolCallId: null,
+            parentId: null,
+            workflowMeta: null,
+            children: [
+              {
+                id: "drill-text",
+                kind: "text",
+                markdown: "drill words",
+                isStreaming: false,
+                parentId: CARD_ID,
+              },
+            ],
+          },
+        ],
+      };
+      return [first, withCard, ...rest];
+    }
+
+    async function openView(scrollStateKey: string) {
+      const rendered = renderChatMessages({
+        messages: transcriptWithCard(),
+        scrollStateKey,
+      });
+      await settleLegendList();
+      fireEvent.click(screen.getByRole("button", { name: `open ${CARD_ID}` }));
+      return rendered;
+    }
+
+    function viewScrollArea(): HTMLElement {
+      const area = screen
+        .getByTestId("subagent-chat-view")
+        .querySelector<HTMLElement>("[data-selection-root]");
+      if (area === null) throw new Error("view scroll area is missing");
+      return area;
+    }
+
+    it("scrolls the view, not the timeline, on PageDown", async () => {
+      await openView("drill-pagedown");
+      const area = viewScrollArea();
+      Object.defineProperty(area, "scrollHeight", {
+        configurable: true,
+        value: 2000,
+      });
+      Object.defineProperty(area, "clientHeight", {
+        configurable: true,
+        value: 400,
+      });
+      const timelineBefore = getScrollNode().scrollTop;
+      const viewBefore = area.scrollTop;
+
+      act(() => {
+        dispatchKeyInScope("PageDown");
+      });
+
+      expect(area.scrollTop).toBeGreaterThan(viewBefore);
+      expect(getScrollNode().scrollTop).toBe(timelineBefore);
+    });
+
+    it("hands the selection root to the view while it is open", async () => {
+      await openView("drill-selection");
+      const container = screen.getByTestId("chat-transcript-container");
+      expect(container.hasAttribute("data-selection-root")).toBe(false);
+      expect(viewScrollArea().hasAttribute("data-selection-root")).toBe(true);
+
+      fireEvent.click(screen.getByTestId("subagent-chat-back"));
+      expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
+      expect(
+        screen
+          .getByTestId("chat-transcript-container")
+          .hasAttribute("data-selection-root"),
+      ).toBe(true);
+    });
+
+    it("closes on Escape and returns focus to the card's open control", async () => {
+      await openView("drill-escape");
+      fireEvent.keyDown(screen.getByRole("heading", { name: "Drill" }), {
+        key: "Escape",
+      });
+      expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: `open ${CARD_ID}` }),
+      );
+    });
+
+    it("closes the view when a cross-tile scroll request arrives", async () => {
+      const { rerenderWith } = await openView("drill-scroll-request");
+      expect(screen.getByTestId("subagent-chat-view")).toBeTruthy();
+
+      rerenderWith({ scrollRequest: { kind: "end", requestId: 90 } });
+
+      expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
     });
   });
 

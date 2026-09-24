@@ -156,9 +156,10 @@ export function formatContextUsageRowValue(row: ContextUsageRow): string {
 /**
  * Compact token formatter for standalone counts: 1_234 → "1.2k",
  * 1_234_567 → "1.2M". Falls back to raw `toLocaleString` for values < 1k so
- * tiny output-only turns aren't misleadingly rounded.
+ * tiny output-only turns aren't misleadingly rounded. Also the thinking-token
+ * estimate's formatter (`thinking-tokens-estimate.tsx`).
  */
-function formatTokens(value: number): string {
+export function formatTokens(value: number): string {
   if (value < 1_000) return value.toLocaleString();
   if (value < 1_000_000) return `${(value / 1_000).toFixed(1)}k`;
   return `${(value / 1_000_000).toFixed(1)}M`;
