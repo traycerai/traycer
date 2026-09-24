@@ -294,7 +294,7 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
             (entry) => entry.chatId === params.chatId,
           );
           if (index >= 0) records.splice(index, 1);
-          return Promise.resolve({ deleted: true });
+          return Promise.resolve({ deleted: true, publicationChatId: null });
         },
       },
     }),
