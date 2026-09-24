@@ -31,6 +31,7 @@ import {
   epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
+  ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
   artifactSubscribeSeedOfferSchema,
@@ -72,14 +73,14 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
   it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
-    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
-    // and `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0;
-    // the artifact lane is still at its first minor. All three keep `@1.0`
-    // installed for released peers.
+    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata),
+    // `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0, and
+    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
+    // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 1],
       ["epic.status.subscribe", 1],
-      ["artifact.subscribe", 0],
+      ["artifact.subscribe", 1],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
       expect(majorLine.latestMinor).toBe(latestMinor);
@@ -96,6 +97,9 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // line's top rather than a flat `latestMinor: 0`.
     expect(hostStreamRpcRegistry["epic.status.subscribe"][1].latestMinor).toBe(
       EPIC_STATUS_DURABILITY_LEGS_MINOR,
+    );
+    expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(
+      ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
     );
   });
 

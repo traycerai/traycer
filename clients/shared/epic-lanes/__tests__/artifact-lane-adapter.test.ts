@@ -718,6 +718,7 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-paylo
         awarenessCalls += 1;
       },
       onUnavailable: () => {},
+      onBodySync: () => {},
       onConnectionStatus: () => {},
     };
     return {

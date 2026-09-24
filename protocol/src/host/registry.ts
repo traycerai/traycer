@@ -633,7 +633,10 @@ import {
   epicStatusSubscribeV10,
   epicStatusSubscribeV11,
 } from "@traycer/protocol/host/epic/status-subscribe";
-import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
+import {
+  artifactSubscribeV10,
+  artifactSubscribeV11,
+} from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
   epicRetryMigrationV10,
@@ -11411,10 +11414,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `chat.subscribe`'s lifetime, not `epic.subscribe`'s.
   "artifact.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the server-only `bodySync` frame (a body served from the
+      // host's local copy before its cloud sync, and when that sync lands).
+      // @1.0 stays installed and FROZEN: the host gates the frame on the
+      // negotiated minor (`ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR`).
+      latestMinor: 1,
       versions: {
         0: {
           contract: artifactSubscribeV10,
+        },
+        1: {
+          contract: artifactSubscribeV11,
         },
       },
     },
