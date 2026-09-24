@@ -1,12 +1,13 @@
 import {
   buildChatActivityTimeline,
+  isCollapsedIntermediateTimelineItem,
   lastAssistantTextSegmentId,
   type ChatActivityTimelineItem,
 } from "@/components/chat/chat-activity-groups";
 import { BrowserSessionRow } from "./segments/browser-session-row";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
-import { deriveTextCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { deriveEarlierActivityCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
   WorkingVerbContext,
   pickWorkingVerb,
@@ -14,11 +15,6 @@ import {
 import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -39,11 +35,9 @@ import {
 import {
   use,
   useCallback,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -79,8 +73,6 @@ import { ToolSegment } from "./segments/tool-segment";
 import { distinctRenderKeys } from "./segment-render-keys";
 import {
   useActivityGroupOpen,
-  useActivityGroupTextCollapseState,
-  useCollapseActivityGroupForText,
   useSetActivityGroupOpen,
 } from "@/stores/chats/activity-group-open-store-context";
 import {
@@ -191,7 +183,26 @@ export function AssistantMessageBody({
   forkAction,
   interviewDeliveryRetry,
 }: AssistantBodyProps) {
-  const [showIntermediateContent, setShowIntermediateContent] = useState(false);
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const earlierActivityKey = useMemo(
+    () => deriveEarlierActivityCollapsibleKey(tileInstanceId, messageId),
+    [messageId, tileInstanceId],
+  );
+  const userShowEarlierActivity = useActivityGroupOpen(earlierActivityKey.id);
+  const findForcedOpen = useChatFindForcedOpen(earlierActivityKey);
+  const setActivityGroupOpen = useSetActivityGroupOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const showIntermediateContent = isEarlierActivityOpen(
+    userShowEarlierActivity,
+    findForcedOpen,
+  );
+  const setShowIntermediateContent = useCallback(
+    (open: boolean) => {
+      setActivityGroupOpen(earlierActivityKey.id, open);
+      setFindForcedOpen(earlierActivityKey, false);
+    },
+    [earlierActivityKey, setActivityGroupOpen, setFindForcedOpen],
+  );
   const activityTimelineTurnState = runState === null ? "complete" : "active";
   const timeline = useMemo(
     () =>
@@ -205,14 +216,24 @@ export function AssistantMessageBody({
     () => lastAssistantTextSegmentId(segments),
     [segments],
   );
+  const finalTextIndex = useMemo(
+    () =>
+      timeline.findIndex((item) =>
+        isFinalAssistantTextTimelineItem(item, finalTextId),
+      ),
+    [finalTextId, timeline],
+  );
   const hasIntermediateContent = useMemo(
     () =>
-      hasCollapsedIntermediateContent(
-        timeline,
-        finalTextId,
-        hasLaterAssistantText,
+      timeline.some((item, index) =>
+        isCollapsedIntermediateTimelineItem(
+          item,
+          index,
+          finalTextIndex,
+          hasLaterAssistantText,
+        ),
       ),
-    [finalTextId, hasLaterAssistantText, timeline],
+    [finalTextIndex, hasLaterAssistantText, timeline],
   );
   const timelineKeys = useMemo(
     () =>
@@ -290,110 +311,38 @@ export function AssistantMessageBody({
       ) : null}
       {timeline.map((item, index) => {
         const key = timelineKeys[index];
-        if (item.kind === "activity_group") {
-          return (
-            <ActivityGroupSegment
-              key={key}
-              group={item.group}
-              collapseOnText={hasLaterAssistantText}
-              hideWhenCollapsed={runState === null && !showIntermediateContent}
-            />
-          );
-        }
-        if (item.kind === "promoted_subagent") {
-          return (
-            <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
-              <SubagentSegment
-                id={item.id}
-                name={item.segment.name}
-                agentType={item.segment.agentType}
-                task={item.segment.task}
-                progressUpdates={item.segment.progressUpdates}
-                result={item.segment.result}
-                isStreaming={item.segment.isStreaming}
-                endState={item.segment.endState}
-                stopped={item.segment.stopped}
-                startedAt={item.segment.startedAt}
-                durationMs={item.segment.durationMs}
-                workflowMeta={item.segment.workflowMeta}
-                nested={item.segment.children}
-                variant="promoted"
-              />
-            </ChatBlockNavigationAnchor>
-          );
-        }
-        const assistantSegment = (
-          <AssistantSegment
-            id={item.id}
-            segment={item.segment}
-            backgroundToolBlockIds={backgroundToolBlockIds}
-            nextStepActions={nextStepActions}
-            forkAction={forkAction}
-            interviewDeliveryRetry={interviewDeliveryRetry}
-            // The turn's OWN harness, for an error row that offers to open that
-            // provider's settings. Taken from the row rather than from ambient
-            // app state so the link points at the provider that actually failed,
-            // even when the transcript is scrolled back to a turn from a harness
-            // the chat has since switched away from. `null` on legacy turns with
-            // no metadata; the affordance then falls back to the section root.
-            harnessId={meta?.provider ?? null}
-            // ONE segment, not every error row on the turn, and not one per
-            // row of a split turn. A failed turn routinely carries several
-            // error blocks that all share this `turnId` - the queue-pause
-            // notice the host appends beside the failure, a non-terminal
-            // extension error before the real terminal - and handing the id to
-            // each of them rendered a full recovery group under each,
-            // including under "Resume the queue to send them", where Retry
-            // retried the failed prompt instead.
-            //
-            // The anchor names the segment that describes the failed ATTEMPT.
-            // It is resolved over the WHOLE turn, but not before the split -
-            // `planAssistantTurnRows` splits first and the rows are built, then
-            // `withManualRungAnchor` runs LAST and rebuilds the ordered
-            // whole-turn segment list from those finished rows
-            // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
-            // to the walk, not about its position in the pipeline. Either way a
-            // turn rendered as several rows still names exactly one. On every
-            // other row `manualRungAnchorId` is null and nothing here matches
-            // - the same answer a row with no turn identity already gets.
-            turnId={
-              manualRungAnchorId !== null && item.id === manualRungAnchorId
-                ? turnId
-                : null
-            }
-          />
+        const isIntermediate = isCollapsedIntermediateTimelineItem(
+          item,
+          index,
+          finalTextIndex,
+          hasLaterAssistantText,
         );
-        const isNormalText =
-          item.segment.kind === "text" &&
-          item.segment.browserSession === undefined &&
-          item.segment.markdown.trim().length > 0;
-        const isCollapsedText =
-          isNormalText && (hasLaterAssistantText || item.id !== finalTextId);
+        const isHidden = isIntermediateTimelineItemHidden(
+          runState,
+          isIntermediate,
+          showIntermediateContent,
+        );
+        const rendered = renderAssistantTimelineItem({
+          item,
+          isIntermediate,
+          isHidden,
+          hasLaterAssistantText,
+          backgroundToolBlockIds,
+          nextStepActions,
+          forkAction,
+          interviewDeliveryRetry,
+          meta,
+          manualRungAnchorId,
+          turnId,
+        });
         return (
-          <ChatBlockNavigationAnchor
+          <IntermediateTimelineItem
             key={key}
-            blockId={item.id}
-            className="empty:hidden"
-            collapsed={
-              isCollapsedText && runState === null
-                ? !showIntermediateContent
-                : undefined
-            }
+            isHidden={isHidden}
+            isIntermediate={isIntermediate}
           >
-            {isNormalText ? (
-              <AssistantTextDisclosure
-                id={item.id}
-                collapsed={isCollapsedText}
-                hideWhenCollapsed={
-                  runState === null && !showIntermediateContent
-                }
-              >
-                {assistantSegment}
-              </AssistantTextDisclosure>
-            ) : (
-              assistantSegment
-            )}
-          </ChatBlockNavigationAnchor>
+            {rendered}
+          </IntermediateTimelineItem>
         );
       })}
       {/* Trailing indicator keeps the in-progress cue visible for the whole
@@ -465,6 +414,122 @@ function StopBadge() {
     >
       <Square className="size-1.5 rounded-xs fill-destructive text-destructive" />
     </span>
+  );
+}
+
+function isEarlierActivityOpen(
+  userOpen: boolean,
+  findForcedOpen: boolean,
+): boolean {
+  return userOpen || findForcedOpen;
+}
+
+function isFinalAssistantTextTimelineItem(
+  item: ChatActivityTimelineItem,
+  finalTextId: string | null,
+): boolean {
+  return item.kind === "segment" && item.id === finalTextId;
+}
+
+function isIntermediateTimelineItemHidden(
+  runState: ChatMessageRunState | null,
+  isIntermediate: boolean,
+  showIntermediateContent: boolean,
+): boolean {
+  return runState === null && isIntermediate && !showIntermediateContent;
+}
+
+interface AssistantTimelineItemRenderArgs {
+  readonly item: ChatActivityTimelineItem;
+  readonly isIntermediate: boolean;
+  readonly isHidden: boolean;
+  readonly hasLaterAssistantText: boolean;
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
+  readonly nextStepActions: NextStepActionHandler | null;
+  readonly forkAction: ChatMessageForkAction | null;
+  readonly interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
+  readonly meta: AssistantTurnMeta | null;
+  readonly manualRungAnchorId: string | null;
+  readonly turnId: string | null;
+}
+
+function renderAssistantTimelineItem(
+  args: AssistantTimelineItemRenderArgs,
+): ReactNode {
+  const {
+    backgroundToolBlockIds,
+    forkAction,
+    hasLaterAssistantText,
+    interviewDeliveryRetry,
+    isHidden,
+    isIntermediate,
+    item,
+    manualRungAnchorId,
+    meta,
+    nextStepActions,
+    turnId,
+  } = args;
+  if (item.kind === "activity_group") {
+    return (
+      <ActivityGroupSegment
+        group={item.group}
+        collapseOnText={hasLaterAssistantText}
+        hideWhenCollapsed={isHidden}
+      />
+    );
+  }
+  if (item.kind === "promoted_subagent") {
+    return (
+      <ChatBlockNavigationAnchor
+        blockId={item.segment.id}
+        className={isIntermediate ? "empty:hidden" : undefined}
+        collapsed={isHidden}
+      >
+        {isHidden ? null : (
+          <SubagentSegment
+            id={item.id}
+            name={item.segment.name}
+            agentType={item.segment.agentType}
+            task={item.segment.task}
+            progressUpdates={item.segment.progressUpdates}
+            result={item.segment.result}
+            isStreaming={item.segment.isStreaming}
+            endState={item.segment.endState}
+            stopped={item.segment.stopped}
+            startedAt={item.segment.startedAt}
+            durationMs={item.segment.durationMs}
+            workflowMeta={item.segment.workflowMeta}
+            nested={item.segment.children}
+            variant="promoted"
+          />
+        )}
+      </ChatBlockNavigationAnchor>
+    );
+  }
+  const assistantSegment = (
+    <AssistantSegment
+      id={item.id}
+      segment={item.segment}
+      backgroundToolBlockIds={backgroundToolBlockIds}
+      nextStepActions={nextStepActions}
+      forkAction={forkAction}
+      interviewDeliveryRetry={interviewDeliveryRetry}
+      harnessId={meta?.provider ?? null}
+      turnId={
+        manualRungAnchorId !== null && item.id === manualRungAnchorId
+          ? turnId
+          : null
+      }
+    />
+  );
+  return (
+    <ChatBlockNavigationAnchor
+      blockId={item.id}
+      className={isIntermediate ? "empty:hidden" : undefined}
+      collapsed={isHidden}
+    >
+      {isHidden ? null : assistantSegment}
+    </ChatBlockNavigationAnchor>
   );
 }
 
@@ -1057,24 +1122,54 @@ function RunElapsedTimer({
   );
 }
 
-function hasCollapsedIntermediateContent(
-  timeline: ReadonlyArray<ChatActivityTimelineItem>,
-  finalTextId: string | null,
-  hasLaterAssistantText: boolean,
-): boolean {
-  return timeline.some((item) => {
-    if (item.kind === "activity_group") {
-      return hasLaterAssistantText || item.group.followedByText;
+function IntermediateTimelineItem(props: {
+  readonly isHidden: boolean;
+  readonly isIntermediate: boolean;
+  readonly children: ReactNode;
+}) {
+  const focusedContentRef = useRef(false);
+  const focusedTurnRef = useRef<HTMLElement | null>(null);
+  const wasHiddenRef = useRef(props.isHidden);
+
+  useLayoutEffect(() => {
+    if (
+      props.isHidden &&
+      props.isIntermediate &&
+      !wasHiddenRef.current &&
+      focusedContentRef.current
+    ) {
+      focusedTurnRef.current
+        ?.querySelector<HTMLButtonElement>("[data-chat-intermediate-trigger]")
+        ?.focus({ preventScroll: true });
+      focusedContentRef.current = false;
+      focusedTurnRef.current = null;
     }
-    if (item.kind !== "segment" || item.segment.kind !== "text") {
-      return false;
-    }
-    return (
-      item.segment.browserSession === undefined &&
-      item.segment.markdown.trim().length > 0 &&
-      (hasLaterAssistantText || item.id !== finalTextId)
-    );
-  });
+    wasHiddenRef.current = props.isHidden;
+  }, [props.isHidden, props.isIntermediate]);
+
+  return (
+    <div
+      data-chat-intermediate-item={props.isIntermediate ? "true" : undefined}
+      onFocusCapture={(event) => {
+        focusedContentRef.current = true;
+        focusedTurnRef.current = event.currentTarget.closest<HTMLElement>(
+          "[data-assistant-turn]",
+        );
+      }}
+      onBlurCapture={(event) => {
+        if (
+          event.relatedTarget instanceof Node &&
+          !event.currentTarget.contains(event.relatedTarget)
+        ) {
+          focusedContentRef.current = false;
+          focusedTurnRef.current = null;
+        }
+      }}
+      className="contents"
+    >
+      {props.children}
+    </div>
+  );
 }
 
 function IntermediateContentDisclosure(props: {
@@ -1099,138 +1194,6 @@ function IntermediateContentDisclosure(props: {
         aria-hidden
       />
     </button>
-  );
-}
-
-function AssistantTextDisclosure(props: {
-  readonly id: string;
-  readonly collapsed: boolean;
-  readonly hideWhenCollapsed: boolean;
-  readonly children: ReactNode;
-}) {
-  const tileInstanceId = useChatCollapsibleTileInstanceId();
-  const collapsibleKey = useMemo(
-    () => deriveTextCollapsibleKey(tileInstanceId, props.id),
-    [props.id, tileInstanceId],
-  );
-  const groupId = collapsibleKey.id;
-  const userOpen = useActivityGroupOpen(groupId);
-  const textCollapseState = useActivityGroupTextCollapseState(groupId);
-  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const collapseForText = useCollapseActivityGroupForText();
-  const setOpen = useSetActivityGroupOpen();
-  const setFindForcedOpen = useSetChatFindForcedOpen();
-  const focusedContentRef = useRef(false);
-  const focusedTurnRef = useRef<HTMLElement | null>(null);
-  const contentHidden =
-    props.collapsed && props.hideWhenCollapsed && !findForcedOpen;
-  const wasContentHiddenRef = useRef(contentHidden);
-  const open =
-    !props.collapsed ||
-    findForcedOpen ||
-    (textCollapseState !== "text-collapsed" && userOpen);
-
-  useLayoutEffect(() => {
-    if (
-      contentHidden &&
-      !wasContentHiddenRef.current &&
-      focusedContentRef.current
-    ) {
-      focusedTurnRef.current
-        ?.querySelector<HTMLButtonElement>("[data-chat-intermediate-trigger]")
-        ?.focus({ preventScroll: true });
-      focusedContentRef.current = false;
-      focusedTurnRef.current = null;
-    }
-    wasContentHiddenRef.current = contentHidden;
-  }, [contentHidden]);
-
-  useEffect(() => {
-    if (!props.collapsed) {
-      return;
-    }
-    if (!findForcedOpen && textCollapseState === undefined) {
-      const activeElement = document.activeElement;
-      if (
-        activeElement instanceof HTMLElement &&
-        contentRef.current?.contains(activeElement)
-      ) {
-        triggerRef.current?.focus({ preventScroll: true });
-      }
-    }
-    collapseForText(groupId);
-  }, [
-    collapseForText,
-    findForcedOpen,
-    groupId,
-    props.collapsed,
-    textCollapseState,
-  ]);
-
-  const updateOpen = useCallback(
-    (next: boolean) => {
-      setOpen(groupId, next);
-      if (!next) {
-        setFindForcedOpen(collapsibleKey, false);
-      }
-    },
-    [collapsibleKey, groupId, setFindForcedOpen, setOpen],
-  );
-
-  if (contentHidden) {
-    return null;
-  }
-
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={updateOpen}
-      className={
-        props.collapsed ? "text-ui-sm text-muted-foreground" : "contents"
-      }
-    >
-      {props.collapsed ? (
-        <CollapsibleTrigger
-          ref={triggerRef}
-          aria-label="Earlier response"
-          variant="quiet"
-          className="group/intermediate-text flex max-w-full items-center overflow-hidden text-left"
-        >
-          <span className="min-w-0 truncate">Earlier response</span>
-          <ChevronRight
-            className="ml-2 size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color] group-hover/intermediate-text:translate-x-0 group-hover/intermediate-text:text-foreground group-focus-visible/intermediate-text:translate-x-0 group-focus-visible/intermediate-text:text-foreground group-focus-visible/intermediate-text:opacity-100 group-data-[state=open]/intermediate-text:translate-x-0 group-data-[state=open]/intermediate-text:rotate-90 group-data-[state=open]/intermediate-text:text-foreground group-data-[state=open]/intermediate-text:opacity-100"
-            aria-hidden
-          />
-        </CollapsibleTrigger>
-      ) : null}
-      <CollapsibleContent className={props.collapsed ? undefined : "contents"}>
-        <div
-          ref={contentRef}
-          onFocusCapture={(event) => {
-            focusedContentRef.current = true;
-            focusedTurnRef.current = event.currentTarget.closest<HTMLElement>(
-              "[data-assistant-turn]",
-            );
-          }}
-          onBlurCapture={(event) => {
-            if (
-              event.relatedTarget instanceof Node &&
-              !event.currentTarget.contains(event.relatedTarget)
-            ) {
-              focusedContentRef.current = false;
-              focusedTurnRef.current = null;
-            }
-          }}
-          className={
-            props.collapsed ? "ml-5 border-l border-border/35 pl-3" : "contents"
-          }
-        >
-          {props.children}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 

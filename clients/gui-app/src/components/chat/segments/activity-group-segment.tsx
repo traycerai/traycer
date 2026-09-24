@@ -63,9 +63,8 @@ interface ActivityGroupSegmentProps {
 function shouldHideActivityGroup(
   hideWhenCollapsed: boolean,
   shouldCollapseForText: boolean,
-  findForcedOpen: boolean,
 ): boolean {
-  return hideWhenCollapsed && shouldCollapseForText && !findForcedOpen;
+  return hideWhenCollapsed && shouldCollapseForText;
 }
 
 export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
@@ -92,7 +91,6 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   const groupHidden = shouldHideActivityGroup(
     hideWhenCollapsed,
     shouldCollapseForText,
-    findForcedOpen,
   );
   const wasGroupHiddenRef = useRef(groupHidden);
   const rememberFocus = useCallback((event: FocusEvent<HTMLElement>) => {
@@ -280,11 +278,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
     <Collapsible
       open={open}
       onOpenChange={updateOpen}
-      hidden={shouldHideActivityGroup(
-        hideWhenCollapsed,
-        shouldCollapseForText,
-        findForcedOpen,
-      )}
+      hidden={shouldHideActivityGroup(hideWhenCollapsed, shouldCollapseForText)}
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger

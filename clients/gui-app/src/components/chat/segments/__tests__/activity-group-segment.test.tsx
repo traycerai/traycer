@@ -172,7 +172,7 @@ describe("<ActivityGroupSegment />", () => {
     expect(screen.queryByText("echo hi")).toBeNull();
   });
 
-  it("still reveals a hidden completed group through find force", () => {
+  it("keeps a hidden completed group hidden when find force is active", () => {
     render(
       <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
         <ForceActivityGroupButton
@@ -191,7 +191,7 @@ describe("<ActivityGroupSegment />", () => {
       screen.getByRole("button", { name: "Force activity group" }),
     );
 
-    expect(screen.getByText("echo hi")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Ran 1 command/ })).toBeNull();
   });
 
   it("opens through find-force and releases on manual collapse", () => {

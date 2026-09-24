@@ -248,6 +248,29 @@ export function lastAssistantTextSegmentId(
   return null;
 }
 
+export function isCollapsedIntermediateTimelineItem(
+  item: ChatActivityTimelineItem,
+  index: number,
+  finalTextIndex: number,
+  hasLaterAssistantText: boolean,
+): boolean {
+  if (item.kind === "activity_group") {
+    return hasLaterAssistantText || item.group.followedByText;
+  }
+  if (item.kind === "promoted_subagent") {
+    return hasLaterAssistantText || finalTextIndex >= 0;
+  }
+  if (item.segment.kind === "tool" && item.segment.agentMessageSend !== null) {
+    return hasLaterAssistantText || finalTextIndex >= 0;
+  }
+  if (item.segment.kind !== "text") return false;
+  return (
+    item.segment.browserSession === undefined &&
+    item.segment.markdown.trim().length > 0 &&
+    (hasLaterAssistantText || (finalTextIndex >= 0 && index < finalTextIndex))
+  );
+}
+
 export function buildChatActivityTimeline(
   segments: ReadonlyArray<MessageSegment>,
   options: ActivityTimelineOptions,

@@ -48,6 +48,17 @@ export function deriveActivityGroupCollapsibleKey(
   return createChatCollapsibleKey(tileInstanceId, "activity-group", groupId);
 }
 
+export function deriveEarlierActivityCollapsibleKey(
+  tileInstanceId: string,
+  messageId: string,
+): ChatCollapsibleKey {
+  return createChatCollapsibleKey(
+    tileInstanceId,
+    "activity-group",
+    `earlier-activity:${messageId}`,
+  );
+}
+
 export function deriveTextCollapsibleKey(
   tileInstanceId: string,
   segmentId: string,
