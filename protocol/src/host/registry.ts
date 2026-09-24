@@ -1,4 +1,11 @@
 import {
+  organizationReadV10,
+  organizationRefreshV10,
+  organizationCommandV10,
+  organizationHistoryV10,
+  organizationSubscribeV10,
+} from "./organization/contracts";
+import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
@@ -4908,6 +4915,55 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 });
 
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
+  "organization.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: organizationReadV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "organization.refresh": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: organizationRefreshV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "organization.command": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: organizationCommandV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "organization.history": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: organizationHistoryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "browser.savedLoginSites": {
     // Settings > Browser's "Sites with saved logins" list (keychain refactor
     // ticket 10). Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL,
@@ -11273,6 +11329,12 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
+  "organization.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: organizationSubscribeV10 } },
+    },
+  },
   "epic.subscribe": {
     1: {
       // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and

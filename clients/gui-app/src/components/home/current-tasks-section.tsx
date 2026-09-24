@@ -226,6 +226,7 @@ function CurrentTaskRow(props: {
   const item = props.item;
   return (
     <HistoryTaskRow
+      organization={null}
       item={item}
       selectionMode={false}
       selectionDisabled={false}
