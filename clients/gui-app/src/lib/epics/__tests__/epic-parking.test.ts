@@ -285,6 +285,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     accountContext: null,
     deliveryPolicy: null,
     hashOnlyRetry: false,
+    sentFromHostId: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };

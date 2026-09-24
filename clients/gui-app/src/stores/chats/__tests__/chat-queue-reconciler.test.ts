@@ -77,6 +77,7 @@ function createPendingAction(
     accountContext: null,
     deliveryPolicy: null,
     hashOnlyRetry: false,
+    sentFromHostId: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -270,6 +271,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -345,6 +347,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -781,6 +784,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -895,6 +899,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: null,
         deliveryPolicy: null,
         hashOnlyRetry: false,
+        sentFromHostId: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };

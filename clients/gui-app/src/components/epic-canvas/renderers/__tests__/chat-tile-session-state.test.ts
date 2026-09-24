@@ -294,6 +294,7 @@ function pendingAction(
     accountContext: null,
     deliveryPolicy: null,
     hashOnlyRetry: false,
+    sentFromHostId: null,
     createdAt: 1_000,
     connectionEpoch: 0,
     ...overrides,

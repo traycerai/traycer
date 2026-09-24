@@ -547,6 +547,7 @@ describe("composer draft store browserAnnotations", () => {
           accountContext: null,
           deliveryPolicy: null,
           hashOnlyRetry: false,
+          sentFromHostId: null,
           createdAt: 1,
           connectionEpoch: 0,
         },

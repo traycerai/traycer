@@ -42,7 +42,11 @@ const DIRTY_CONTENT: JsonContent = {
  * way here, so the read site has to narrow rather than assume.
  */
 interface GateCreateChatRequest {
-  readonly initialMessage?: { readonly content: JsonContent } | null;
+  readonly hostId?: string | null;
+  readonly initialMessage?: {
+    readonly content: JsonContent;
+    readonly sentFromHostId?: string | null;
+  } | null;
 }
 
 const testState = vi.hoisted(() => ({
@@ -51,6 +55,11 @@ const testState = vi.hoisted(() => ({
       readonly initialTurnStarted: boolean;
     }>
   >(() => Promise.resolve({ initialTurnStarted: false })),
+  // The directory's LOCAL host id - the machine typing, deliberately
+  // distinct from the placement mock's fixed target ("host-1") below so a
+  // reader replaced by the target host id fails alongside one replaced by a
+  // constant.
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   ingesting: false,
@@ -134,9 +143,13 @@ vi.mock("@/lib/host", () => ({
 }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => stubHostClient,
-  // No local host in this harness: the create's `sentFromHostId` is `null`,
-  // as it is from a shell with no local host.
-  getHostBindingSnapshot: () => null,
+  // The create stamps `sentFromHostId` from the directory's local host at
+  // submit - see `testState.getLocalHostId` for the default and the
+  // sender-host-placement cases below for the assertions.
+  getHostBindingSnapshot: () => ({
+    hostClient: stubHostClient,
+    directory: { getLocalHostId: testState.getLocalHostId },
+  }),
 }));
 
 // P1.2: the body resolves its placement through this hook and refuses to
@@ -352,6 +365,8 @@ beforeEach(() => {
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
+  testState.getLocalHostId.mockReset();
+  testState.getLocalHostId.mockReturnValue("host-local-typing");
 });
 
 afterEach(() => {
@@ -470,6 +485,71 @@ describe("NewConversationModalBody direct submit gate", () => {
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
     expect(testState.createChat).toHaveBeenCalledTimes(1);
+  });
+
+  // `sentFromHostId` names the machine the user is TYPING on (the local
+  // host), never the `hostId` the chat is created on (here, the placement
+  // mock's fixed "host-1"). The suite's default local id ("host-local-typing")
+  // already diverges from that target, so a reader quietly replaced by the
+  // target host would fail this alongside one replaced by a constant.
+  it("stamps the initial message's sentFromHostId with the local host id, not the target host", () => {
+    useAuthStore.setState({
+      profile: { userId: "user-1", userName: "Tester", email: "t@example.com" },
+    });
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={null}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+      { wrapper: QueryWrapper },
+    );
+
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    const request = testState.createChat.mock.calls[0][0];
+    expect(request.hostId).toBe("host-1");
+    expect(request.initialMessage?.sentFromHostId).toBe("host-local-typing");
+  });
+
+  // The null path stays pinned: a shell with no local host sends no sender
+  // host, rather than falling back to the target host.
+  it("sends a null sentFromHostId when the directory has no local host", () => {
+    testState.getLocalHostId.mockReturnValue(null);
+    useAuthStore.setState({
+      profile: { userId: "user-1", userName: "Tester", email: "t@example.com" },
+    });
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={null}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+      { wrapper: QueryWrapper },
+    );
+
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    const request = testState.createChat.mock.calls[0][0];
+    expect(request.initialMessage?.sentFromHostId ?? null).toBeNull();
   });
 
   it("treats every hash as present before snapshot readiness, then defers to the real predicate", () => {
