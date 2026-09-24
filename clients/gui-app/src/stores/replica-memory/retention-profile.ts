@@ -45,7 +45,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
 export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   maxLiveEpics: 3,
-  retainedTopLevelSurfaces: 2,
+  retainedTopLevelSurfaces: 1,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
 });
