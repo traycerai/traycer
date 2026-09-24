@@ -1,3 +1,4 @@
+import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
@@ -128,29 +129,31 @@ export function RootComponent() {
           into their declared default-host scope rather than each creating its
           own route gate. */}
       <HostReadyGate>
-        <FirstTaskImportBridge />
-        <HostScopeReady scope="default-host">
-          <PreventSleepController />
-          <TrayOpenEpicBridge />
-          <NotificationFocusBridge />
-          <EpicAccessCoordinator />
-          <ProviderProfileAddFlowHost />
-        </HostScopeReady>
-        <RootSurface
-          showOnboarding={showOnboarding}
-          isStandalone={isStandalone}
-          admissionRefusal={admission.refusal}
-        />
-        {isStandalone ? null : (
-          <>
-            <SystemTabModalHost />
-            <ChatSearchDialogHost />
-            <SweepReviewDialogHost />
-            {/* Mobile-only full-screen notifications surface (renders null on
+        <OrganizationProvider>
+          <FirstTaskImportBridge />
+          <HostScopeReady scope="default-host">
+            <PreventSleepController />
+            <TrayOpenEpicBridge />
+            <NotificationFocusBridge />
+            <EpicAccessCoordinator />
+            <ProviderProfileAddFlowHost />
+          </HostScopeReady>
+          <RootSurface
+            showOnboarding={showOnboarding}
+            isStandalone={isStandalone}
+            admissionRefusal={admission.refusal}
+          />
+          {isStandalone ? null : (
+            <>
+              <SystemTabModalHost />
+              <ChatSearchDialogHost />
+              <SweepReviewDialogHost />
+              {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
-            <NotificationsMobileSheet />
-          </>
-        )}
+              <NotificationsMobileSheet />
+            </>
+          )}
+        </OrganizationProvider>
       </HostReadyGate>
     </>
   );

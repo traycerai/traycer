@@ -1,4 +1,9 @@
 import {
+  OrganizationMetadata,
+  TaskPersonalDecoration,
+  HistoryImportedStatus,
+} from "@/components/organization/organization-metadata";
+import {
   type FocusEvent,
   type ReactNode,
   useCallback,
@@ -53,6 +58,7 @@ const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
 
 export interface HistoryTaskRowProps {
   readonly item: HistoryItem;
+  readonly organization: { readonly canEdit: boolean } | null;
   readonly selectionMode: boolean;
   readonly selectionDisabled: boolean;
   readonly selectedForDelete: boolean;
@@ -142,6 +148,12 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
           </HistoryRowStatusSlot>
           {props.renameEditor ?? (
             <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              {props.organization === null ? null : (
+                <TaskPersonalDecoration
+                  taskId={props.item.epicId}
+                  fallback={props.item.organization}
+                />
+              )}
               <span className="truncate font-medium text-foreground">
                 {historyItemDisplayTitle(props.item)}
               </span>
@@ -149,7 +161,11 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                 id={importedDescriptionId}
                 rowFocusSession={null}
               >
-                <ImportedUnseenDot epicId={props.item.epicId} />
+                {props.organization === null ? (
+                  <ImportedUnseenDot epicId={props.item.epicId} />
+                ) : (
+                  <HistoryImportedStatus item={props.item} />
+                )}
               </HistoryRowStatusSlot>
               {props.showOpenBadge ? (
                 <HistoryOpenBadge
@@ -170,6 +186,13 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
             </span>
           )}
         </span>
+        {props.organization === null ? null : (
+          <OrganizationMetadata
+            taskId={props.item.epicId}
+            canEdit={props.organization.canEdit}
+            fallback={props.item.organization}
+          />
+        )}
         <HistoryRowTrailingMetadata
           epicId={props.item.epicId}
           selectionMode={props.selectionMode}

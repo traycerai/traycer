@@ -1,3 +1,7 @@
+import {
+  taskOrganizationSchema,
+  type TaskOrganization,
+} from "@traycer/protocol/host/organization/schemas";
 import type {
   PermissionRole,
   ListTaskLight,
@@ -31,6 +35,7 @@ const BUCKET_ORDER: Record<HistoryRecencyBucket, number> = {
 };
 
 export interface HistoryItem {
+  organization?: TaskOrganization;
   id: string;
   epicId: string;
   taskType: HistoryItemTaskType;
@@ -212,6 +217,10 @@ function buildHistoryItem(args: {
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
   return {
+    organization:
+      "organization" in task
+        ? taskOrganizationSchema.safeParse(task.organization).data
+        : undefined,
     id: itemId(light.id, taskType, index),
     epicId: light.id,
     taskType,

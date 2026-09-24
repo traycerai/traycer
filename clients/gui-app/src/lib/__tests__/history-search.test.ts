@@ -12,7 +12,7 @@ describe("history search params", () => {
   it("parses typed history params and defaults active search to relevance", () => {
     const search = parseHistorySearch({
       historyQuery: "  api  ",
-      historyRepos: ["traycer/server", " traycer/gui-app "],
+      historyRepos: ["traycer/server", " traycer/gui-app ", "traycer/gui-app"],
       historyRepoMode: "all",
       historyWorkspaces: [
         "host-1:%2FUsers%2Fme%2Fgui-app",
@@ -23,6 +23,10 @@ describe("history search params", () => {
     });
 
     expect(search).toEqual({
+      labelNames: [],
+      labelMode: "any",
+      groupIds: [],
+      includeUngrouped: false,
       query: "  api  ",
       repos: ["traycer/gui-app", "traycer/server"],
       repoMode: "all",
@@ -116,6 +120,44 @@ describe("history search params", () => {
     expect(
       historySearchToParams(defaulted).historyChatHostMode,
     ).toBeUndefined();
+  });
+
+  it("round-trips label and group categories, including all-mode and Ungrouped", () => {
+    const parsed = parseHistorySearch({
+      historyLabels: ["zeta", " alpha ", "zeta", " alpha  "],
+      historyLabelMode: "all",
+      historyGroups: ["group-b", " group-a "],
+      historyUngrouped: true,
+    });
+
+    expect(parsed.labelNames).toEqual(["alpha", "zeta"]);
+    expect(parsed.labelMode).toBe("all");
+    expect(parsed.groupIds).toEqual(["group-a", "group-b"]);
+    expect(parsed.includeUngrouped).toBe(true);
+
+    const params = historySearchToParams(parsed);
+    expect(params).toMatchObject({
+      historyLabels: ["alpha", "zeta"],
+      historyLabelMode: "all",
+      historyGroups: ["group-a", "group-b"],
+      historyUngrouped: true,
+    });
+    expect(parseHistorySearch(params)).toMatchObject({
+      labelNames: ["alpha", "zeta"],
+      labelMode: "all",
+      groupIds: ["group-a", "group-b"],
+      includeUngrouped: true,
+    });
+  });
+
+  it("omits label mode when only one label is selected", () => {
+    const search = parseHistorySearch({
+      historyLabels: "alpha",
+      historyLabelMode: "all",
+    });
+
+    expect(search.labelNames).toEqual(["alpha"]);
+    expect(historySearchToParams(search).historyLabelMode).toBeUndefined();
   });
 
   it("collapses whitespace variants of one chat-host id to a single entry", () => {

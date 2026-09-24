@@ -333,4 +333,124 @@ describe("manual tab groups", () => {
     });
     expect(restored.groups).toEqual({ g: group });
   });
+
+  it("keeps cloud group memberships and personal colors through pairing and separation", () => {
+    const cloudGroups = {
+      "group-a": { name: "Alpha", color: "#8ab4f8", collapsed: false },
+      "group-b": { name: "Beta", color: "#f28b82", collapsed: false },
+    };
+    useTabsStore.setState({
+      ...layout({
+        groups: cloudGroups,
+        customizations: {
+          [tabRefKey(a)]: {
+            color: "#ef4444",
+            icon: "A",
+            groupId: "group-a",
+            organizationOwnerId: "user-1",
+          },
+          [tabRefKey(b)]: {
+            color: "#f97316",
+            icon: "B",
+            groupId: "group-b",
+            organizationOwnerId: "user-1",
+          },
+        },
+      }),
+      stripOrder: [a, b, c],
+    });
+
+    useTabsStore.getState().pair({
+      left: a,
+      right: b,
+      splitId: "cloud-pair",
+      leftRatio: 0.5,
+      targetRef: a,
+    });
+    useTabsStore.getState().separateSplit("cloud-pair");
+
+    expect(useTabsStore.getState().customizations).toMatchObject({
+      [tabRefKey(a)]: {
+        color: "#ef4444",
+        groupId: "group-a",
+        organizationOwnerId: "user-1",
+      },
+      [tabRefKey(b)]: {
+        color: "#f97316",
+        groupId: "group-b",
+        organizationOwnerId: "user-1",
+      },
+    });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it("carries draft group intent to its replacement without spreading it during a split", () => {
+    const draft = { kind: "draft" as const, id: "draft-group-intent" };
+    const assignedDraft = setLayoutTabGroup(
+      layout({
+        items: [{ kind: "tab", id: tabItemId(draft), ref: draft }],
+        groups: { g: group },
+      }),
+      draft,
+      "g",
+    );
+
+    expect(assignedDraft.customizations?.[tabRefKey(draft)]).toMatchObject({
+      groupId: "g",
+      pendingGroupId: "g",
+    });
+
+    const replaced = replaceLayoutRef(assignedDraft, {
+      previous: draft,
+      next: a,
+    });
+    expect(replaced.customizations?.[tabRefKey(a)]).toMatchObject({
+      groupId: "g",
+      pendingGroupId: "g",
+    });
+
+    useTabsStore.setState({
+      ...layout({
+        items: [
+          { kind: "tab", id: tabItemId(a), ref: a },
+          { kind: "tab", id: tabItemId(b), ref: b },
+        ],
+        groups: { g: group },
+        customizations: {
+          [tabRefKey(a)]: {
+            color: null,
+            icon: null,
+            groupId: "g",
+            pendingGroupId: "g",
+          },
+          [tabRefKey(b)]: {
+            color: "#f97316",
+            icon: null,
+            groupId: null,
+          },
+        },
+      }),
+      stripOrder: [a, b],
+    });
+    useTabsStore.getState().pair({
+      left: a,
+      right: b,
+      splitId: "draft-intent-pair",
+      leftRatio: 0.5,
+      targetRef: a,
+    });
+
+    expect(
+      useTabsStore.getState().customizations?.[tabRefKey(a)],
+    ).toMatchObject({
+      groupId: "g",
+      pendingGroupId: "g",
+    });
+    expect(
+      useTabsStore.getState().customizations?.[tabRefKey(b)],
+    ).toMatchObject({
+      groupId: null,
+    });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
 });
