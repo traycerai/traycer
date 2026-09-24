@@ -71,14 +71,14 @@ function installGeometry(): void {
         return getter(this);
       },
     });
-  // The viewport shares its row with the count control, so it is narrower
-  // by the control's width exactly while the control is mounted.
+  // The viewport shares its row with the two edge slots, so it is narrower
+  // by one slot width per slot mounted (400 with both slots, 480 with none).
   define("clientWidth", (el) => {
     if (el.dataset.testid !== "viewport") return 0;
-    const control = el.parentElement?.querySelector(
-      "[data-hidden-tabs-control]",
-    );
-    return geometry.outerWidth - (control ? geometry.controlWidth : 0);
+    const controls =
+      el.parentElement?.querySelectorAll("[data-hidden-tabs-control]").length ??
+      0;
+    return geometry.outerWidth - controls * geometry.controlWidth;
   });
   define("scrollWidth", (el) =>
     el.dataset.testid === "viewport" ? geometry.scrollWidth : 0,
@@ -112,9 +112,8 @@ function Harness(props: {
   readonly layout: TaskTabLayout;
   readonly keys: ReadonlyArray<string>;
 }) {
-  const { setScrollElement, hiddenTabKeys, revealTab } = useHiddenHeaderTabs(
-    props.layout,
-  );
+  const { setScrollElement, hiddenTabKeys, hasOverflow, revealTab } =
+    useHiddenHeaderTabs(props.layout);
   return (
     <div>
       <div ref={setScrollElement} data-testid="viewport">
@@ -130,10 +129,16 @@ function Harness(props: {
           </button>
         ))}
       </div>
-      {hiddenTabKeys.length > 0 ? (
-        <span data-hidden-tabs-control>{hiddenTabKeys.length}</span>
+      {hasOverflow ? (
+        <>
+          <span data-hidden-tabs-control="left" />
+          <span data-hidden-tabs-control="right" />
+        </>
       ) : null}
-      <output data-testid="hidden">{hiddenTabKeys.join(",")}</output>
+      <output data-testid="hidden">
+        {hiddenTabKeys.left.join(",")}|{hiddenTabKeys.right.join(",")}
+      </output>
+      <output data-testid="overflow">{String(hasOverflow)}</output>
       <button type="button" onClick={() => revealTab("b")}>
         reveal-b
       </button>
@@ -144,14 +149,23 @@ function Harness(props: {
   );
 }
 
+// "left|right" membership of the two edge menus.
 function hidden(): string {
   return screen.getByTestId("hidden").textContent;
+}
+
+function overflow(): string {
+  return screen.getByTestId("overflow").textContent;
+}
+
+function controlCount(): number {
+  return document.querySelectorAll("[data-hidden-tabs-control]").length;
 }
 
 function overflowingGeometry(): Geometry {
   return {
     viewport: { left: 100, right: 500 },
-    outerWidth: 440,
+    outerWidth: 480,
     scrollWidth: 600,
     controlWidth: 40,
     tabs: {
@@ -185,25 +199,25 @@ afterEach(() => {
 });
 
 describe("useHiddenHeaderTabs", () => {
-  it("counts tabs clipped on either edge, in DOM order, and not the fully visible ones", () => {
+  it("lists tabs clipped on either edge, in DOM order, and not the fully visible ones", () => {
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).toBe("a,d");
+    expect(hidden()).toBe("a|d");
   });
 
   it("tolerates one pixel of sub-pixel clipping", () => {
     geometry.tabs.d = { left: 420, right: 501 };
     geometry.tabs.a = { left: 99, right: 160 };
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
   it("reports nothing when the content fits", () => {
     geometry.scrollWidth = 400;
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
-  it("recounts when the strip scrolls", () => {
+  it("re-measures when the strip scrolls", () => {
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
     geometry.tabs = {
       a: { left: -20, right: 100 },
@@ -212,38 +226,38 @@ describe("useHiddenHeaderTabs", () => {
       d: { left: 360, right: 460 },
     };
     fireEvent.scroll(screen.getByTestId("viewport"));
-    expect(hidden()).toBe("a");
+    expect(hidden()).toBe("a|");
   });
 
-  it("recounts when the viewport is resized", () => {
+  it("re-measures when the viewport is resized", () => {
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
     geometry.viewport = { left: 100, right: 700 };
     geometry.outerWidth = 640;
     geometry.scrollWidth = 700;
     fireResize();
-    expect(hidden()).toBe("a");
+    expect(hidden()).toBe("a|");
   });
 
-  it("clears the count once a resize makes everything fit", () => {
+  it("clears the hidden membership once a resize makes everything fit", () => {
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
     geometry.scrollWidth = 400;
     fireResize();
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
-  it("counts a tab that is added past the edge", async () => {
+  it("lists a tab that is added past the edge", async () => {
     const { rerender } = render(<Harness layout="scroll" keys={["a", "b"]} />);
-    expect(hidden()).toBe("a");
+    expect(hidden()).toBe("a|");
     geometry.tabs.e = { left: 520, right: 620 };
     // The DOM change is observed through a MutationObserver callback.
     await act(async () => {
       rerender(<Harness layout="scroll" keys={["a", "b", "e"]} />);
       await Promise.resolve();
     });
-    expect(hidden()).toBe("a,e");
+    expect(hidden()).toBe("a|e");
   });
 
-  it("drops a removed tab, e.g. a collapsed group, from the count", async () => {
+  it("drops a removed tab, e.g. a collapsed group, from the membership", async () => {
     const { rerender } = render(
       <Harness layout="scroll" keys={["a", "b", "c", "d"]} />,
     );
@@ -251,55 +265,138 @@ describe("useHiddenHeaderTabs", () => {
       rerender(<Harness layout="scroll" keys={["b", "c"]} />);
       await Promise.resolve();
     });
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
   it("ignores tabs with no rendered width", () => {
     geometry.tabs.d = { left: 0, right: 0 };
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).toBe("a");
+    expect(hidden()).toBe("a|");
   });
 
-  it("counts in shrink layout too when even compact tabs overflow", () => {
+  it("lists hidden tabs in shrink layout too when even compact tabs overflow", () => {
     render(<Harness layout="shrink" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).toBe("a,d");
+    expect(hidden()).toBe("a|d");
   });
 
-  it("shows no count in shrink layout when the tabs fit", () => {
+  it("lists no hidden tabs in shrink layout when the tabs fit", () => {
     geometry.scrollWidth = 400;
     render(<Harness layout="shrink" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
   it("recomputes from the new geometry when the layout switches", () => {
     const { rerender } = render(
       <Harness layout="scroll" keys={["a", "b", "c", "d"]} />,
     );
-    expect(hidden()).toBe("a,d");
+    expect(hidden()).toBe("a|d");
     geometry.scrollWidth = 400;
     rerender(<Harness layout="shrink" keys={["a", "b", "c", "d"]} />);
     fireResize();
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
-  it("subtracts the count control's footprint so it cannot keep itself visible", () => {
+  it("subtracts both edge slots' footprint so they cannot keep themselves mounted", () => {
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-    expect(hidden()).not.toBe("");
-    // Control mounted: clientWidth is 400. 430 content overflows that but fits
-    // the 440px that exist once the control is gone, so the count must clear
-    // and stay cleared after clientWidth grows back to 440.
-    geometry.scrollWidth = 430;
+    expect(hidden()).not.toBe("|");
+    // Slots mounted: clientWidth is 400. 470 content overflows that but fits
+    // the 480px that exist once both slots are gone, so the slots must clear
+    // and stay cleared after clientWidth grows back to 480.
+    geometry.scrollWidth = 470;
     fireResize();
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
     fireResize();
-    expect(hidden()).toBe("");
+    expect(hidden()).toBe("|");
   });
 
-  it("still counts when content overflows even after the control's footprint is added back", () => {
+  it("still reports overflow when content exceeds the width even after both slots' footprint is added back", () => {
     render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-    geometry.scrollWidth = 450;
+    geometry.scrollWidth = 490;
     fireResize();
-    expect(hidden()).toBe("a,d");
+    expect(hidden()).toBe("a|d");
+  });
+
+  describe("per-side edge menus", () => {
+    const KEYS = ["a", "b", "c", "d"];
+
+    it("mounts both control slots whenever the strip overflows, even if one side is empty", () => {
+      geometry.tabs.a = { left: 100, right: 160 };
+      render(<Harness layout="scroll" keys={KEYS} />);
+      expect(hidden()).toBe("|d");
+      expect(overflow()).toBe("true");
+      expect(controlCount()).toBe(2);
+    });
+
+    it("moves tabs between sides only as the strip scrolls", () => {
+      render(<Harness layout="scroll" keys={KEYS} />);
+      expect(hidden()).toBe("a|d");
+      geometry.tabs = {
+        a: { left: -60, right: 40 },
+        b: { left: 40, right: 180 },
+        c: { left: 180, right: 300 },
+        d: { left: 300, right: 400 },
+      };
+      fireEvent.scroll(screen.getByTestId("viewport"));
+      expect(hidden()).toBe("a,b|");
+      geometry.tabs = {
+        a: { left: 100, right: 200 },
+        b: { left: 200, right: 340 },
+        c: { left: 340, right: 460 },
+        d: { left: 460, right: 560 },
+      };
+      fireEvent.scroll(screen.getByTestId("viewport"));
+      expect(hidden()).toBe("|d");
+    });
+
+    it("lists a tab wider than the viewport on both sides", () => {
+      geometry.tabs = {
+        a: { left: 60, right: 160 },
+        b: { left: 50, right: 600 },
+        c: { left: 600, right: 700 },
+        d: { left: 700, right: 800 },
+      };
+      render(<Harness layout="scroll" keys={KEYS} />);
+      expect(hidden()).toBe("a,b|b,c,d");
+    });
+
+    it("keeps DOM order within each side", () => {
+      geometry.tabs = {
+        a: { left: 0, right: 50 },
+        b: { left: 50, right: 99 },
+        c: { left: 99, right: 400 },
+        d: { left: 500, right: 560 },
+      };
+      render(<Harness layout="scroll" keys={["d", "c", "b", "a"]} />);
+      expect(hidden()).toBe("b,a|d");
+    });
+
+    it("does not let the two-slot footprint sustain overflow after a resize", () => {
+      render(<Harness layout="scroll" keys={KEYS} />);
+      expect(controlCount()).toBe(2);
+      // 470 fits the 480px that exist once both slots are gone.
+      geometry.scrollWidth = 470;
+      fireResize();
+      expect(overflow()).toBe("false");
+      expect(controlCount()).toBe(0);
+      fireResize();
+      expect(overflow()).toBe("false");
+      expect(hidden()).toBe("|");
+    });
+
+    it("keeps overflow when content exceeds the width with both slots added back", () => {
+      render(<Harness layout="scroll" keys={KEYS} />);
+      geometry.scrollWidth = 490;
+      fireResize();
+      expect(overflow()).toBe("true");
+      expect(controlCount()).toBe(2);
+    });
+
+    it("reports no overflow and no slots when everything fits", () => {
+      geometry.scrollWidth = 400;
+      render(<Harness layout="scroll" keys={KEYS} />);
+      expect(overflow()).toBe("false");
+      expect(controlCount()).toBe(0);
+    });
   });
 
   it("reveal scrolls the tab into view and focuses it", () => {
@@ -358,17 +455,17 @@ describe("useHiddenHeaderTabs", () => {
       expect(hidden()).toContain("b");
     });
 
-    it("does not reveal a hidden active tab when the count control narrows the viewport", () => {
+    it("does not reveal a hidden active tab when the edge slots narrow the viewport", () => {
       geometry.scrollWidth = 400;
       const scroll = renderWithActive("a", "scroll");
-      expect(hidden()).toBe("");
+      expect(hidden()).toBe("|");
       geometry.scrollWidth = 600;
       fireResize();
-      expect(hidden()).toBe("a,d");
-      // The control is now mounted and the viewport narrower; the observer
+      expect(hidden()).toBe("a|d");
+      // Both slots are now mounted and the viewport narrower; the observer
       // reports that too.
       fireResize();
-      expect(hidden()).toBe("a,d");
+      expect(hidden()).toBe("a|d");
       expect(scroll).not.toHaveBeenCalled();
     });
 
@@ -422,7 +519,8 @@ describe("useHiddenHeaderTabs", () => {
     }
 
     function FrameHarness(props: { readonly frames: ReadonlyArray<Frame> }) {
-      const { setScrollElement, hiddenTabKeys } = useHiddenHeaderTabs("scroll");
+      const { setScrollElement, hiddenTabKeys, hasOverflow } =
+        useHiddenHeaderTabs("scroll");
       return (
         <div>
           <div ref={setScrollElement} data-testid="viewport">
@@ -446,10 +544,15 @@ describe("useHiddenHeaderTabs", () => {
               </div>
             ))}
           </div>
-          {hiddenTabKeys.length > 0 ? (
-            <span data-hidden-tabs-control>{hiddenTabKeys.length}</span>
+          {hasOverflow ? (
+            <>
+              <span data-hidden-tabs-control="left" />
+              <span data-hidden-tabs-control="right" />
+            </>
           ) : null}
-          <output data-testid="hidden">{hiddenTabKeys.join(",")}</output>
+          <output data-testid="hidden">
+            {hiddenTabKeys.left.join(",")}|{hiddenTabKeys.right.join(",")}
+          </output>
         </div>
       );
     }
@@ -511,14 +614,14 @@ describe("useHiddenHeaderTabs", () => {
       async ({ c, b }) => {
         initialGeometry();
         const { rerender } = render(<FrameHarness frames={ABC} />);
-        expect(hidden()).toBe("c");
+        expect(hidden()).toBe("|c");
 
         midFlipGeometry();
         await act(async () => {
           rerender(<FrameHarness frames={reorderedFrames(c, b)} />);
           await Promise.resolve();
         });
-        expect(hidden()).toBe("b");
+        expect(hidden()).toBe("|b");
 
         // Only the transforms settle: same children, no resize, scroll or
         // selection change.
@@ -527,7 +630,7 @@ describe("useHiddenHeaderTabs", () => {
           rerender(<FrameHarness frames={reorderedFrames("none", "none")} />);
           await Promise.resolve();
         });
-        expect(hidden()).toBe("b");
+        expect(hidden()).toBe("|b");
       },
     );
 
@@ -546,13 +649,13 @@ describe("useHiddenHeaderTabs", () => {
           frames={[{ id: "split", keys: ["x", "y"], transform: TRANSLATE_72 }]}
         />,
       );
-      expect(hidden()).toBe("y");
+      expect(hidden()).toBe("|y");
     });
 
     it("keeps tabs without a frame working", () => {
       // The plain harness renders bare buttons with no [data-strip-item-id].
       render(<Harness layout="scroll" keys={["a", "b", "c", "d"]} />);
-      expect(hidden()).toBe("a,d");
+      expect(hidden()).toBe("a|d");
     });
 
     it("snapshots active visibility by its final position, so a later shrink reveals it", async () => {
