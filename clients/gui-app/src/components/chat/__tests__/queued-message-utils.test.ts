@@ -156,6 +156,7 @@ function queuedItem(input: {
     sender: input.sender,
     settings: TEST_SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: input.status,
     targetTurnId: null,

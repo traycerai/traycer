@@ -24,6 +24,7 @@ import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version"
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -590,6 +591,11 @@ export function useLandingComposerActions(
               sender: { type: "user" as const, userId },
               settings,
               accountContext,
+              // The machine this composer runs on, NOT `activeHostId` (where
+              // the chat is created): read at submit exactly as a send frame
+              // reads it, so the first turn's browser is placed by the same
+              // fact as every later one.
+              sentFromHostId: readLocalHostIdSnapshot(),
               // Spread rather than a `false` literal, like the sibling opt-in
               // below: absent and `false` read identically on the host, and a
               // request that names the key only when it is asking for something

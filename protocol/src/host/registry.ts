@@ -278,6 +278,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -12084,7 +12085,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 16,
+      latestMinor: 17,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12173,6 +12174,13 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // host withholds nothing.
         16: {
           contract: chatSubscribeV116,
+        },
+        // @1.17 adds `sentFromHostId` on `send` / `editUserMessage` and on the
+        // queued prompt item: the machine the message was sent from, which
+        // places a routed browser realm born on that turn. A defaulted key in
+        // a non-strict object at every minor, so the host withholds nothing.
+        17: {
+          contract: chatSubscribeV117,
         },
       },
     },
