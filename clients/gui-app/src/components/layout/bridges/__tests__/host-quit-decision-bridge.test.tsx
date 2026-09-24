@@ -719,6 +719,7 @@ describe("<HostQuitDecisionBridge /> - phase transitions", () => {
 
     const dialog = await screen.findByTestId("host-quit-dialog");
     expect(dialog.dataset.quitState).toBe("stopping");
+    expect(dialog.textContent).toContain("Traycer quits and the host stops.");
     expect(screen.getByTestId("host-quit-stopping")).not.toBeNull();
     expect(screen.queryByTestId("host-quit-counts")).toBeNull();
     expect(screen.getByTestId("host-quit-stop")).toHaveProperty(
@@ -797,6 +798,7 @@ describe("<HostQuitDecisionBridge /> - phase transitions", () => {
 
     const dialog = await screen.findByTestId("host-quit-dialog");
     expect(dialog.dataset.quitState).toBe("stopping");
+    expect(dialog.textContent).toContain("Traycer quits and the host stops.");
     expect(screen.getByTestId("host-quit-stopping")).not.toBeNull();
   });
 

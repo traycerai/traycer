@@ -159,8 +159,11 @@ export const HOST_QUIT_DESCRIPTION_BUSY_RETRY =
   "Something started on the host while it was stopping, so it was left running. Keep it running, or stop it now and end this work.";
 export const HOST_QUIT_DESCRIPTION_IDLE =
   "Quitting Traycer can keep the host running so your phone can still reach it, or stop it now.";
+/** True in both orders: the ordinary stop settles and then Traycer quits, but a
+ * terminal-started host the service stop cannot reach (`not-service-run`) is
+ * ended by its own supervisor after Traycer has already quit. */
 export const HOST_QUIT_DESCRIPTION_STOPPING =
-  "Traycer quits as soon as the host has stopped.";
+  "Traycer quits and the host stops.";
 export const HOST_QUIT_DESCRIPTION_CHECKING =
   "Traycer is asking this machine's host what it is running.";
 
