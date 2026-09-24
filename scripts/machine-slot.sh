@@ -15,9 +15,9 @@
 # `auto` sizes the pool from physical memory: one slot per 16 GB, minimum one.
 # `TRAYCER_MACHINE_SLOTS` overrides it for every name.
 #
-# This file is kept byte-identical in traycerai/traycer and the internal
-# monorepo: both repos' hooks name the same lock files, so a commit in one
-# waits for a commit in the other.
+# The internal monorepo's hook sources this file through its traycer/
+# submodule, so both repos' hooks take the same lock files and a commit in
+# one waits for a commit in the other.
 #
 # HOW THE LOCK IS HELD
 #
