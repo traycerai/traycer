@@ -53,6 +53,12 @@ export type TabNavigationIntent =
       readonly nestedFocus: NestedFocusTarget | null;
     }
   | { readonly kind: "draft"; readonly draftId: string }
+  /**
+   * An open identity tab. Per-instance, keyed by the identity id: the tab
+   * record in `identity-tabs-store` carries the host the tab is bound to for
+   * life, so the intent names only the identity.
+   */
+  | { readonly kind: "identity"; readonly identityId: string }
   | { readonly kind: "history" }
   | { readonly kind: "settings"; readonly section: SettingsSectionId }
   | { readonly kind: "home" };
@@ -155,6 +161,12 @@ export function draftTabIntent(
   draftId: string,
 ): Extract<TabNavigationIntent, { kind: "draft" }> {
   return { kind: "draft", draftId };
+}
+
+export function identityTabIntent(
+  identityId: string,
+): Extract<TabNavigationIntent, { kind: "identity" }> {
+  return { kind: "identity", identityId };
 }
 
 export function newDraftTabIntent(

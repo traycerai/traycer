@@ -17,6 +17,7 @@ import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
+import { Route as IdentitiesIdentityIdRouteImport } from "./routes/identities.$identityId";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
@@ -82,6 +83,11 @@ const EpicsIndexRoute = EpicsIndexRouteImport.update({
   id: "/",
   path: "/",
   getParentRoute: () => EpicsRoute,
+} as any);
+const IdentitiesIdentityIdRoute = IdentitiesIdentityIdRouteImport.update({
+  id: "/identities/$identityId",
+  path: "/identities/$identityId",
+  getParentRoute: () => rootRouteImport,
 } as any);
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
   id: "/",
@@ -218,6 +224,7 @@ export interface FileRoutesByFullPath {
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/identities/$identityId": typeof IdentitiesIdentityIdRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
@@ -251,6 +258,7 @@ export interface FileRoutesByTo {
   "/onboarding": typeof OnboardingRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/identities/$identityId": typeof IdentitiesIdentityIdRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
@@ -287,6 +295,7 @@ export interface FileRoutesById {
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/identities/$identityId": typeof IdentitiesIdentityIdRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
@@ -324,6 +333,7 @@ export interface FileRouteTypes {
     | "/settings"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/identities/$identityId"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
@@ -357,6 +367,7 @@ export interface FileRouteTypes {
     | "/onboarding"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/identities/$identityId"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
@@ -392,6 +403,7 @@ export interface FileRouteTypes {
     | "/settings"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/identities/$identityId"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
@@ -428,6 +440,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
+  IdentitiesIdentityIdRoute: typeof IdentitiesIdentityIdRoute;
 }
 
 declare module "@tanstack/react-router" {
@@ -487,6 +500,13 @@ declare module "@tanstack/react-router" {
       fullPath: "/epics/";
       preLoaderRoute: typeof EpicsIndexRouteImport;
       parentRoute: typeof EpicsRoute;
+    };
+    "/identities/$identityId": {
+      id: "/identities/$identityId";
+      path: "/identities/$identityId";
+      fullPath: "/identities/$identityId";
+      preLoaderRoute: typeof IdentitiesIdentityIdRouteImport;
+      parentRoute: typeof rootRouteImport;
     };
     "/settings/": {
       id: "/settings/";
@@ -744,6 +764,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
+  IdentitiesIdentityIdRoute: IdentitiesIdentityIdRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

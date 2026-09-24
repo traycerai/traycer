@@ -1,4 +1,5 @@
 import { DraftsDialog } from "@/components/composer/drafts/drafts-dialog";
+import { IdentitiesDialog } from "@/components/identities/identities-dialog";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
@@ -65,6 +66,9 @@ export function DesktopDialogHost(): ReactNode {
           activeEpicId={activeEpicId}
           onClose={close}
         />
+      ) : null}
+      {activeDialog === "identities" ? (
+        <IdentitiesDialog hostId={hostId} onClose={close} />
       ) : null}
       <AboutDetailsDialog
         open={activeDialog === "about-details"}

@@ -24,6 +24,30 @@ export function draftPathname(draftId: string): string {
   return `/draft/${draftId}`;
 }
 
+export function identityRoute(identityId: string): NavigateOptions {
+  return {
+    to: "/identities/$identityId",
+    params: { identityId },
+  };
+}
+
+export function identityPathname(identityId: string): string {
+  return `/identities/${identityId}`;
+}
+
+const IDENTITY_ROUTE_RE = /^\/identities\/([^/]+)\/?$/;
+
+/** The identity id from `/identities/:identityId`, or `null` for any other route. */
+export function readIdentityIdFromPath(pathname: string): string | null {
+  const match = IDENTITY_ROUTE_RE.exec(pathname);
+  if (match === null) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 const DEFAULT_EPIC_SEARCH = {
   focusedAt: undefined,
   focusArtifactId: undefined,
