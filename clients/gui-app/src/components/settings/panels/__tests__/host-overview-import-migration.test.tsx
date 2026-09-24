@@ -76,6 +76,10 @@ import {
 } from "@/stores/migration/migration-run-store";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  armSettingsOpenIntent,
+  resetSettingsOpenIntentForTests,
+} from "@/stores/tabs/settings-open-intent-store";
 
 /**
  * Data & migration moved off General and onto the Overview of the host it
@@ -193,7 +197,21 @@ function arrangePickedHost(): void {
   };
 }
 
+/**
+ * Import & migration now lives on the Data tab, not the default Status one,
+ * so every assertion in this suite needs it open. Arming the open intent
+ * before mounting lands the page directly on Data — the same mechanism a
+ * real deep link uses — rather than every test clicking through the tab bar
+ * first for content the suite's own subject has nothing to do with.
+ */
 function renderPanel(): void {
+  armSettingsOpenIntent({
+    section: "host",
+    resetToGeneral: false,
+    tab: "data",
+    draft: null,
+    hostId: null,
+  });
   render(
     <QueryClientProvider
       client={
@@ -206,14 +224,6 @@ function renderPanel(): void {
         <HostSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
-  );
-}
-
-function isBefore(first: Element, second: Element): boolean {
-  return (
-    (first.compareDocumentPosition(second) &
-      Node.DOCUMENT_POSITION_FOLLOWING) !==
-    0
   );
 }
 
@@ -231,19 +241,19 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  resetSettingsOpenIntentForTests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   scopedStreamMock.current = null;
 });
 
 describe("Host Overview · Data & migration", () => {
-  it("renders both rows in a group sitting after Installation", () => {
+  it("renders both rows in one group on the Data tab", () => {
     renderPanel();
 
-    const group = screen.getByTestId("host-import-migration");
+    expect(screen.getByTestId("host-import-migration")).toBeTruthy();
     expect(screen.getByTestId("settings-import-sessions")).toBeTruthy();
     expect(screen.getByTestId("settings-reattempt-migration")).toBeTruthy();
-    expect(isBefore(screen.getByTestId("host-installation"), group)).toBe(true);
   });
 
   it("hands the picked host's own stream binding to the migration run", () => {
@@ -324,8 +334,10 @@ describe("Host Overview · Data & migration", () => {
     expect(screen.queryByTestId("host-import-migration")).toBeNull();
     expect(screen.queryByTestId("settings-reattempt-migration")).toBeNull();
     // The rest of the page is unaffected - this is a withheld group, not a
-    // withheld panel.
-    expect(screen.getByTestId("host-installation")).toBeTruthy();
+    // withheld panel. The header sits above every tab, so it is the proof
+    // that survives the move to a tabbed page (its old counterpart,
+    // "host-installation", is on a different tab and is not mounted here).
+    expect(screen.getByTestId("host-identity-card")).toBeTruthy();
   });
 
   it("withholds the group while no stream has resolved at all", () => {

@@ -96,8 +96,8 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings-panel-model";
 import {
   buildOverviewHostFixture,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import {
@@ -629,7 +629,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     await screen.findByText("v1.7.0 is available.");
     expect(screen.queryByText(/Ask this host which versions/)).toBeNull();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     await waitFor(() => {
       const rows = within(screen.getByTestId("host-version-rows"));
       expect(rows.getByText("v1.7.0")).toBeTruthy();
@@ -683,7 +683,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // in-flight one is a matter of timing, and the assertion below passes on
     // only one of those. That the list arrives at all without a click is the
     // behaviour this line now also pins.
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     // ABSENT, not `false`. The first load states no override at all, which is
     // what lets the host derive inclusion from its own installed version; a
     // `false` here would be an explicit exclusion nobody asked for, and would
@@ -741,9 +741,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list moved into the Advanced disclosure, which Radix does not mount
-    // while closed — so this is the difference between "no rows" and "no drawer".
-    await openHostOverviewAdvanced();
+    // The list is on the Updates tab, whose body is not mounted until it is
+    // visited — so this is the difference between "no rows" and "no tab".
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
@@ -843,7 +843,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = await screen.findByTestId("host-version-rows");
     const row = within(rows).getByRole("listitem");
     fireEvent.click(within(row).getByRole("button", { name: "Install 1.3.0" }));
@@ -1132,7 +1132,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     const downgrade = within(rowFor(rows, "1.2.0")).getByRole("button", {
@@ -1184,7 +1184,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     expect(
       within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
@@ -1226,7 +1226,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     const equalRow = rowFor(rows.getAllByRole("listitem"), "1.2.0+build.2");
     const equal = within(equalRow);
@@ -1272,7 +1272,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     expect(
       within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
@@ -1329,7 +1329,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(
@@ -1369,7 +1369,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     );
     expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     await waitFor(() => {
       const rows = within(picker).getAllByRole("listitem");
@@ -1415,7 +1415,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     await screen.findByText("v1.7.0 is available.");
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(
@@ -1450,16 +1450,21 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
-    // Grab the Install button BEFORE the dialog opens: Radix marks the page
+    // The version picker (Updates) and the service deregister control
+    // (Installation) now live on two different tabs. Visit Updates first and
+    // grab the Install button BEFORE the dialog opens — Radix marks the page
     // behind an open dialog aria-hidden, which removes the rows from the
-    // accessibility tree that role queries search.
+    // accessibility tree that role queries search — then switch to
+    // Installation: the dialog it opens is panel-level, so it stays open
+    // across the tab switch exactly as it would in the app.
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     const installButton = within(rowFor(rows, "1.6.0")).getByRole("button", {
       name: "Install 1.6.0",
     });
 
+    await selectHostOverviewTab("installation");
     fireEvent.click(
       await screen.findByTestId("host-overview-service-deregister"),
     );
@@ -1506,7 +1511,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       ).toBe(false);
     });
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     fireEvent.click(
@@ -1556,7 +1561,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       ).toBe(false);
     });
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     fireEvent.click(
@@ -1620,7 +1625,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     });
     const statusCallsBeforeInstall = fixture.hostStatusCalls();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     fireEvent.click(
@@ -1678,9 +1683,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list moved into the Advanced disclosure, which Radix does not mount
-    // while closed — so this is the difference between "no rows" and "no drawer".
-    await openHostOverviewAdvanced();
+    // The list is on the Updates tab, whose body is not mounted until it is
+    // visited — so this is the difference between "no rows" and "no tab".
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     expect(within(picker).getAllByRole("listitem")).toHaveLength(
       VERSION_LIST_PREVIEW,
@@ -1743,7 +1748,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     await waitFor(() => expect(requests).toEqual([undefined]));
 
     const checkbox = await screen.findByRole("checkbox", {
@@ -1800,7 +1805,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom(hostId, fixture);
       renderPanel();
-      await openHostOverviewAdvanced();
+      await selectHostOverviewTab("updates");
     }
 
     await renderWithSource("installed-rc", "host-a");
@@ -1902,7 +1907,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", hostA);
     const view = renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     await waitFor(() =>
       expect(requestsByHost).toEqual([
         { hostId: "host-a", includePreReleases: undefined },
@@ -1972,7 +1977,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(summary.textContent).toContain("won't update to it automatically");
 
     // The manual route stays open: the newer row is present and installable.
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.1.0");
     expect(
@@ -2091,7 +2096,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
 
     // The RC the user asked to see is still there and still installable — the
     // gate changes the sentence, never the manual route.
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.0.0-rc.1");
     expect(
@@ -2641,7 +2646,7 @@ describe("Overview updates — CLI floor remedy", () => {
 
     // An install of the lower installable row discovers the host is
     // externally managed; the region retires behind its notice.
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton("Install 1.2.5"));
     await screen.findByTestId("host-overview-updates-degraded");
     expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();

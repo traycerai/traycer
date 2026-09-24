@@ -42,7 +42,7 @@ import {
   describeCliFloorRemedy,
   type CliFloorRemedy,
 } from "@/components/settings/panels/host-overview-cli-floor-remedy";
-import type { VersionPickerProps } from "@/components/settings/panels/host-overview-advanced";
+import type { VersionPickerProps } from "@/components/settings/panels/host-overview-version-picker";
 import type { HostVersionRow } from "@/components/settings/panels/host-version-rows";
 import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings-panel-model";
 import {
@@ -116,10 +116,10 @@ function comparisonBaseline(
  * WHERE THE ANSWER GOES is split, and that split is the point. The card body
  * gets one line and at most two buttons — the state, Update now when there is
  * something to install, Check now — and the eleven-row version table it used to
- * hold open moved into the Advanced disclosure. A permanently-expanded list of
- * every historical version, with no way to collapse it, answered a question
- * ("which exact build do I want to pin to?") almost nobody asks, at the cost of
- * burying the one ("am I up to date?") everybody does.
+ * hold open moved to a tab of its own, Updates. A permanently-expanded list of
+ * every historical version on the card, with no way to put it away, answered
+ * a question ("which exact build do I want to pin to?") almost nobody asks, at
+ * the cost of burying the one ("am I up to date?") everybody does.
  *
  * The state lives HERE rather than in either consumer because both read it: the
  * summary row needs `latest`, and the picker needs the whole manifest. This hook

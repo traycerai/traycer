@@ -421,7 +421,7 @@ describe("HostDangerZone", () => {
     // an account write that needs no route to the machine.
     //
     // The copy rule is not a style preference. This app already says
-    // "Deregister" one card away in the Advanced disclosure, for OS-SERVICE
+    // "Deregister" in the Installation group on the same tab, for OS-SERVICE
     // deregistration — a machine-local repair with nothing in common with
     // ending a host's membership of an account. Two destructive controls
     // sharing a verb is how someone reaches for the wrong one.

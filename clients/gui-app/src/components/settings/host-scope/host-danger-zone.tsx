@@ -113,8 +113,8 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
  *
  * NEVER the word "deregister" in copy, and the collision is not hypothetical:
  * this app already says "Deregister" for OS-SERVICE deregistration in the
- * Advanced disclosure one card away, which is a machine-local repair operation
- * with nothing in common with this one.
+ * Installation group just above, on the same tab, which is a machine-local
+ * repair operation with nothing in common with this one.
  *
  * The copy is written against what `POST /api/v3/hosts/:hostId/deregister`
  * actually does. It stamps `deregisteredAt` and clears the presence lease; it

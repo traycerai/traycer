@@ -15,12 +15,12 @@ import {
 /**
  * The auto-update policy switch.
  *
- * Now inside the Advanced disclosure, apart from the drain gate below, and the
- * split is about urgency rather than topic. This is a preference someone sets
- * once and forgets, so it belongs with the other settings a person opens
- * Advanced to find; "Apply now — ends N sessions" appears only while an update is
- * genuinely blocked on open sessions, and hiding THAT behind a collapsed
- * disclosure would bury the one control here with a deadline on it.
+ * On the Overview's Updates tab, apart from the drain gate below on Status, and
+ * the split is about urgency rather than topic. This is a preference someone
+ * sets once and forgets, so it belongs with the other settings a person opens
+ * Updates to find; "Apply now — ends N sessions" appears only while an update is
+ * genuinely blocked on open sessions, and hiding THAT behind a tab the page
+ * does not open on would bury the one control here with a deadline on it.
  *
  * Works without a live session on purpose: the policy is stored in the
  * account's host registry and the host reads it on its next check-in, which is

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
-import { openHostOverviewAdvanced } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { selectHostOverviewTab } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -117,9 +117,9 @@ describe("Overview capability split without host management", () => {
     // The regression: the page-wide gate replaced this, so a registered host
     // with no current route had no update-policy UI anywhere in the app.
     //
-    // Behind the Advanced disclosure now — the policy is a preference, not an
-    // answer — but still PRESENT without a route, which is the whole claim.
-    await openHostOverviewAdvanced();
+    // On the Updates tab now — the policy is a preference, not an answer —
+    // but still PRESENT without a route, which is the whole claim.
+    await selectHostOverviewTab("updates");
     expect(
       screen.getByRole("switch", { name: "Turn on auto-update" }),
     ).not.toBeNull();
@@ -127,7 +127,10 @@ describe("Overview capability split without host management", () => {
     // gate preserves it hidden through the outage) or absent — and the gate
     // says why. The zone itself still renders: its other row (Remove Traycer)
     // runs over the local CLI bridge, so the gate belongs around the
-    // snapshots row, not around the region.
+    // snapshots row, not around the region. The Danger Zone is on the
+    // Installation tab, so it has to be visited for this to be a real
+    // assertion rather than "never mounted, so trivially absent".
+    await selectHostOverviewTab("installation");
     const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
     expect(clearRow === null || isConcealed(clearRow)).toBe(true);
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
@@ -158,10 +161,10 @@ describe("Overview capability split without host management", () => {
     // The trade is deliberate and this is the assertion that states its cost:
     // an unreachable host can no longer be pinned to a version at all.
     //
-    // Asserted with Advanced OPEN, so this is a real absence rather than the
-    // drawer merely being shut: everything the disclosure holds is mounted, and
+    // Asserted on the Updates tab, so this is a real absence rather than the
+    // tab merely being unvisited: everything the tab holds is mounted, and
     // the picker still is not there.
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
     expect(screen.queryByTestId("host-overview-updates")).toBeNull();
     // What survives the outage, and the whole reason this card is not gated as

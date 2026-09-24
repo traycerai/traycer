@@ -235,13 +235,15 @@ predicates; it never imports the assembled index or the search consumer.
 | Every rendered anchor is an indexed anchor of that section                                                                                                               | reverse membership inside `assertSettingsSearchTargets`                                                                                                                                                                                                                                                               |
 | Every contributor's words reach an entry                                                                                                                                 | the coverage test: its label and keywords appear in its target entry's document; no dangling, self or contributor target                                                                                                                                                                                              |
 | Every member has exactly one placement                                                                                                                                   | `CheckedSectionInput` rejects a `search` with both; the index test checks the input member by member                                                                                                                                                                                                                  |
-| No host-GATED element carries an anchor                                                                                                                                  | an exhaustive index test: an anchor on a host-scoped section is legal only when that section is registered with `hostScope: "connecting"`, so the executor proves every anchor it indexes lands while the host has no usable client (today: Permissions' tab bar and its Modes row)                                   |
+| No host-GATED element carries an anchor                                                                                                                                  | an exhaustive index test: an anchor on a host-scoped section is legal only when that section is registered with `hostScope: "connecting"`, so the executor proves every anchor it indexes lands while the host has no usable client (today: Permissions' tab bar and its Modes row, and the host Overview's tab bar)  |
 
 **Not guaranteed:**
 
 - A bespoke `<div>` that uses no primitive and writes no anchor is invisible to
-  all of this. Providers, Worktrees and the Host overview's own cards are
-  indexed at page and region level for that reason.
+  all of this. Providers and Worktrees are indexed at page and region level
+  for that reason, and the host Overview at page and TAB level: its tab
+  triggers are destinations, and every card inside a tab body folds into the
+  page.
 - TypeScript is structural: the types enforce a definition's SHAPE; the
   collection, reference and DOM tests establish COVERAGE. Types are not
   provenance — nothing stops a panel rendering another section's definition.
@@ -318,13 +320,13 @@ different answers:
   in a narrow window, because no predicate can see a width. Placement was
   anchored until it started hiding below `md`; searching it in a narrow
   desktop window then landed on an empty page. A row whose drawing condition
-  mentions the viewport at all belongs here. Permissions' tab triggers are
-  the one anchored element a viewport redraws, and they stay indexed because
-  the landing never depends on the width: on a phone viewport the tab bar
-  becomes one Select whose trigger carries the ACTIVE tab's anchor, and the
-  panel switches to the landed tab (during render, from `pendingReveal`)
-  before the reveal's first poll, so the anchor asked for is always the one
-  drawn.
+  mentions the viewport at all belongs here. Tab triggers - Permissions' and
+  the host Overview's - are the one anchored element a viewport redraws, and
+  they stay indexed because the landing never depends on the width: on a
+  phone viewport the tab bar becomes one Select whose trigger carries the
+  ACTIVE tab's anchor, and the panel switches to the landed tab (during
+  render, from `pendingReveal`) before the reveal's first poll, so the anchor
+  asked for is always the one drawn.
   A subgroup IS indexed, anchored on its inset card, so a result for one of
   its rows lands on the switch that reveals the row.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
@@ -366,22 +368,27 @@ different answers:
   notice; the bodies of Permissions' Judge, Rules and Activity tabs, which a
   host that predates `autoJudge.get` / `autoPolicy.get` /
   `autoJudge.listRecent` has no notion of at all; and
-  the Overview's Installation and Danger zone cards themselves,
-  which the page drops for an unresolved or vanished host) — not indexed. A
+  every card inside the Overview's tab bodies - Installation and Danger zone
+  among them - which come and go with the host's state and which the page
+  drops for an unresolved or vanished host) — not indexed. A
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
   second, wrong model of the panel. The rule is **stable destinations**: index
   an element that renders whatever state the selected host is in — the PAGE,
   or an element the page draws OUTSIDE its `HostScopeGate` — and let every
   definition inside the gate contribute to it, so its label folds into that
-  entry's keywords. "uninstall", "snapshots", "import", "installation", "log
-  level", "startup flags" and "wsl" land on their page; "judge", "policy",
-  "allow rule" and "activity" land on the Permissions tab trigger that opens
-  them. The invariant that follows: **no host-GATED element carries an
-  anchor.** Permissions is the one host-scoped page that anchors anything, and
-  only what sits outside its gate: the tab bar (a trigger is never gated —
-  `HostScopeGate` wraps the three host-backed tab BODIES) and the Modes row,
-  which is application-scoped. The index test enforces it mechanically: an
+  entry's keywords. "log level", "startup flags" and "wsl" land on their
+  page; "judge", "policy", "allow rule" and "activity" land on the
+  Permissions tab trigger that opens them; "uninstall", "snapshots",
+  "import", "installation" and "port forward" land on the Overview tab
+  trigger that opens them. The invariant that follows: **no host-GATED
+  element carries an anchor.** Two host-scoped pages anchor anything, and
+  only what sits outside their gates. Permissions: the tab bar (a trigger is
+  never gated — `HostScopeGate` wraps the three host-backed tab BODIES) and
+  the Modes row, which is application-scoped. The Overview: its tab bar,
+  which renders for every host in every state above bodies that each gate
+  themselves; everything inside a body folds into the PAGE, whose own
+  vocabulary is split across the five triggers. The index test enforces it mechanically: an
   anchored entry on a `group: "host"` section is legal only when that section
   is registered with `hostScope: "connecting"`, so the executor has proved the
   anchor lands while the host has no usable client.
@@ -419,8 +426,9 @@ never renders passes too. A fixture's `hostScope` is `null` for an
 application page and `"connecting"` for a host-scoped one: the executor mocks
 `useHostScope` to a connecting scope for it, so every body behind
 `HostScopeGate` is concealed and only the anchors outside the gate can be
-found. Permissions is the only host-scoped page registered; every other host
-page anchors nothing, so it has nothing to prove.
+found. Permissions and the host Overview are the host-scoped pages
+registered; every other host page anchors nothing, so it has nothing to
+prove.
 
 **Reveal.** A click arms the store, then navigates through
 `lib/settings-navigation.ts` (surface-agnostic — the modal deliberately uses no
@@ -5378,6 +5386,84 @@ set-state-in-effect` forbids the effect form, and an effect would also
   sidebar switcher is the collection, and every lifecycle verb lives on the
   Overview of the host it describes.
 
+  **A pinned host header over five tabs** (`host-overview-tabs.tsx`; core
+  flows: the `host-overview-tabs` epic artifact). The header is the identity
+  part of `HostIdentityCard` - name and rename, the Local/Remote tag,
+  Activate, the `⋯` menu, the health line, the working chip - and it never
+  moves, so switching tabs never hides Restart or Activate. Under it, in this
+  order, most used first and destructive last: **Status · Updates · Ports ·
+  Data · Installation**, a `TabsList variant="line"`.
+  - **Frame.** The header, the tab bar and the active body share one card.
+    On desktop the page takes `SettingsPanelShell`'s `fillHeight` (the
+    Providers model) with a transparent body card: the header and the bar
+    are pinned, only the active tab's body scrolls, and the card is only as
+    tall as its content up to the pane. The `md:` classes on the tab frame
+    are that whole model. On a phone (`useIsMobileViewport`) nothing is a
+    scroll container and the page scrolls as one, header included; the bar
+    becomes a section `Select` (built like `PermissionsTabSelect`) whose
+    trigger carries the ACTIVE tab's search anchor, and Activate moves into
+    the `⋯` menu as its first item (with its reason written under it). The
+    phone's name row never wraps (`HostIdentityCard`'s `nameRowWraps`): the
+    name truncates, and the pencil, the tag and the `⋯` keep their space.
+  - **Every tab, every state.** All five render for every host in every
+    state - connecting, restarting to finish an update, unreachable,
+    stopped, not installed, update required - so the header and the bar sit
+    outside anything that withholds a body, and each body decides what it
+    can show (the per-region `usable` gates it carried before the split).
+    While the host connects, Status shows the loading shape
+    (`HostScopeConnecting`) where the update answer goes - unless its update
+    progress is retained, which is then the answer. The header's own states are unchanged: this computer's host down gets
+    Run doctor (and Reinstall Traycer after a removal), an unreachable host
+    gets no Activate or `⋯`. The two page states with NO header and no tabs
+    are unchanged too - a host removed from the account while you look at
+    it, and an account with no host but Traycer installed
+    (`LocalRecoveryDangerZone`).
+  - **Tab state.** The page opens on Status. `OpenSettingsModalOpts.tab`
+    opens the named tab (read through `useSettingsOpenIntent("host")`,
+    acknowledged with `acknowledgeSettingsOpenIntent`, and its `hostId`
+    carried into the Settings scope before paint, as Permissions does); a
+    tab this page does not have is ignored. The four links into
+    `section: "host"` (the resource monitor's and the rate-limit popover's
+    Manage hosts, the composer's host section, the chat tile's host update)
+    name `tab: "status"`, so an Overview already open on another tab comes
+    back to Status, on the same host or a new one - a link with no tab arms
+    no intent and would leave the tab where it was. A
+    settings-search landing on a tab's anchor switches to it during render
+    (`hostOverviewTabForAnchor`); a page result moves nothing. Nothing
+    switches tabs by itself. The selected tab is held by `HostSettingsPanel`
+    (`useHostOverviewTabSelection`, in `host-overview-tab-state.ts` beside
+    the components' `host-overview-tabs.tsx`, so both keep Fast Refresh)
+    ABOVE its per-host remount (`key={scopeKey}`), so a switch of host in
+    the sidebar picker keeps the tab while the remount still closes an open
+    confirmation, the rename field and the Doctor panel of the previous
+    host. A VISITED tab stays mounted, hidden while inactive (the Rules-tab
+    rule), so a half-typed retention limit survives a look at Status; an
+    unvisited one is never mounted, and visited tabs reset when the page
+    closes or the host changes.
+  - **Selecting a tab from inside the page** goes through ONE seam:
+    `useHostOverviewSelectTab()` (`host-overview-tab-state.ts`), provided
+    by the panel through `HostOverviewSelectTabProvider`, `null` outside it.
+    The header's update pill and the "Change in Updates" / "Pick it in
+    Updates" links use it.
+  - **One component per tab**, each drawing what the panel hands it; the
+    queries, the mutations and every dialog stay in `host-overview-panel.tsx`,
+    so the update answer on Status and the version list on Updates are still
+    one `useHostOverviewUpdates` instance. The dialogs open over whichever
+    tab is showing: the restart confirm, the three "Host is busy"
+    force-or-defer dialogs (restart, staged-update force, bound dispatch),
+    the restart offer that opens by itself after an update started here has
+    installed, and the Doctor sheet. The trigger and phone-`Select` badges
+    (the Ports count, the Installation dot) hang on `HostOverviewTabs`'
+    `badges`.
+
+    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                         |
+    | ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Status       | `host-overview-status-tab.tsx`       | The update operation card, the update answer (Update now / Check now, the command-line-tools remedy, the failed-attempt line), the drain-gate row                                                                                                        |
+    | Updates      | `host-overview-updates-tab.tsx`      | The auto-update switch and the version picker (`host-overview-version-picker.tsx`), shown open - the Advanced disclosure is gone                                                                                                                         |
+    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`                                                                                                                                                                                                                                   |
+    | Data         | `host-overview-data-tab.tsx`         | Data & migration (`HostImportMigrationSection`), then Version history (`ArtifactVersionSettingsSection`)                                                                                                                                                 |
+    | Installation | `host-overview-installation-tab.tsx` | The Installation group (Installation details, then the OS service, `host-overview-os-service-section.tsx`; withheld while the host cannot be reached), the CLI upgrade hint (this computer only), the Danger zone last (File edit snapshots still in it) |
+
   **The page reads the scoped host's OWN RPC** (`host-overview-panel.tsx`):
   `host.status` for what it is running, `host.identity.get` for what it is
   called, `host.getInstallationInfo` for how it was installed; buttons are
@@ -5462,10 +5548,11 @@ set-state-in-effect` forbids the effect form, and an effect would also
     lost ack idempotent instead of a busy refusal. `{outcome:"busy"}` is NOT an
     error: the host closed session admission, found work in flight and reopened
     it, so it renders as an amber notice with a Try again, never a red toast.
-  - **Updates**: one card, both halves. The host's own "Check now" and the
-    VERSION LIST it reveals (`host.update.*`) sit above the account registry's
-    auto-update policy and drain-gate force (`HostRegistryUpdates`, keyed by
-    `hostId`, controls capture their target when armed).
+  - **Updates**: one hook, two tabs. The host's own answer and "Check now"
+    (`host.update.*`) and the drain-gate force sit on Status; the VERSION LIST
+    and the account registry's auto-update policy sit on Updates
+    (`HostRegistryUpdates`, keyed by `hostId`, controls capture their target
+    when armed).
     - **The version list replaced a free-text pin.** `host.update.check` returns
       the whole manifest, not just `latest`, so the Overview renders the same
       per-row-Install list the local recovery console has always had - for a
@@ -5883,7 +5970,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
       (`host-settings-package-manager-upgrade-hint.tsx`) pins the version
       Desktop bundles, the answer to "your npm CLI is older than Desktop's";
       this remedy pins the host's required floor, the answer to "this host
-      refuses the CLI it has". Advanced rows retain their reasons.
+      refuses the CLI it has". Version rows on Updates retain their reasons.
       Sentence precedence preserves the record-derived parks: **failure →
       activation debt → CLI remedy → checking → unreachable → no manifest →
       stranded on its release line / up to date → unavailable / available**.
@@ -5932,8 +6019,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.
-  - **Data & migration** (`panels/host-import-migration-section.tsx`), between
-    Installation and the danger zone: **Import your work** (opens the session
+  - **Data & migration** (`panels/host-import-migration-section.tsx`), on the
+    Data tab above Version history: **Import your work** (opens the session
     import wizard for the sessions on THIS host's disk) and **Data migration**
     (retry moving this host's local SQLite tasks and epics to cloud). Both came
     off General for the reason that section now states - they move one
@@ -5978,7 +6065,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
     Traycer (local CLI bridge, local host only, never gated on reachability), and
     **Remove from account** (an account write, remote + registered only). That
     last one is NEVER called "deregister" in copy - this app already uses that
-    word for OS-SERVICE deregistration in the Advanced disclosure one card away,
+    word for OS-SERVICE deregistration in the OS service section on the same tab,
     and two destructive controls sharing a verb is how someone reaches for the
     wrong one. Its confirmation is written against what the route actually does:
     `POST /api/v3/hosts/:id/deregister` stamps `deregisteredAt` and clears the

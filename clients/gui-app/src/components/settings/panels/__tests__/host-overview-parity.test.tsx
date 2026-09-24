@@ -42,7 +42,11 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
-import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { HOST_OVERVIEW_TABS } from "@/components/settings/panels/host-overview.definitions";
+import {
+  buildOverviewHostFixture,
+  selectHostOverviewTab,
+} from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 afterEach(() => {
   cleanup();
@@ -325,6 +329,17 @@ async function renderOverviewSnapshot(options: {
   const displayedName = (await screen.findByText(options.effectiveName))
     .textContent;
 
+  // Visit every tab so its body force-mounts: the comparison below reads the
+  // WHOLE container, and an unvisited tab's body is not in the DOM at all
+  // (`host-overview-tabs.tsx`'s `forceMount={visited.has(value) ? true :
+  // undefined}`) — without this, only the default Status tab's controls would
+  // ever reach the snapshot, and the Danger Zone's local/remote removal split
+  // (the whole point of `removalTestIds`) would silently compare two empty
+  // lists.
+  for (const tab of HOST_OVERVIEW_TABS) {
+    await selectHostOverviewTab(tab);
+  }
+
   const testIds = Array.from(view.container.querySelectorAll("[data-testid]"))
     .map((node) => node.getAttribute("data-testid") ?? "")
     .filter((testId) => !DANGER_ZONE_REMOVAL_TEST_IDS.has(testId))
@@ -366,6 +381,13 @@ async function renderOverviewSnapshot(options: {
     // `SHARED_ROW_NAME`.
     .split(options.hostId)
     .join("<HOST_ID>")
+    // The Danger Zone's snapshot-size row never resolves in this fixture (no
+    // bridge, so the query stays pending), so it renders `AgentSpinningDots`'
+    // braille glyph the whole time — real-clock-driven, one 80ms frame at a
+    // time, so which frame two SEQUENTIAL renders land on is not a fact about
+    // local/remote parity. Normalized for the same reason the host id is:
+    // real variance the comparison must not fail on.
+    .replace(/[⠀-⣿]/gu, "<SPINNER_FRAME>")
     .replace(/\s+/gu, " ")
     .trim();
 
