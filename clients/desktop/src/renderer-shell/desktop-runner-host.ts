@@ -12,7 +12,13 @@ import type {
   HostControllerStatus,
   HostDoctorReport,
   HostInstalledRecord,
+  HostLifecycleSetRequest,
+  HostLifecycleSetResult,
+  HostLifecycleView,
   HostLogsTailResult,
+  HostQuitDecisionRequest,
+  HostQuitDecisionResponse,
+  HostQuitStateEvent,
   HostNameSettings,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -38,6 +44,7 @@ import type {
   IHostTray,
   IFileDropHost,
   IFileSaveHost,
+  IHostLifecycleHost,
   IMigrationHost,
   INotificationHost,
   IRendererCrashTelemetryHost,
@@ -49,6 +56,7 @@ import type {
   ITraycerCli,
   IWorkspaceFoldersHost,
   IZoomHost,
+  LocalHostCapability,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
@@ -274,6 +282,13 @@ export interface DesktopPreloadBridge {
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
+  hostLifecycle: DesktopHostLifecycleBridge;
+  /**
+   * Whether main runs the local-host lanes in this launch, pinned at boot
+   * from the lifecycle policy. `"none"` means the machine runs no host of its
+   * own and every local-host surface is off until the next launch.
+   */
+  readonly localHostCapability: LocalHostCapability;
   /**
    * The preload-built client of the main-process selection authority. It
    * already carries this load's engine-issued `attachSeq` and its own
@@ -377,6 +392,25 @@ export interface DesktopHostManagementBridge {
 
 export interface DesktopHostTrayBridge {
   onCommand(handler: (command: HostTrayCommand) => void): {
+    dispose: () => void;
+  };
+}
+
+/**
+ * Preload-exposed lifecycle policy plus the quit round-trip with the host
+ * quit modal (see `electron-preload/host-lifecycle-bridge.ts`).
+ */
+export interface DesktopHostLifecycleBridge {
+  get(): Promise<HostLifecycleView>;
+  set(request: HostLifecycleSetRequest): Promise<HostLifecycleSetResult>;
+  onChange(handler: (view: HostLifecycleView) => void): {
+    dispose: () => void;
+  };
+  onQuitRequest(handler: (request: HostQuitDecisionRequest) => void): {
+    dispose: () => void;
+  };
+  respondToQuitRequest(response: HostQuitDecisionResponse): Promise<void>;
+  onQuitState(handler: (event: HostQuitStateEvent) => void): {
     dispose: () => void;
   };
 }
@@ -680,7 +714,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
-  readonly hasLocalHost: boolean = true;
+  // False for a launch booted in the `none` lifecycle mode: main runs no
+  // local-host lanes, so nothing may wait on, provision or manage one.
+  readonly hasLocalHost: boolean;
   // The renderer's own clipboard takes images, and where a MIME type defeats
   // it the main-process nativeImage bridge picks the write up.
   readonly canCopyImages: boolean = true;
@@ -697,16 +733,18 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly appUpdates: DesktopAppUpdatesBridge;
   readonly globalShortcuts: DesktopGlobalShortcutsBridge;
   readonly support: DesktopSupportBridge;
-  readonly service: IServiceHost;
-  readonly traycerCli: ITraycerCli;
+  readonly service: IServiceHost | null;
+  readonly traycerCli: ITraycerCli | null;
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
   readonly crashTelemetry: IRendererCrashTelemetryHost;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
   readonly browserView: BrowserViewBridge;
-  readonly hostManagement: IHostManagement;
-  readonly hostTray: IHostTray;
+  readonly hostManagement: IHostManagement | null;
+  readonly hostTray: IHostTray | null;
+  // Present in every launch mode: in `none` it is the only way back.
+  readonly hostLifecycle: IHostLifecycleHost;
   // No OS push on the desktop: notifications here are native `show` calls, not
   // an APNs/FCM permission the user can revoke from a settings app.
   readonly pushPermission: null = null;
@@ -733,6 +771,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.bridge.authnBaseUrl;
     this.relayBaseUrl = options.bridge.relayBaseUrl;
+    this.hasLocalHost = options.bridge.localHostCapability !== "none";
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;
     this.appUpdates = options.bridge.appUpdates;
@@ -831,40 +870,31 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
 
     this.workspaceFolders = {
-      canPickNatively: true,
+      // A native dialog names paths on THIS machine, which only a local host
+      // can open; a `none` launch has none.
+      canPickNatively: this.hasLocalHost,
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
     this.fileSave = buildDesktopFileSave(this.bridge.fileDrops);
-    this.service = {
-      install: () => this.bridge.service.install(),
-      uninstall: (purge) => this.bridge.service.uninstall(purge),
-      start: () => this.bridge.service.start(),
-      stop: () => this.bridge.service.stop(),
-      restart: () => this.bridge.service.restart(),
-      upgrade: () => this.bridge.service.upgrade(),
-      enableLinger: () => this.bridge.service.enableLinger(),
-      getLogTail: (maxLines) => this.bridge.service.getLogTail(maxLines),
-    };
-    this.traycerCli = {
-      hostStatus: () => this.bridge.traycerCli.hostStatus(),
-      shellConfigGet: () => this.bridge.traycerCli.shellConfigGet(),
-      shellConfigSet: (input) => this.bridge.traycerCli.shellConfigSet(input),
-      shellConfigReset: () => this.bridge.traycerCli.shellConfigReset(),
-      shellConfigAdd: (input) => this.bridge.traycerCli.shellConfigAdd(input),
-      shellConfigRemove: (input) =>
-        this.bridge.traycerCli.shellConfigRemove(input),
-      shellRevertArgs: (input) => this.bridge.traycerCli.shellRevertArgs(input),
-      shellProbe: (input) => this.bridge.traycerCli.shellProbe(input),
-      // Desktop always ships the native file dialog, so this capability is
-      // present here (non-desktop hosts leave `traycerCli` null entirely).
-      pickShellProgramFile: () => this.bridge.traycerCli.pickShellProgramFile(),
-      shellListDetected: () => this.bridge.traycerCli.shellListDetected(),
-      envOverrideList: () => this.bridge.traycerCli.envOverrideList(),
-      envOverrideSet: (input) => this.bridge.traycerCli.envOverrideSet(input),
-      envOverrideDelete: (input) =>
-        this.bridge.traycerCli.envOverrideDelete(input),
-    };
+    // The four local-host surfaces below are `null` in a `none` launch: there
+    // is no host here to run as a service, provision, manage or drive from the
+    // tray, and a surface that branches once on `null` hides itself.
+    this.service = !this.hasLocalHost
+      ? null
+      : {
+          install: () => this.bridge.service.install(),
+          uninstall: (purge) => this.bridge.service.uninstall(purge),
+          start: () => this.bridge.service.start(),
+          stop: () => this.bridge.service.stop(),
+          restart: () => this.bridge.service.restart(),
+          upgrade: () => this.bridge.service.upgrade(),
+          enableLinger: () => this.bridge.service.enableLinger(),
+          getLogTail: (maxLines) => this.bridge.service.getLogTail(maxLines),
+        };
+    this.traycerCli = !this.hasLocalHost
+      ? null
+      : buildDesktopTraycerCli(this.bridge.traycerCli);
     this.migration = {
       announceRunning: (snapshot) =>
         this.bridge.migration.announceRunning(snapshot),
@@ -872,53 +902,20 @@ export class DesktopRunnerHost implements IRunnerHost {
       onChange: (handler) =>
         toDisposable(this.bridge.migration.onChange(handler)),
     };
-    const managementBridge = this.bridge.hostManagement;
-    this.hostManagement = {
-      getHostControllerStatus: () => managementBridge.getHostControllerStatus(),
-      convergeReady: (force) => managementBridge.convergeReady(force),
-      applyStaged: (trigger, force) =>
-        managementBridge.applyStaged(trigger, force),
-      activateInstalled: (force) => managementBridge.activateInstalled(force),
-      installVersion: (pin, force) =>
-        managementBridge.installVersion(pin, force),
-      uninstallHost: (input) => managementBridge.uninstallHost(input),
-      uninstallTraycer: () => managementBridge.uninstallTraycer(),
-      getRemovalState: () => managementBridge.getRemovalState(),
-      clearRemoval: () => managementBridge.clearRemoval(),
-      restartHost: () => managementBridge.restartHost(),
-      getHostLogs: (input) => managementBridge.getHostLogs(input),
-      runDoctor: (input) => managementBridge.runDoctor(input),
-      availableVersions: (input) => managementBridge.availableVersions(input),
-      installedRecord: () => managementBridge.installedRecord(),
-      registerService: () => managementBridge.registerService(),
-      deregisterService: () => managementBridge.deregisterService(),
-      registryCheck: (input) => managementBridge.registryCheck(input),
-      freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
-      freePortAndRestartIfIdle: (input) =>
-        managementBridge.freePortAndRestartIfIdle(input),
-      cliManifest: () => managementBridge.cliManifest(),
-      maintenanceUpdateCheck: (input) =>
-        managementBridge.maintenanceUpdateCheck(input),
-      maintenanceDoctor: (input) => managementBridge.maintenanceDoctor(input),
-      maintenanceInstallationInfo: (input) =>
-        managementBridge.maintenanceInstallationInfo(input),
-      maintenanceInstallVersion: (input) =>
-        managementBridge.maintenanceInstallVersion(input),
-      restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
-      runDoctorRepairQueued: (input) =>
-        managementBridge.runDoctorRepairQueued(input),
-      runDoctorRepairIfIdle: (input) =>
-        managementBridge.runDoctorRepairIfIdle(input),
-      getHostName: () => managementBridge.getHostName(),
-      setHostName: (input) => managementBridge.setHostName(input),
-    };
+    this.hostManagement = !this.hasLocalHost
+      ? null
+      : buildDesktopHostManagement(this.bridge.hostManagement);
     this.hostControllerStatus = {
       onChange: (handler) => this.bridge.hostControllerStatus.onChange(handler),
     };
-    this.hostTray = {
-      onCommand: (handler) =>
-        toDisposable(this.bridge.hostTray.onCommand(handler)),
-    };
+    const hostTrayBridge = this.bridge.hostTray;
+    this.hostTray = !this.hasLocalHost
+      ? null
+      : {
+          onCommand: (handler) =>
+            toDisposable(hostTrayBridge.onCommand(handler)),
+        };
+    this.hostLifecycle = buildDesktopHostLifecycle(this.bridge.hostLifecycle);
     // The preload bridge already returns a `DeviceFlowSession`-shaped handle
     // (authorize result + per-attempt `onResult` + `cancel`), so this forwards
     // straight through - the CORS-safe authorize + poll loop lives in main.
@@ -1172,6 +1169,89 @@ function settleOnAbort<T>(
 
 function toDisposable(subscription: { dispose: () => void }): Disposable {
   return { dispose: subscription.dispose };
+}
+
+function buildDesktopTraycerCli(bridge: DesktopTraycerCliBridge): ITraycerCli {
+  return {
+    hostStatus: () => bridge.hostStatus(),
+    shellConfigGet: () => bridge.shellConfigGet(),
+    shellConfigSet: (input) => bridge.shellConfigSet(input),
+    shellConfigReset: () => bridge.shellConfigReset(),
+    shellConfigAdd: (input) => bridge.shellConfigAdd(input),
+    shellConfigRemove: (input) => bridge.shellConfigRemove(input),
+    shellRevertArgs: (input) => bridge.shellRevertArgs(input),
+    shellProbe: (input) => bridge.shellProbe(input),
+    // Desktop always ships the native file dialog, so this capability is
+    // present here (non-desktop hosts leave `traycerCli` null entirely).
+    pickShellProgramFile: () => bridge.pickShellProgramFile(),
+    shellListDetected: () => bridge.shellListDetected(),
+    envOverrideList: () => bridge.envOverrideList(),
+    envOverrideSet: (input) => bridge.envOverrideSet(input),
+    envOverrideDelete: (input) => bridge.envOverrideDelete(input),
+  };
+}
+
+function buildDesktopHostManagement(
+  managementBridge: DesktopHostManagementBridge,
+): IHostManagement {
+  return {
+    getHostControllerStatus: () => managementBridge.getHostControllerStatus(),
+    convergeReady: (force) => managementBridge.convergeReady(force),
+    applyStaged: (trigger, force) =>
+      managementBridge.applyStaged(trigger, force),
+    activateInstalled: (force) => managementBridge.activateInstalled(force),
+    installVersion: (pin, force) => managementBridge.installVersion(pin, force),
+    uninstallHost: (input) => managementBridge.uninstallHost(input),
+    uninstallTraycer: () => managementBridge.uninstallTraycer(),
+    getRemovalState: () => managementBridge.getRemovalState(),
+    clearRemoval: () => managementBridge.clearRemoval(),
+    restartHost: () => managementBridge.restartHost(),
+    getHostLogs: (input) => managementBridge.getHostLogs(input),
+    runDoctor: (input) => managementBridge.runDoctor(input),
+    availableVersions: (input) => managementBridge.availableVersions(input),
+    installedRecord: () => managementBridge.installedRecord(),
+    registerService: () => managementBridge.registerService(),
+    deregisterService: () => managementBridge.deregisterService(),
+    registryCheck: (input) => managementBridge.registryCheck(input),
+    freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
+    freePortAndRestartIfIdle: (input) =>
+      managementBridge.freePortAndRestartIfIdle(input),
+    cliManifest: () => managementBridge.cliManifest(),
+    maintenanceUpdateCheck: (input) =>
+      managementBridge.maintenanceUpdateCheck(input),
+    maintenanceDoctor: (input) => managementBridge.maintenanceDoctor(input),
+    maintenanceInstallationInfo: (input) =>
+      managementBridge.maintenanceInstallationInfo(input),
+    maintenanceInstallVersion: (input) =>
+      managementBridge.maintenanceInstallVersion(input),
+    restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+    runDoctorRepairQueued: (input) =>
+      managementBridge.runDoctorRepairQueued(input),
+    runDoctorRepairIfIdle: (input) =>
+      managementBridge.runDoctorRepairIfIdle(input),
+    getHostName: () => managementBridge.getHostName(),
+    setHostName: (input) => managementBridge.setHostName(input),
+  };
+}
+
+/**
+ * The desktop's `IHostLifecycleHost`. `quit` is always present here: the
+ * preload and this renderer ship in one bundle, so the round-trip members
+ * exist whenever the policy members do.
+ */
+function buildDesktopHostLifecycle(
+  bridge: DesktopHostLifecycleBridge,
+): IHostLifecycleHost {
+  return {
+    get: () => bridge.get(),
+    set: (request) => bridge.set(request),
+    onChange: (handler) => toDisposable(bridge.onChange(handler)),
+    quit: {
+      onQuitRequest: (handler) => toDisposable(bridge.onQuitRequest(handler)),
+      respondToQuitRequest: (response) => bridge.respondToQuitRequest(response),
+      onQuitState: (handler) => toDisposable(bridge.onQuitState(handler)),
+    },
+  };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { Menu, Tray, app, nativeImage } from "electron";
+import { Menu, Notification, Tray, app, nativeImage } from "electron";
 import { access, constants } from "node:fs/promises";
 import { join } from "node:path";
 import { platform as nodePlatform } from "node:process";
@@ -143,6 +143,23 @@ export interface DesktopTrayPresentation {
 }
 
 /**
+ * The host lifecycle part of the tray (host-lifecycle-modes T06): the mode
+ * line ("Host: running · stops with app") shown in the tooltip and as a
+ * disabled menu row, and whether to offer "Quit and Stop Host".
+ */
+export interface DesktopTrayHostLifecyclePresentation {
+  /** `null` hides the row and leaves the tooltip as the indicator alone. */
+  readonly line: string | null;
+  readonly offerQuitAndStopHost: boolean;
+}
+
+/** A one-off notice from the tray icon (the close-to-tray explainer). */
+export interface DesktopTrayNotice {
+  readonly title: string;
+  readonly content: string;
+}
+
+/**
  * Identity line shown beside the Sign Out action: `Name (email)` when a
  * display name is known, otherwise just the email.
  */
@@ -173,6 +190,13 @@ export class DesktopTrayController {
   private onCommand:
     | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
     | null;
+  private hostLifecycle: DesktopTrayHostLifecyclePresentation = {
+    line: null,
+    offerQuitAndStopHost: false,
+  };
+  private onQuitAndStopHost: (() => void) | null = null;
+  /** A quit is stopping the host: the mode line reads "Stopping host…". */
+  private quitStopping = false;
   // Display-only - `registerAccelerator: false` on the "Open Traycer" item's
   // `accelerator` below means the OS never binds this key combo from the
   // menu; the real registration lives solely in the global-shortcuts
@@ -218,12 +242,66 @@ export class DesktopTrayController {
 
   setIndicator(state: DesktopTrayIndicatorState): void {
     this.indicator = state;
-    this.tray.setToolTip(`Traycer (${state})`);
+    this.refreshToolTip();
   }
 
   setPresentation(presentation: DesktopTrayPresentation): void {
     this.presentation = presentation;
     this.rebuildMenu();
+  }
+
+  setHostLifecyclePresentation(
+    presentation: DesktopTrayHostLifecyclePresentation,
+  ): void {
+    if (
+      this.hostLifecycle.line === presentation.line &&
+      this.hostLifecycle.offerQuitAndStopHost ===
+        presentation.offerQuitAndStopHost
+    ) {
+      return;
+    }
+    this.hostLifecycle = presentation;
+    this.refreshToolTip();
+    this.rebuildMenu();
+  }
+
+  /**
+   * The quit transaction's stopping phase. The mode line - tooltip and menu
+   * row - reads "Stopping host…" while it lasts, which also covers a quit with
+   * no window to show its progress in (macOS after the last close).
+   */
+  setQuitStopping(stopping: boolean): void {
+    if (this.quitStopping === stopping) {
+      return;
+    }
+    this.quitStopping = stopping;
+    this.refreshToolTip();
+    this.rebuildMenu();
+  }
+
+  /** What "Quit and Stop Host" runs; `null` detaches it (bridge teardown). */
+  setQuitAndStopHostHandler(handler: (() => void) | null): void {
+    this.onQuitAndStopHost = handler;
+  }
+
+  /**
+   * A notice anchored to the tray icon: a balloon on Windows, a system
+   * notification on Linux (Electron has no tray balloon there), nothing on
+   * macOS, where no caller needs one - a closed window never hides the app
+   * there.
+   */
+  showNotice(notice: DesktopTrayNotice): void {
+    if (nodePlatform === "win32") {
+      this.tray.displayBalloon({
+        title: notice.title,
+        content: notice.content,
+        iconType: "info",
+      });
+      return;
+    }
+    if (nodePlatform === "linux" && Notification.isSupported()) {
+      new Notification({ title: notice.title, body: notice.content }).show();
+    }
   }
 
   setSummonAccelerator(accelerator: string | null): void {
@@ -236,6 +314,16 @@ export class DesktopTrayController {
 
   dispose(): void {
     this.tray.destroy();
+  }
+
+  private refreshToolTip(): void {
+    const base = `Traycer (${this.indicator})`;
+    const line = this.lifecycleLine();
+    this.tray.setToolTip(line === null ? base : `${base}\n${line}`);
+  }
+
+  private lifecycleLine(): string | null {
+    return this.quitStopping ? "Stopping host…" : this.hostLifecycle.line;
   }
 
   private showMainWindow(): void {
@@ -308,6 +396,20 @@ export class DesktopTrayController {
             },
           ]
         : [];
+    const lifecycleLine = this.lifecycleLine();
+    const lifecycleLineItems =
+      lifecycleLine === null ? [] : [{ label: lifecycleLine, enabled: false }];
+    const quitAndStopHostItems = this.hostLifecycle.offerQuitAndStopHost
+      ? [
+          {
+            label: "Quit and Stop Host",
+            click: () => {
+              log.info("[tray] quit and stop host from tray menu");
+              this.onQuitAndStopHost?.();
+            },
+          },
+        ]
+      : [];
     const menu = Menu.buildFromTemplate([
       {
         label: "Open Traycer",
@@ -332,6 +434,7 @@ export class DesktopTrayController {
         enabled: this.presentation.canCheckForUpdates,
         click: () => this.runCommand("app.checkForUpdates", null),
       },
+      ...lifecycleLineItems,
       {
         label: "Restart Host",
         click: () => this.runCommand("host.restart", null),
@@ -349,6 +452,7 @@ export class DesktopTrayController {
           this.runCommand(isSignedIn ? "app.signOut" : "app.signIn", null),
       },
       { type: "separator" },
+      ...quitAndStopHostItems,
       {
         label: "Quit Traycer",
         click: () => {

@@ -35,8 +35,16 @@ import type {
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 import type { BrowserViewBridge } from "./browser-view";
+import type {
+  HostLifecycleMode,
+  HostLifecyclePolicyWriter,
+} from "@traycer/protocol/config/host-lifecycle-policy";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
+export type {
+  HostLifecycleMode,
+  HostLifecyclePolicyWriter,
+} from "@traycer/protocol/config/host-lifecycle-policy";
 
 export interface RendererCrashTelemetryInput {
   readonly appVersion: string | null;
@@ -654,6 +662,19 @@ export interface IRunnerHost {
   readonly hostTray: IHostTray | null;
 
   /**
+   * This machine's host lifecycle mode (when you quit Traycer, does the host
+   * keep running, stop, or ask), read and written through the desktop main
+   * process, which owns the policy file beside the host's own records.
+   *
+   * Present on the desktop in EVERY launch mode, including one booted with no
+   * local host - where `hostManagement`, `service`, `traycerCli` and
+   * `hostTray` are `null` and this is the only way to switch the local host
+   * back on. `null` on shells with no local-host concept (mobile, web, tests).
+   * Never a host RPC: the setting has to work while the host is down.
+   */
+  readonly hostLifecycle: IHostLifecycleHost | null;
+
+  /**
    * OS push permission of the DEVICE running this renderer - the phone's own
    * notification switch, not anything host-scoped. Present on shells where OS
    * push exists (the native mobile shells) and `null` everywhere else
@@ -677,6 +698,186 @@ export interface IRunnerHost {
    * to sit on a press that visibly did nothing.
    */
   readonly systemBack: ISystemBackHost | null;
+}
+
+/**
+ * Whether this desktop instance runs the local-host lanes at all. Computed
+ * ONCE at boot by the desktop main process from the lifecycle policy (`none`
+ * gives `"none"`, every other mode `"managed"`) and fixed for the life of the
+ * process, so entering or leaving `none` is restart-to-apply.
+ */
+export type LocalHostCapability = "managed" | "none";
+
+/**
+ * What the RUNNING supervisor does with the policy: `enforcing` advertises
+ * the lifecycle capability, `not-enforcing` is an older supervisor that keeps
+ * running through a CLI upgrade until the next host restart, `not-running`
+ * means there is no host to apply anything to.
+ */
+export type HostLifecycleSupervisorState =
+  | "enforcing"
+  | "not-enforcing"
+  | "not-running";
+
+/**
+ * What still stands between the desired mode and the running one:
+ * `restart-app` - entering or leaving `none` ("takes effect at next launch");
+ * `restart-host` - an older supervisor is running ("restart the host to
+ * apply"); `none` - nothing is pending.
+ */
+export type HostLifecyclePending = "none" | "restart-app" | "restart-host";
+
+/**
+ * The lifecycle policy as the desktop reads it: DESIRED (the policy file,
+ * which the CLI co-writes) and APPLIED (what this desktop instance runs
+ * under). Every view is built from a fresh read of the files.
+ */
+export interface HostLifecycleView {
+  readonly desired: {
+    readonly mode: HostLifecycleMode;
+    /** `0` when no valid policy file exists (Background by absence). */
+    readonly rev: number;
+    readonly updatedBy: HostLifecyclePolicyWriter | null;
+    readonly updatedAt: string | null;
+  };
+  readonly applied: {
+    readonly localHostCapability: LocalHostCapability;
+    readonly supervisor: HostLifecycleSupervisorState;
+  };
+  readonly pending: HostLifecyclePending;
+}
+
+/** The stop a `→ none` transition runs, as the user confirmed it. */
+export type HostLifecycleStopChoice = "if-idle" | "force";
+
+export interface HostLifecycleSetRequest {
+  readonly mode: HostLifecycleMode;
+  /**
+   * The confirmed stop for `→ none` while this instance runs the local-host
+   * lanes: `"if-idle"` after an idle list, `"force"` after the user pressed
+   * Stop on a busy (or unknown) one. `null` for every other transition; a
+   * `→ none` that needs a stop and carries `null` is refused with
+   * `confirmation-required` and changes nothing.
+   */
+  readonly stop: HostLifecycleStopChoice | null;
+}
+
+export type HostLifecycleStopRefusal =
+  | "host-busy"
+  | "lock-busy"
+  | "update-active";
+
+export type HostLifecycleSetFailure =
+  | "confirmation-required"
+  | "stop-failed"
+  | "write-failed";
+
+/**
+ * The answer to `hostLifecycle.set`. Every arm carries a fresh view, so a
+ * surface never has to guess what the file says after a refusal.
+ *
+ * - `applied` - the policy now says the requested mode (or already did).
+ * - `stop-refused` - `→ none`'s stop was refused and the policy is unchanged.
+ *   `host-busy` is the if-idle probe finding work (show it, then retry with
+ *   `force`); `lock-busy` and `update-active` are another lifecycle actor.
+ * - `failed` - nothing was committed; `message` says why.
+ * - `superseded` - the policy changed underneath a `→ none` stop (the CLI
+ *   wrote it), so this request committed nothing and the newer choice stands.
+ */
+export type HostLifecycleSetResult =
+  | { readonly kind: "applied"; readonly view: HostLifecycleView }
+  | {
+      readonly kind: "stop-refused";
+      readonly reason: HostLifecycleStopRefusal;
+      readonly message: string;
+      readonly view: HostLifecycleView;
+    }
+  | {
+      readonly kind: "failed";
+      readonly reason: HostLifecycleSetFailure;
+      readonly message: string;
+      readonly view: HostLifecycleView;
+    }
+  | { readonly kind: "superseded"; readonly view: HostLifecycleView };
+
+/** The two modes whose quit asks the renderer anything. */
+export type HostQuitDecisionMode = "ask" | "stop-if-idle";
+
+/**
+ * Main's question to the renderer while a quit is held open.
+ *
+ * `round: "initial"` is the first ask of this quit. `round: "busy-retry"`
+ * follows an idle-only stop the host refused because something started in
+ * the meantime: the renderer shows the NEW list, and its Stop is a force.
+ * `busyMessage` is the refusal main received on that retry, `null` otherwise.
+ */
+export interface HostQuitDecisionRequest {
+  readonly requestId: string;
+  readonly mode: HostQuitDecisionMode;
+  readonly round: "initial" | "busy-retry";
+  readonly busyMessage: string | null;
+}
+
+/**
+ * The person's answer. `remember` is the "Remember my choice" checkbox; main
+ * maps it (Keep → `background`, Stop → `linked`). `force` on Stop is `true`
+ * only after the renderer DISPLAYED a busy or unknown list (or on a
+ * `busy-retry` round) - force only after disclosure. Cancel carries nothing:
+ * it abandons the quit and ignores the checkbox.
+ */
+export type HostQuitDecision =
+  | { readonly kind: "keep"; readonly remember: boolean }
+  | {
+      readonly kind: "stop";
+      readonly force: boolean;
+      readonly remember: boolean;
+    }
+  | { readonly kind: "cancel" };
+
+export interface HostQuitDecisionResponse {
+  readonly requestId: string;
+  readonly decision: HostQuitDecision;
+}
+
+/**
+ * Where main's quit transaction is: `stopping` while a stop runs (the modal
+ * shows progress with its buttons disabled), then `quitting`, or `cancelled`
+ * when the quit was abandoned. `requestId` names the decision request the
+ * phase belongs to, `null` for a stop no request preceded (Linked mode).
+ */
+export type HostQuitPhase = "stopping" | "quitting" | "cancelled";
+
+export interface HostQuitStateEvent {
+  readonly requestId: string | null;
+  readonly phase: HostQuitPhase;
+}
+
+/**
+ * The renderer half of the desktop's quit round-trip. A sub-capability of
+ * `IHostLifecycleHost` so a surface branches on `null` once: a shell with a
+ * lifecycle policy but no quit transaction to hold open leaves it `null`. The
+ * desktop always provides it; a window that is not listening when a quit
+ * starts gets main's own native prompt instead.
+ */
+export interface IHostQuitDecisionHost {
+  onQuitRequest(
+    handler: (request: HostQuitDecisionRequest) => void,
+  ): Disposable;
+  respondToQuitRequest(response: HostQuitDecisionResponse): Promise<void>;
+  onQuitState(handler: (event: HostQuitStateEvent) => void): Disposable;
+}
+
+/**
+ * The desktop's host lifecycle policy (see `IRunnerHost.hostLifecycle`).
+ *
+ * `onChange` fires for every change main observes, including a CLI
+ * `traycer host lifecycle set`; a consumer reflects it and never replays it.
+ */
+export interface IHostLifecycleHost {
+  get(): Promise<HostLifecycleView>;
+  set(request: HostLifecycleSetRequest): Promise<HostLifecycleSetResult>;
+  onChange(handler: (view: HostLifecycleView) => void): Disposable;
+  readonly quit: IHostQuitDecisionHost | null;
 }
 
 /**

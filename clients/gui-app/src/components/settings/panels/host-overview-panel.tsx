@@ -15,6 +15,7 @@ import {
   type InstallationDetailsRecord,
 } from "@/components/settings/panels/host-settings-installation-details";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
@@ -1559,6 +1560,7 @@ export function HostOverviewPanel(props: {
         healthAction={
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
+        lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
         {/* The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
             below rather than sitting beside it — two update lines describing one

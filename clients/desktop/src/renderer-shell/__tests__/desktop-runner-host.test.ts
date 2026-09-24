@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   HostControllerStatus,
+  HostLifecycleSetRequest,
+  HostLifecycleSetResult,
+  HostLifecycleView,
+  HostQuitDecisionRequest,
+  HostQuitDecisionResponse,
+  HostQuitStateEvent,
   HostRegistryUpdateState,
+  IHostQuitDecisionHost,
   ITokenStore,
   LocalHostSnapshot,
   RegisteredHostsChange,
@@ -14,6 +21,17 @@ import {
   DesktopRunnerHost,
   type DesktopPreloadBridge,
 } from "../desktop-runner-host";
+
+/**
+ * `DesktopRunnerHost.hostLifecycle.quit` is `IHostQuitDecisionHost | null`
+ * per the shared contract, but desktop always wires it - the throw here pins
+ * that contract rather than letting every call site fight strictNullChecks.
+ */
+function desktopQuit(host: DesktopRunnerHost): IHostQuitDecisionHost {
+  const quit = host.hostLifecycle.quit;
+  if (quit === null) throw new Error("desktop must wire hostLifecycle.quit");
+  return quit;
+}
 
 // In vitest's jsdom env the `encrypt-storage` UMD wrapper fails to pick up
 // `window.localStorage` correctly; we don't need to exercise the AES path
@@ -708,6 +726,19 @@ function buildFakeBridge(
     hostControllerStatus: {
       onChange: () => ({ dispose: () => undefined }),
     },
+    hostLifecycle: {
+      get: async () => {
+        throw new Error("hostLifecycle.get not used in test");
+      },
+      set: async () => {
+        throw new Error("hostLifecycle.set not used in test");
+      },
+      onChange: () => ({ dispose: () => undefined }),
+      onQuitRequest: () => ({ dispose: () => undefined }),
+      respondToQuitRequest: async () => undefined,
+      onQuitState: () => ({ dispose: () => undefined }),
+    },
+    localHostCapability: "managed",
     selectionAuthority: createInertSelectionAuthorityClient(),
     refreshSelectionFleet: () => Promise.resolve(),
   };
@@ -1202,5 +1233,182 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
     for (const handler of calls.slice(1)) {
       expect(handler).toHaveBeenCalledTimes(2);
     }
+  });
+});
+
+describe("DesktopRunnerHost.hostLifecycle", () => {
+  it("delegates get/set/onChange to the bridge", async () => {
+    const fake = buildFakeBridge(null);
+    const view: HostLifecycleView = {
+      desired: {
+        mode: "background",
+        rev: 1,
+        updatedBy: "desktop",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      applied: { localHostCapability: "managed", supervisor: "enforcing" },
+      pending: "none",
+    };
+    const setResult: HostLifecycleSetResult = { kind: "applied", view };
+    const get = vi.fn(async () => view);
+    const set = vi.fn(async () => setResult);
+    const changeDisposer = { dispose: vi.fn() };
+    const onChange = vi.fn(
+      (_handler: (view: HostLifecycleView) => void) => changeDisposer,
+    );
+    fake.bridge.hostLifecycle.get = get;
+    fake.bridge.hostLifecycle.set = set;
+    fake.bridge.hostLifecycle.onChange = onChange;
+
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(host.hostLifecycle.get()).resolves.toBe(view);
+    expect(get).toHaveBeenCalledOnce();
+
+    const request: HostLifecycleSetRequest = { mode: "background", stop: null };
+    await expect(host.hostLifecycle.set(request)).resolves.toBe(setResult);
+    expect(set).toHaveBeenCalledWith(request);
+
+    const changeHandler = vi.fn();
+    const changeSubscription = host.hostLifecycle.onChange(changeHandler);
+    expect(onChange).toHaveBeenCalledWith(changeHandler);
+    changeSubscription.dispose();
+    expect(changeDisposer.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("delegates quit.{onQuitRequest,respondToQuitRequest,onQuitState} to the bridge", async () => {
+    const fake = buildFakeBridge(null);
+    const quitRequestDisposer = { dispose: vi.fn() };
+    const quitStateDisposer = { dispose: vi.fn() };
+    const onQuitRequest = vi.fn(
+      (_handler: (request: HostQuitDecisionRequest) => void) =>
+        quitRequestDisposer,
+    );
+    const respondToQuitRequest = vi.fn(async () => undefined);
+    const onQuitState = vi.fn(
+      (_handler: (event: HostQuitStateEvent) => void) => quitStateDisposer,
+    );
+    fake.bridge.hostLifecycle.onQuitRequest = onQuitRequest;
+    fake.bridge.hostLifecycle.respondToQuitRequest = respondToQuitRequest;
+    fake.bridge.hostLifecycle.onQuitState = onQuitState;
+
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    const requestHandler = vi.fn();
+    const requestSubscription = desktopQuit(host).onQuitRequest(requestHandler);
+    expect(onQuitRequest).toHaveBeenCalledWith(requestHandler);
+    requestSubscription.dispose();
+    expect(quitRequestDisposer.dispose).toHaveBeenCalledOnce();
+
+    const response: HostQuitDecisionResponse = {
+      requestId: "req-1",
+      decision: { kind: "keep", remember: false },
+    };
+    await desktopQuit(host).respondToQuitRequest(response);
+    expect(respondToQuitRequest).toHaveBeenCalledWith(response);
+
+    const stateHandler = vi.fn();
+    const stateSubscription = desktopQuit(host).onQuitState(stateHandler);
+    expect(onQuitState).toHaveBeenCalledWith(stateHandler);
+    stateSubscription.dispose();
+    expect(quitStateDisposer.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("DesktopRunnerHost.localHostCapability", () => {
+  it("turns off every local-host surface for a 'none' launch, but keeps hostLifecycle wired and delegating", async () => {
+    const fake = buildFakeBridge(null);
+    const bridge: DesktopPreloadBridge = {
+      ...fake.bridge,
+      localHostCapability: "none",
+    };
+    const host = new DesktopRunnerHost({
+      bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    expect(host.hasLocalHost).toBe(false);
+    expect(host.service).toBeNull();
+    expect(host.traycerCli).toBeNull();
+    expect(host.hostManagement).toBeNull();
+    expect(host.hostTray).toBeNull();
+    expect(host.workspaceFolders.canPickNatively).toBe(false);
+
+    // `hostLifecycle` is the one local-host-adjacent surface that must stay
+    // wired in a `none` launch: it is the only way back to a managed mode.
+    expect(host.hostLifecycle).not.toBeNull();
+
+    const view: HostLifecycleView = {
+      desired: {
+        mode: "none",
+        rev: 3,
+        updatedBy: "cli",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      applied: { localHostCapability: "none", supervisor: "not-running" },
+      pending: "none",
+    };
+    const get = vi.fn(async () => view);
+    fake.bridge.hostLifecycle.get = get;
+    await expect(host.hostLifecycle.get()).resolves.toBe(view);
+    expect(get).toHaveBeenCalledOnce();
+
+    const quitRequestDisposer = { dispose: vi.fn() };
+    const onQuitRequest = vi.fn(
+      (_handler: (request: HostQuitDecisionRequest) => void) =>
+        quitRequestDisposer,
+    );
+    fake.bridge.hostLifecycle.onQuitRequest = onQuitRequest;
+    const requestHandler = vi.fn();
+    const requestSubscription = desktopQuit(host).onQuitRequest(requestHandler);
+    expect(onQuitRequest).toHaveBeenCalledWith(requestHandler);
+    requestSubscription.dispose();
+    expect(quitRequestDisposer.dispose).toHaveBeenCalledOnce();
+
+    const respondToQuitRequest = vi.fn(async () => undefined);
+    fake.bridge.hostLifecycle.respondToQuitRequest = respondToQuitRequest;
+    const response: HostQuitDecisionResponse = {
+      requestId: "req-none",
+      decision: { kind: "cancel" },
+    };
+    await desktopQuit(host).respondToQuitRequest(response);
+    expect(respondToQuitRequest).toHaveBeenCalledWith(response);
+
+    const quitStateDisposer = { dispose: vi.fn() };
+    const onQuitState = vi.fn(
+      (_handler: (event: HostQuitStateEvent) => void) => quitStateDisposer,
+    );
+    fake.bridge.hostLifecycle.onQuitState = onQuitState;
+    const stateHandler = vi.fn();
+    const stateSubscription = desktopQuit(host).onQuitState(stateHandler);
+    expect(onQuitState).toHaveBeenCalledWith(stateHandler);
+    stateSubscription.dispose();
+    expect(quitStateDisposer.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("turns on every local-host surface for a 'managed' launch, alongside hostLifecycle", () => {
+    const fake = buildFakeBridge(null);
+    const bridge: DesktopPreloadBridge = {
+      ...fake.bridge,
+      localHostCapability: "managed",
+    };
+    const host = new DesktopRunnerHost({
+      bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    expect(host.hasLocalHost).toBe(true);
+    expect(host.service).not.toBeNull();
+    expect(host.traycerCli).not.toBeNull();
+    expect(host.hostManagement).not.toBeNull();
+    expect(host.hostTray).not.toBeNull();
+    expect(host.workspaceFolders.canPickNatively).toBe(true);
+    expect(host.hostLifecycle).not.toBeNull();
   });
 });

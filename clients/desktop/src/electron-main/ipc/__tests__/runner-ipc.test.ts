@@ -620,6 +620,11 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.acknowledgeQuitRequest,
           RunnerHostInvoke.respondToQuitRequest,
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+          // Host quit round-trip (host-lifecycle-modes T06): the modal's
+          // answer, plus the preload-internal readiness and servicing ack.
+          RunnerHostInvoke.hostQuitRespond,
+          RunnerHostInvoke.hostQuitListening,
+          RunnerHostInvoke.hostQuitAcknowledge,
           // H10: main captures the final browser state directly off the
           // `BrowserSessionsRegistry` on quit - there is no renderer round
           // trip left to ack, so this channel is gone.

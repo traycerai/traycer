@@ -385,6 +385,24 @@ export type AnalyticsSetting =
   | "voiceInputEnabled"
   | "voiceLanguage";
 
+/**
+ * The five host lifecycle modes (`HostLifecycleMode`), restated here because
+ * the protocol module that owns them also imports `node:path`, so the renderer
+ * can only import it as a type.
+ */
+export type AnalyticsHostLifecycleMode =
+  | "background"
+  | "ask"
+  | "stop-if-idle"
+  | "linked"
+  | "none";
+
+/** Which renderer surface committed a lifecycle mode. */
+export type AnalyticsHostLifecycleSource =
+  | "settings"
+  | "quit-modal"
+  | "no-host-card";
+
 export type AnalyticsTheme =
   | "mode:dark"
   | "mode:light"
@@ -560,6 +578,8 @@ export enum AnalyticsEvent {
   TabCloseBlocked = "tab_close_blocked",
   AppResourceSample = "app_resource_sample",
   AppResourcePressure = "app_resource_pressure",
+  HostLifecycleModeSet = "host_lifecycle_mode_set",
+  HostQuitDecision = "host_quit_decision",
 }
 
 type SourceProperties = { readonly source: AnalyticsSource };
@@ -1094,6 +1114,23 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.AppResourceSample]: ResourceMeasurementProperties;
   readonly [AnalyticsEvent.AppResourcePressure]: ResourceMeasurementProperties & {
     readonly pressure_tier: AnalyticsResourcePressureTier;
+  };
+  readonly [AnalyticsEvent.HostLifecycleModeSet]: {
+    readonly mode: AnalyticsHostLifecycleMode;
+    readonly source: AnalyticsHostLifecycleSource;
+  };
+  /**
+   * One answer the quit modal gave main. `verdict` is the list state the modal
+   * DISPLAYED when the person chose (a busy-retry round counts as busy;
+   * `unknown` is a list it could not read). `forced` is the stop's `force`,
+   * `false` for keep and cancel.
+   */
+  readonly [AnalyticsEvent.HostQuitDecision]: {
+    readonly mode: "ask" | "stop-if-idle";
+    readonly verdict: "idle" | "busy" | "unknown";
+    readonly choice: "keep" | "stop" | "cancel";
+    readonly forced: boolean;
+    readonly remembered: boolean;
   };
 }
 
@@ -1779,6 +1816,11 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["outcome", "blocker", "attachment_count"],
   ),
   ...eventKeyEntries([AnalyticsEvent.TabCloseBlocked], ["decision"]),
+  ...eventKeyEntries([AnalyticsEvent.HostLifecycleModeSet], ["mode", "source"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.HostQuitDecision],
+    ["mode", "verdict", "choice", "forced", "remembered"],
+  ),
   ...eventKeyEntries(
     [AnalyticsEvent.AppResourceSample],
     [
@@ -2132,6 +2174,31 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     "blocked_action",
     new Set(["send", "open_github_issue", "report_on_github", "save_bundle"]),
   ),
+  ...eventValueEntries(
+    [AnalyticsEvent.HostLifecycleModeSet],
+    "mode",
+    new Set(["background", "ask", "stop-if-idle", "linked", "none"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.HostLifecycleModeSet],
+    "source",
+    new Set(["settings", "quit-modal", "no-host-card"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.HostQuitDecision],
+    "mode",
+    new Set(["ask", "stop-if-idle"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.HostQuitDecision],
+    "verdict",
+    new Set(["idle", "busy", "unknown"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.HostQuitDecision],
+    "choice",
+    new Set(["keep", "stop", "cancel"]),
+  ),
 ]);
 
 const BOOLEAN_PROPERTY_KEYS = new Set<string>([
@@ -2149,6 +2216,8 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
   "restored_tabs",
   "revert_artifacts",
   "settings_changed",
+  "forced",
+  "remembered",
 ]);
 
 const COUNT_PROPERTY_KEYS = new Set<string>([
@@ -2373,6 +2442,10 @@ const STRICT_EVENTS = new Set<AnalyticsEvent>([
   AnalyticsEvent.NotificationsMarkedAllRead,
   AnalyticsEvent.NotificationPageLoaded,
   AnalyticsEvent.NotificationNewRevealed,
+  // Enums and booleans only, by contract: an extra key (a host id, a path)
+  // is a caller bug to reject, not data to strip.
+  AnalyticsEvent.HostLifecycleModeSet,
+  AnalyticsEvent.HostQuitDecision,
 ]);
 
 export function sanitizeAnalyticsProperties(

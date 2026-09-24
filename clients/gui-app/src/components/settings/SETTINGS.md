@@ -1015,7 +1015,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
 ## Sections
 
 - `General` App behavior, agent activity, and local data controls, divided
-  into four named groups via `settings-group.tsx`: a small, quiet `<h2>`
+  into named groups via `settings-group.tsx`: a small, quiet `<h2>`
   label sits OUTSIDE its own bordered card, so orientation (the label) and
   action (the card's rows) read as different things - a group label never
   looks like another setting row. This replaced an earlier row-shaped
@@ -1045,6 +1045,28 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     itself is returned by `prevent-sleep-settings-section.tsx` rather than
     wrapped here, so the heading disappears with the row instead of drawing
     over an empty card.
+  - **When you quit Traycer** (`host-lifecycle-settings-section.tsx`, anchor
+    `general-host-lifecycle`, gated by `isHostLifecycleGroupAvailable`: the
+    desktop's `runnerHost.hostLifecycle` bridge and not the mobile app): the
+    host lifecycle mode for THIS machine - Background (default), Ask, Stop if
+    idle, Linked, No local host - as five radios whose copy is the host
+    lifecycle UX artifact's, with the machine noun platform-substituted (Mac /
+    PC / machine; never "device"). It is here, on the app-wide page, and not
+    under a host scope, because it is a machine-local desktop preference read
+    and written through desktop main (`hostLifecycle.get/set/onChange`), never
+    a host RPC: it has to render signed out, before any host is installed,
+    and in a launch with no local host, where it is the only way back. A CLI
+    `traycer host lifecycle set` arrives through `onChange` and is reflected,
+    never replayed. Below the radios, while desired and applied differ: "Set
+    to X · restart the host to apply" (an older supervisor is running; carries
+    a Restart host button that opens `LocalHostRestartFlow`) or "Set to X ·
+    takes effect at next launch" (entering or leaving No local host). No local
+    host is disabled with the reason on a plan without remote hosts (known
+    unpaid `subscriptionStatus`), and choosing it while this launch runs a
+    host confirms through the quit modal's stop-only form
+    (`host-lifecycle-none-confirm-dialog.tsx`). The local host's Overview
+    header carries the same mode promise the tray shows ("keeps running after
+    quit") as a link back here (`host-scope/host-lifecycle-mode-line.tsx`).
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
     your work and Data migration used to share this group under the name
     "Setup & migration"; both moved to the scoped host's **Overview**, because
@@ -5408,7 +5430,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
     could show v1.4.2 (the registry row) above v1.5.0 (the RPC) at the same
     time, which reads as broken rather than stale.
     - **Layout.** Name, rename pencil and tags on one line; presence dot, health
-      label, platform/arch/version and the sessions chip on the next; then a
+      label, the lifecycle mode line (this machine's own host only - the
+      `lifecycleLine` slot, "keeps running after quit", linking to General ▸
+      When you quit Traycer), platform/arch/version and the sessions chip on
+      the next; then a
       footer verb bar; then Host ID. Rename is a pencil ON the name rather than
       a third word beside Restart and Run doctor - it was the only one of the
       three whose object is the name, and as a peer button it read as an equally

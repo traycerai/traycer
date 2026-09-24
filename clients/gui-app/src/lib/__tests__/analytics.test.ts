@@ -1752,3 +1752,169 @@ describe("Layout page settings analytics", () => {
     }
   });
 });
+
+describe("host lifecycle analytics schema", () => {
+  it("accepts host_lifecycle_mode_set with every mode/source combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = [
+      "background",
+      "ask",
+      "stop-if-idle",
+      "linked",
+      "none",
+    ] as const;
+    const sources = ["settings", "quit-modal", "no-host-card"] as const;
+
+    for (const mode of modes) {
+      for (const source of sources) {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+            mode,
+            source,
+          }),
+        ).toEqual({ mode, source });
+      }
+    }
+  });
+
+  it("rejects host_lifecycle_mode_set with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "settings",
+        hostId: "host-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_lifecycle_mode_set with an out-of-taxonomy mode or source", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "always-on",
+        source: "settings",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "tray",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts host_quit_decision with every verdict/choice combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = ["ask", "stop-if-idle"] as const;
+    const verdicts = ["idle", "busy", "unknown"] as const;
+    const choices = ["keep", "stop", "cancel"] as const;
+
+    for (const mode of modes) {
+      for (const verdict of verdicts) {
+        for (const choice of choices) {
+          expect(
+            sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+              mode,
+              verdict,
+              choice,
+              forced: choice === "stop",
+              remembered: false,
+            }),
+          ).toEqual({
+            mode,
+            verdict,
+            choice,
+            forced: choice === "stop",
+            remembered: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("rejects host_quit_decision with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+        requestId: "req-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid mode or verdict", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "always-ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "checking",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid choice", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "force-stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with forced/remembered sent as non-booleans", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: "true",
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the runtime event contract complete after adding both events", async () => {
+    const { analyticsEventContractIsComplete } =
+      await import("@/lib/analytics");
+
+    expect(analyticsEventContractIsComplete()).toBe(true);
+  });
+});

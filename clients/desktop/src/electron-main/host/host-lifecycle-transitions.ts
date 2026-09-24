@@ -99,6 +99,12 @@ export type QuitVerdictWriteOutcome =
   | "no-local-host"
   | "write-failed";
 
+/** See `HostLifecycleService.readQuitPolicy`. */
+export interface QuitPolicyRead {
+  readonly mode: HostLifecycleMode;
+  readonly rev: number;
+}
+
 /**
  * A failure's errno-style code, or `null`. What the lifecycle log lines carry
  * instead of the error text: a filesystem message names the host home path,
@@ -161,6 +167,27 @@ export class HostLifecycleService {
   /** A fresh read of the policy, for a caller deciding on it (the quit path). */
   readPolicy(): Promise<HostLifecyclePolicyRead> {
     return this.store.readPolicy();
+  }
+
+  /** Whether this instance runs the local-host lanes right now. */
+  localHostLanesActive(): boolean {
+    return this.lanesActive();
+  }
+
+  /**
+   * The mode a quit, or a closing last window, acts on: a fresh read of the
+   * policy while this instance runs the local-host lanes, and `none` once they
+   * are off (booted in `none`, or `none` committed this session) - there is
+   * no local host to keep or stop then, whatever the file says. A CLI-written
+   * `none` observed while the lanes still run reads as `none` too: it takes
+   * effect at the next launch and stops nothing now.
+   */
+  async readQuitPolicy(): Promise<QuitPolicyRead> {
+    const read = await this.store.readPolicy();
+    return {
+      mode: this.lanesActive() ? read.mode : "none",
+      rev: read.rev,
+    };
   }
 
   async getView(): Promise<HostLifecycleView> {

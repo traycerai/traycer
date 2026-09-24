@@ -1,16 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { IHostManagement } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostLifecycleSetRequest,
+  HostLifecycleSetResult,
+  HostLifecycleView,
+  IHostLifecycleHost,
+  IHostManagement,
+  IRunnerHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import {
+  HostReadinessControllerContext,
   projectDefaultHostReadiness,
   type DefaultHostReadinessPresentation,
+  type HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
 import {
   DefaultHostReadyGate,
   HostReadinessControllerProvider,
+  SurfaceReadinessFallback,
 } from "@/components/layout/host-readiness-controller";
 import {
   HostCompatibilityProvider,
@@ -19,8 +35,17 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
+import {
+  NO_LOCAL_HOST_DESKTOP_LEAD,
+  NO_LOCAL_HOST_DESKTOP_TAIL,
+  NO_LOCAL_HOST_INSTALL_COMMAND,
+  NO_LOCAL_HOST_RUN_HERE_APPLIED,
+  NO_LOCAL_HOST_RUN_HERE_LABEL,
+} from "@/lib/host/host-lifecycle-copy";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -439,5 +464,316 @@ describe("local-plane admission for the removal-sentinel read", () => {
     // test before the predicate was read.
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(spy.removalStateCalls()).toBe(0);
+  });
+});
+
+/**
+ * `SurfaceReadinessFallback`'s desktop-shaped `mobile-no-host` card - a
+ * desktop launched in the `none` lifecycle mode (no local host of its own)
+ * hits the same readiness kind mobile's zero-host case does, but must render
+ * the desktop copy (`DesktopNoLocalHostFallback`) rather than the "connect a
+ * host from this device" line that makes sense only on a phone.
+ *
+ * Rendered directly against the card rather than through the whole
+ * `HostReadinessControllerProvider` stack: the card's own behavior depends
+ * only on `runnerHost.hostLifecycle` and the readiness controller context, so
+ * a lighter harness pins the card without re-deriving admission/auth/directory
+ * wiring the earlier suite in this file already exercises.
+ */
+describe("SurfaceReadinessFallback - desktop no-local-host card", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  type SetResultBuilder = (
+    request: HostLifecycleSetRequest,
+    currentView: HostLifecycleView,
+  ) => HostLifecycleSetResult;
+
+  /**
+   * `buildResult: null` answers every `set` with `applied` at the requested
+   * mode. `notifyChange: false` withholds the `onChange` push, so the only
+   * way a new view reaches the card is the mutation writing the RESULT's view
+   * into the cache.
+   */
+  function createFakeHostLifecycleHost(
+    initialMode: HostLifecycleView["desired"]["mode"],
+    buildResult: SetResultBuilder | null,
+    notifyChange: boolean,
+  ): {
+    readonly host: IHostLifecycleHost;
+    readonly setRequests: () => readonly HostLifecycleSetRequest[];
+  } {
+    let view: HostLifecycleView = {
+      desired: { mode: initialMode, rev: 1, updatedBy: null, updatedAt: null },
+      applied: { localHostCapability: "none", supervisor: "not-running" },
+      pending: "none",
+    };
+    const listeners = new Set<(view: HostLifecycleView) => void>();
+    const setRequests: HostLifecycleSetRequest[] = [];
+    const host: IHostLifecycleHost = {
+      get: () => Promise.resolve(view),
+      set: (request: HostLifecycleSetRequest) => {
+        setRequests.push(request);
+        const result: HostLifecycleSetResult =
+          buildResult === null
+            ? {
+                kind: "applied",
+                view: {
+                  ...view,
+                  desired: { ...view.desired, mode: request.mode },
+                },
+              }
+            : buildResult(request, view);
+        view = result.view;
+        if (notifyChange) {
+          for (const listener of listeners) listener(view);
+        }
+        return Promise.resolve(result);
+      },
+      onChange: (handler: (view: HostLifecycleView) => void) => {
+        listeners.add(handler);
+        return {
+          dispose: () => {
+            listeners.delete(handler);
+          },
+        };
+      },
+      quit: null,
+    };
+    return { host, setRequests: () => setRequests };
+  }
+
+  function renderNoHostFallback(runnerHost: IRunnerHost) {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "mobile-no-host" }),
+      defaultHostPresentation: DEFAULT_PRESENTATION,
+      hasBeenDefaultHostReady: false,
+    };
+    return render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <QueryClientProvider client={queryClient}>
+          <HostReadinessControllerContext.Provider value={controller}>
+            <SurfaceReadinessFallback readiness={{ kind: "mobile-no-host" }} />
+          </HostReadinessControllerContext.Provider>
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+  }
+
+  it("renders the desktop copy with the install command in a <code> element when hostLifecycle is present", async () => {
+    const { host } = createFakeHostLifecycleHost("none", null, true);
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: host,
+    });
+    renderNoHostFallback(runnerHost);
+
+    const card = await screen.findByTestId("desktop-no-local-host");
+    expect(card.textContent).toContain(NO_LOCAL_HOST_DESKTOP_LEAD);
+    expect(card.textContent).toContain(NO_LOCAL_HOST_DESKTOP_TAIL);
+    const code = card.querySelector("code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe(NO_LOCAL_HOST_INSTALL_COMMAND);
+    expect(
+      screen.getByRole("button", { name: NO_LOCAL_HOST_RUN_HERE_LABEL }),
+    ).toBeTruthy();
+  });
+
+  it("clicking 'Run a host here instead' calls hostLifecycle.set and fires host_lifecycle_mode_set with source no-host-card", async () => {
+    const { host, setRequests } = createFakeHostLifecycleHost(
+      "none",
+      null,
+      true,
+    );
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: host,
+    });
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderNoHostFallback(runnerHost);
+
+    const button = await screen.findByRole("button", {
+      name: NO_LOCAL_HOST_RUN_HERE_LABEL,
+    });
+    // The button starts disabled until `useRunnerHostLifecycleQuery` resolves
+    // its first `get()` read (`disabled: view === undefined || ...`) - wait
+    // for that settle before clicking, else the click lands on a disabled
+    // button and never reaches the mutation.
+    await waitFor(() => {
+      expect(button.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(setRequests()).toEqual([{ mode: "background", stop: null }]);
+    });
+    await waitFor(() => {
+      expect(trackSpy).toHaveBeenCalledWith(
+        AnalyticsEvent.HostLifecycleModeSet,
+        { mode: "background", source: "no-host-card" },
+      );
+    });
+  });
+
+  it("shows the applied note and 'Quit Traycer' instead of the run-here button once desired.mode is no longer none", async () => {
+    const { host } = createFakeHostLifecycleHost("background", null, true);
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: host,
+    });
+    renderNoHostFallback(runnerHost);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("desktop-no-local-host").textContent).toBe(
+        NO_LOCAL_HOST_RUN_HERE_APPLIED,
+      );
+    });
+    expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: NO_LOCAL_HOST_RUN_HERE_LABEL }),
+    ).toBeNull();
+  });
+
+  it("a 'failed' result shows the message inline, keeps the run-here button, and fires no analytics", async () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    const { host } = createFakeHostLifecycleHost(
+      "none",
+      (_request, currentView) => ({
+        kind: "failed",
+        reason: "write-failed",
+        message: "Couldn't write the policy file.",
+        view: currentView,
+      }),
+      true,
+    );
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: host,
+    });
+    renderNoHostFallback(runnerHost);
+
+    const button = await screen.findByRole("button", {
+      name: NO_LOCAL_HOST_RUN_HERE_LABEL,
+    });
+    await waitFor(() => {
+      expect(button.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("no-local-host-run-here-error").textContent,
+      ).toBe("Couldn't write the policy file.");
+    });
+    expect(
+      screen.getByRole("button", { name: NO_LOCAL_HOST_RUN_HERE_LABEL }),
+    ).toBeTruthy();
+    expect(trackSpy).not.toHaveBeenCalledWith(
+      AnalyticsEvent.HostLifecycleModeSet,
+      expect.anything(),
+    );
+  });
+
+  it("a 'superseded' result whose view is still desired.mode 'none' shows no error line and keeps the run-here button, no analytics", async () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    const { host, setRequests } = createFakeHostLifecycleHost(
+      "none",
+      (_request, currentView) => ({ kind: "superseded", view: currentView }),
+      true,
+    );
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: host,
+    });
+    renderNoHostFallback(runnerHost);
+
+    const button = await screen.findByRole("button", {
+      name: NO_LOCAL_HOST_RUN_HERE_LABEL,
+    });
+    await waitFor(() => {
+      expect(button.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(setRequests()).toHaveLength(1);
+    });
+    expect(screen.queryByTestId("no-local-host-run-here-error")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: NO_LOCAL_HOST_RUN_HERE_LABEL }),
+    ).toBeTruthy();
+    expect(trackSpy).not.toHaveBeenCalledWith(
+      AnalyticsEvent.HostLifecycleModeSet,
+      expect.anything(),
+    );
+  });
+
+  it("a 'superseded' result whose view has desired.mode 'linked' switches the card to the applied note and Quit Traycer, driven by the result's view", async () => {
+    const { host } = createFakeHostLifecycleHost(
+      "none",
+      (_request, currentView) => ({
+        kind: "superseded",
+        view: {
+          ...currentView,
+          desired: {
+            mode: "linked",
+            rev: currentView.desired.rev + 1,
+            updatedBy: "cli",
+            updatedAt: null,
+          },
+        },
+      }),
+      // No `onChange` push: only the result's own view can move the card.
+      false,
+    );
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: host,
+    });
+    renderNoHostFallback(runnerHost);
+
+    const button = await screen.findByRole("button", {
+      name: NO_LOCAL_HOST_RUN_HERE_LABEL,
+    });
+    await waitFor(() => {
+      expect(button.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("desktop-no-local-host").textContent).toBe(
+        NO_LOCAL_HOST_RUN_HERE_APPLIED,
+      );
+    });
+    expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
+  });
+
+  // `stop-refused` is unreachable from this card: it always sends
+  // `stop: null` (never `"if-idle"`/`"force"`), and that result arm is only
+  // produced by the host in response to a stop request. No test for it here.
+
+  it("renders the unchanged mobile copy (no desktop testid) when hostLifecycle is null", async () => {
+    const runnerHost = createFakeRunnerHost({
+      hasLocalHost: false,
+      hostLifecycle: null,
+    });
+    renderNoHostFallback(runnerHost);
+
+    expect(await screen.findByTestId("mobile-no-host")).toBeTruthy();
+    expect(screen.queryByTestId("desktop-no-local-host")).toBeNull();
   });
 });

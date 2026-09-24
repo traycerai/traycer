@@ -2,6 +2,7 @@ import { modLabel } from "@/lib/keybindings/platform";
 import {
   alwaysAvailable,
   isExperimentalGroupAvailable,
+  isHostLifecycleGroupAvailable,
   isPreventSleepRowAvailable,
   isVoiceInputRowAvailable,
 } from "@/lib/settings/settings-availability";
@@ -97,6 +98,32 @@ export const GENERAL = defineSettingsSection("general", {
       "power",
       "screensaver",
       "suspend",
+    ],
+  },
+  // Machine-local, so it lives here rather than under a host scope: it has to
+  // work signed out, before any host is installed, and with no local host.
+  hostLifecycle: {
+    kind: "group",
+    search: { anchor: "general-host-lifecycle" },
+    label: "When you quit Traycer",
+    description:
+      "Choose what happens to the host on this machine when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
+    breadcrumb: null,
+    availableWhen: isHostLifecycleGroupAvailable,
+    keywords: [
+      "quit",
+      "host",
+      "background",
+      "keep running",
+      "stop host",
+      "linked",
+      "lifecycle",
+      "login",
+      "ask",
+      "idle",
+      "remote",
+      "wsl",
+      "no local host",
     ],
   },
   worktrees: {

@@ -8,6 +8,11 @@ import type {
   HostLifecycleSetRequest,
   HostLifecycleView,
 } from "../../ipc-contracts/host-lifecycle-types";
+import type {
+  HostQuitDecisionRequest,
+  HostQuitDecisionResponse,
+  HostQuitStateEvent,
+} from "../../ipc-contracts/host-quit-types";
 
 type Listener = (event: unknown, payload: unknown) => void;
 
@@ -137,5 +142,119 @@ describe("readLocalHostCapability", () => {
     };
     expect(readLocalHostCapability()).toBe("managed");
     expect(fake.syncChannels).toEqual([RunnerHostSync.localHostCapability]);
+  });
+});
+
+describe("host quit round-trip", () => {
+  const REQUEST: HostQuitDecisionRequest = {
+    requestId: "req-1",
+    mode: "ask",
+    round: "initial",
+    busyMessage: null,
+  };
+
+  function requestListeners(): readonly Listener[] {
+    return [...(fake.listeners.get(RunnerHostEvent.hostQuitRequest) ?? [])];
+  }
+
+  function listeningCalls(): readonly unknown[] {
+    return calls()
+      .filter((call) => call.channel === RunnerHostInvoke.hostQuitListening)
+      .map((call) => call.args[0]);
+  }
+
+  function ackCalls(): readonly unknown[] {
+    return calls()
+      .filter((call) => call.channel === RunnerHostInvoke.hostQuitAcknowledge)
+      .map((call) => call.args[0]);
+  }
+
+  it("uses exactly the documented channel names", () => {
+    expect(RunnerHostEvent.hostQuitRequest).toBe(
+      "runnerHost:event:hostQuit:request",
+    );
+    expect(RunnerHostInvoke.hostQuitRespond).toBe(
+      "runnerHost:hostQuit:respond",
+    );
+    expect(RunnerHostEvent.hostQuitState).toBe(
+      "runnerHost:event:hostQuit:state",
+    );
+  });
+
+  it("reports listening:true on the first subscriber only and false on the last dispose only", () => {
+    const bridge = buildHostLifecycleBridge();
+    const first = bridge.onQuitRequest(() => undefined);
+    expect(listeningCalls()).toEqual([true]);
+    const second = bridge.onQuitRequest(() => undefined);
+    expect(listeningCalls()).toEqual([true]);
+    expect(requestListeners()).toHaveLength(2);
+
+    first.dispose();
+    expect(listeningCalls()).toEqual([true]);
+    // A double dispose must not decrement twice.
+    first.dispose();
+    expect(listeningCalls()).toEqual([true]);
+    expect(requestListeners()).toHaveLength(1);
+
+    second.dispose();
+    expect(listeningCalls()).toEqual([true, false]);
+    expect(requestListeners()).toHaveLength(0);
+  });
+
+  it("acknowledges the requestId after the handler returns, not before", () => {
+    const order: string[] = [];
+    const bridge = buildHostLifecycleBridge();
+    bridge.onQuitRequest(() => {
+      order.push(`handler(acks=${ackCalls().length})`);
+    });
+    const [listener] = requestListeners();
+    listener({}, REQUEST);
+    expect(order).toEqual(["handler(acks=0)"]);
+    expect(ackCalls()).toEqual(["req-1"]);
+  });
+
+  it("does not acknowledge when the handler throws", () => {
+    const bridge = buildHostLifecycleBridge();
+    bridge.onQuitRequest(() => {
+      throw new Error("modal crashed");
+    });
+    const [listener] = requestListeners();
+    expect(() => {
+      listener({}, REQUEST);
+    }).toThrow("modal crashed");
+    expect(ackCalls()).toEqual([]);
+  });
+
+  it("respondToQuitRequest invokes hostQuitRespond with the payload unchanged", async () => {
+    const response: HostQuitDecisionResponse = {
+      requestId: "req-1",
+      decision: { kind: "stop", force: true, remember: false },
+    };
+    await buildHostLifecycleBridge().respondToQuitRequest(response);
+    expect(calls()).toEqual([
+      { channel: RunnerHostInvoke.hostQuitRespond, args: [response] },
+    ]);
+  });
+
+  it("onQuitState delivers state events and stops after dispose", () => {
+    const received: HostQuitStateEvent[] = [];
+    const subscription = buildHostLifecycleBridge().onQuitState((event) => {
+      received.push(event);
+    });
+    const listeners = [
+      ...(fake.listeners.get(RunnerHostEvent.hostQuitState) ?? []),
+    ];
+    expect(listeners).toHaveLength(1);
+    const event: HostQuitStateEvent = { requestId: "req-1", phase: "stopping" };
+    for (const listener of listeners) listener({}, event);
+    expect(received).toEqual([event]);
+    subscription.dispose();
+    expect(fake.listeners.get(RunnerHostEvent.hostQuitState)?.size).toBe(0);
+    for (const listener of listeners) {
+      // A delivery after dispose reaches nobody: the listener is detached.
+      expect(
+        fake.listeners.get(RunnerHostEvent.hostQuitState)?.has(listener),
+      ).toBe(false);
+    }
   });
 });

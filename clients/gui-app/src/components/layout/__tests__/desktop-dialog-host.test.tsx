@@ -396,6 +396,7 @@ function createBaseRunnerHost(): IRunnerHost {
     migration: null,
     hostManagement: null,
     hostTray: null,
+    hostLifecycle: null,
     zoom: null,
     pushPermission: null,
     systemBack: null,

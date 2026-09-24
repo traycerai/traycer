@@ -1,4 +1,8 @@
-import type { IPushPermissionHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostLifecycleView,
+  IHostLifecycleHost,
+  IPushPermissionHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
@@ -66,6 +70,19 @@ const PUSH_PERMISSION: IPushPermissionHost = {
 
 const SYSTEM_SETTINGS = { open: () => Promise.resolve() };
 
+const HOST_LIFECYCLE_VIEW: HostLifecycleView = {
+  desired: { mode: "background", rev: 0, updatedBy: null, updatedAt: null },
+  applied: { localHostCapability: "managed", supervisor: "enforcing" },
+  pending: "none",
+};
+
+const HOST_LIFECYCLE: IHostLifecycleHost = {
+  get: () => Promise.resolve(HOST_LIFECYCLE_VIEW),
+  set: () => Promise.resolve({ kind: "applied", view: HOST_LIFECYCLE_VIEW }),
+  onChange: () => ({ dispose: () => undefined }),
+  quit: null,
+};
+
 const BASE_HOST = createFakeRunnerHost({});
 
 function notificationsHost(options: {
@@ -120,6 +137,13 @@ export const SETTINGS_SEARCH_FIXTURES = [
       {
         name: "the installed mobile app",
         context: { ...NO_BRIDGES, mobileApp: true },
+      },
+      {
+        name: "only the desktop host lifecycle bridge",
+        context: {
+          ...NO_BRIDGES,
+          runnerHost: createFakeRunnerHost({ hostLifecycle: HOST_LIFECYCLE }),
+        },
       },
     ],
   },

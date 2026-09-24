@@ -247,6 +247,20 @@ export const RunnerHostInvoke = {
   // machine that runs no local host can still switch back.
   hostLifecycleGet: "runnerHost:hostLifecycle:get",
   hostLifecycleSet: "runnerHost:hostLifecycle:set",
+  // The quit transaction's renderer round-trip (host-lifecycle-modes T06):
+  // the modal's answer to a `hostQuitRequest`. Main ignores an unknown or
+  // stale `requestId`.
+  hostQuitRespond: "runnerHost:hostQuit:respond",
+  // PRELOAD-INTERNAL, never on the renderer surface. `listening` is this
+  // window's readiness for a quit request (the preload reports its first
+  // `onQuitRequest` subscriber and its last dispose), and `acknowledge` is the
+  // servicing ack the preload sends once a request reached a handler that did
+  // not throw - together the host-quit equivalent of the unsynced-edits path's
+  // `appLifecycleReadyWindowIds` + `acknowledgeQuitRequest`. Without them a
+  // window that never mounted the modal, or a frozen renderer, would hold a
+  // quit open for ever.
+  hostQuitListening: "runnerHost:hostQuit:listening",
+  hostQuitAcknowledge: "runnerHost:hostQuit:acknowledge",
   featureSettingsGet: "runnerHost:featureSettings:get",
   agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
@@ -518,6 +532,11 @@ export const RunnerHostEvent = {
   // A fresh `HostLifecycleView` whenever it changed: a mode change from this
   // app, or a policy / supervisor record written by the CLI.
   hostLifecycleChange: "runnerHost:event:hostLifecycle:change",
+  // The quit transaction asking the MRU window's host quit modal for a
+  // decision (`HostQuitDecisionRequest`), and its progress after one
+  // (`HostQuitStateEvent`, fanned to every window).
+  hostQuitRequest: "runnerHost:event:hostQuit:request",
+  hostQuitState: "runnerHost:event:hostQuit:state",
 } as const;
 
 /**

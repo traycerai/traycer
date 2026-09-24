@@ -1,7 +1,8 @@
-import { app, nativeImage } from "electron";
+import { app, dialog, nativeImage } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { initLogger, log } from "../app/logger";
 import { configureNativeAboutPanel } from "../app/about";
 import {
@@ -61,7 +62,30 @@ import {
   runUpdateInstallQuitSequence,
 } from "./update-install-quit";
 import { applyQuitDecision } from "./quit-decision";
+import {
+  QUIT_STOP_DEADLINE_MS,
+  QUIT_STOPPING_REVEAL_DELAY_MS,
+  QuitTransactions,
+} from "./quit-transaction";
+import {
+  askHostQuitNatively,
+  confirmQuitAndStopHost,
+} from "./host-quit-native-dialog";
+import {
+  ensureReachableAfterStayOpen,
+  revealHiddenWindowForStopping,
+} from "./quit-stay-open";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
+import {
+  CLOSE_TO_TRAY_NOTICE_FILE_NAME,
+  CloseToTray,
+  createCloseToTrayNoticeOnce,
+  parseCloseToTrayNoticeState,
+  registryCloseToTrayWindows,
+  type CloseToTrayNoticeState,
+} from "../windows/close-to-tray";
+import { createJsonFileStore } from "../app/json-file-store";
+import { trayHostLifecyclePresentation } from "../tray/tray-host-lifecycle";
 import {
   applyHostUpdateMenuState,
   armLocalHostBootOnSignIn,
@@ -495,13 +519,21 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const closingWindowIds = new Set<string>();
   let zoomController: WindowZoomController | null = null;
   let windowRegistry: WindowRegistry | null = null;
+  // Built once the tray and the lifecycle service exist; until then a close
+  // is an ordinary close.
+  let closeToTray: CloseToTray | null = null;
   /**
    * Read `state.bridge` / `windowRegistry` at call time: a window can close
    * before the bridge exists, and a `close` listener captured at window
    * construction must not silently skip the final browser capture in that
    * gap.
+   *
+   * Close-to-tray goes first: a last window it hides is not closing, so its
+   * browser guests stay alive and need no final capture. A close it lets
+   * through (re-issued) comes back here and takes the capture path below.
    */
   function onWindowClose(windowId: string, event: ElectronEvent): void {
+    if (closeToTray?.interceptClose(windowId, event) === true) return;
     const bridge = state.bridge;
     const registry = windowRegistry;
     if (bridge === null || registry === null) return;
@@ -718,6 +750,31 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
+  const registryForClose = windowRegistry;
+  closeToTray = new CloseToTray({
+    platform: process.platform,
+    hasTray: () => tray !== null,
+    isQuitting: () => shellQuitState.isQuitting(),
+    readQuitMode: async () => (await hostLifecycle.readQuitPolicy()).mode,
+    windows: registryCloseToTrayWindows(registryForClose),
+    requestQuit: () => {
+      app.quit();
+    },
+    showNoticeOnce: createCloseToTrayNoticeOnce({
+      store: createJsonFileStore<CloseToTrayNoticeState>(
+        join(app.getPath("userData"), CLOSE_TO_TRAY_NOTICE_FILE_NAME),
+        { shown: false },
+        parseCloseToTrayNoticeState,
+      ),
+      show: () => {
+        tray?.showNotice({
+          title: "Traycer is still running",
+          content:
+            "Traycer is still running in the tray. Quit from the tray to stop the host.",
+        });
+      },
+    }),
+  });
 
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
@@ -816,6 +873,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   wireAppLifecycle(state, {
     host,
     hostController,
+    hostLifecycle,
     menu,
     windowRegistry,
     bridge,
@@ -1247,6 +1305,7 @@ export function runDeferred<
 interface LifecycleServices {
   readonly host: HostLifecycle;
   readonly hostController: HostController;
+  readonly hostLifecycle: HostLifecycleService;
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly bridge: RunnerIpcBridge;
@@ -1268,32 +1327,12 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     if (services.windowRegistry.focusMru()) {
       return;
     }
-    // No live window to focus (e.g. macOS red-light close of the last window
-    // left the app running). Restore the preserved window snapshot(s) rather
-    // than minting a blank window, so a close-then-reopen keeps the user's tabs,
-    // canvas, and drafts. Falls back to a blank window when nothing restorable
-    // survives.
-    const plan = planActivateWithoutLiveWindow(
-      services.desktopStateStore.getRestorableWindowEntries(),
-    );
-    if (plan.kind === "restore") {
-      for (const entry of plan.entries) {
-        restorePreservedWindowOnActivate(services, entry);
-      }
-      return;
-    }
-    void services.windowRegistry.create({
-      initialRoute: null,
-      beforeLoad: null,
-    });
+    openWindowWithoutLiveWindow(services);
   });
 
-  // Flag flipped once the renderer authorizes the quit. Subsequent
-  // `before-quit` fires short-circuit so `app.quit()` can complete.
+  // Flag flipped once the quit is authorized. Subsequent `before-quit` fires
+  // short-circuit so `app.quit()` can complete.
   let quitAuthorized = false;
-  // Guards the one-shot quit-time host update so our own re-`quit()` (after the
-  // attempt settles) doesn't re-enter the attempt.
-  let quitTimeHostUpdateStarted = false;
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
@@ -1337,6 +1376,83 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       });
   };
 
+  const quitTransactions = new QuitTransactions({
+    isInstallingUpdate,
+    lifecycle: services.hostLifecycle,
+    controller: services.hostController,
+    requestDecision: (prompt) =>
+      services.bridge.requestHostQuitDecision(prompt),
+    withdrawDecision: (error) => {
+      services.bridge.withdrawHostQuitDecisions(error);
+    },
+    askNatively: (prompt, signal) =>
+      askHostQuitNatively(prompt, signal, (options) =>
+        dialog.showMessageBox(options),
+      ),
+    publishState: (event) => {
+      services.bridge.publishHostQuitState(event);
+    },
+    revealStopping: () => {
+      if (revealHiddenWindowForStopping(services.windowRegistry)) {
+        log.info("[host-quit] window shown for stopping", {
+          phase: "stopping",
+          reason: "stop-running",
+        });
+      }
+    },
+    setStoppingIndicator: (stopping) => {
+      services.tray?.setQuitStopping(stopping);
+    },
+    revealDelayMs: QUIT_STOPPING_REVEAL_DELAY_MS,
+    unsyncedEditsGate: () => runUnsyncedEditsGate(services.bridge),
+    // Never START a new host mutation this late - only drain whatever
+    // `HostController` mutation is already in flight (bounded), so the
+    // desktop doesn't swap its own bytes out from under a subprocess
+    // mid-swap. Drain the renderer's freshest per-window projection into the
+    // state store, then re-quit. Fail-open at every step - a wedged mutation,
+    // failure, or the bounded drain timeout all fall through to the quit; the
+    // launch-time `applyStaged` reconcile is the guaranteed fallback either
+    // way.
+    runUpdateInstallSequence: (hooks) =>
+      runUpdateInstallQuitSequence({
+        drainHostMutation: () =>
+          services.hostController.awaitMutationLaneIdle(
+            QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
+          ),
+        isInstallPending: isInstallingUpdate,
+        drainRendererProjection: () =>
+          services.bridge.requestFreshUnsyncedSnapshot(
+            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+          ),
+        authorizeQuitAfterFlush: hooks.authorizeQuit,
+        stayOpen: hooks.stayOpen,
+      }),
+    authorizeQuitAfterFlush,
+    authorizeQuitNow: () => {
+      quitAuthorized = true;
+      app.quit();
+    },
+    stayOpen: () => {
+      services.quitState.resetQuitting();
+      const reopened = ensureReachableAfterStayOpen({
+        platform: process.platform,
+        windows: services.windowRegistry,
+        openWindow: () => {
+          openWindowWithoutLiveWindow(services);
+        },
+      });
+      if (reopened) {
+        log.info("[host-quit] window reopened after cancelled quit", {
+          reason: "unreachable",
+        });
+      }
+    },
+    deadlineMs: QUIT_STOP_DEADLINE_MS,
+  });
+  if (services.tray !== null) {
+    installTrayHostLifecycle(services.tray, services, quitTransactions);
+  }
+
   app.on("before-quit", (event) => {
     // Mark the shell as quitting on the FIRST pass, before any preventDefault or
     // async work, so the windows registry-change listener preserves every
@@ -1347,100 +1463,154 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       teardownShellObservers();
       return;
     }
-    const activeBridge = state.bridge;
-    if (activeBridge === null) {
+    if (state.bridge === null) {
       event.preventDefault();
       authorizeQuitAfterFlush();
       return;
     }
 
-    // `quitAndInstall` drives this quit after the user chose "Restart" to
-    // install an update. Let it through - intercepting with the unsynced-edits
-    // prompt would silently swallow the install. State is still flushed via
-    // `teardownShellObservers`.
-    if (isInstallingUpdate()) {
-      // Second pass: our quit-time host update settled and re-fired `quit()`.
-      // Let it through.
-      if (quitTimeHostUpdateStarted) {
-        log.info(
-          "[desktop] before-quit - update install in progress, allowing quit",
-        );
-        quitAuthorized = true;
-        teardownShellObservers();
-        return;
-      }
-      // First pass: never START a new host mutation this late - only drain
-      // whatever `HostController` mutation is already in flight (bounded),
-      // so the desktop doesn't swap its own bytes out from under a
-      // subprocess mid-swap. Drain the renderer's freshest per-window
-      // projection into the state store, then re-quit. Fail-open at every
-      // step - a wedged mutation, failure, or the bounded drain timeout all
-      // fall through to the quit; the launch-time `applyStaged` reconcile is
-      // the guaranteed fallback either way.
-      quitTimeHostUpdateStarted = true;
-      event.preventDefault();
+    // One transaction per quit (see `quit-transaction.ts`): the first pass
+    // creates it, a repeat joins it. Its update-install branch keeps the
+    // existing order - `quitAndInstall` drives that quit after the user chose
+    // "Restart", and intercepting it with the unsynced-edits prompt would
+    // silently swallow the install - and its only "allow" is that branch's
+    // existing second pass: the updater re-firing `quit()` is let through,
+    // once the `handoff` verdict is on disk.
+    if (quitTransactions.onBeforeQuit() === "allow") {
       log.info(
-        "[desktop] before-quit - install pending; draining any in-flight host mutation first",
+        "[desktop] before-quit - update install in progress, allowing quit",
       );
-      void runUpdateInstallQuitSequence({
-        drainHostMutation: () =>
-          services.hostController.awaitMutationLaneIdle(
-            QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
-          ),
-        isInstallPending: isInstallingUpdate,
-        drainRendererProjection: () =>
-          activeBridge.requestFreshUnsyncedSnapshot(
-            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
-          ),
-        authorizeQuitAfterFlush,
-        stayOpen: () => {
-          // Re-arm the first-pass sequence: leaving the flag set would make
-          // the NEXT Restart-to-install take the second-pass shortcut above,
-          // skipping the host reconcile, the renderer drain, AND the shell
-          // flush for that quit.
-          quitTimeHostUpdateStarted = false;
-          services.quitState.resetQuitting();
-        },
-      });
+      quitAuthorized = true;
+      teardownShellObservers();
       return;
     }
-
     event.preventDefault();
-    void activeBridge
-      .requestFreshUnsyncedSnapshot(QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS)
-      .then((snapshot) => {
-        if (!activeBridge.hasUnsyncedEdits()) {
-          log.info(
-            "[desktop] before-quit - no unsynced edits after fresh query",
-            { affectedEpics: snapshot.length },
-          );
-          authorizeQuitAfterFlush();
-          return;
-        }
-        log.info(
-          "[desktop] before-quit intercepted - awaiting renderer decision",
-          { affectedEpics: snapshot.length },
-        );
-        return activeBridge
-          .requestQuitDecision(snapshot)
-          .then((decision) => {
-            applyQuitDecision(decision, {
-              authorizeQuitAfterFlush,
-              stayOpen: () => {
-                services.quitState.resetQuitting();
-              },
-            });
-          })
-          .catch((err) => {
-            log.warn("[desktop] quit decision failed - staying alive", err);
-            services.quitState.resetQuitting();
-          });
-      })
-      .catch((err) => {
-        log.warn("[desktop] fresh-snapshot query failed - staying alive", err);
-        services.quitState.resetQuitting();
-      });
   });
+}
+
+/**
+ * The existing unsynced-edits intercept, as the quit transaction's first
+ * step: `proceed` when nothing is unsynced after a fresh query or the user
+ * chose to quit anyway, `stay-open` when they cancelled or the intercept
+ * failed (the safe direction for an answer nothing here understood).
+ */
+function runUnsyncedEditsGate(
+  bridge: RunnerIpcBridge,
+): Promise<"proceed" | "stay-open"> {
+  return bridge
+    .requestFreshUnsyncedSnapshot(QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS)
+    .then((snapshot): Promise<"proceed" | "stay-open"> | "proceed" => {
+      if (!bridge.hasUnsyncedEdits()) {
+        log.info(
+          "[desktop] before-quit - no unsynced edits after fresh query",
+          {
+            affectedEpics: snapshot.length,
+          },
+        );
+        return "proceed";
+      }
+      log.info(
+        "[desktop] before-quit intercepted - awaiting renderer decision",
+        { affectedEpics: snapshot.length },
+      );
+      return bridge
+        .requestQuitDecision(snapshot)
+        .then((decision) => {
+          let outcome: "proceed" | "stay-open" = "stay-open";
+          applyQuitDecision(decision, {
+            authorizeQuitAfterFlush: () => {
+              outcome = "proceed";
+            },
+            stayOpen: () => {
+              outcome = "stay-open";
+            },
+          });
+          return outcome;
+        })
+        .catch((err: unknown): "stay-open" => {
+          log.warn("[desktop] quit decision failed - staying alive", err);
+          return "stay-open";
+        });
+    })
+    .catch((err: unknown): "stay-open" => {
+      log.warn("[desktop] fresh-snapshot query failed - staying alive", err);
+      return "stay-open";
+    });
+}
+
+/**
+ * No live window to focus (e.g. macOS red-light close of the last window left
+ * the app running, or a cancelled tray-less quit on Windows/Linux). Restore
+ * the preserved window snapshot(s) rather than minting a blank window, so a
+ * close-then-reopen keeps the user's tabs, canvas, and drafts. Falls back to
+ * a blank window when nothing restorable survives.
+ */
+function openWindowWithoutLiveWindow(services: LifecycleServices): void {
+  const plan = planActivateWithoutLiveWindow(
+    services.desktopStateStore.getRestorableWindowEntries(),
+  );
+  if (plan.kind === "restore") {
+    for (const entry of plan.entries) {
+      restorePreservedWindowOnActivate(services, entry);
+    }
+    return;
+  }
+  void services.windowRegistry.create({
+    initialRoute: null,
+    beforeLoad: null,
+  });
+}
+
+/**
+ * The tray's host lifecycle line and "Quit and Stop Host" item, kept current
+ * from the policy (a fresh read on every lifecycle change) and the local host
+ * snapshot. Detached with the bridge.
+ */
+function installTrayHostLifecycle(
+  tray: DesktopTrayController,
+  services: LifecycleServices,
+  quitTransactions: QuitTransactions,
+): void {
+  let generation = 0;
+  const refresh = (): void => {
+    generation += 1;
+    const current = generation;
+    void services.hostLifecycle
+      .readQuitPolicy()
+      .then((policy) => {
+        if (current !== generation) return;
+        tray.setHostLifecyclePresentation(
+          trayHostLifecyclePresentation({
+            lanesActive: services.hostLifecycle.localHostLanesActive(),
+            mode: policy.mode,
+            hostRunning: services.host.getSnapshot() !== null,
+          }),
+        );
+      })
+      .catch(() => undefined);
+  };
+  tray.setQuitAndStopHostHandler(() => {
+    void confirmQuitAndStopHost((options) =>
+      dialog.showMessageBox(options),
+    ).then((confirmation) => {
+      log.info("[host-quit] quit and stop host confirm", {
+        reason: confirmation.confirmed ? "confirmed" : "declined",
+        remembered: confirmation.remember,
+      });
+      if (!confirmation.confirmed) return;
+      quitTransactions.quitAndStopHost(confirmation.remember, () => {
+        app.quit();
+      });
+    });
+  });
+  services.host.on("change", refresh);
+  const disposeLifecycleChange = services.hostLifecycle.onChange(refresh);
+  services.bridge.disposeFns.push(() => {
+    services.host.off("change", refresh);
+    disposeLifecycleChange();
+    tray.setQuitAndStopHostHandler(null);
+  });
+  refresh();
 }
 
 // Recreate a preserved window on macOS `activate`, reusing its original id so

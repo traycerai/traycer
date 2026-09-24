@@ -167,8 +167,17 @@ export class HostDirectoryService implements IHostDirectoryService {
    * and every live local snapshot. Never cleared, only replaced: the id is a
    * durable machine fact, and a stale value can only neutralise the twin of a
    * host this machine no longer runs - which nothing should relay-dial anyway.
+   *
+   * A shell with NO local host (`IRunnerHost.hasLocalHost === false`: the
+   * phone, and a desktop launched in the `none` lifecycle mode) never holds
+   * one. There is no host of this machine's to protect, and a remembered id
+   * would rewrite this machine's OLD registry row - still listed, and now
+   * possibly served by a host the person moved elsewhere - into a
+   * non-dialable local entry. That row stays what the registry says it is.
    */
-  private lastKnownLocalHostId: string | null = loadPersistedLocalHostId();
+  private lastKnownLocalHostId: string | null;
+  /** `IRunnerHost.hasLocalHost`, fixed for the life of the shell. */
+  private readonly hasLocalHost: boolean;
   private remoteEntries: readonly HostDirectoryEntry[] = [];
   /**
    * The snapshot most recently fanned out through `emit()`, kept so the poll
@@ -306,6 +315,10 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
+    this.hasLocalHost = options.runnerHost.hasLocalHost;
+    this.lastKnownLocalHostId = this.hasLocalHost
+      ? loadPersistedLocalHostId()
+      : null;
     this.onRegistryPollTick = options.onRegistryPollTick;
     this.remoteFetcher =
       options.remoteFetcher === null ? fetchRemoteHosts : options.remoteFetcher;
@@ -390,8 +403,11 @@ export class HostDirectoryService implements IHostDirectoryService {
     // exactly the reinstall this guard exists for - the host is down, so no
     // snapshot will seed it either. The shell's pid metadata is the one source
     // that still answers in that window. A shell without a local host (web,
-    // mobile) answers `null` and nothing is neutralised.
-    await this.seedLocalHostIdFromShell();
+    // mobile, a `none` desktop launch) is not asked at all: nothing of its own
+    // exists to neutralise.
+    if (this.hasLocalHost) {
+      await this.seedLocalHostIdFromShell();
+    }
     // The seed introduced an await BEFORE the subscription exists, so a
     // provider that unmounts or swaps its runner mid-flight can call
     // `dispose()` while nothing is registered yet. Without this recheck
@@ -403,8 +419,14 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
-      this.localEntry = toLocalEntry(snapshot);
-      if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
+      // A shell with no local host has no local ENTRY either, whatever a
+      // snapshot says: the directory answers for this launch's capability.
+      this.localEntry = this.hasLocalHost ? toLocalEntry(snapshot) : null;
+      if (
+        this.hasLocalHost &&
+        snapshot !== null &&
+        snapshot.hostId !== this.lastKnownLocalHostId
+      ) {
         this.adoptLocalHostId(snapshot.hostId);
       }
       appLogger.info("[host-directory] local host snapshot changed", {
@@ -1242,7 +1264,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * that is already happening, and stops for good on the first answer.
    */
   private async reseedLocalHostIdIfUnknown(): Promise<void> {
-    if (this.lastKnownLocalHostId !== null) {
+    if (!this.hasLocalHost || this.lastKnownLocalHostId !== null) {
       return;
     }
     await this.seedLocalHostIdFromShell();

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
+import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
@@ -87,6 +88,9 @@ export function RootComponent() {
       <MenuCommandListener />
       <HostTrayCommandListener />
       <DesktopDialogHost />
+      {/* The host quit modal: on every route, signed in or not, so a quit is
+          always answered in-window rather than by main's native prompt. */}
+      <HostQuitDecisionBridge />
       <NotificationEmissionController />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization

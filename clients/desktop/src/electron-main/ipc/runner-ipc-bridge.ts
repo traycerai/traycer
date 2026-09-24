@@ -13,6 +13,17 @@ import type {
   UnsyncedEditsSnapshot,
 } from "../../ipc-contracts/app-lifecycle-types";
 import type {
+  HostQuitDecisionMode,
+  HostQuitDecisionRequest,
+  HostQuitDecisionResponse,
+  HostQuitStateEvent,
+} from "../../ipc-contracts/host-quit-types";
+import {
+  RendererDecisionRequests,
+  type RendererDecisionMessages,
+} from "./renderer-decision-requests";
+import { registerHostQuitIpc } from "./host-quit-ipc";
+import type {
   DesktopAuthSessionSnapshot,
   MenuCommandId,
   MenuCommandPayload,
@@ -336,12 +347,35 @@ type HostChangeListener = (
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
 
-export interface QuitDecisionWaiter {
-  readonly requestId: string;
-  readonly windowId: string;
-  readonly resolve: (decision: QuitDecision) => void;
-  readonly reject: (error: Error) => void;
-  readonly serviceTimer: NodeJS.Timeout;
+const QUIT_INTERCEPTION_MESSAGES: RendererDecisionMessages = {
+  noWindow: "No renderer window is available for quit interception",
+  notReady: "MRU renderer has not advertised app-lifecycle readiness",
+  superseded: "Quit interception superseded by a newer quit attempt",
+  notAcknowledged:
+    "MRU renderer received quit interception but did not acknowledge servicing it",
+  cannotReceive: "MRU renderer cannot receive quit interception",
+  rendererReset: "Renderer reset before resolving quit interception",
+  windowClosed: "Quit interception window closed before resolving",
+  disposed: "Runner IPC bridge disposed before quit decision resolved",
+};
+
+const HOST_QUIT_DECISION_MESSAGES: RendererDecisionMessages = {
+  noWindow: "No renderer window is available for the host quit decision",
+  notReady: "MRU renderer is not listening for host quit requests",
+  superseded: "Host quit decision superseded by a newer quit attempt",
+  notAcknowledged:
+    "MRU renderer received the host quit request but did not acknowledge servicing it",
+  cannotReceive: "MRU renderer cannot receive the host quit request",
+  rendererReset: "Renderer reset before resolving the host quit decision",
+  windowClosed: "Host quit decision window closed before resolving",
+  disposed: "Runner IPC bridge disposed before the host quit decision resolved",
+};
+
+/** A host quit request before main mints its `requestId`. */
+export interface HostQuitPrompt {
+  readonly mode: HostQuitDecisionMode;
+  readonly round: HostQuitDecisionRequest["round"];
+  readonly busyMessage: string | null;
 }
 
 /**
@@ -567,11 +601,39 @@ export class RunnerIpcBridge {
   readonly appLifecycleReadyWindowIds = new Set<string>();
   readonly unsyncedEditsSnapshots = new Map<string, UnsyncedEditsSnapshot>();
   /**
-   * Pending quit-decision resolvers. Each quit request carries a requestId so
-   * late acknowledgements or decisions from a previous attempt cannot service
-   * a newer retry.
+   * Pending unsynced-edits quit decisions. Each quit request carries a
+   * requestId so late acknowledgements or decisions from a previous attempt
+   * cannot service a newer retry.
    */
-  readonly quitDecisionWaiters: QuitDecisionWaiter[] = [];
+  readonly quitDecisions = new RendererDecisionRequests<QuitDecision>({
+    readyWindowIds: this.appLifecycleReadyWindowIds,
+    serviceAckTimeoutMs: QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS,
+    messages: QUIT_INTERCEPTION_MESSAGES,
+    onAbandoned: null,
+  });
+  /**
+   * Windows whose preload reported a live `hostLifecycle.onQuitRequest`
+   * subscriber - the host quit modal's readiness, as
+   * `appLifecycleReadyWindowIds` is the unsynced-edits prompt's.
+   */
+  readonly hostQuitListeningWindowIds = new Set<string>();
+  /**
+   * Pending host quit decisions; the same machinery as `quitDecisions`. A
+   * request main gives up on is told `cancelled`, so a modal that did open
+   * (a late ack, a withdrawn question) closes rather than answering nobody.
+   */
+  readonly hostQuitDecisions =
+    new RendererDecisionRequests<HostQuitDecisionResponse>({
+      readyWindowIds: this.hostQuitListeningWindowIds,
+      serviceAckTimeoutMs: QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS,
+      messages: HOST_QUIT_DECISION_MESSAGES,
+      onAbandoned: (waiter) => {
+        this.publishHostQuitState({
+          requestId: waiter.requestId,
+          phase: "cancelled",
+        });
+      },
+    });
   /**
    * In-flight fresh-snapshot waiters keyed by `requestId`. Only the response
    * whose id matches resolves the corresponding promise - ambient
@@ -622,6 +684,7 @@ export class RunnerIpcBridge {
     registerDeviceFlowIpc(this);
     registerTrayIpc(this);
     registerLifecycleIpc(this);
+    registerHostQuitIpc(this);
     registerWindowsIpc(this);
     registerOwnershipIpc(this);
     registerEpicVisibilityIpc(this);
@@ -930,6 +993,9 @@ export class RunnerIpcBridge {
 
   markRendererUnavailable(windowId: string): void {
     this.appLifecycleReadyWindowIds.delete(windowId);
+    // The reset renderer's preload realm is gone with its subscribers; a
+    // reloaded one reports `listening` again when its modal re-subscribes.
+    this.hostQuitListeningWindowIds.delete(windowId);
     // A renderer that died stops reporting, and `retainWindows` cannot help:
     // it prunes by window REGISTRATION, which this window still has. Left
     // alone, this window's last visible-Epic report would stand forever and
@@ -937,10 +1003,8 @@ export class RunnerIpcBridge {
     // is how a row is removed, so this is the same path a window that stopped
     // showing anything takes.
     this.epicVisibility.report(windowId, []);
-    this.rejectQuitDecisionWaitersForWindow(
-      windowId,
-      new Error("Renderer reset before resolving quit interception"),
-    );
+    this.quitDecisions.rejectRendererReset(windowId);
+    this.hostQuitDecisions.rejectRendererReset(windowId);
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => waiter.windowId === windowId,
     );
@@ -955,56 +1019,60 @@ export class RunnerIpcBridge {
    * receive the event, or never acknowledges that it has started servicing it.
    */
   requestQuitDecision(snapshot: UnsyncedEditsSnapshot): Promise<QuitDecision> {
-    const target = this.windowRegistry.getMruRecord();
-    if (target === null) {
-      return Promise.reject(
-        new Error("No renderer window is available for quit interception"),
-      );
-    }
-    if (!this.appLifecycleReadyWindowIds.has(target.windowId)) {
-      return Promise.reject(
-        new Error("MRU renderer has not advertised app-lifecycle readiness"),
-      );
-    }
-    this.rejectQuitDecisionWaitersForWindow(
-      target.windowId,
-      new Error("Quit interception superseded by a newer quit attempt"),
-    );
-    const requestId = randomUUID();
-    return new Promise<QuitDecision>((resolve, reject) => {
-      const serviceTimer = setTimeout(() => {
-        const waiter = this.removeQuitDecisionWaiter(requestId);
-        if (waiter === null) {
-          return;
-        }
-        waiter.reject(
-          new Error(
-            "MRU renderer received quit interception but did not acknowledge servicing it",
-          ),
-        );
-      }, QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS);
-      this.quitDecisionWaiters.push({
-        requestId,
-        windowId: target.windowId,
-        resolve,
-        reject,
-        serviceTimer,
-      });
-      if (
-        this.safeSendToWindow(target.windowId, RunnerHostEvent.quitRequested, {
+    return this.quitDecisions.request(
+      this.windowRegistry.getMruRecord(),
+      (windowId, requestId) =>
+        this.safeSendToWindow(windowId, RunnerHostEvent.quitRequested, {
           requestId,
           snapshot,
-        })
-      ) {
-        return;
-      }
-      const waiter = this.removeQuitDecisionWaiter(requestId);
-      if (waiter !== null) {
-        waiter.reject(
-          new Error("MRU renderer cannot receive quit interception"),
+        }),
+    );
+  }
+
+  /**
+   * The quit transaction's question to the host quit modal, through the same
+   * machinery as `requestQuitDecision`: the MRU window, only if its preload
+   * reported a listening modal, with the same servicing-ack budget and the
+   * same rejection when the renderer resets, the window closes or the bridge
+   * is disposed. A rejection means "no renderer can answer"; the transaction
+   * then asks natively.
+   *
+   * The target is shown and focused first: after a close-to-tray the MRU
+   * window is hidden, and a modal in a hidden window is a quit nobody can
+   * answer.
+   */
+  requestHostQuitDecision(
+    prompt: HostQuitPrompt,
+  ): Promise<HostQuitDecisionResponse> {
+    return this.hostQuitDecisions.request(
+      this.windowRegistry.getMruRecord(),
+      (windowId, requestId) => {
+        this.windowRegistry.focusById(windowId);
+        return this.safeSendToWindow(
+          windowId,
+          RunnerHostEvent.hostQuitRequest,
+          {
+            requestId,
+            mode: prompt.mode,
+            round: prompt.round,
+            busyMessage: prompt.busyMessage,
+          } satisfies HostQuitDecisionRequest,
         );
-      }
-    });
+      },
+    );
+  }
+
+  /**
+   * Withdraw a pending host quit question (the quit it belonged to was
+   * superseded); its caller sees `error`.
+   */
+  withdrawHostQuitDecisions(error: Error): void {
+    this.hostQuitDecisions.rejectAllWith(error);
+  }
+
+  /** The quit transaction's progress, to every window. */
+  publishHostQuitState(event: HostQuitStateEvent): void {
+    this.fanOut(RunnerHostEvent.hostQuitState, event);
   }
 
   dispose(): void {
@@ -1026,9 +1094,8 @@ export class RunnerIpcBridge {
       ipcMain.removeListener(channel, listener);
     }
     this.syncListeners.length = 0;
-    this.rejectAllQuitDecisionWaiters(
-      new Error("Runner IPC bridge disposed before quit decision resolved"),
-    );
+    this.quitDecisions.rejectAll();
+    this.hostQuitDecisions.rejectAll();
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
     // armed past dispose() would either fire its setTimeout against a bridge
     // that no longer owns any IPC handlers, or hang the awaiting caller
@@ -1384,10 +1451,13 @@ export class RunnerIpcBridge {
         this.appLifecycleReadyWindowIds.delete(windowId);
       }
     }
-    this.rejectQuitDecisionWaiters(
-      (waiter) => !liveWindowIds.has(waiter.windowId),
-      new Error("Quit interception window closed before resolving"),
-    );
+    for (const windowId of this.hostQuitListeningWindowIds) {
+      if (!liveWindowIds.has(windowId)) {
+        this.hostQuitListeningWindowIds.delete(windowId);
+      }
+    }
+    this.quitDecisions.rejectClosedWindows(liveWindowIds);
+    this.hostQuitDecisions.rejectClosedWindows(liveWindowIds);
     // A fresh-snapshot request targets one window; if that window closed
     // before answering, no reply is ever coming and the waiter would
     // otherwise sit armed until its own timeout - same gap the line above
@@ -1406,51 +1476,8 @@ export class RunnerIpcBridge {
     this.epicVisibility.retainWindows(liveWindowIds);
   }
 
-  removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
-    const waiterIndex = this.quitDecisionWaiters.findIndex(
-      (entry) => entry.requestId === requestId,
-    );
-    if (waiterIndex === -1) {
-      return null;
-    }
-    const waiter = this.quitDecisionWaiters.splice(waiterIndex, 1)[0];
-    clearTimeout(waiter.serviceTimer);
-    return waiter;
-  }
-
-  private rejectQuitDecisionWaitersForWindow(
-    windowId: string,
-    error: Error,
-  ): void {
-    this.rejectQuitDecisionWaiters(
-      (waiter) => waiter.windowId === windowId,
-      error,
-    );
-  }
-
-  private rejectAllQuitDecisionWaiters(error: Error): void {
-    this.rejectQuitDecisionWaiters(() => true, error);
-  }
-
-  private rejectQuitDecisionWaiters(
-    predicate: (waiter: QuitDecisionWaiter) => boolean,
-    error: Error,
-  ): void {
-    const retained: QuitDecisionWaiter[] = [];
-    for (const waiter of this.quitDecisionWaiters) {
-      if (!predicate(waiter)) {
-        retained.push(waiter);
-        continue;
-      }
-      clearTimeout(waiter.serviceTimer);
-      waiter.reject(error);
-    }
-    this.quitDecisionWaiters.length = 0;
-    this.quitDecisionWaiters.push(...retained);
-  }
-
   /**
-   * `rejectQuitDecisionWaiters`'s counterpart for fresh-snapshot requests.
+   * The quit-decision rejections' counterpart for fresh-snapshot requests.
    * `resolveStale()` (not `reject`) because a fresh-snapshot request has a
    * well-defined "did not answer" value - the cached ambient snapshot - so
    * there is no error to propagate, only a freshness fact to report.

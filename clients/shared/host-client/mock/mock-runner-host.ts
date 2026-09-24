@@ -297,6 +297,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly migration: null = null;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
+  readonly hostLifecycle: null = null;
   readonly zoom: null = null;
   readonly pushPermission: null = null;
   readonly systemBack: null = null;

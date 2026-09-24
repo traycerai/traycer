@@ -709,3 +709,54 @@ describe("quit verdicts", () => {
     expect(await harness.store.readPresence()).toBeNull();
   });
 });
+
+describe("readQuitPolicy / localHostLanesActive", () => {
+  it("reads the file's mode fresh while the lanes run, CLI writes included", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 3, "stop-if-idle");
+    expect(harness.service.localHostLanesActive()).toBe(true);
+    expect(await harness.service.readQuitPolicy()).toEqual({
+      mode: "stop-if-idle",
+      rev: 3,
+    });
+
+    // The CLI co-writes the policy: the next read sees it without an observe tick.
+    await writeCliPolicy(harness.store, 4, "linked");
+    expect(await harness.service.readQuitPolicy()).toEqual({
+      mode: "linked",
+      rev: 4,
+    });
+  });
+
+  it("is none when the app booted in none, whatever the file says", async () => {
+    const harness = makeHarness("none", POLL_MS);
+    await writeCliPolicy(harness.store, 2, "linked");
+    expect(harness.service.localHostLanesActive()).toBe(false);
+    expect((await harness.service.readQuitPolicy()).mode).toBe("none");
+  });
+
+  it("is none after none was committed this session, even if the file is rewritten", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 4, "ask");
+    await harness.service.writeLaunchPresence();
+    expect((await harness.service.readQuitPolicy()).mode).toBe("ask");
+
+    const result = await runNone(harness, "if-idle");
+    expect(result.kind).toBe("applied");
+    expect(harness.service.localHostLanesActive()).toBe(false);
+    expect((await harness.service.readQuitPolicy()).mode).toBe("none");
+
+    await writeCliPolicy(harness.store, 9, "linked");
+    expect((await harness.service.readQuitPolicy()).mode).toBe("none");
+  });
+
+  it("reports a CLI-written none as none while the lanes still run", async () => {
+    const harness = makeHarness("managed", POLL_MS);
+    await writeCliPolicy(harness.store, 5, "none");
+    expect(harness.service.localHostLanesActive()).toBe(true);
+    expect(await harness.service.readQuitPolicy()).toEqual({
+      mode: "none",
+      rev: 5,
+    });
+  });
+});
