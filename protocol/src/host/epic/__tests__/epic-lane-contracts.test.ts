@@ -1643,16 +1643,61 @@ describe("artifact.subscribe@1.1 bodySync frame (O1)", () => {
     ).toBe(false);
   });
 
-  it("still accepts every @1.0 frame kind (V11 is a strict superset)", () => {
-    expect(
-      artifactSubscribeServerFrameSchemaV11.safeParse({
+  describe("V11 is a strict superset of every @1.0 server frame kind", () => {
+    const base = { authorityEpoch: "epoch-1", artifactId: "artifact-1" };
+    // One valid fixture per @1.0 kind. The kind list below is checked against
+    // the V10 union itself, so a kind added to @1.0 without a fixture here
+    // fails that test rather than going unexercised.
+    const fixtures = {
+      doc: {
         kind: "doc",
-        authorityEpoch: "epoch-1",
-        artifactId: "artifact-1",
+        ...base,
         docGuid: "guid-1",
         stateVectorBase64: "AQ==",
         hasBinaryPayload: true,
-      }).success,
-    ).toBe(true);
+      },
+      docUpdate: {
+        kind: "docUpdate",
+        ...base,
+        docGuid: "guid-1",
+        hasBinaryPayload: true,
+      },
+      docAck: {
+        kind: "docAck",
+        ...base,
+        docGuid: "guid-1",
+        coverageStateVectorBase64: "AQ==",
+        hasBinaryPayload: false,
+      },
+      awareness: { kind: "awareness", ...base, hasBinaryPayload: true },
+      unavailable: {
+        kind: "unavailable",
+        ...base,
+        code: "bodyUnavailable",
+        reason: "retrying",
+        terminal: false,
+        hasBinaryPayload: false,
+      },
+      pong: { kind: "pong", hasBinaryPayload: false },
+    };
+
+    it("has a fixture for exactly the kinds the V10 union declares", () => {
+      const declared = artifactSubscribeServerFrameSchemaV10.options
+        .map((option) => option.shape.kind.value)
+        .sort();
+      expect(Object.keys(fixtures).sort()).toEqual(declared);
+    });
+
+    it.each(Object.entries(fixtures))(
+      "%s parses under both V10 and V11",
+      (_kind, fixture) => {
+        expect(
+          artifactSubscribeServerFrameSchemaV10.safeParse(fixture).success,
+        ).toBe(true);
+        expect(
+          artifactSubscribeServerFrameSchemaV11.safeParse(fixture).success,
+        ).toBe(true);
+      },
+    );
   });
 });
