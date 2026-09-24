@@ -124,8 +124,8 @@ async function runFinalizeUpgradeSwapWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
 ): Promise<FinalizeSwapOutcome> {
-  return runFinalizeUpgradeSwapWithStart(opts, () =>
-    startHostServiceWithAttempt(
+  return runFinalizeUpgradeSwapWithStart(opts, async () => {
+    const outcome = await startHostServiceWithAttempt(
       capability,
       contenderOptions,
       // Completes the restart whose stop released the CLI binary: a restart
@@ -133,8 +133,21 @@ async function runFinalizeUpgradeSwapWithAttempt(
       "maintenance",
       createServiceController(),
       serviceLabelFor(opts.environment),
-    ),
-  );
+    );
+    // Not expected here: the stop that released the binary ended the old
+    // supervisor, and it removed its records. A live one means something
+    // else brought the service back first, and its supervisor hands the host
+    // back itself - which is what this start was for.
+    if (outcome.kind === "supervisor-relaunching") {
+      createCliLogger(opts.environment).info(
+        "Finalize-upgrade start left the host to the service's live supervisor",
+        {
+          environment: opts.environment,
+          supervisorPid: outcome.supervisorPid,
+        },
+      );
+    }
+  });
 }
 
 async function runFinalizeUpgradeSwapWithStart(

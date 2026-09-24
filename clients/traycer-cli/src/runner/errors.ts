@@ -165,6 +165,13 @@ export const CLI_ERROR_CODES = {
   // form (`host service refresh`, or the lifecycle mode change that runs it).
   // Nothing was started or stopped; the message names the repair.
   SERVICE_DEFINITION_REFRESH_FAILED: "E_SERVICE_DEFINITION_REFRESH_FAILED",
+  // A start found the service's own supervisor alive and relaunching its
+  // host, so it started nothing, and the relaunch did not bring the host back
+  // within the supervisor's longest backoff plus a boot allowance. Nothing
+  // was changed; the supervisor may still succeed, or exhaust its budget and
+  // exit, after which a start takes the ordinary path. Deliberately not
+  // expected: a host its supervisor cannot bring back is a real failure.
+  SERVICE_SUPERVISOR_RELAUNCHING: "E_SERVICE_SUPERVISOR_RELAUNCHING",
 
   // --- CLI install lifecycle (foundation only in NP-1) ---
   CLI_LOCK_BUSY: "E_CLI_LOCK_BUSY",

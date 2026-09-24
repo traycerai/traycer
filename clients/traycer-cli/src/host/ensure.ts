@@ -205,6 +205,10 @@ export async function ensureHost(
     force: opts.force,
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     yankLookup: opts.yankLookup,
+    // The real clock and budget: `host ensure` (and the desktop's ensure
+    // through it) is the caller whose wait for a relaunching supervisor
+    // matters most, and it has no reason to shorten it.
+    supervisorRelaunchWait: null,
     holdExplicitDowngrade,
     onProgress: opts.onProgress,
     beforeMutate: opts.beforeMutate,

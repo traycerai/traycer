@@ -38,6 +38,7 @@ import {
 import { runWithLeaseAtServiceSpawnEdge } from "../service/spawn-edge";
 import { assertHostIdleForStop } from "./busy-check";
 import { publishHostStartAdoption } from "./host-start-adoption";
+import { findLiveServiceSupervisor } from "./service-supervisor-relaunch";
 import type { HostStartOrigin } from "./lifecycle-origin";
 import type {
   DesktopRegistrationTakeover,
@@ -225,14 +226,50 @@ export async function restartHostServiceWithAttempt(
   });
 }
 
-/** Final-actuator facade for a service start. */
+/**
+ * What a service start did.
+ *
+ * - `started` - a host-start adoption proof was published and the service
+ *   manager was asked to start the service.
+ * - `supervisor-relaunching` - the service's own supervisor is alive, so the
+ *   host is down only between its relaunches: nothing was published and
+ *   nothing started (`host/service-supervisor-relaunch.ts`). The caller waits
+ *   for that relaunch OUTSIDE its lock, or reports it; it must not escalate.
+ */
+export type ServiceStartOutcome =
+  | { readonly kind: "started" }
+  | {
+      readonly kind: "supervisor-relaunching";
+      readonly supervisorPid: number;
+    };
+
+/**
+ * Final-actuator facade for a service start.
+ *
+ * The one place every service start passes through - `host ensure` (and the
+ * desktop's ensure through it), `host service start`, and the post-swap start
+ * of `cli finalize-upgrade` - so the one place that asks first whether the
+ * service's supervisor is still alive. A start then could never be consumed:
+ * the service manager starts nothing for a running service, and the pending
+ * proof it left made the supervisor refuse its own relaunches
+ * (CRASH-RELAUNCH-ENSURE-RACE). A start after an update or restart stop finds
+ * no live supervisor - that stop ended it and it removed its records - and
+ * takes the ordinary path.
+ */
 export async function startHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
   origin: HostStartOrigin,
   controller: Pick<ServiceController, "start" | "hostStartAdoptionLabel">,
   label: ServiceLabel,
-): Promise<void> {
+): Promise<ServiceStartOutcome> {
+  const supervisor = await findLiveServiceSupervisor(label.environment);
+  if (supervisor !== null) {
+    return {
+      kind: "supervisor-relaunching",
+      supervisorPid: supervisor.supervisorPid,
+    };
+  }
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
   await withServiceMutationAuthority(verify, async () => {
@@ -248,6 +285,7 @@ export async function startHostServiceWithAttempt(
       },
     );
   });
+  return { kind: "started" };
 }
 
 /**

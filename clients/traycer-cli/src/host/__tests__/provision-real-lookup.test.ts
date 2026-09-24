@@ -105,6 +105,7 @@ describe("provisionHost real yank lookup construction", () => {
       adoption: undefined,
       lifecycleOrigin: "terminal",
       beforeMutate: null,
+      supervisorRelaunchWait: null,
     });
 
     expect(result.action).toBe("noop");

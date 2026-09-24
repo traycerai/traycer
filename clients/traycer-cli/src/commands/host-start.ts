@@ -131,6 +131,7 @@ import {
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import { SUPERVISOR_ADMISSION_WAIT_MS } from "../host/update-budget";
+import { RELAUNCH_BACKOFF_MS } from "../host/relaunch-schedule";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
@@ -214,17 +215,9 @@ export const LAYER0_STATUS_FD = 3;
  */
 export const MAX_CONSECUTIVE_RELAUNCHES = 5;
 
-/**
- * Spacing before each relaunch, indexed by how many have already been made; the
- * last entry repeats. Deliberately faster off the mark than the desktop
- * governor's `[0, 60_000, 300_000]`: that one arbitrates while a user is
- * present and other recovery exists, whereas here the host is provably dead and
- * nothing else is watching. Caps at a minute so a machine that cannot start a
- * host is not hammered.
- */
-export const RELAUNCH_BACKOFF_MS: readonly number[] = [
-  1_000, 5_000, 15_000, 30_000, 60_000,
-];
+// Spacing before each relaunch: see `host/relaunch-schedule.ts`, where a start
+// that finds this supervisor alive also reads it.
+export { RELAUNCH_BACKOFF_MS };
 
 /**
  * How long a child must have RUN before its death is forgiven and the attempt

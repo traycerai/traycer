@@ -232,6 +232,7 @@ function makeOpts(
     adoption: undefined,
     lifecycleOrigin: "terminal",
     beforeMutate: null,
+    supervisorRelaunchWait: null,
     ...overrides,
   };
 }
