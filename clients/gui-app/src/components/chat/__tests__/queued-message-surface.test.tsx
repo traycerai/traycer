@@ -1051,6 +1051,163 @@ describe("<QueuedMessagePanel />", () => {
     expect(within(agentRow).queryByText("Can steer")).toBeNull();
     expect(within(agentRow).getByText("Will steer")).not.toBeNull();
   });
+
+  describe("queue fallback reason and Steer now availability", () => {
+    function steerRequestedItem(
+      queueItemId: string,
+      mode: "safe_point" | "interrupt_restart",
+    ): ChatQueuedPromptItem {
+      return {
+        ...queuedItem(queueItemId, `${queueItemId} text`, "steer_requested"),
+        delivery: mode === "safe_point" ? "same_turn" : "next_turn",
+        targetTurnId: "turn-1",
+        steerRequest: { mode, targetTurnId: "turn-1", requestedAt: 1 },
+      };
+    }
+
+    function steerNowButtonForRow(rowIndex: number): HTMLButtonElement {
+      const row = screen.getAllByTestId("queued-message-row").at(rowIndex);
+      if (row === undefined) throw new Error(`Expected row ${rowIndex}`);
+      const button = within(row).getByRole("button", {
+        name: "Steer queued message now",
+      });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("Expected a button element");
+      }
+      return button;
+    }
+
+    it("keeps Steer now available on another row while a safe_point steer is requested", () => {
+      renderPanel({
+        queue: runningQueueState([
+          steerRequestedItem("queue-waiting", "safe_point"),
+          queuedItem("queue-other", "Other queued prompt", "pending"),
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      expect(steerNowButtonForRow(1).disabled).toBe(false);
+    });
+
+    it("keeps Steer now available on another row while a safe_point steer is already handed off (steering)", () => {
+      renderPanel({
+        queue: runningQueueState([
+          {
+            ...steerRequestedItem("queue-handed-off", "safe_point"),
+            status: "steering",
+          },
+          queuedItem("queue-other", "Other queued prompt", "pending"),
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      expect(steerNowButtonForRow(1).disabled).toBe(false);
+    });
+
+    it("disables Steer now on another row while an interrupt_restart steer is staged", () => {
+      renderPanel({
+        queue: runningQueueState([
+          steerRequestedItem("queue-restarting", "interrupt_restart"),
+          queuedItem("queue-other", "Other queued prompt", "pending"),
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      expect(steerNowButtonForRow(1).disabled).toBe(true);
+    });
+
+    it("renders a fallback item's reason inline in its row", () => {
+      const reason =
+        "A steer is already in flight; this message will run next.";
+      renderPanel({
+        queue: queueState([
+          {
+            ...queuedItem("queue-fallback", "Fallback prompt", "fallback"),
+            fallbackReason: reason,
+          },
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      const row = screen.getByTestId("queued-message-row");
+      expect(within(row).getByText("Fallback prompt")).not.toBeNull();
+      expect(within(row).getByText(reason)).not.toBeNull();
+    });
+
+    it("renders a paused item's retained reason inline in its row", () => {
+      const reason = "Paused after you pressed Stop.";
+      renderPanel({
+        queue: queueState([
+          {
+            ...queuedItem("queue-paused", "Paused prompt", "paused"),
+            fallbackReason: reason,
+          },
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      const row = screen.getByTestId("queued-message-row");
+      expect(within(row).getByText(reason)).not.toBeNull();
+    });
+
+    it("renders a received A2A item's retained pending reason inline in its row", () => {
+      const reason = "Retained after the turn ended before it could steer.";
+      renderPanel({
+        queue: queueState([
+          {
+            ...agentQueuedItem("queue-agent", "Agent response"),
+            fallbackReason: reason,
+          },
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      const row = screen.getByTestId("queued-message-row");
+      expect(within(row).getByText("Agent response")).not.toBeNull();
+      expect(within(row).getByText(reason)).not.toBeNull();
+    });
+
+    it("renders nothing extra for a null or whitespace-only fallbackReason", () => {
+      renderPanel({
+        queue: queueState([
+          queuedItem("queue-plain", "Same preview", "pending"),
+          {
+            ...queuedItem("queue-blank", "Same preview", "pending"),
+            fallbackReason: "   ",
+          },
+        ]),
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+
+      const rows = screen.getAllByTestId("queued-message-row");
+      const plain = rows.at(0);
+      const blank = rows.at(1);
+      if (plain === undefined || blank === undefined) {
+        throw new Error("Expected two rows");
+      }
+      // No placeholder, label or empty element for an absent reason: the two
+      // rows render identical text.
+      expect(blank.textContent).toBe(plain.textContent);
+      expect(blank.childElementCount).toBe(plain.childElementCount);
+      expect(blank.querySelectorAll("*").length).toBe(
+        plain.querySelectorAll("*").length,
+      );
+    });
+  });
 });
 
 function renderPanel(input: {
