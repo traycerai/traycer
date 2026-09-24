@@ -321,6 +321,10 @@ export function BrowsersPanelEmptyState(props: {
   readonly elsewhere: readonly EpicBrowsersElsewhere[];
   readonly onShowHost: (hostId: string) => void;
 }) {
+  // With browsers on another machine, "yet" would contradict the rows below
+  // it, and "agents open theirs here too" would point at the wrong machine:
+  // these rows exist because an agent's browser was placed somewhere else.
+  const hasElsewhere = props.elsewhere.length > 0;
   return (
     <div
       className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-8 text-center text-muted-foreground"
@@ -328,10 +332,14 @@ export function BrowsersPanelEmptyState(props: {
     >
       <Globe2 className="size-8 text-muted-foreground/45" aria-hidden />
       <div className="space-y-1">
-        <p className="text-ui-sm text-muted-foreground/60">No browsers yet.</p>
-        <p className="text-ui-xs text-muted-foreground/50">
-          Agents open theirs here too.
+        <p className="text-ui-sm text-muted-foreground/60">
+          {hasElsewhere ? "No browsers on this host." : "No browsers yet."}
         </p>
+        {hasElsewhere ? null : (
+          <p className="text-ui-xs text-muted-foreground/50">
+            Agents open theirs here too.
+          </p>
+        )}
       </div>
       <Button
         type="button"
