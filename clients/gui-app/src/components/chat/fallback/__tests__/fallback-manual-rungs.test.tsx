@@ -13,6 +13,8 @@ import type {
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/chat-fallback";
+import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
+import { AGENT_FAILURE_REASONS } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
@@ -1638,6 +1640,245 @@ describe("FallbackManualRungActions", () => {
       expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
       const root = screen.getByRole("button", { name: "Retry" }).parentElement;
       expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
+  });
+
+  /**
+   * FALLBACK-LIMIT-COPY.
+   *
+   * `waitExplanation` (`describeWaitDisposition(attempt.waitDisposition, …)`)
+   * is a RATE-LIMIT fact: the host derives `waitDisposition` from the
+   * rate-limit gauge alone, and `REASON_ELIGIBLE_RUNGS`
+   * (`@traycer/protocol/host/fallback-policy`) is the shared matrix that says
+   * a wait is meaningful only where a reason's row carries `"wait"` -
+   * `rate_limit` alone. Both renderers of that sentence - the card's
+   * `ManualRungExplanations` band and the destination menu's
+   * `emptyStateActions` - compute it from `attempt.waitDisposition` with no
+   * regard for `attempt.failure.reason`, so a turn that failed for an
+   * unrelated reason (the host lost the stream, an account is out of credit,
+   * a model went away) still gets told "The provider hasn't said when this
+   * limit resets" whenever the gauge happens to read `no_verified_reset` (or
+   * `beyond_cap`, or `checking`) at that moment - a sentence about a rate
+   * limit that never happened.
+   *
+   * Every case in this block is RED on the unmodified component. The planned
+   * fix gates `waitExplanation` on
+   * `REASON_ELIGIBLE_RUNGS[attempt.failure.reason].includes("wait")`; none of
+   * that gating exists yet, so each sentence below is asserted ABSENT and
+   * currently renders anyway.
+   */
+  describe("FALLBACK-LIMIT-COPY: the wait explanation is a rate-limit-only fact", () => {
+    it("does not show the no-verified-reset sentence for missing_terminal_event, and still renders Retry", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "missing_terminal_event" },
+          eligibleRungs: ["retry"],
+          waitDisposition: "no_verified_reset",
+          // "unknown" + no failed tuple renders no switch sentence either, so
+          // this case isolates the wait explanation alone.
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // RED on current code: a stalled stream (`missing_terminal_event`) has
+      // no rate limit to have "not said when it resets" - and
+      // `REASON_ELIGIBLE_RUNGS.missing_terminal_event` carries no "wait" rung
+      // at all - yet the sentence renders because `waitExplanation` never
+      // consults the failure reason.
+      expect(
+        screen.queryByText(
+          "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+        ),
+      ).toBeNull();
+    });
+
+    it("does not show the beyond-cap sentence for a non-wait reason (billing)", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "billing" },
+          eligibleRungs: ["retry"],
+          waitDisposition: "beyond_cap",
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // RED on current code: `REASON_ELIGIBLE_RUNGS.billing` is
+      // `["profile", "tier"]` - no "wait" - a spent-quota failure has no
+      // reset boundary to be "beyond the cap" of. Matches both the
+      // with-resetsAt and without-resetsAt wordings of the sentence, since
+      // both share this clause.
+      expect(screen.queryByText(/Traycer is set to wait/)).toBeNull();
+    });
+
+    it("does not show the checking sentence for a non-wait reason (model_unavailable)", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "model_unavailable" },
+          eligibleRungs: ["retry"],
+          waitDisposition: "checking",
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // RED on current code: a model going away has no reset probe running
+      // for it, so nothing is "checking" - yet the sentence renders anyway.
+      expect(screen.queryByText("Checking when this limit resets…")).toBeNull();
+    });
+
+    it("does not repeat the no-verified-reset sentence inside the empty Switch… menu for missing_terminal_event", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "missing_terminal_event" },
+          // "switch" included so the menu's own empty-state branch (which
+          // carries `emptyStateActions`, and therefore `waitExplanation`
+          // again) is what renders - the same scaffolding the F6 test above
+          // uses to drive this exact branch.
+          eligibleRungs: ["switch"],
+          waitDisposition: "no_verified_reset",
+          switchDisposition: "eligible",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      );
+      harness.listData = listTargetsResponse({
+        outcome: "listed",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      });
+      renderActions(TURN_ID);
+      // The card-level band, restated here so this fixture's own render is
+      // not proven only by the menu assertion below.
+      expect(
+        screen.queryByText(
+          "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+        ),
+      ).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
+      // RED on current code: `emptyStateActions` renders the SAME
+      // `waitExplanation` value the card computed above, with no reason gate
+      // of its own either - F6 gave this sentence two renderers and neither
+      // one checks the reason.
+      expect(
+        screen.queryByText(
+          "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+        ),
+      ).toBeNull();
+    });
+
+    /**
+     * The generalised sweep: EVERY reason `REASON_ELIGIBLE_RUNGS` marks as
+     * carrying no `"wait"` rung gets no wait sentence - not only the two
+     * hand-picked above. Iterates `AGENT_FAILURE_REASONS` - the typed list a
+     * `LastFailedAttempt.failure.reason` actually draws from - and indexes
+     * `REASON_ELIGIBLE_RUNGS` with it directly, the same way the production
+     * gate does; no cast, because the two reason lists are the same set by
+     * construction (see `content-blocks.ts`'s own doc on why they are kept in
+     * step at compile time). So a new reason added to the protocol with no
+     * "wait" rung is covered here without this file changing.
+     *
+     * `auth` is excluded on purpose: `ManualRungActions` returns `null` for
+     * it before `ManualRungAffordances` (and `waitExplanation`) ever renders
+     * - see "renders no rungs for an auth failure…" above - so including it
+     * here would assert something true for a reason that never reaches the
+     * code under test, which proves nothing about the gate.
+     */
+    it("finds at least one non-wait reason, and none of them show the no-verified-reset sentence", () => {
+      const nonWaitReasons = AGENT_FAILURE_REASONS.filter(
+        (reason) =>
+          reason !== "auth" && !REASON_ELIGIBLE_RUNGS[reason].includes("wait"),
+      );
+      // Not vacuous - falsification: an empty filter would make the loop
+      // below assert nothing and pass for the wrong reason entirely.
+      expect(nonWaitReasons.length).toBeGreaterThan(0);
+
+      for (const reason of nonWaitReasons) {
+        seedAttempt(
+          lastFailedAttempt({
+            userMessageId: USER_MESSAGE_ID,
+            turnId: TURN_ID,
+            failure: { reason },
+            eligibleRungs: ["retry"],
+            waitDisposition: "no_verified_reset",
+            switchDisposition: "unknown",
+            failedTuple: null,
+          }),
+        );
+        const { unmount } = renderActions(TURN_ID);
+        expect(
+          screen.getByRole("button", { name: "Retry" }),
+          reason,
+        ).toBeDefined();
+        // RED on current code, for every reason this table names.
+        expect(
+          screen.queryByText(
+            "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+          ),
+          reason,
+        ).toBeNull();
+        unmount();
+      }
+    });
+  });
+
+  /**
+   * The controls for the block above: `rate_limit` is the one reason whose
+   * `REASON_ELIGIBLE_RUNGS` row DOES carry `"wait"`, so the sentence must stay
+   * exactly as it renders today. These must be GREEN now and stay green once
+   * the reason gate lands - they are what stops the fix from over-gating and
+   * silencing the sentence for the one reason it is actually about.
+   */
+  describe("FALLBACK-LIMIT-COPY controls: the wait explanation still renders for rate_limit", () => {
+    it("still shows the no-verified-reset sentence for rate_limit", () => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ["retry"],
+          resetsAt: undefined,
+          waitDisposition: "no_verified_reset",
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(
+        screen.getByText(
+          "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+        ),
+      ).toBeDefined();
+    });
+
+    it("still shows the beyond-cap sentence for rate_limit with a resetsAt", () => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ["retry"],
+          resetsAt: RESETS_AT,
+          waitDisposition: "beyond_cap",
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(
+        screen.getByText(
+          `This limit resets at ${formatClockTime(RESETS_AT)} — longer than Traycer is set to wait.`,
+        ),
+      ).toBeDefined();
     });
   });
 });

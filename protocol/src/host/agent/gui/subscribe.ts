@@ -1656,8 +1656,11 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * identical, and the state where a wait is genuinely impossible looked like
      * the state where it is merely far away.
      *
-     * Rendering rule: explain when this is not `eligible`, and never infer any of
-     * these from the failure payload. `beyond_cap` is the one value that pairs
+     * Rendering rule: explain when this is not `eligible` and the failure's
+     * reason has a reset boundary at all (`REASON_ELIGIBLE_RUNGS` lists
+     * `wait` for it), and never infer any of these from the failure payload.
+     * The value is decided from the failed tuple's reset gauge alone, so a
+     * reason with no limit behind it still arrives `no_verified_reset`. `beyond_cap` is the one value that pairs
      * with `failure.resetsAt` - the boundary IS known, and the payload carries it
      * uncapped - so a card may name the time and point at Settings. The cap
      * itself deliberately never reaches the client, for the reason

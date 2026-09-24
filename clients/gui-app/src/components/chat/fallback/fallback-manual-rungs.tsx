@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { create, useStore } from "zustand";
+import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
 import type {
   ChatRunSettings,
   LastFailedAttempt,
@@ -621,12 +622,23 @@ function ManualRungAffordances({
   // cap and ABSENT for one nobody verified, so the two states a user can act
   // on were indistinguishable from here, and the state where a wait is
   // impossible looked like the state where it is merely far away.
-  const waitExplanation = describeWaitDisposition(
-    attempt.waitDisposition,
-    attempt.failure.resetsAt === undefined
-      ? null
-      : formatWaitTime(attempt.failure.resetsAt, now),
-  );
+  //
+  // Said only for a failure whose REASON has a reset boundary to wait on -
+  // `REASON_ELIGIBLE_RUNGS`, the matrix the host engine reads too, so this is
+  // not a second opinion. The disposition is decided from the failed tuple's
+  // reset gauge alone, so a turn that died with no terminal event arrives
+  // `no_verified_reset` and would be told "the provider hasn't said when this
+  // limit resets" about a limit it never hit.
+  const waitExplanation = REASON_ELIGIBLE_RUNGS[
+    attempt.failure.reason
+  ].includes("wait")
+    ? describeWaitDisposition(
+        attempt.waitDisposition,
+        attempt.failure.resetsAt === undefined
+          ? null
+          : formatWaitTime(attempt.failure.resetsAt, now),
+      )
+    : null;
   // All three switch decisions in one call - see the helper for why they are
   // one decision and not three.
   const { offersSwitch, switchLeads, switchExplanation } = switchAffordanceFor({
