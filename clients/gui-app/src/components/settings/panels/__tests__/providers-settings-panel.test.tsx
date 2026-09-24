@@ -3013,6 +3013,77 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeNull();
   });
 
+  it("links blocked profile sign-in to CLI setup without repeating its progress", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "",
+                version: null,
+                available: false,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+            profiles: [
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: null,
+                tier: null,
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+          availabilityPending: false,
+          managedInstallState: { status: "downloading", percent: 100 },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(
+      screen.getByText("Sign-in is unavailable until CLI setup is complete."),
+    ).toBeDefined();
+    expect(screen.queryByText("Preparing Codex… 100%")).toBeNull();
+    expect(screen.queryByText("Installing · 100%")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "CLI & Args" }));
+
+    expect(
+      screen
+        .getByRole("tab", { name: "CLI & Args" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(
+      screen.getByRole("progressbar", { name: "Installing · 100%" }),
+    ).toBeDefined();
+  });
+
   it("uses the shared profile switcher and combined refresh when only the terminal profile exists", async () => {
     providerMocks.listResult.data = {
       providers: [
@@ -3448,7 +3519,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
-          signInUnavailableHint={null}
+          onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}
