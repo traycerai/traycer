@@ -137,6 +137,7 @@ describe("CLI capability-consuming mutation facades", () => {
         await installHostServiceWithAttempt(
           capability,
           contenderOptions,
+          "desktop",
           { install, hostStartAdoptionLabel },
           serviceOptions,
         );
@@ -149,6 +150,7 @@ describe("CLI capability-consuming mutation facades", () => {
       expect.anything(),
       contenderOptions,
       "ai.traycer.host.agent",
+      "desktop",
     );
     expect(events).toEqual([
       "label",
@@ -192,6 +194,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -237,6 +240,7 @@ describe("CLI capability-consuming mutation facades", () => {
         await installHostServiceWithAttempt(
           capability,
           contenderOptions,
+          "desktop",
           { install, hostStartAdoptionLabel },
           serviceOptions,
         );
@@ -290,6 +294,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -336,6 +341,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -387,6 +393,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -407,6 +414,7 @@ describe("CLI capability-consuming mutation facades", () => {
       installHostServiceWithAttempt(
         forged,
         contenderOptions,
+        "desktop",
         { install, hostStartAdoptionLabel: async (label) => label.id },
         serviceOptions,
       ),
@@ -438,6 +446,7 @@ describe("CLI capability-consuming mutation facades", () => {
       installHostServiceWithAttempt(
         released,
         contenderOptions,
+        "desktop",
         { install, hostStartAdoptionLabel: async (label) => label.id },
         serviceOptions,
       ),
@@ -458,6 +467,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel: async (label) => label.id },
             serviceOptions,
           ),
@@ -495,18 +505,23 @@ describe("CLI capability-consuming mutation facades", () => {
       },
       async (capability) => {
         await expect(
-          commitHostInstallSourceWithAttempt(capability, contenderOptions, {
-            environment: "production",
-            staged: stagedSource,
-            onProgress: () => undefined,
-            lifecycle: null,
-            onWillSwap: null,
-            storeFormatFloor: ungatedStoreFormatFloorEvidence(
-              "host update",
-              false,
-            ),
-            onSwapCommitted: null,
-          }),
+          commitHostInstallSourceWithAttempt(
+            capability,
+            contenderOptions,
+            "desktop",
+            {
+              environment: "production",
+              staged: stagedSource,
+              onProgress: () => undefined,
+              lifecycle: null,
+              onWillSwap: null,
+              storeFormatFloor: ungatedStoreFormatFloorEvidence(
+                "host update",
+                false,
+              ),
+              onSwapCommitted: null,
+            },
+          ),
         ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
         return "must-not-report-ran";
       },

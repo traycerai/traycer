@@ -1,6 +1,7 @@
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { ensureHost, type HostEnsureResult } from "../host/ensure";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { formatServiceLifecycleWarning } from "../service";
 import {
@@ -41,6 +42,13 @@ export interface HostEnsureArgs {
   readonly keepInstalled: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`: `desktop` from the desktop's converge, `terminal`
+   * (the default) from anything else. Recorded in the adoption proof every
+   * start here publishes (`host/lifecycle-origin.ts`); a grant runs whatever
+   * it says.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
@@ -74,6 +82,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     );
     const result = await ensureHost({
       adoption,
+      lifecycleOrigin: args.lifecycleOrigin,
       runtime: ctx.runtime,
       versionRequest: args.versionRequest,
       fromPath: args.fromPath,

@@ -230,6 +230,7 @@ function makeOpts(
     yankLookup: { isVersionYanked: mocks.isVersionYankedMock },
     holdExplicitDowngrade: false,
     adoption: undefined,
+    lifecycleOrigin: "terminal",
     beforeMutate: null,
     ...overrides,
   };

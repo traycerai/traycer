@@ -20,6 +20,12 @@ const mocks = vi.hoisted(() => ({
   busyCalls: [] as Array<string | undefined>,
   lockCalls: [] as Array<{ reason: string }>,
   stopForRestartForceValues: [] as boolean[],
+  // When set, the stub's relaunch crosses the REAL service spawn edge, which
+  // is what publishes the adoption proof - so the proof's origin becomes
+  // observable in `publishedOrigins`. Off by default: every other case pins
+  // command-level wiring and never publishes.
+  crossSpawnEdge: false,
+  publishedOrigins: [] as string[],
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -54,6 +60,11 @@ vi.mock("../../service", async (importOriginal) => {
       },
       relaunchAfterRestart: async () => {
         mocks.controllerCalls.push("relaunchAfterRestart");
+        if (mocks.crossSpawnEdge) {
+          const { atServiceSpawnEdge } =
+            await import("../../service/spawn-edge");
+          await atServiceSpawnEdge();
+        }
       },
       hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
@@ -66,10 +77,18 @@ vi.mock("../../service", async (importOriginal) => {
 // the adoption handshake (that's `host-start-adoption.test.ts`), so
 // replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
-  publishHostStartAdoption: async () => ({
-    waitForSpawn: async () => undefined,
-    cancel: async () => undefined,
-  }),
+  publishHostStartAdoption: async (
+    _capability: unknown,
+    _contenderOptions: unknown,
+    _serviceLabel: string,
+    origin: string,
+  ) => {
+    mocks.publishedOrigins.push(origin);
+    return {
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    };
+  },
 }));
 
 vi.mock("../../host/busy-check", () => ({
@@ -171,6 +190,8 @@ describe("buildHostRestartCommand", () => {
     mocks.busyCalls = [];
     mocks.lockCalls = [];
     mocks.stopForRestartForceValues = [];
+    mocks.crossSpawnEdge = false;
+    mocks.publishedOrigins = [];
   });
 
   afterEach(() => {
@@ -202,6 +223,26 @@ describe("buildHostRestartCommand", () => {
       "stopForRestart",
       "relaunchAfterRestart",
     ]);
+  });
+
+  it("publishes the relaunch's adoption proof as `maintenance`, whoever asked for the restart", async () => {
+    // Lifecycle modes (T03): a restart brings back a run that already
+    // existed, so its relaunch leg records `maintenance` in the proof the
+    // supervisor consumes - never the caller's `--lifecycle-origin`.
+    mocks.crossSpawnEdge = true;
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+    });
+    await command(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
   });
 
   it("plain restart proceeds unconditionally even when the host is busy", async () => {

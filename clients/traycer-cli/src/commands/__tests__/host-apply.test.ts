@@ -138,6 +138,7 @@ function runApply(
     expectedStageFingerprint: null,
     respectHold: overrides.respectHold ?? false,
     attemptAdoption: null,
+    lifecycleOrigin: "terminal",
     acceptStoreFormatLoss: false,
   })(fakeCtx());
 }

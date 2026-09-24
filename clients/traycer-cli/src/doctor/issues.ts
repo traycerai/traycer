@@ -1,3 +1,5 @@
+import type { HostLifecycleSnapshot } from "../host/lifecycle-snapshot";
+
 // Doctor issue codes - stable strings the Desktop failure card maps to
 // concrete CLI subcommand fixes per Tech Plan §Doctor Engine. Keep this
 // list authoritative; add new codes here rather than ad-hoc strings.
@@ -215,6 +217,16 @@ export const DOCTOR_ISSUE_CODES = {
   // different remedies: a held lock has a holder to stop; an unreadable one
   // has a file to inspect.
   HOST_UPDATE_MARKER_LOCK_UNREADABLE: "HOST_UPDATE_MARKER_LOCK_UNREADABLE",
+  // `lifecycle-policy.json` exists but is corrupt or cannot be read. It reads
+  // as Background - the upgrade-safe default, so nothing parks - which is
+  // exactly why it needs saying: a user who chose Linked or Ask gets
+  // Background behaviour with nothing else anywhere to tell them.
+  HOST_LIFECYCLE_POLICY_UNREADABLE: "HOST_LIFECYCLE_POLICY_UNREADABLE",
+  // A non-Background mode is set while the host runs under a supervisor that
+  // does not enforce it (one that predates the policy and kept running
+  // through a CLI upgrade, or a record left by a supervisor that is gone).
+  // The mode takes effect at the next host restart.
+  HOST_LIFECYCLE_POLICY_NOT_ENFORCED: "HOST_LIFECYCLE_POLICY_NOT_ENFORCED",
 } as const;
 
 export type DoctorIssueCode =
@@ -240,4 +252,11 @@ export interface DoctorIssue {
 
 export interface DoctorResult {
   readonly issues: readonly DoctorIssue[];
+  /**
+   * The host lifecycle policy, desktop presence, run origin/owner and the
+   * running supervisor's capability (D7). Facts, not issues: printed in the
+   * report whatever they are, and additive to the payload, whose existing
+   * readers take `issues` only.
+   */
+  readonly lifecycle: HostLifecycleSnapshot;
 }

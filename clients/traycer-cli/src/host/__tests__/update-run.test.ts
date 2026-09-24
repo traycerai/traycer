@@ -1058,6 +1058,7 @@ function armWorld(): void {
     async (
       _capability: unknown,
       _contenderOptions: unknown,
+      _origin: unknown,
       options: ApplyMockOptions,
     ) => {
       const target = world.stagedVersion;
@@ -1306,7 +1307,7 @@ describe("runHostUpdate - the install intent's arms", () => {
     // the fixture installs 3.0.0, then fails verification for 2.0.0 - the
     // wrong error, over a host that was moved.
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledTimes(1);
-    expect(mocks.applyHostWithAttempt.mock.calls[0][2]).toMatchObject({
+    expect(mocks.applyHostWithAttempt.mock.calls[0][3]).toMatchObject({
       expectedStagedVersion: "2.0.0",
     });
     expect(world.stagedVersion).toBe("3.0.0");
@@ -2000,6 +2001,7 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ acceptStoreFormatLoss: true }),
     );
   });
@@ -2198,6 +2200,7 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ expectedStageFingerprint: claimed }),
     );
     expect(world.installedVersion).toBe(installedVersion);
@@ -2435,6 +2438,7 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ expectedStageFingerprint: claimed }),
     );
     expect(world.installedVersion).toBe("1.0.0");
@@ -2459,7 +2463,7 @@ describe("runHostUpdate - bound intents", () => {
     // The transfer minted a NEW id, so pinning the apply to the claim's - the
     // fingerprint of bytes that no longer exist - would refuse the very stage
     // this run just placed.
-    const applied = mocks.applyHostWithAttempt.mock.calls[0]?.[2];
+    const applied = mocks.applyHostWithAttempt.mock.calls[0]?.[3];
     expect(applied?.expectedStageFingerprint).not.toBe(claimed);
     expect(applied?.expectedStageFingerprint).toBe(mocks.transferStageIds[0]);
   });
@@ -2581,6 +2585,7 @@ describe("runHostUpdate - the writer's own contract", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await rm(updateAttemptRecordPath(currentHome.value), { force: true });
@@ -2646,6 +2651,7 @@ describe("runHostUpdate - the writer's own contract", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -3186,6 +3192,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ force: true }),
     );
   });
@@ -3197,6 +3204,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -3338,6 +3346,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -3576,6 +3585,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -3954,6 +3964,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -3981,6 +3992,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -4079,6 +4091,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -4488,6 +4501,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -5288,6 +5302,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -5664,6 +5679,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? target;
@@ -5742,6 +5758,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         // Fires BEFORE the cooperative stop. Production passes no hook here,
@@ -6487,6 +6504,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -6584,6 +6602,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -7077,6 +7096,14 @@ describe("ported: the explicit request's version binding (#1752 round 14)", () =
 
     expect(mocks.stopHostForRestartWithAttempt).toHaveBeenCalledTimes(1);
     expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
+    // The activation arm's relaunch is the maintenance leg of `host update`:
+    // it brings back a run that already existed, whoever invoked the update
+    // (`host/lifecycle-origin.ts`). Its 3rd positional argument is the
+    // origin, beside the same assertion already made on
+    // `applyHostWithAttempt`'s apply-arm relaunch above.
+    expect(mocks.relaunchHostAfterRestartWithAttempt.mock.calls[0]?.[2]).toBe(
+      "maintenance",
+    );
   });
 });
 
@@ -7168,6 +7195,7 @@ describe("fixup: cold review B", () => {
   function applyFixture(): (
     capability: unknown,
     contenderOptions: unknown,
+    origin: unknown,
     options: ApplyMockOptions,
   ) => Promise<unknown> {
     const armed = mocks.applyHostWithAttempt.getMockImplementation();
@@ -7192,6 +7220,7 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         // Another actor consumed this park's stage under the apply's own lock
@@ -7221,7 +7250,7 @@ describe("fixup: cold review B", () => {
             .catch(() => undefined);
           return observed;
         });
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
 
@@ -7256,12 +7285,13 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await seedInstalled("3.0.0");
         world.runningVersion = "3.0.0";
         await seedStaged(null);
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
 
@@ -7300,12 +7330,13 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await seedInstalled("2.0.0");
         world.runningVersion = "2.0.0";
         await seedStaged(null);
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
     let moved = false;
@@ -7374,6 +7405,7 @@ describe("fixup: cold review B", () => {
           async (
             _capability: unknown,
             _contenderOptions: unknown,
+            _origin: unknown,
             options: ApplyMockOptions,
           ) => refuse(options),
         );
@@ -7415,12 +7447,18 @@ describe("fixup: cold review B", () => {
         async (
           capability: unknown,
           contenderOptions: unknown,
+          origin: unknown,
           options: ApplyMockOptions,
         ) => {
           await seedInstalled(installedVersion);
           world.runningVersion = runningVersion;
           await seedStaged(null);
-          const outcome = await delegate(capability, contenderOptions, options);
+          const outcome = await delegate(
+            capability,
+            contenderOptions,
+            origin,
+            options,
+          );
           outcomes.push(outcome);
           return outcome;
         },
@@ -7711,12 +7749,13 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await seedInstalled("2.0.0");
         world.runningVersion = "staging.1750000000.abc1234";
         await seedStaged(null);
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
     return attemptId;
@@ -7825,6 +7864,7 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -7848,6 +7888,7 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";

@@ -449,13 +449,25 @@ export async function writeJsonAtomically(
   destination: string,
   value: object,
 ): Promise<void> {
+  await writeTextAtomically(destination, `${JSON.stringify(value)}\n`);
+}
+
+/**
+ * {@link writeJsonAtomically} for a record whose bytes a shared serializer
+ * already produced (the `@traycer/protocol/config` lifecycle records), so the
+ * file on disk is exactly what that serializer wrote.
+ */
+export async function writeTextAtomically(
+  destination: string,
+  text: string,
+): Promise<void> {
   await mkdir(dirname(destination), { recursive: true });
   const temporary = join(
     dirname(destination),
     `.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
   );
   try {
-    await writeFile(temporary, `${JSON.stringify(value)}\n`, {
+    await writeFile(temporary, text, {
       encoding: "utf8",
       mode: 0o600,
     });

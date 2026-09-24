@@ -1,5 +1,9 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
 import {
   createServiceController,
   serviceLabelFor,
@@ -12,6 +16,7 @@ import { startHostServiceWithAttempt } from "../host/update-mutation";
 import type { Environment } from "../runner/environment";
 import type { ILogger } from "../logger";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 
 // `traycer host service start` - ask the OS service manager to start the
 // already-registered host in the BACKGROUND and return.
@@ -93,9 +98,23 @@ async function statusBestEffort(
   }
 }
 
-export const serviceStartCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
+export interface ServiceStartArgs {
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof this start publishes
+   * (`host/lifecycle-origin.ts`). Informational: it never decides whether the
+   * supervisor runs.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
+}
+
+export function buildServiceStartCommand(args: ServiceStartArgs): CommandFn {
+  return (ctx) => runServiceStart(ctx, args);
+}
+
+async function runServiceStart(
+  ctx: CommandContext,
+  args: ServiceStartArgs,
+): Promise<CommandResult> {
   ctx.runtime.logger.info("Service start command started", {
     environment: ctx.runtime.environment,
   });
@@ -178,6 +197,7 @@ export const serviceStartCommand: CommandFn = async (
       await startHostServiceWithAttempt(
         capability,
         contenderOptions,
+        args.lifecycleOrigin,
         controller,
         label,
       );
@@ -217,7 +237,7 @@ export const serviceStartCommand: CommandFn = async (
       exitCode: 0,
     };
   });
-};
+}
 
 function startData(
   label: ServiceLabel,

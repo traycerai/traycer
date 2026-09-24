@@ -61,6 +61,10 @@ import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
 import { probeUpdateMarkerLock } from "./update-marker-lock";
+import {
+  readHostLifecycleSnapshot,
+  type HostLifecycleSnapshot,
+} from "../host/lifecycle-snapshot";
 import { CliError } from "../runner/errors";
 import {
   createServiceController,
@@ -878,7 +882,61 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     });
   }
 
-  return { issues };
+  // ---- 7. Host lifecycle policy ----
+  const lifecycle = await readHostLifecycleSnapshot(
+    opts.environment,
+    hostProcessAlive,
+  );
+  issues.push(...lifecycleIssues(lifecycle, hostProcessAlive));
+
+  return { issues, lifecycle };
+}
+
+/**
+ * The lifecycle facts are always in the report (`DoctorResult.lifecycle`);
+ * these are the two states that need a person to act.
+ */
+function lifecycleIssues(
+  lifecycle: HostLifecycleSnapshot,
+  hostProcessAlive: boolean,
+): DoctorIssue[] {
+  const issues: DoctorIssue[] = [];
+  const { policy, supervisor } = lifecycle;
+  if (policy.state === "invalid" || policy.state === "unreadable") {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.HOST_LIFECYCLE_POLICY_UNREADABLE,
+      severity: "warning",
+      title:
+        policy.state === "invalid"
+          ? "Host lifecycle policy file is corrupt"
+          : "Host lifecycle policy file cannot be read",
+      message: `${policy.path} is ${policy.state === "invalid" ? "not a valid lifecycle policy" : "unreadable"}, so the host runs in Background mode: it starts at login and keeps running after the app quits, whatever mode was chosen. Choose the mode again in Traycer's settings, or with 'traycer host lifecycle set <mode>'.`,
+      // No Desktop button: which mode to restore is the user's choice.
+      fixAction: null,
+      terminalCommand: "traycer host lifecycle set background",
+      details: { path: policy.path, state: policy.state },
+    });
+  }
+  if (
+    policy.mode !== "background" &&
+    hostProcessAlive &&
+    !supervisor.enforcesLifecyclePolicy
+  ) {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.HOST_LIFECYCLE_POLICY_NOT_ENFORCED,
+      severity: "warning",
+      title: "Host lifecycle mode is not enforced yet",
+      message: `The lifecycle mode is '${policy.mode}', but the running host supervisor does not enforce lifecycle modes (it predates them, or it exited without cleaning up). The mode takes effect after the host restarts.`,
+      fixAction: "host-restart",
+      terminalCommand: "traycer host restart",
+      details: {
+        mode: policy.mode,
+        supervisorRecord: supervisor.state,
+        supervisorLiveness: supervisor.liveness,
+      },
+    });
+  }
+  return issues;
 }
 
 /**

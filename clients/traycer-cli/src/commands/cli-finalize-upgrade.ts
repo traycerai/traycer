@@ -128,6 +128,9 @@ async function runFinalizeUpgradeSwapWithAttempt(
     startHostServiceWithAttempt(
       capability,
       contenderOptions,
+      // Completes the restart whose stop released the CLI binary: a restart
+      // relaunch leg, so `maintenance` (`host/lifecycle-origin.ts`).
+      "maintenance",
       createServiceController(),
       serviceLabelFor(opts.environment),
     ),

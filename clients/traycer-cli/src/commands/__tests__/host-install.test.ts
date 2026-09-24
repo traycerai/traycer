@@ -288,6 +288,7 @@ function baseArgs(overrides: Partial<HostInstallArgs>): HostInstallArgs {
     ifIdle: false,
     force: false,
     attemptAdoption: null,
+    lifecycleOrigin: "terminal",
     acceptStoreFormatLoss: false,
     ...overrides,
   };

@@ -44,6 +44,7 @@ import { compareHostVersions } from "@traycer-clients/shared/host-version/compar
 import { holdVersionOnSwapCommitted } from "./held-host-version";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
+import type { HostStartOrigin } from "./lifecycle-origin";
 import { hostHomeDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import {
@@ -198,6 +199,12 @@ export interface ProvisionHostOptions {
    * invocation, which keeps the acquire-or-refuse path exactly as it was.
    */
   readonly adoption: UpdateMutationCapabilityAdoption | undefined;
+  /**
+   * `--lifecycle-origin` of the command provisioning this host, recorded in
+   * every adoption proof a start here publishes (`host/lifecycle-origin.ts`).
+   * Informational: it never decides whether the supervisor runs.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
   // When true, skip the pre-reinstall busy probe and replace a running host
   // unconditionally (the desktop's "Force restart"). Default callers pass
@@ -816,6 +823,7 @@ async function commitInstall(
   const result = await commitHostInstallSourceWithAttempt(
     capability,
     contenderOptions,
+    opts.lifecycleOrigin,
     {
       environment: opts.runtime.environment,
       staged,
@@ -898,6 +906,7 @@ async function runServiceRegister(
   await installHostServiceWithAttempt(
     capability,
     contenderOptions,
+    opts.lifecycleOrigin,
     controller,
     {
       label,
@@ -968,6 +977,7 @@ async function runStart(
     await startHostServiceWithAttempt(
       capability,
       contenderOptions,
+      opts.lifecycleOrigin,
       controller,
       label,
     );
@@ -1002,6 +1012,7 @@ async function runStart(
       await installHostServiceWithAttempt(
         capability,
         contenderOptions,
+        opts.lifecycleOrigin,
         controller,
         {
           label,
@@ -1050,6 +1061,7 @@ async function runStart(
         await startHostServiceWithAttempt(
           capability,
           contenderOptions,
+          opts.lifecycleOrigin,
           controller,
           label,
         );

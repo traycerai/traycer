@@ -40,6 +40,7 @@ import {
 } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
 import type { StopIntentIdentity } from "../../host/stop-intent";
+import type { SupervisorRecords } from "../../host/lifecycle-files";
 import {
   HOST_CRASH_REPORT_TIMEOUT_MS,
   type HostCrashTelemetry,
@@ -52,6 +53,12 @@ import type {
   UpdateContenderAdmission,
   UpdateContenderOutcome,
 } from "@traycer-clients/shared/host-update";
+import type { HostLifecycleMode } from "@traycer/protocol/config/host-lifecycle-policy";
+import type { HostStartOrigin } from "../../host/lifecycle-origin";
+import type {
+  HostStartAdoptionConsumeResult,
+  HostStartAdoptionGrant,
+} from "../../host/host-start-adoption";
 
 // `traycer host start --environment <ch>` is the single supervisor entry
 // point. There is one launch path: read the environment's
@@ -269,6 +276,10 @@ interface Recorded {
     message: string;
     fields: Record<string, unknown>;
   }>;
+  // Lifecycle-policy records the supervisor published / removed. Stubbed so a
+  // test run never writes `supervisor.json` into a real host home.
+  readonly lifecycleRecordWrites: SupervisorRecords[];
+  readonly lifecycleRecordRemovals: number[];
 }
 
 /**
@@ -337,6 +348,8 @@ function makeRunStubs(
     loggerErrors: [],
     loggerInfos: [],
     loggerWarns: [],
+    lifecycleRecordWrites: [],
+    lifecycleRecordRemovals: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
   // to `ChildProcess` through an explicit `unknown` intermediate rather than a
@@ -509,6 +522,26 @@ function makeRunStubs(
       recorded.lastStderrTee = tee;
       recorded.stderrTees.push(tee);
       return tee;
+    },
+    // Same hazard as `hasStopIntent`: unset, the lifecycle gate reads the
+    // developer's real `lifecycle-policy.json` / `desktop-presence.json` (a
+    // non-Background machine would park every labelled start below), and an
+    // admitted run WRITES `supervisor.json` into the real host home. The
+    // default here is a Background machine, which is every pre-policy
+    // install; the lifecycle tests opt into other modes explicitly.
+    lifecycle: {
+      readPolicy: async () => ({ kind: "absent" }),
+      readPresence: async () => ({ kind: "absent" }),
+      probePresence: async () => "indeterminate",
+      consumeAdoption: async () => ({ kind: "absent" }),
+      writeRecords: async (_environment, records) => {
+        recorded.lifecycleRecordWrites.push(records);
+      },
+      removeRecords: async (_environment, supervisorPid) => {
+        recorded.lifecycleRecordRemovals.push(supervisorPid);
+      },
+      ownStartIdentity: () => null,
+      cliVersion: "0.0.0-test",
     },
   };
   return { child, recorded, deps };
@@ -4524,5 +4557,600 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
     // The spawn still happened: the announcement is a note beside an admitted
     // relaunch, never a substitute for one.
     expect(recorded.spawnCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// --------------------------------- lifecycle admission, handoff and records
+
+/**
+ * A labelled service launch, exactly as a launchd/systemd/Scheduled Task
+ * invocation supplies it: a service label and no adoption nonce.
+ */
+const LABELLED_START = {
+  environment: "production",
+  cwd: null,
+  serviceLabel: "ai.traycer.host.fallback",
+  adoptionNonce: null,
+} as const;
+
+/**
+ * Overlays the lifecycle policy mode and the gate's adoption/presence reads
+ * on top of whatever `makeRunStubs` already configured, leaving
+ * `writeRecords` / `removeRecords` / `ownStartIdentity` / `cliVersion`
+ * exactly as the harness set them.
+ */
+function withLifecyclePolicy(
+  base: Partial<RunHostStartDeps>,
+  mode: HostLifecycleMode,
+  consumeAdoption: RunHostStartDeps["lifecycle"]["consumeAdoption"],
+  readPresence: RunHostStartDeps["lifecycle"]["readPresence"],
+  probePresence: RunHostStartDeps["lifecycle"]["probePresence"],
+): Partial<RunHostStartDeps> {
+  const baseLifecycle = base.lifecycle;
+  if (baseLifecycle === undefined) {
+    throw new Error("test lifecycle dependency missing");
+  }
+  return {
+    ...base,
+    lifecycle: {
+      ...baseLifecycle,
+      readPolicy: async () => ({
+        kind: "valid",
+        record: {
+          v: 1,
+          rev: 1,
+          mode,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          updatedBy: "cli",
+        },
+      }),
+      consumeAdoption,
+      readPresence,
+      probePresence,
+    },
+  };
+}
+
+/** A minimal adoption grant, tracking how many times each method fired. */
+function makeFakeGrant(origin: HostStartOrigin | null): {
+  readonly grant: HostStartAdoptionGrant;
+  readonly abandonCalls: number[];
+  readonly acknowledgeSpawnCalls: number[];
+} {
+  const abandonCalls: number[] = [];
+  const acknowledgeSpawnCalls: number[] = [];
+  const grant: HostStartAdoptionGrant = {
+    origin,
+    acknowledgeSpawn: async () => {
+      acknowledgeSpawnCalls.push(acknowledgeSpawnCalls.length);
+      return true;
+    },
+    abandon: async () => {
+      abandonCalls.push(abandonCalls.length);
+    },
+  };
+  return { grant, abandonCalls, acknowledgeSpawnCalls };
+}
+
+/**
+ * Overlays `lifecycle.writeRecords` / `removeRecords` with a Set-backed model
+ * of `supervisor.json` presence (write adds this pid, remove deletes it), so
+ * a test can assert presence/absence directly rather than only counting
+ * calls.
+ */
+function withPidTrackingLifecycle(
+  base: Partial<RunHostStartDeps>,
+  published: Set<number>,
+  writeCalls: SupervisorRecords[],
+  removeCalls: number[],
+): Partial<RunHostStartDeps> {
+  const baseLifecycle = base.lifecycle;
+  if (baseLifecycle === undefined) {
+    throw new Error("test lifecycle dependency missing");
+  }
+  return {
+    ...base,
+    lifecycle: {
+      ...baseLifecycle,
+      writeRecords: async (_environment, records) => {
+        writeCalls.push(records);
+        published.add(records.record.pid);
+      },
+      removeRecords: async (_environment, supervisorPid) => {
+        removeCalls.push(supervisorPid);
+        published.delete(supervisorPid);
+      },
+    },
+  };
+}
+
+describe("runHostStart - lifecycle admission park rule", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("parks a labelled start under a non-Background mode with no proof and dead/absent presence, publishing nothing", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const published = new Set<number>();
+    const writeCalls: SupervisorRecords[] = [];
+    const removeCalls: number[] = [];
+    const tracking = withPidTrackingLifecycle(
+      withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "absent" }),
+        async () => ({ kind: "absent" }),
+        async () => "indeterminate",
+      ),
+      published,
+      writeCalls,
+      removeCalls,
+    );
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.markers).toHaveLength(0);
+    expect(writeCalls).toHaveLength(0);
+    expect(removeCalls).toHaveLength(0);
+    expect(published.size).toBe(0);
+
+    const parkedLogs = recorded.loggerInfos.filter(
+      (entry) => entry.message === "Host supervisor parked by lifecycle policy",
+    );
+    expect(parkedLogs).toHaveLength(1);
+    expect(parkedLogs[0]?.fields).toEqual({ mode: "linked" });
+  });
+});
+
+describe("runHostStart - lifecycle admission never parks a run-worthy start", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("never parks an unlabelled (foreground) start, whatever the mode", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking = withChildExit(
+      withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "absent" }),
+        async () => ({ kind: "absent" }),
+        async () => "indeterminate",
+      ),
+      child,
+      0,
+      null,
+    );
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+
+    expect(
+      recorded.loggerInfos.some(
+        (entry) =>
+          entry.message === "Host supervisor parked by lifecycle policy",
+      ),
+    ).toBe(false);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("never parks a start the gate consumed a grant for, whatever presence says", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const { grant } = makeFakeGrant("terminal");
+    const tracking = withChildExit(
+      withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "grant", grant }),
+        async () => ({ kind: "absent" }),
+        async () => "dead",
+      ),
+      child,
+      0,
+      null,
+    );
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(
+      recorded.loggerInfos.some(
+        (entry) =>
+          entry.message === "Host supervisor parked by lifecycle policy",
+      ),
+    ).toBe(false);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("never parks on indeterminate presence, and records the run as not adopted", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking = withChildExit(
+      withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "absent" }),
+        async () => ({
+          kind: "valid",
+          record: {
+            v: 1,
+            pid: 4242,
+            processStartIdentity: "pid:4242:indeterminate",
+            onExit: "stop",
+            policyRev: 1,
+            writtenAt: "2026-01-01T00:00:00.000Z",
+          },
+        }),
+        async () => "indeterminate",
+      ),
+      child,
+      0,
+      null,
+    );
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(
+      recorded.loggerInfos.some(
+        (entry) =>
+          entry.message === "Host supervisor parked by lifecycle policy",
+      ),
+    ).toBe(false);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+    expect(recorded.lifecycleRecordWrites[0]?.runState.adopted).toBe(false);
+  });
+
+  it("records the run as adopted when the gate observed a live desktop presence", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking = withChildExit(
+      withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "absent" }),
+        async () => ({
+          kind: "valid",
+          record: {
+            v: 1,
+            pid: 4242,
+            processStartIdentity: "pid:4242:alive",
+            onExit: "stop",
+            policyRev: 1,
+            writtenAt: "2026-01-01T00:00:00.000Z",
+          },
+        }),
+        async () => "alive",
+      ),
+      child,
+      0,
+      null,
+    );
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+    expect(recorded.lifecycleRecordWrites[0]?.runState.adopted).toBe(true);
+  });
+});
+
+describe("runHostStart - host-start adoption handoff", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("hands the gate's consumed proof to only the first admission call, and null to every relaunch", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const { grant } = makeFakeGrant("terminal");
+    const consumedResult: HostStartAdoptionConsumeResult = {
+      kind: "grant",
+      grant,
+    };
+    const withLinked = withLifecyclePolicy(
+      deps,
+      "linked",
+      async () => consumedResult,
+      async () => ({ kind: "absent" }),
+      async () => "indeterminate",
+    );
+    const scripted = withScriptedAttempts(withLinked, [
+      { code: 9, signal: null },
+      { code: 0, signal: null },
+    ]);
+    const consumedSeen: Array<HostStartAdoptionConsumeResult | null> = [];
+    const tracking: Partial<RunHostStartDeps> = {
+      ...scripted.deps,
+      maxRelaunches: 1,
+      admitHostStartSpawn: async (
+        _options,
+        run,
+        _onAdmittedBeside,
+        handoff,
+      ) => {
+        consumedSeen.push(handoff.consumed);
+        return { kind: "ran", result: await run() };
+      },
+    };
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(consumedSeen).toHaveLength(2);
+    expect(consumedSeen[0]).toBe(consumedResult);
+    expect(consumedSeen[1]).toBeNull();
+  });
+
+  it("hands null to the first admission call under the default Background-mode lifecycle stub", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const consumedSeen: Array<HostStartAdoptionConsumeResult | null> = [];
+    const tracking: Partial<RunHostStartDeps> = {
+      ...withChildExit(deps, child, 0, null),
+      admitHostStartSpawn: async (
+        _options,
+        run,
+        _onAdmittedBeside,
+        handoff,
+      ) => {
+        consumedSeen.push(handoff.consumed);
+        return { kind: "ran", result: await run() };
+      },
+    };
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(consumedSeen).toHaveLength(1);
+    expect(consumedSeen[0]).toBeNull();
+  });
+});
+
+describe("runHostStart - published supervisor records", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("publishes pid, capabilities and cliVersion from the injected lifecycle deps", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking = withChildExit(deps, child, 0, null);
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+    const record = recorded.lifecycleRecordWrites[0]?.record;
+    expect(record?.pid).toBe(process.pid);
+    expect(record?.capabilities).toContain("lifecycle-policy-v1");
+    expect(record?.cliVersion).toBe(deps.lifecycle?.cliVersion);
+  });
+
+  it("publishes once per supervisor, not once per relaunch attempt", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 9, signal: null },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 1 },
+        ),
+      recorded,
+    );
+
+    expect(scripted.children).toHaveLength(2);
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+  });
+
+  it("records admission as foreground for an unlabelled start", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking = withChildExit(deps, child, 0, null);
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+    expect(recorded.lifecycleRecordWrites[0]?.runState.admission).toBe(
+      "foreground",
+    );
+    expect(recorded.lifecycleRecordWrites[0]?.runState.origin).toBeNull();
+  });
+
+  it("records admission as unattended for a labelled start the admission consumed no proof for", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking = withChildExit(deps, child, 0, null);
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+    expect(recorded.lifecycleRecordWrites[0]?.runState.admission).toBe(
+      "unattended",
+    );
+  });
+
+  it("records admission as granted, with the granting origin, when admission reports a grant", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const tracking: Partial<RunHostStartDeps> = {
+      ...withChildExit(deps, child, 0, null),
+      admitHostStartSpawn: async (
+        _options,
+        run,
+        _onAdmittedBeside,
+        handoff,
+      ) => {
+        handoff.onGranted("desktop");
+        return { kind: "ran", result: await run() };
+      },
+    };
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(recorded.lifecycleRecordWrites).toHaveLength(1);
+    expect(recorded.lifecycleRecordWrites[0]?.runState.admission).toBe(
+      "granted",
+    );
+    expect(recorded.lifecycleRecordWrites[0]?.runState.origin).toBe("desktop");
+  });
+});
+
+describe("runHostStart - supervisor.json lifecycle across outcomes", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("is never written when the lifecycle policy parks the start", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const published = new Set<number>();
+    const writeCalls: SupervisorRecords[] = [];
+    const removeCalls: number[] = [];
+    const tracking = withPidTrackingLifecycle(
+      withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "absent" }),
+        async () => ({ kind: "absent" }),
+        async () => "indeterminate",
+      ),
+      published,
+      writeCalls,
+      removeCalls,
+    );
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(recorded.exited).toBe(0);
+    expect(writeCalls).toHaveLength(0);
+    expect(removeCalls).toHaveLength(0);
+    expect(published.size).toBe(0);
+  });
+
+  it("is written then removed around a cooperative, clean child exit", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const published = new Set<number>();
+    const writeCalls: SupervisorRecords[] = [];
+    const removeCalls: number[] = [];
+    const tracking = withChildExit(
+      withPidTrackingLifecycle(deps, published, writeCalls, removeCalls),
+      child,
+      0,
+      null,
+    );
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(writeCalls).toHaveLength(1);
+    expect(removeCalls).toEqual([process.pid]);
+    expect(published.has(process.pid)).toBe(false);
+  });
+
+  it("is written once and removed once, at the very end of a crash-budget exhaustion", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const published = new Set<number>();
+    const writeCalls: SupervisorRecords[] = [];
+    const removeCalls: number[] = [];
+    const tracking = withPidTrackingLifecycle(
+      deps,
+      published,
+      writeCalls,
+      removeCalls,
+    );
+    const scripted = withScriptedAttempts(tracking, [
+      { code: 9, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 2 },
+        ),
+      recorded,
+    );
+
+    // 1 initial + 2 relaunches, all crashing, before the budget gives up.
+    expect(scripted.children).toHaveLength(3);
+    expect(recorded.exited).toBe(9);
+    expect(writeCalls).toHaveLength(1);
+    expect(removeCalls).toEqual([process.pid]);
+    expect(published.has(process.pid)).toBe(false);
+  });
+
+  it("is written then removed on a throw path after a successful attempt already published it", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const published = new Set<number>();
+    const writeCalls: SupervisorRecords[] = [];
+    const removeCalls: number[] = [];
+    const tracking = withPidTrackingLifecycle(
+      deps,
+      published,
+      writeCalls,
+      removeCalls,
+    );
+    const scripted = withScriptedAttempts(tracking, [
+      { code: 9, signal: null },
+    ]);
+    let readInstallRecordCalls = 0;
+    const withFailingRelaunchResolve: Partial<RunHostStartDeps> = {
+      ...scripted.deps,
+      maxRelaunches: 1,
+      readInstallRecord: async () => {
+        readInstallRecordCalls += 1;
+        // The first attempt resolves normally (twice: once outside the
+        // admission callback, once again inside it, under the lock). Every
+        // read from the second attempt onward fails, so that relaunch hits
+        // the target-resolution throw path instead of spawning again.
+        return readInstallRecordCalls <= 2 ? sampleRecord(exec) : null;
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withFailingRelaunchResolve,
+        ),
+      recorded,
+    );
+
+    // One successful spawn, then a target-resolution CliError on the
+    // relaunch attempt that the exhausted budget refuses to retry.
+    expect(scripted.children).toHaveLength(1);
+    expect(recorded.exited).toBe(69);
+    expect(writeCalls).toHaveLength(1);
+    expect(removeCalls).toEqual([process.pid]);
+    expect(published.has(process.pid)).toBe(false);
+  });
+});
+
+describe("runHostStart - an unspent gate-consumed grant is abandoned", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("abandons the grant when a stop lands before the first spawn", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const { grant, abandonCalls } = makeFakeGrant("terminal");
+    const tracking: Partial<RunHostStartDeps> = {
+      ...withLifecyclePolicy(
+        deps,
+        "linked",
+        async () => ({ kind: "grant", grant }),
+        async () => ({ kind: "absent" }),
+        async () => "indeterminate",
+      ),
+      // Simulates `host stop` landing after the gate already consumed the
+      // grant but before this attempt's pre-spawn guard - the guard the
+      // supervisor asks on EVERY attempt, including the first, immediately
+      // before it would create a child.
+      hasStopIntent: async () => "stop",
+    };
+
+    await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.exited).toBe(0);
+    expect(abandonCalls).toHaveLength(1);
+    expect(recorded.lifecycleRecordWrites).toHaveLength(0);
+    expect(recorded.lifecycleRecordRemovals).toHaveLength(0);
   });
 });

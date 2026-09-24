@@ -180,6 +180,7 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     keepInstalled: false,
     onProgress: null,
     adoption: undefined,
+    lifecycleOrigin: "terminal",
     beforeMutate: null,
     ...overrides,
   };

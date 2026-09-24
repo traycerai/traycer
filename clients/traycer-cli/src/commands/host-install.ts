@@ -36,6 +36,7 @@ import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   gateStoreFormatFloor,
   ungatedStoreFormatFloorEvidence,
@@ -138,6 +139,11 @@ export interface HostInstallArgs {
   readonly acceptStoreFormatLoss: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the post-swap start
+   * publishes (`host/lifecycle-origin.ts`). Informational only.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 /**
@@ -317,6 +323,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
               return commitHostInstallSourceWithAttempt(
                 capability,
                 contenderOptions,
+                args.lifecycleOrigin,
                 {
                   environment: ctx.runtime.environment,
                   staged,

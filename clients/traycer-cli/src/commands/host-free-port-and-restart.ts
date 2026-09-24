@@ -186,6 +186,8 @@ export function buildHostFreePortAndRestartCommand(
             await restartHostServiceWithAttempt(
               capability,
               contenderOptions,
+              // A restart's relaunch leg, whoever asked for it.
+              "maintenance",
               controller,
               label,
             );

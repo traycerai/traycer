@@ -16,6 +16,7 @@ import {
   takeoverDesktopRegistrationWithAttempt,
 } from "../host/update-mutation";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
@@ -41,6 +42,11 @@ export interface ServiceInstallArgs {
   readonly takeover: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the registration's
+   * start publishes (`host/lifecycle-origin.ts`). Informational only.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export function buildServiceInstallCommand(
@@ -120,6 +126,7 @@ export function buildServiceInstallCommand(
         await installHostServiceWithAttempt(
           capability,
           contenderOptions,
+          args.lifecycleOrigin,
           controller,
           {
             label,

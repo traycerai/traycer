@@ -14,6 +14,7 @@ import {
   HOST_START_ADOPTION_MAX_AGE_MS,
 } from "../service/spawn-edge-bounds";
 import { hostHomeDir } from "../store/paths";
+import { parseHostStartOrigin, type HostStartOrigin } from "./lifecycle-origin";
 import type { WithCliUpdateContenderOptions } from "./update-contender";
 
 const HOST_START_ADOPTION_FILENAME = ".host-start-adoption.json";
@@ -75,6 +76,19 @@ type HostStartAdoptionFile = {
   /** The current service manifest's identity, never a hand-run start. */
   readonly serviceLabel: string;
   readonly adoption: UpdateMutationCapabilityAdoption;
+  /**
+   * Who asked for this start (see `lifecycle-origin.ts`). ADDITIVE within
+   * version 2: an N-1 consumer ignores the key, and a proof from an N-1
+   * publisher simply has none - `parseAdoption` reads that as `null` ("not
+   * recorded") rather than refusing the grant, because the origin is
+   * informational and a grant runs whatever it says.
+   */
+  readonly origin: HostStartOrigin;
+};
+
+/** What a reader gets back: the origin may be missing or unknown. */
+type ParsedHostStartAdoptionFile = Omit<HostStartAdoptionFile, "origin"> & {
+  readonly origin: HostStartOrigin | null;
 };
 
 type HostStartAdoptionAcknowledgement = {
@@ -95,6 +109,12 @@ export interface HostStartAdoptionLease {
 }
 
 export interface HostStartAdoptionGrant {
+  /**
+   * The publisher's `--lifecycle-origin`, or `null` when the proof was
+   * published by a CLI that predates the field (or names an origin this
+   * build does not know). Never a reason to refuse: every grant runs.
+   */
+  readonly origin: HostStartOrigin | null;
   /**
    * Called only after the supervisor has synchronously spawned its selected
    * target. It repeats the parent-holder check before acknowledging, so a
@@ -137,6 +157,7 @@ export async function publishHostStartAdoption(
   capability: UpdateMutationCapability,
   options: WithCliUpdateContenderOptions,
   serviceLabel: string,
+  origin: HostStartOrigin,
 ): Promise<HostStartAdoptionLease> {
   if (serviceLabel.length === 0) {
     throw new Error("host-start adoption requires a service label");
@@ -160,6 +181,7 @@ export async function publishHostStartAdoption(
         nonce,
         serviceLabel,
         adoption,
+        origin,
       } satisfies HostStartAdoptionFile),
       { encoding: "utf8", mode: 0o600, flag: "wx" },
     );
@@ -411,6 +433,7 @@ export async function consumeHostStartAdoption(
     return {
       kind: "grant",
       grant: {
+        origin: parsed.origin,
         acknowledgeSpawn: async (): Promise<boolean> => {
           if (!claimed) return false;
           const parentStillLive =
@@ -481,7 +504,7 @@ export async function readHostStartAdoptionNonce(
 
 type PendingAdoptionRead =
   | { readonly kind: "absent" }
-  | { readonly kind: "valid"; readonly file: HostStartAdoptionFile }
+  | { readonly kind: "valid"; readonly file: ParsedHostStartAdoptionFile }
   | { readonly kind: "malformed" }
   | { readonly kind: "unreadable" };
 
@@ -525,7 +548,7 @@ async function readPendingAdoption(path: string): Promise<PendingAdoptionRead> {
  * publisher's proof (see `removeAdoptionIfNonce`).
  */
 async function readOrphanedProof(
-  file: HostStartAdoptionFile,
+  file: ParsedHostStartAdoptionFile,
   home: string,
 ): Promise<HostStartAdoptionConsumeResult | null> {
   let parentLive: boolean;
@@ -602,7 +625,7 @@ async function restoreClaimToVacantPath(
   await rm(claimed, { force: true }).catch(() => undefined);
 }
 
-function parseAdoption(input: string): HostStartAdoptionFile | null {
+function parseAdoption(input: string): ParsedHostStartAdoptionFile | null {
   let value: unknown;
   try {
     value = JSON.parse(input);
@@ -638,7 +661,14 @@ function parseAdoption(input: string): HostStartAdoptionFile | null {
   ) {
     return null;
   }
-  return value as HostStartAdoptionFile;
+  return {
+    version: 2,
+    issuedAtMs: file.issuedAtMs,
+    nonce: file.nonce,
+    serviceLabel: file.serviceLabel,
+    adoption: adoption as UpdateMutationCapabilityAdoption,
+    origin: parseHostStartOrigin(file.origin),
+  };
 }
 
 function parseAcknowledgement(

@@ -285,6 +285,9 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
       relaunchHostAfterRestartWithAttempt(
         capability,
         contenderOptions,
+        // The restart's relaunch leg: `maintenance` whoever asked for the
+        // restart, desktop or terminal (`host/lifecycle-origin.ts`).
+        "maintenance",
         args.controller,
         args.label,
         stopped,

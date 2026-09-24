@@ -56,7 +56,29 @@ import {
   reportHostCrashToSentry,
   type HostCrashTelemetry,
 } from "../host/crash-telemetry";
-import { consumeHostStartAdoption } from "../host/host-start-adoption";
+import {
+  consumeHostStartAdoption,
+  type HostStartAdoptionConsumeResult,
+} from "../host/host-start-adoption";
+import {
+  admitSupervisorLifecycle,
+  type SupervisorLifecycleGateDeps,
+} from "../host/lifecycle-admission";
+import {
+  probeDesktopPresenceLiveness,
+  readDesktopPresence,
+  readHostLifecyclePolicy,
+  removeSupervisorRecords,
+  writeSupervisorRecords,
+  type ObservedDesktopPresence,
+  type SupervisorRecords,
+  type SupervisorRunAdmission,
+} from "../host/lifecycle-files";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
+import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
+import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
+import { ownProcessStartIdentity } from "../store/process-identity";
+import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
   readStopIntentIdentity,
@@ -444,7 +466,50 @@ export type AdmitHostStartSpawn = (
    * sandbox - the same hazard `deps.logger`'s own comment names.
    */
   onAdmittedBeside: (record: HostUpdateAttemptRecord) => void,
+  adoption: HostStartAdoptionHandoff,
 ) => Promise<UpdateContenderOutcome<ChildProcess>>;
+
+/**
+ * How one admission meets the host-start adoption proof.
+ *
+ * `consumed` is the first attempt's proof when the lifecycle gate already
+ * consumed it to decide the park rule (`host/lifecycle-admission.ts`): the
+ * admission uses that result and does NOT consume again, because a grant is
+ * one-shot and it is this admission's spawn that must acknowledge it. `null`
+ * - every attempt under Background, and every relaunch - means consume here,
+ * exactly as before the gate existed.
+ *
+ * `onGranted` is told the proof's origin when the admission rides a grant, so
+ * the supervisor's run state can say who asked for this run. Informational
+ * only: it cannot refuse anything.
+ */
+export interface HostStartAdoptionHandoff {
+  readonly consumed: HostStartAdoptionConsumeResult | null;
+  readonly onGranted: (origin: HostStartOrigin | null) => void;
+}
+
+/**
+ * The supervisor's lifecycle-policy seams: the gate's reads (see
+ * `SupervisorLifecycleGateDeps`) plus the two records it publishes about
+ * itself once a run is admitted. Injected as ONE dependency so a test harness
+ * cannot stub the reads and forget the writes - the defaults write into the
+ * real host home.
+ */
+export interface SupervisorLifecycleDeps extends Omit<
+  SupervisorLifecycleGateDeps,
+  "now"
+> {
+  readonly writeRecords: (
+    environment: Environment,
+    records: SupervisorRecords,
+  ) => Promise<void>;
+  readonly removeRecords: (
+    environment: Environment,
+    supervisorPid: number,
+  ) => Promise<void>;
+  readonly ownStartIdentity: () => ProcessStartIdentity | null;
+  readonly cliVersion: string;
+}
 
 function describeHostStartAdmission(
   outcome: Exclude<UpdateContenderOutcome<unknown>, { readonly kind: "ran" }>,
@@ -567,11 +632,16 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // pid.json read never touches a real host home. Best-effort: the marker is
   // written first and the relaunch does not wait on the network.
   readonly reportHostCrash: (telemetry: HostCrashTelemetry) => Promise<void>;
+  // The lifecycle policy's park rule and the supervisor's `supervisor.json` /
+  // `supervisor-run.json`. The defaults read and WRITE the real host home, so
+  // a test that runs a labelled start, or reaches an admitted spawn, must
+  // inject this - see the shared harness in `host-start.test.ts`.
+  readonly lifecycle: SupervisorLifecycleDeps;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
-  admitHostStartSpawn: async (options, run, onAdmittedBeside) => {
+  admitHostStartSpawn: async (options, run, onAdmittedBeside, handoff) => {
     // A service controller that already owns the outer attempt capability
     // publishes a one-shot, target-home-bound adoption proof immediately
     // before asking the OS manager to launch this supervisor. Reacquiring
@@ -583,15 +653,18 @@ const defaultRunDeps: RunHostStartDeps = {
       "serviceLabel" in options ? options.serviceLabel : null;
     const adoptionNonce =
       "adoptionNonce" in options ? options.adoptionNonce : null;
-    const adoption = await consumeHostStartAdoption(
-      options.environment,
-      serviceLabel,
-      adoptionNonce,
-    );
+    const adoption =
+      handoff.consumed ??
+      (await consumeHostStartAdoption(
+        options.environment,
+        serviceLabel,
+        adoptionNonce,
+      ));
     if (adoption.kind !== "absent" && adoption.kind !== "grant") {
       throw new Error(adoption.reason);
     }
     if (adoption.kind === "grant") {
+      handoff.onGranted(adoption.grant.origin);
       let child: ChildProcess | null = null;
       try {
         child = await run();
@@ -727,6 +800,21 @@ const defaultRunDeps: RunHostStartDeps = {
   readStopIntentIdentity,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
+  lifecycle: {
+    readPolicy: readHostLifecyclePolicy,
+    readPresence: readDesktopPresence,
+    probePresence: probeDesktopPresenceLiveness,
+    // These two are resolved at call time, not at module load: `index.ts`
+    // imports this module, and a suite that mocks `host/host-start-adoption`
+    // or `store/process-identity` without these exports would otherwise fail
+    // on import rather than never calling them.
+    consumeAdoption: (environment, serviceLabel, adoptionNonce) =>
+      consumeHostStartAdoption(environment, serviceLabel, adoptionNonce),
+    writeRecords: writeSupervisorRecords,
+    removeRecords: removeSupervisorRecords,
+    ownStartIdentity: () => ownProcessStartIdentity(),
+    cliVersion: resolveCliVersion(process.env),
+  },
 };
 
 // Long-running entrypoint invoked by the OS service manager. Resolves
@@ -786,6 +874,9 @@ export async function runHostStart(
   // on a pre-action log baseline (Finding F evidence identity).
   const attemptId = randomUUID();
   const supervisorPid = process.pid;
+  // `supervisor.json`'s `startedAt`: when this supervisor began, not when its
+  // records were published or its current child spawned.
+  const supervisorStartedAt = deps.now();
   // Read before any other await, because it defines what "already served" means
   // for this whole invocation: whatever record is on disk NOW is one our own
   // existence answers - something asked for a start after asking for a stop, and
@@ -1082,10 +1173,83 @@ export async function runHostStart(
       process.off(sig, handler);
     }
   };
-  const exitSupervisor = (code: number): void => {
+
+  // ---- Lifecycle state ----------------------------------------------------
+  //
+  // Declared before `exitSupervisor`, which reads both on every exit path.
+  //
+  // `pendingAdoption` - the first attempt's proof, when the lifecycle gate
+  // consumed it and no admission has used it yet. A grant held here and never
+  // spent (a stop landing before the first spawn, a first attempt that fails
+  // setup and then exits) is abandoned on the way out, so its claim file does
+  // not outlive this supervisor.
+  //
+  // `recordsPublished` - whether `supervisor.json` / `supervisor-run.json`
+  // are ours to remove. Removal is guarded by our pid as well
+  // (`removeSupervisorRecords`), so a second supervisor that parks or declines
+  // can never erase the records of the one that is running.
+  let pendingAdoption: HostStartAdoptionConsumeResult | null = null;
+  let recordsPublished = false;
+  const releaseLifecycleResources = async (): Promise<void> => {
+    const unspent = pendingAdoption;
+    pendingAdoption = null;
+    if (unspent !== null && unspent.kind === "grant") {
+      await unspent.grant.abandon().catch(() => undefined);
+    }
+    if (recordsPublished) {
+      recordsPublished = false;
+      await deps.lifecycle
+        .removeRecords(opts.environment, supervisorPid)
+        .catch(() => undefined);
+    }
+  };
+
+  // Every exit below goes through here, so `supervisor.json` never outlives
+  // the supervisor it describes: a desktop that finds one reads it as "a
+  // supervisor that enforces the lifecycle policy is running". The records
+  // are removed BEFORE the signal handlers are released, so a stop arriving
+  // during the removal is latched rather than killing this process with the
+  // record half-removed.
+  const exitSupervisor = async (code: number): Promise<void> => {
+    await releaseLifecycleResources();
     releaseShutdownHandlers();
     return deps.exit(code);
   };
+
+  // ---- Lifecycle admission ------------------------------------------------
+  //
+  // ONCE, before the first attempt writes a marker: an unattended start that
+  // the lifecycle policy parks is not a spawn attempt, and a `starting` /
+  // `failed-to-spawn` pair at every parked login would read in `host doctor`
+  // as a host that keeps failing to spawn. Only a labelled service launch
+  // (`serviceStarted`) can park; the rule itself, and why it keys on the
+  // consumed proof rather than on `serviceStarted` or the nonce, is in
+  // `host/lifecycle-admission.ts`. In-process relaunches are the same run and
+  // are never re-admitted here.
+  const lifecycleGate = await admitSupervisorLifecycle(
+    {
+      environment: opts.environment,
+      serviceLaunch:
+        serviceStarted && serviceLabel !== null
+          ? {
+              serviceLabel,
+              adoptionNonce:
+                "adoptionNonce" in opts ? opts.adoptionNonce : null,
+            }
+          : null,
+    },
+    { ...deps.lifecycle, now: deps.now },
+  );
+  if (lifecycleGate.kind === "park") {
+    // `mode=` only. Deliberately none of the usual fields: nothing about this
+    // line needs an identifier, and a parked login is the most frequent line
+    // a non-Background machine writes.
+    logger.info("Host supervisor parked by lifecycle policy", {
+      mode: lifecycleGate.mode,
+    });
+    return exitSupervisor(0);
+  }
+  pendingAdoption = lifecycleGate.consumed;
 
   for (;;) {
     attemptNumber += 1;
@@ -1256,7 +1420,9 @@ export async function runHostStart(
       });
       // Leaving by `throw` is still leaving. A caller that catches this keeps
       // a stale handler set, and every stale handler goes on mutating the
-      // `shuttingDown` of the run that installed it.
+      // `shuttingDown` of the run that installed it. The same goes for the
+      // lifecycle records and an unspent grant (see `exitSupervisor`).
+      await releaseLifecycleResources();
       releaseShutdownHandlers();
       throw err;
     }
@@ -1593,6 +1759,23 @@ export async function runHostStart(
     // fallback timeout, and the recorded state lets the tee settle it
     // immediately for a stream that is already dead.
     let stderrErroredEarly = false;
+    // Fresh per admission: the grant this admission rode, or `null`. Set only
+    // by `onGranted`, so an admission that consumed a grant and then failed
+    // cannot leave a later, unattended attempt described as granted. A holder
+    // object for the reason `spawnedWhileAdmitting` is one: it is written from
+    // inside the admission callback.
+    const granted: {
+      value: { readonly origin: HostStartOrigin | null } | null;
+    } = { value: null };
+    const adoptionHandoff: HostStartAdoptionHandoff = {
+      consumed: pendingAdoption,
+      onGranted: (origin) => {
+        granted.value = { origin };
+      },
+    };
+    // Spent by this admission whatever its outcome; later attempts consume
+    // their own.
+    pendingAdoption = null;
     try {
       const admission = await deps.admitHostStartSpawn(
         opts,
@@ -1711,6 +1894,7 @@ export async function runHostStart(
             },
           );
         },
+        adoptionHandoff,
       );
       if (admission.kind !== "ran") {
         // `withUpdateContender` performs a post-callback ownership check. If
@@ -2104,6 +2288,34 @@ export async function runHostStart(
       if (recordedEnding !== null) settle(recordedEnding);
     });
 
+    // The run is admitted: publish `supervisor.json` and the run state once
+    // per supervisor, from the admission that first ran. In-process
+    // relaunches are the same run and change nothing here (T04's observer
+    // is what updates the run state from then on).
+    if (!recordsPublished) {
+      // Latched BEFORE the write, and whatever the write's outcome: a
+      // publish that failed halfway may still have landed one of the two
+      // files, and every exit path must remove what is ours (the removal is
+      // pid-guarded and tolerates an absent file).
+      recordsPublished = true;
+      const admittedAs: SupervisorRunAdmission =
+        granted.value !== null
+          ? "granted"
+          : serviceStarted
+            ? "unattended"
+            : "foreground";
+      await publishSupervisorRecords({
+        deps,
+        logger,
+        environment: opts.environment,
+        supervisorPid,
+        startedAt: supervisorStartedAt,
+        admission: admittedAs,
+        origin: granted.value?.origin ?? null,
+        presence: lifecycleGate.presence,
+      });
+    }
+
     // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS
     // one: `host stop` can write its intent just after that read returned
     // false, scan for a host while this child does not exist yet, find nothing
@@ -2436,6 +2648,63 @@ export async function runHostStart(
       );
     }
     consecutiveRelaunches = decision.consecutiveRelaunches;
+  }
+}
+
+/**
+ * Publish `supervisor.json` (the desktop's "does the running supervisor
+ * enforce the lifecycle policy?") and `supervisor-run.json` (who asked for
+ * this run and whether a desktop owns it) for an admitted run.
+ *
+ * Evidence, never control flow - the same rule as the bootstrap markers: a
+ * host home that refuses a write must not cost the host. A failed publish is
+ * logged at WARN; a reader that then finds no `supervisor.json` treats this
+ * supervisor exactly like an old one (nothing is known to be enforced).
+ *
+ * `adopted` is set here only from what the admission gate itself observed: a
+ * presence it probed and found alive. A grant, or a Background start, did not
+ * look, and says so (`lastPresence: null`) until the policy observer does.
+ */
+async function publishSupervisorRecords(input: {
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly supervisorPid: number;
+  readonly startedAt: string;
+  readonly admission: SupervisorRunAdmission;
+  readonly origin: HostStartOrigin | null;
+  readonly presence: ObservedDesktopPresence | null;
+}): Promise<void> {
+  const now = input.deps.now();
+  try {
+    await input.deps.lifecycle.writeRecords(input.environment, {
+      record: {
+        v: 1,
+        pid: input.supervisorPid,
+        cliVersion: input.deps.lifecycle.cliVersion,
+        capabilities: [SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1],
+        startedAt: input.startedAt,
+      },
+      runState: {
+        v: 1,
+        supervisorPid: input.supervisorPid,
+        supervisorStartIdentity: input.deps.lifecycle.ownStartIdentity(),
+        admission: input.admission,
+        origin: input.origin,
+        adopted: input.presence?.liveness === "alive",
+        lastPresence: input.presence,
+        updatedAt: now,
+      },
+    });
+  } catch (cause) {
+    input.logger.warn(
+      "Host supervisor could not publish its lifecycle records",
+      {
+        environment: input.environment,
+        errorName: errorFromUnknown(cause).name,
+        errorMessage: errorFromUnknown(cause).message,
+      },
+    );
   }
 }
 

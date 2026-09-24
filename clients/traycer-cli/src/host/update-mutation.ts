@@ -17,6 +17,7 @@ import {
 } from "../service/mutation-authority";
 import { runWithLeaseAtServiceSpawnEdge } from "../service/spawn-edge";
 import { publishHostStartAdoption } from "./host-start-adoption";
+import type { HostStartOrigin } from "./lifecycle-origin";
 import type {
   DesktopRegistrationTakeover,
   InstallServiceOptions,
@@ -38,6 +39,7 @@ import type {
 export async function applyHostWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   options: Omit<ApplyHostOptions, "verifyMutationCapability">,
 ): Promise<ApplyHostOutcome> {
   const verify = (): Promise<void> =>
@@ -47,7 +49,12 @@ export async function applyHostWithAttempt(
     ...options,
     verifyMutationCapability: verify,
     publishHostStartAdoption: (serviceLabel) =>
-      publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+      publishHostStartAdoption(
+        capability,
+        contenderOptions,
+        serviceLabel,
+        origin,
+      ),
   });
 }
 
@@ -55,6 +62,7 @@ export async function applyHostWithAttempt(
 export async function commitHostInstallSourceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   options: Omit<CommitHostInstallSourceOptions, "verifyMutationCapability">,
 ): Promise<CommitHostInstallSourceResult> {
   const verify = (): Promise<void> =>
@@ -64,7 +72,12 @@ export async function commitHostInstallSourceWithAttempt(
     options.lifecycle.setHostStartAdoptionPublisher !== undefined
   ) {
     options.lifecycle.setHostStartAdoptionPublisher((serviceLabel) =>
-      publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+      publishHostStartAdoption(
+        capability,
+        contenderOptions,
+        serviceLabel,
+        origin,
+      ),
     );
   }
   await requireCliUpdateMutationCapability(capability, contenderOptions);
@@ -78,6 +91,7 @@ export async function commitHostInstallSourceWithAttempt(
 export async function installHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "install" | "hostStartAdoptionLabel">,
   options: InstallServiceOptions,
 ): Promise<void> {
@@ -87,6 +101,7 @@ export async function installHostServiceWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       options.label,
       async () => {
@@ -130,6 +145,7 @@ export async function stopHostServiceWithAttempt(
 export async function restartHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "restart" | "hostStartAdoptionLabel">,
   label: ServiceLabel,
 ): Promise<void> {
@@ -139,6 +155,7 @@ export async function restartHostServiceWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       label,
       async () => {
@@ -153,6 +170,7 @@ export async function restartHostServiceWithAttempt(
 export async function startHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "start" | "hostStartAdoptionLabel">,
   label: ServiceLabel,
 ): Promise<void> {
@@ -162,6 +180,7 @@ export async function startHostServiceWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       label,
       async () => {
@@ -214,6 +233,7 @@ export async function stopHostForRestartWithAttempt(
 export async function relaunchHostAfterRestartWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<
     ServiceController,
     "relaunchAfterRestart" | "hostStartAdoptionLabel"
@@ -227,6 +247,7 @@ export async function relaunchHostAfterRestartWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       label,
       async () => {
@@ -237,9 +258,15 @@ export async function relaunchHostAfterRestartWithAttempt(
   });
 }
 
+// `origin` is the one field every start facade above threads through to the
+// proof it publishes (`host/lifecycle-origin.ts`): a command's own
+// `--lifecycle-origin` for a start it asks for, `maintenance` for the relaunch
+// legs of `host update` and `host restart`. It never decides whether the
+// supervisor runs - a grant always runs - only what `host status` reports.
 async function runWithHostStartAdoption(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "hostStartAdoptionLabel">,
   label: ServiceLabel,
   start: () => Promise<void>,
@@ -256,7 +283,13 @@ async function runWithHostStartAdoption(
   // `runWithLeaseAtServiceSpawnEdge`. A call that never reaches an edge
   // publishes no grant and waits for no child.
   await runWithLeaseAtServiceSpawnEdge(
-    () => publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+    () =>
+      publishHostStartAdoption(
+        capability,
+        contenderOptions,
+        serviceLabel,
+        origin,
+      ),
     start,
   );
 }

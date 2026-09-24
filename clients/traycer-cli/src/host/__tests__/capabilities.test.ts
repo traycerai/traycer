@@ -44,6 +44,7 @@ describe("host capability tokens", () => {
       "host-start-adoption-v2",
       "maintenance-lease-v1",
       "maintenance-lease-v2",
+      "lifecycle-policy-v1",
     ]);
   });
 });
@@ -83,6 +84,7 @@ describe("runHostCapabilities", () => {
         "host-start-adoption-v2",
         "maintenance-lease-v1",
         "maintenance-lease-v2",
+        "lifecycle-policy-v1",
       ],
     });
   });
@@ -90,7 +92,7 @@ describe("runHostCapabilities", () => {
   it("emits one token per line without --json", () => {
     expect(runHostCapabilities({ kind: "list", json: false })).toEqual({
       stdout:
-        "service-label\nhost-start-adoption-v2\nmaintenance-lease-v1\nmaintenance-lease-v2\n",
+        "service-label\nhost-start-adoption-v2\nmaintenance-lease-v1\nmaintenance-lease-v2\nlifecycle-policy-v1\n",
       exitCode: 0,
     });
   });
@@ -163,6 +165,7 @@ describe("`traycer host capabilities` as a subprocess", () => {
         "host-start-adoption-v2",
         "maintenance-lease-v1",
         "maintenance-lease-v2",
+        "lifecycle-policy-v1",
       ],
     });
   });
