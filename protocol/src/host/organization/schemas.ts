@@ -11,7 +11,7 @@ export const organizationVersionSchema = z
   .string()
   .regex(/^(0|[1-9][0-9]{0,18})$/)
   .refine(
-    (value) => BigInt(value) <= 9223372036854775807n,
+    (value) => BigInt(value) <= BigInt("9223372036854775807"),
     "Version is too large",
   );
 const id = z.string().min(1).max(36);
