@@ -1,6 +1,6 @@
 import { prepareHistoryScopeForPromotion } from "@/lib/history-scope-handoff";
 import { History } from "lucide-react";
-import { HistoryModalContent } from "@/components/epics/history-modal-content";
+import { LazyHistoryModalBody } from "@/stores/tabs/overlays/lazy-overlay-bodies";
 import { resolveHistoryTabIntent } from "@/lib/commands/actions/open-system-tab";
 import { isHistoryPath } from "@/stores/tabs/kinds/history";
 import type { SystemOverlayModule } from "@/stores/tabs/system-overlay-registry";
@@ -10,7 +10,7 @@ export const historyOverlayModule: SystemOverlayModule<"history"> = {
   label: "History",
   Icon: History,
   renderBody: (_active, onClose) => (
-    <HistoryModalContent onSelectEpic={onClose} />
+    <LazyHistoryModalBody onSelectEpic={onClose} />
   ),
   promotionIntent: () => resolveHistoryTabIntent(),
   isOverlayPath: (pathname) => isHistoryPath(pathname),

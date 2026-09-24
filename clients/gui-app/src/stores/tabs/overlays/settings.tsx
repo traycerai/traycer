@@ -1,5 +1,5 @@
 import { Settings } from "lucide-react";
-import { SettingsModalContent } from "@/components/settings/settings-modal-content";
+import { LazySettingsModalBody } from "@/stores/tabs/overlays/lazy-overlay-bodies";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
@@ -14,7 +14,7 @@ export const settingsOverlayModule: SystemOverlayModule<"settings"> = {
   kind: "settings",
   label: "Settings",
   Icon: Settings,
-  renderBody: (active) => <SettingsModalContent section={active.section} />,
+  renderBody: (active) => <LazySettingsModalBody section={active.section} />,
   promotionIntent: (active) =>
     resolveSettingsTabIntent({
       subSection: active.section,
