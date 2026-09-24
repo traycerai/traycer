@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, type MockInstance } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import type { FSWatcher } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +54,59 @@ vi.mock("node:tls", () => ({
   connect: tlsConnect,
   default: { connect: tlsConnect },
 }));
+
+/**
+ * Test-only escape hatch for the pid-metadata watcher's `fs.watch` call
+ * (`installWatcher` / `armPidWatch` in `../host-lifecycle`). Default OFF:
+ * every test gets a REAL `FSWatcher` on the REAL root dir, identical to
+ * production - `watch` here only counts the delegation
+ * (`realDelegationCount`) so a test that actually depends on the watcher
+ * firing can prove it did (see the delegation guard in "skips the readiness
+ * wait entirely..." below).
+ *
+ * `inertForThisTestOnly` is flipped ONLY by "holds one failed probe...",
+ * which measured a real flake in that exact test: under load, a LATE
+ * FSEvents edge for the test's own pid.json write (written just before
+ * `bootstrap()`) lands INSIDE the test's second explicit
+ * `reloadSnapshotFromDisk()`. That starts a watcher-driven
+ * `reloadSnapshotFromWatcher()` at a newer generation, which supersedes the
+ * explicit reload - the `generation !== this.reloadGeneration` branch in
+ * `reloadSnapshot` - so the explicit reload returns without folding its
+ * failure into `busy`, and the test reads a stale `available`
+ * (`expected 'available' to be 'busy'`). That test drives every reload
+ * explicitly because counting consecutive failed probes is what it tests, so
+ * the watcher has nothing to contribute there and is redirected to a REAL
+ * `FSWatcher` on a private, empty, never-written directory - genuine (no
+ * type casts), and guaranteed to never fire.
+ */
+const watcherRedirect = vi.hoisted(() => ({
+  inertForThisTestOnly: false,
+  redirectedRequests: new Array<string>(),
+  inertDirs: new Array<string>(),
+  realDelegationCount: 0,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const { tmpdir: hostTmpdir } = await import("node:os");
+  const { join: joinPath } = await import("node:path");
+  const watch = (
+    path: string,
+    listener: (event: string, filename: string | null) => void,
+  ): FSWatcher => {
+    if (!watcherRedirect.inertForThisTestOnly) {
+      watcherRedirect.realDelegationCount += 1;
+      return actual.watch(path, listener);
+    }
+    watcherRedirect.redirectedRequests.push(path);
+    const inertDir = actual.mkdtempSync(
+      joinPath(hostTmpdir(), "host-lifecycle-inert-watch-"),
+    );
+    watcherRedirect.inertDirs.push(inertDir);
+    return actual.watch(inertDir, listener);
+  };
+  return { ...actual, watch, default: { ...actual, watch } };
+});
 
 import {
   canReachHostWebsocketUrl,
@@ -556,6 +610,13 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    // Delegation guard for the `watcherRedirect` mock above: this test's own
+    // pass depends on the REAL fs.watch firing a watcher-driven reload after
+    // provisioning writes pid.json below (nothing else in this test drives
+    // that reload). If the mock's default ever flipped from delegate-to-real
+    // to inert-for-all, this count would stop advancing and the assertion
+    // below would go red - see the delegation-guard ablation.
+    const realDelegationBefore = watcherRedirect.realDelegationCount;
     try {
       await Promise.race([
         lifecycle.bootstrap({ hostInstalled: false }),
@@ -599,6 +660,11 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       }
       expect(lifecycle.getSnapshot()?.hostId).toBe("post-signin-host");
       expect(errors).toEqual([]);
+      // The watcher-driven reload above only converged because the mock
+      // actually delegated to a real fs.watch.
+      expect(watcherRedirect.realDelegationCount).toBeGreaterThan(
+        realDelegationBefore,
+      );
     } finally {
       restoreLiveness();
       lifecycle.dispose();
@@ -1054,10 +1120,38 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     lifecycle.on("change", (snapshot) => {
       changes.push(snapshot?.hostId ?? null);
     });
+    // This test drives EVERY reload explicitly, because counting consecutive
+    // failed probes is what it tests - so the two mechanisms that can start
+    // an UNSOLICITED reload behind its back must both be neutralised for the
+    // test's own duration:
+    //   - the pid-metadata watcher (measured: a late FSEvents edge for the
+    //     `writeFile` above can land inside the second explicit reload below
+    //     and supersede it via a generation bump - see `watcherRedirect`'s
+    //     comment); and
+    //   - the reachability retry ladder `scheduleReachabilityRetry` arms on
+    //     the FIRST failed reload, which would supersede the same way if this
+    //     test ever spanned its 250ms.
+    // The watcher is the source measured under load; the ladder is the same
+    // class, reproduced by delaying the probe past its first rung. Both end in
+    // the same `expected 'available' to be 'busy'`.
+    watcherRedirect.inertForThisTestOnly = true;
     try {
       await lifecycle.bootstrap({ hostInstalled: true });
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
+      // The watcher install inside bootstrap was redirected exactly once, to
+      // a real (never-firing) FSWatcher on a private directory - not this
+      // lifecycle's own root.
+      expect(watcherRedirect.redirectedRequests).toEqual([dir]);
+
+      // Hold the reachability retry ladder behind fake timers from here on,
+      // so its 250ms `setTimeout` (armed by the first failed reload just
+      // below) can never fire for real and supersede a later explicit
+      // reload. Only `setTimeout`/`clearTimeout` are faked - everything this
+      // test still awaits (pid-file reads, the injected `reachabilityProbe`,
+      // the stubbed liveness reader, `probeProcessExistenceWithoutSpawn`) is
+      // plain async/Promise work with no timer of its own.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
       // ONE failed probe against a live process changes nothing the renderer
       // can see. This assertion used to demand `null` - and that is the
@@ -1073,6 +1167,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       // bypassed), this assertion is what goes red instead of the test
       // silently passing on an unconsulted spy.
       expect(killSpy).toHaveBeenCalledWith(12345, 0);
+      // Mechanism, not end state: the ladder was armed by the failure above
+      // (`needsReprobe` is true through the hysteresis hold) AND held - the
+      // fake `setTimeout` it scheduled is still pending, not fired.
+      expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
 
       // The SECOND consecutive failure is corroboration, so the verdict
       // degrades - to `busy`, never to absence. The host is still named, still
@@ -1089,9 +1187,15 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host", "same-host", "same-host"]);
     } finally {
+      vi.useRealTimers();
+      watcherRedirect.inertForThisTestOnly = false;
       killSpy.mockRestore();
       restoreLiveness();
       lifecycle.dispose();
+      // After `dispose()` has closed the redirected watcher.
+      for (const inertDir of watcherRedirect.inertDirs.splice(0)) {
+        await rm(inertDir, { recursive: true, force: true });
+      }
       await rm(dir, { recursive: true, force: true });
     }
   });
