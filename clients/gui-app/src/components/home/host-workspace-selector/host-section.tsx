@@ -81,10 +81,12 @@ export function WorkspaceHostSwitcher(
               .getState()
               .setScopedHostId(props.activeHostId);
           }
+          // Named rather than left null: an Overview already open on another
+          // tab comes back to Status, as every host link does.
           openSettings({
             section: "host",
             resetToGeneral: false,
-            tab: null,
+            tab: "status",
             draft: null,
             hostId: null,
           });

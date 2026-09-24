@@ -338,9 +338,12 @@ describe("BrowserPeekTile", () => {
     });
 
     expect(screen.getByText("Open natively")).toBeTruthy();
+    // The machine is NAMED. A routed agent can place a native tab on a third
+    // machine - neither this viewer's nor its chat's - and "that host" is then
+    // a referent the reader cannot resolve from anything on screen.
     expect(
       screen.getByText(
-        "This tab is open in the desktop app on that host, so it can't be streamed here.",
+        "This tab is open in the Traycer desktop app on host-test, so it can't be streamed here.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("Going native")).toBeNull();

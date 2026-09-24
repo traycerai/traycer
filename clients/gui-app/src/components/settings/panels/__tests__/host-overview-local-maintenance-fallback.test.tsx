@@ -98,8 +98,8 @@ import {
   ExternalHostRestartTrigger,
   buildOverviewHostFixture,
   buildOverviewManagement,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -482,7 +482,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         expectedHostId: HOST_ID,
       });
     });
-    fireEvent.click(await screen.findByText("Installation details"));
+    // The Install record is shown open: no disclosure to expand first.
+    await selectHostOverviewTab("installation");
     const installVersion = await screen.findByTestId(
       "settings-host-install-version",
     );
@@ -492,7 +493,6 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     const pencil = await screen.findByTestId("host-overview-edit-name");
     expect(pencil.getAttribute("data-degraded")).toBe("unsupported");
 
-    await openHostOverviewAdvanced();
     expect(
       await screen.findByTestId("host-overview-service-degraded"),
     ).toBeTruthy();

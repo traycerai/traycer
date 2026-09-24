@@ -13,7 +13,7 @@
   "scripts": {
     "clean": "rimraf dist",
     "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
-    "compile": "tsgo --noEmit -p tsconfig.json",
+    "compile": "tsgo --noEmit -p tsconfig.json --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs",
     "build:renderer": "vite build --config vite.renderer.config.ts && bun scripts/assert-single-instance-deps.cjs",
     "build:app": "bun run --cwd ../../protocol validate:registries && bun run clean && bun run build:main && bun run build:renderer",
@@ -26,7 +26,8 @@
     "dev:renderer": "vite --config vite.renderer.config.ts",
     "dev:main": "bun run build:main && bun scripts/dev/dev-main.cjs",
     "dev": "bun scripts/dev/dev-stack.cjs",
-    "lint": "oxlint -c oxlint.config.mts --fix --deny-warnings .",
+    "lint": "bun run lint:files .",
+    "lint:files": "oxlint -c oxlint.config.mts --fix --deny-warnings --no-error-on-unmatched-pattern",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run",

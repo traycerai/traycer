@@ -121,7 +121,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/canvas/tab-strip.tsx": 2,
   "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx": 1,
   "gui-app/src/components/epic-canvas/document-preview/document-search-bar.tsx": 2,
-  "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": 7,
   "gui-app/src/components/epic-canvas/pip/agent-browser-pip.tsx": 6,
   "gui-app/src/components/epic-canvas/renderers/managed-command-output-tile.tsx": 3,
   "gui-app/src/components/epic-canvas/renderers/terminal-tile-xterm.tsx": 5,
@@ -132,6 +131,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
+  "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
   // Enter/Space on a row's overlay link, plus the search box's Escape (clears a
   // non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 3,
@@ -148,7 +148,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
-  "gui-app/src/editor-core/nodes/mermaid/pan-zoom-svg-viewer.tsx": 7,
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,
   "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 2,
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 4,
@@ -213,13 +212,9 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     chars: ["c", "d"],
     why: "single-letter accelerators on visible labels inside the open drafts list",
   },
-  "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": {
+  "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": {
     chars: ["+", "-", "0", "=", "F", "_", "f"],
-    why: "unmodified viewer keys: the character typed IS the request, and both spellings are accepted precisely because layouts differ",
-  },
-  "gui-app/src/editor-core/nodes/mermaid/pan-zoom-svg-viewer.tsx": {
-    chars: ["+", "-", "0", "=", "F", "_", "f"],
-    why: "unmodified viewer keys, as above",
+    why: "unmodified viewer keys: the character typed IS the request, and both spellings are accepted precisely because layouts differ - shared by every zoomable surface (image preview, image diff, PDF/Word document toolbars, the Mermaid/SVG pan-zoom viewer) since they all render this one cluster",
   },
   "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx":
     {

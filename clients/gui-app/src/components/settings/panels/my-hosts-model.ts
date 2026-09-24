@@ -523,7 +523,12 @@ export function formatLastSeen(
   return `last seen ${formatElapsed(deltaSeconds)}`;
 }
 
-function formatElapsed(deltaSeconds: number): string {
+/**
+ * The elapsed half of {@link formatLastSeen} ("2h ago"), for a surface that
+ * labels the fact itself - Installation ▸ About this host's "Last seen" - and
+ * must still word it the way the header's health line does beside it.
+ */
+export function formatElapsed(deltaSeconds: number): string {
   if (deltaSeconds < 45) {
     return "just now";
   }
