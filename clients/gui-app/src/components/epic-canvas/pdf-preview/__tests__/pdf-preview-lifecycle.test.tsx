@@ -299,4 +299,27 @@ describe("<PdfPreview /> document lifecycle", () => {
     expect(screen.getByText("/ 2")).not.toBeNull();
     expect(onRenderFailure).not.toHaveBeenCalled();
   });
+
+  it("sets the viewer's currentScale to 1 when Actual size is clicked", async () => {
+    const document = makeDocument(
+      Promise.resolve(null),
+      vi.fn(() => Promise.resolve()),
+    );
+    state.getDocument.mockReturnValueOnce(
+      makeTask(
+        Promise.resolve(document),
+        vi.fn(() => Promise.resolve()),
+      ),
+    );
+    const onRenderFailure = vi.fn();
+
+    render(<PdfPreview {...baseProps({ onRenderFailure })} />);
+
+    await waitFor(() => expect(screen.getByText("/ 2")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Actual size" }));
+
+    expect(state.viewerInstances[0]?.currentScale).toBe(1);
+    expect(onRenderFailure).not.toHaveBeenCalled();
+  });
 });

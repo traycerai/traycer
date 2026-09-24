@@ -63,6 +63,9 @@ const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
 
+/** `"page-width"` while the automatic fit is in force, `null` once the user has zoomed by hand. */
+type ScaleMode = "page-width" | null;
+
 /** The shared document-viewer contract - see `lazy-document-viewer.tsx`. */
 export type PdfPreviewProps = DocumentViewerProps;
 
@@ -99,8 +102,14 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
   // zooms manually, then `null`. A resize observer re-applies the mode so
   // fit-to-width survives tile resizes AND a mount whose container had no
   // laid-out width yet when `pagesinit` fired (where pdf.js silently falls
-  // back to 100%).
-  const scaleModeRef = useRef<"page-width" | null>("page-width");
+  // back to 100%). Held twice on purpose: the ref is what the observer
+  // callback reads, the state is what presses the toolbar's fit button.
+  const scaleModeRef = useRef<ScaleMode>("page-width");
+  const [scaleMode, setScaleModeState] = useState<ScaleMode>("page-width");
+  const setScaleMode = useCallback((mode: ScaleMode): void => {
+    scaleModeRef.current = mode;
+    setScaleModeState(mode);
+  }, []);
 
   const onRenderFailureRef = useRef(props.onRenderFailure);
   useEffect(() => {
@@ -281,23 +290,33 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
     binding.viewer.currentPageNumber = clamped;
   }, []);
 
-  const zoomBy = useCallback((factor: number) => {
-    const binding = bindingRef.current;
-    if (binding === null) return;
-    scaleModeRef.current = null;
-    const next = Math.min(
-      Math.max(binding.viewer.currentScale * factor, MIN_SCALE),
-      MAX_SCALE,
-    );
-    binding.viewer.currentScale = next;
-  }, []);
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const binding = bindingRef.current;
+      if (binding === null) return;
+      setScaleMode(null);
+      const next = Math.min(
+        Math.max(binding.viewer.currentScale * factor, MIN_SCALE),
+        MAX_SCALE,
+      );
+      binding.viewer.currentScale = next;
+    },
+    [setScaleMode],
+  );
 
   const handleFitWidth = useCallback(() => {
     const binding = bindingRef.current;
     if (binding === null) return;
-    scaleModeRef.current = "page-width";
+    setScaleMode("page-width");
     binding.viewer.currentScaleValue = "page-width";
-  }, []);
+  }, [setScaleMode]);
+
+  const handleActualSize = useCallback(() => {
+    const binding = bindingRef.current;
+    if (binding === null) return;
+    setScaleMode(null);
+    binding.viewer.currentScale = 1;
+  }, [setScaleMode]);
 
   const handleRotate = useCallback(() => {
     const binding = bindingRef.current;
@@ -435,10 +454,19 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
         pageNumber={pageNumber}
         pageCount={pageCount}
         onGoToPage={goToPage}
-        scalePercent={scalePercent}
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
-        onFitWidth={handleFitWidth}
+        zoom={{
+          ready: documentReady,
+          scalePercent,
+          canZoomIn: scalePercent === null || scalePercent < MAX_SCALE * 100,
+          canZoomOut: scalePercent === null || scalePercent > MIN_SCALE * 100,
+          onZoomIn: handleZoomIn,
+          onZoomOut: handleZoomOut,
+          fitKind: "width",
+          fitActive: scaleMode === "page-width",
+          onFit: handleFitWidth,
+          actualSizeActive: scalePercent === 100,
+          onActualSize: handleActualSize,
+        }}
         onRotate={handleRotate}
         outline={
           hasOutline ? { open: outlineOpen, onToggle: toggleOutline } : null
