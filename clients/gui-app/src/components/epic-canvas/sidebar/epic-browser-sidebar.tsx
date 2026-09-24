@@ -26,7 +26,12 @@ import {
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import {
+  useEpicBrowsersElsewhere,
+  type EpicBrowsersElsewhere,
+} from "@/components/epic-canvas/sidebar/use-epic-browsers-elsewhere";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
@@ -83,6 +88,14 @@ function BrowsersPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const sessions = useBrowserSessionsContext();
+  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
+  // Read whether or not the panel is empty - the empty state is the only
+  // consumer today, but the read is a registry scan with no stream of its own,
+  // so gating it on emptiness would buy nothing and add a branch.
+  const elsewhere = useEpicBrowsersElsewhere({
+    epicId: props.epicId,
+    resolvedHostId: hostPin.resolvedHostId,
+  });
   const listRef = useRef<HTMLUListElement>(null);
   const revealRequest = useSidebarNodeRevealRequest(props.tabId);
   const visibleRevealRequest = useVisibleSidebarNodeRevealRequest(props.tabId);
@@ -205,6 +218,8 @@ function BrowsersPanelBodyLive(props: {
         <BrowsersPanelEmptyState
           onAddBrowser={addBrowser}
           isAdding={isAdding}
+          elsewhere={elsewhere}
+          onShowHost={hostPin.setSelection}
         />
       ) : null}
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
@@ -299,6 +314,12 @@ export function BrowsersPanelUnavailableState(props: {
 export function BrowsersPanelEmptyState(props: {
   readonly onAddBrowser: () => void;
   readonly isAdding: boolean;
+  /**
+   * Machines this task has browsers on that the panel is not showing, and how
+   * to move it to one. Empty is the ordinary case and renders nothing extra.
+   */
+  readonly elsewhere: readonly EpicBrowsersElsewhere[];
+  readonly onShowHost: (hostId: string) => void;
 }) {
   return (
     <div
@@ -322,6 +343,45 @@ export function BrowsersPanelEmptyState(props: {
         <Plus className="size-3.5" aria-hidden />
         Add browser
       </Button>
+      {props.elsewhere.map((host) => (
+        <BrowsersElsewhereOnHost
+          key={host.hostId}
+          host={host}
+          onShowHost={props.onShowHost}
+        />
+      ))}
     </div>
+  );
+}
+
+/**
+ * "Nothing here, but this task has browsers over there" - one row per other
+ * machine, which pins the panel to it.
+ *
+ * Its own component because the host's display name is a hook, and these are
+ * a list. The pin is the panel's existing host filter written for it, so the
+ * reader ends up where the filter menu would have taken them and the badge on
+ * the filter button explains what changed.
+ */
+function BrowsersElsewhereOnHost(props: {
+  readonly host: EpicBrowsersElsewhere;
+  readonly onShowHost: (hostId: string) => void;
+}) {
+  const entry = useHostDirectoryEntryForHostId(props.host.hostId);
+  const hostLabel = entry?.label ?? props.host.hostId;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={() => props.onShowHost(props.host.hostId)}
+    >
+      <Globe2 className="size-3.5" aria-hidden />
+      <span className="min-w-0 truncate">
+        {props.host.tabCount === 1
+          ? `1 browser on ${hostLabel}`
+          : `${props.host.tabCount} browsers on ${hostLabel}`}
+      </span>
+    </Button>
   );
 }
