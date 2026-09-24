@@ -484,6 +484,45 @@ export const chatRunSettingsStrictSchema = lazySchema(() =>
 export type ChatRunSettingsStrict = z.infer<typeof chatRunSettingsStrictSchema>;
 
 /**
+ * Wire-freeze copy of the DEFAULTED tuple as it stood before `identityId`,
+ * enums live, backstops intact.
+ *
+ * Bound by the RELEASED create request lines through
+ * `createChatInitialMessageSchema` (`host/epic/unary-schemas.ts`):
+ * `epic.create@1.0`/`@1.1` embed it under `chat.initialMessage.settings` and
+ * `epic.createChat@1.0`/`@1.1` under `initialMessage.settings`. Those four
+ * lines bound the live tuple by reference, which was fine until the live
+ * tuple grew a key: `prepareRequestPayload` strips a newer client's request by
+ * re-parsing it through the OLDER minor's own request schema, so a field that
+ * is on the live tuple survives the strip and reaches a `host-v1.3.1` peer
+ * that never negotiated it. `identityId` rides the `@1.2` leaf
+ * (`createChatInitialMessageSchemaV12`), the first line that may carry it.
+ *
+ * Hand-frozen field-for-field, never `.omit()`-derived, on the discipline
+ * every frozen copy of this tuple follows: a later addition to the live tuple
+ * must not leak onto a released line. The backstop defaults stay because the
+ * released lines had them - a `@1.1` caller that omits `serviceTier` or
+ * `profileId` parsed then and must parse now. The enums stay LIVE for the
+ * reason `chatRunSettingsStrictSchemaPreIdentity` gives: this is a
+ * client->host request, and pinning a roster would make a harness unsettable
+ * rather than version-gated.
+ */
+export const chatRunSettingsSchemaPreIdentity = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
+export type ChatRunSettingsPreIdentity = z.infer<
+  typeof chatRunSettingsSchemaPreIdentity
+>;
+
+/**
  * Wire-freeze copy of the strict tuple as it stood before `identityId`.
  *
  * Bound by `epic.updateChatRunSettings@1.1`, which SHIPPED in `host-v1.3.x`
