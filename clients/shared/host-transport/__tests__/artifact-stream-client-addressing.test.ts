@@ -125,6 +125,7 @@ function attach(): { session: StubSession; seen: Seen } {
       onDocAck: (frame) => seen.docAck.push(frame.artifactId),
       onAwareness: (frame) => seen.awareness.push(frame.artifactId),
       onUnavailable: (frame) => seen.unavailable.push(frame.artifactId),
+      onBodySync: () => {},
       onConnectionStatus: () => {},
     },
   });

@@ -67,6 +67,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactAwarenessFrame,
+  ArtifactBodySyncFrame,
   ArtifactDocAckFrame,
   ArtifactDocFrame,
   ArtifactDocUpdateFrame,
@@ -312,6 +313,18 @@ export function createArtifactLaneAdapter(
             authorityEpochTransition(frame.authorityEpoch),
           );
         }
+      },
+      onBodySync: (frame: ArtifactBodySyncFrame) => {
+        // Forwarded as the wire states it. Pairing it with the body it
+        // describes is the consumer's job, and the ordering makes that cheap:
+        // the host sends it only after the `doc` frame it describes, and the
+        // consumer forgets it on every `doc` and `unavailable`.
+        emit({
+          kind: "doc-body-sync",
+          authorityEpoch: frame.authorityEpoch,
+          docId: artifactId,
+          state: frame.state,
+        });
       },
       onConnectionStatus: (status, reason) => {
         if (!accepts(generation)) return;
