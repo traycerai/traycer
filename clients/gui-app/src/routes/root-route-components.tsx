@@ -9,6 +9,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
 import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
+import { AppSuspendReleaseController } from "@/components/layout/bridges/app-suspend-release-controller";
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
@@ -119,6 +120,7 @@ export function RootComponent() {
           neighbour; an unadmitted shell has no create to refuse. */}
       {admission.admitted ? <LocalStoreRepairDialogHost /> : null}
       <ChatSessionWakeRetryController />
+      <AppSuspendReleaseController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
           these bridges + the page only mount once the host is reachable (or the

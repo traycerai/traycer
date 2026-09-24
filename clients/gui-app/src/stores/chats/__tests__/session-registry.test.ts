@@ -649,3 +649,139 @@ function markRunning(handle: ChatSessionStoreHandle): void {
     },
   });
 }
+
+describe("ChatSessionRegistry.sleepIdleWarmSessions (app suspend)", () => {
+  function createCountingHandle(epicId: string, chatId: string) {
+    let opens = 0;
+    let closes = 0;
+    const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: "host-a",
+      epicId,
+      chatId,
+      userId: null,
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: () => {
+        opens += 1;
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
+          close: () => {
+            closes += 1;
+          },
+        };
+      },
+    });
+    return { handle, opens: () => opens, closes: () => closes };
+  }
+
+  function acquire(
+    registry: ChatSessionRegistry,
+    chatId: string,
+    handle: ChatSessionStoreHandle,
+  ): ChatSessionStoreHandle {
+    return registry.acquire(
+      { epicId: "epic-1", chatId, hostId: HOST, scopeKey: SCOPE },
+      () => handle,
+    );
+  }
+
+  function createRegistry(): ChatSessionRegistry {
+    return new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("closes a lease-free idle session's stream and keeps its store", () => {
+    const registry = createRegistry();
+    const owned = createCountingHandle("epic-1", "chat-1");
+    acquire(registry, "chat-1", owned.handle);
+    registry.release("epic-1", "chat-1", HOST);
+
+    expect(registry.sleepIdleWarmSessions()).toBe(1);
+
+    expect(owned.closes()).toBe(1);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(owned.handle);
+    const state = owned.handle.store.getState();
+    expect(state.asleep).toBe(true);
+    expect(state.connectionStatus).toBe("closed");
+    expect(state.fatalClose).toBeNull();
+    // Idempotent: an already-sleeping session is not counted or closed again.
+    expect(registry.sleepIdleWarmSessions()).toBe(0);
+    expect(owned.closes()).toBe(1);
+  });
+
+  it("leaves a leased session connected", () => {
+    const registry = createRegistry();
+    const owned = createCountingHandle("epic-1", "chat-1");
+    acquire(registry, "chat-1", owned.handle);
+
+    expect(registry.sleepIdleWarmSessions()).toBe(0);
+    expect(owned.closes()).toBe(0);
+    expect(owned.handle.store.getState().asleep).toBe(false);
+  });
+
+  it("leaves a lease-free session with work in flight connected", () => {
+    const registry = createRegistry();
+    const running = createCountingHandle("epic-1", "chat-running");
+    acquire(registry, "chat-running", running.handle);
+    running.handle.store.setState({ runStatus: "running" });
+    registry.release("epic-1", "chat-running", HOST);
+
+    expect(registry.sleepIdleWarmSessions()).toBe(0);
+    expect(running.closes()).toBe(0);
+    expect(running.handle.store.getState().asleep).toBe(false);
+  });
+
+  it("reconnects a sleeping session when a tile leases it again", () => {
+    const registry = createRegistry();
+    const owned = createCountingHandle("epic-1", "chat-1");
+    acquire(registry, "chat-1", owned.handle);
+    registry.release("epic-1", "chat-1", HOST);
+    registry.sleepIdleWarmSessions();
+    expect(owned.opens()).toBe(1);
+
+    // A passive read is not a lease and must not wake it.
+    registry.peek("epic-1", "chat-1", HOST);
+    expect(owned.opens()).toBe(1);
+
+    const revived = acquire(
+      registry,
+      "chat-1",
+      createCountingHandle("epic-1", "chat-1").handle,
+    );
+
+    expect(revived).toBe(owned.handle);
+    expect(owned.opens()).toBe(2);
+    const state = owned.handle.store.getState();
+    expect(state.asleep).toBe(false);
+    expect(state.connectionStatus).toBe("connecting");
+  });
+
+  it("does not re-dial an awake session on revival", () => {
+    const registry = createRegistry();
+    const owned = createCountingHandle("epic-1", "chat-1");
+    acquire(registry, "chat-1", owned.handle);
+    registry.release("epic-1", "chat-1", HOST);
+
+    acquire(registry, "chat-1", owned.handle);
+
+    expect(owned.opens()).toBe(1);
+    expect(owned.closes()).toBe(0);
+  });
+});

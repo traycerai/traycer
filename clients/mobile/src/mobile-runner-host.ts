@@ -692,6 +692,10 @@ export class MobileRunnerHost implements IRunnerHost {
     return this.systemResume.subscribe(handler);
   }
 
+  onSystemSuspended(handler: () => void): Disposable {
+    return this.systemResume.subscribeSuspended(handler);
+  }
+
   onNetworkPathChanged(handler: () => void): Disposable {
     return this.networkPath.subscribe(handler);
   }
@@ -1370,6 +1374,7 @@ function resumeEvidenceModeFor(platform: string): ResumeEvidenceMode {
 
 class MobileSystemResume {
   private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
+  private readonly suspendHandlers = new Set<() => void>();
   private listening = false;
   private background = false;
   /** Stamped only by the numeric modes; `null` dwell everywhere else. */
@@ -1411,6 +1416,25 @@ class MobileSystemResume {
     };
   }
 
+  /**
+   * The background half of the episode, for `IRunnerHost.onSystemSuspended`.
+   * Same level-triggered source as {@link subscribe}, so a suspend and its
+   * resume always describe one episode.
+   */
+  subscribeSuspended(handler: () => void): Disposable {
+    // Tracking starts BEFORE the handler joins, and the order is the guard: a
+    // DOM pair installed while the document is already hidden seeds its state
+    // as backgrounded, and an app that STARTS hidden did not just leave - the
+    // same reason a cold start's first foreground is not a resume.
+    this.ensureTracking();
+    this.suspendHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.suspendHandlers.delete(handler);
+      },
+    };
+  }
+
   private noteBackground(stampDwell: boolean): void {
     if (this.background) {
       // Level-triggered: a duplicate background report says nothing new.
@@ -1418,6 +1442,14 @@ class MobileSystemResume {
     }
     this.background = true;
     this.enteredAt = stampDwell ? Date.now() : null;
+    for (const handler of Array.from(this.suspendHandlers)) {
+      try {
+        handler();
+      } catch (error) {
+        // One bad subscriber must not cost the others their release.
+        console.error("[mobile] system-suspend handler threw", error);
+      }
+    }
   }
 
   /**

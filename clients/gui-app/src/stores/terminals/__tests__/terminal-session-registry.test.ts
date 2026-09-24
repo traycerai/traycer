@@ -704,4 +704,33 @@ describe("TerminalSessionRegistry", () => {
       expect(registry.get(`terminal-${index + 1}`)).toBe(entry.handle);
     });
   });
+
+  describe("disposeLingeringPlainTerminals (app suspend)", () => {
+    it("drops lease-free plain terminals now, and keeps leased ones and lease-free terminal-agents", () => {
+      const registry = new TerminalSessionRegistry();
+      const lingering = createHandle("terminal");
+      const onScreen = createHandle("terminal");
+      const agent = createHandle("terminal-agent");
+
+      registry.acquire("lingering", () => lingering.handle, HOST_ID);
+      registry.release("lingering", lingering.handle, true);
+      registry.acquire("on-screen", () => onScreen.handle, HOST_ID);
+      registry.acquire("agent", () => agent.handle, HOST_ID);
+      registry.release("agent", agent.handle, true);
+      const closesBefore = {
+        onScreen: onScreen.closeCount(),
+        agent: agent.closeCount(),
+      };
+
+      // Well inside the linger window: only the explicit release can drop it.
+      expect(registry.disposeLingeringPlainTerminals()).toBe(1);
+
+      expect(registry.get("lingering")).toBeNull();
+      expect(lingering.closeCount()).toBe(2);
+      expect(registry.get("on-screen")).toBe(onScreen.handle);
+      expect(onScreen.closeCount()).toBe(closesBefore.onScreen);
+      expect(registry.get("agent")).toBe(agent.handle);
+      expect(agent.closeCount()).toBe(closesBefore.agent);
+    });
+  });
 });

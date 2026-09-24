@@ -61,6 +61,12 @@ export function retryClosedChatSessions(
     if (state.connectionStatus !== "closed") {
       continue;
     }
+    // Closed on purpose, not by a failure this wake could clear: the session
+    // was put to sleep with nobody watching it, and it reconnects when a tile
+    // next leases it. Re-dialing it here would undo the sleep on every resume.
+    if (state.asleep) {
+      continue;
+    }
     appLogger.info("[chat-session] wake retry for closed session", {
       reason,
       epicId: handle.epicId,

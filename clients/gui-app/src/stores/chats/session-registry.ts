@@ -162,7 +162,13 @@ export class ChatSessionRegistry {
           handle.dispose();
         },
         onParked: () => {},
-        onRevived: () => {},
+        // A tile leasing a session {@link sleepIdleWarmSessions} put to sleep
+        // is the one moment it may reconnect. A throw here (the transport
+        // factory failing) is the registry's fail-toward-disposal case.
+        onRevived: (handle) => {
+          const state = handle.store.getState();
+          if (state.asleep) state.retry();
+        },
       },
     });
   }
@@ -335,6 +341,40 @@ export class ChatSessionRegistry {
         this.sessions.discard(entry.key, "released");
       }
     });
+  }
+
+  /**
+   * Put every lease-free session with no unsettled work to sleep: its stream
+   * closes and its store stays, and it reconnects when a tile next leases it
+   * (see `onRevived` above). Returns how many went to sleep.
+   *
+   * For the app's background episode. Once the OS suspends the runtime the
+   * idle TTL cannot run, so a warm session would otherwise hold its socket and
+   * its host-side chat lease for the whole background, and be re-dialed - its
+   * snapshot downloaded again - with every other stream on the way back,
+   * whether or not anyone opens it.
+   *
+   * Gated on {@link hasUnsettledChatWork}, the PARK gate, rather than the
+   * narrower `hasActiveWork` the TTL reads. The TTL may reclaim a chat whose
+   * only outstanding item is an unacknowledged action because it disposes the
+   * store too and a re-open replays from the host's answer; a sleeping store
+   * outlives its stream, and a stream closed under an accepted action or a
+   * running turn would drop exactly the frames that settle it.
+   *
+   * Leased sessions are left alone: a tile holds them, so they are on screen
+   * or deliberately retained.
+   */
+  sleepIdleWarmSessions(): number {
+    let slept = 0;
+    for (const entry of this.sessions.entries()) {
+      if (entry.demand > 0) continue;
+      const handle = entry.session;
+      if (handle.store.getState().asleep) continue;
+      if (hasUnsettledChatWork(handle)) continue;
+      handle.store.getState().sleep();
+      if (handle.store.getState().asleep) slept += 1;
+    }
+    return slept;
   }
 
   disposeAll(): void {

@@ -204,6 +204,7 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly systemResumedHandlers = new Set<
     (event: SystemResumeEvent) => void
   >();
+  private readonly systemSuspendedHandlers = new Set<() => void>();
   private readonly networkPathChangedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
@@ -897,6 +898,15 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
+  onSystemSuspended(handler: () => void): Disposable {
+    this.systemSuspendedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.systemSuspendedHandlers.delete(handler);
+      },
+    };
+  }
+
   onNetworkPathChanged(handler: () => void): Disposable {
     this.networkPathChangedHandlers.add(handler);
     return {
@@ -931,6 +941,13 @@ export class MockRunnerHost implements IRunnerHost {
   emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
       handler(event);
+    }
+  }
+
+  /** Test helper: fire the backgrounded signal to every `onSystemSuspended` subscriber. */
+  emitSystemSuspended(): void {
+    for (const handler of this.systemSuspendedHandlers) {
+      handler();
     }
   }
 
