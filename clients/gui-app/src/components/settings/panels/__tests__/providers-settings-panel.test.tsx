@@ -3448,7 +3448,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
-          signInUnavailableHint={null}
+          onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}
