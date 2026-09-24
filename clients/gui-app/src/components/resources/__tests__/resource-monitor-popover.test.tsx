@@ -5330,3 +5330,67 @@ describe("ResourceMonitorPopover · custom trigger", () => {
     expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("bottom");
   });
 });
+
+/**
+ * The installed app's header button shows nothing while closed, so the global
+ * stream follows the panel there. Everywhere else - the desktop header, and a
+ * readout trigger on any shell - the closed popover keeps its background lease.
+ */
+describe("ResourceMonitorPopover · global stream lease", () => {
+  function renderHeader(): void {
+    render(
+      <TooltipProvider>
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("holds no global stream while the phone's header panel is closed", () => {
+    setMobileApp(true);
+    installStubFactory();
+    renderHeader();
+
+    expect(resourcesRegistry.getGlobal()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(resourcesRegistry.getGlobal()).toBeNull();
+  });
+
+  it("keeps the desktop header's background stream while closed", () => {
+    installStubFactory();
+    renderHeader();
+
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+  });
+
+  it("keeps a readout trigger's background stream on the phone", () => {
+    setMobileApp(true);
+    installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourceMonitorPopover
+          trigger="custom"
+          claimsOpenAction
+          contentSide="top"
+          triggerNode={
+            <button type="button" data-testid="status-bar-trigger">
+              cpu 12%
+            </button>
+          }
+        />
+      </TooltipProvider>,
+    );
+
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+  });
+});

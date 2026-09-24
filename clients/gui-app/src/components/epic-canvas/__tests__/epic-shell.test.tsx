@@ -7,6 +7,7 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { setMobileApp } from "@/lib/mobile-app";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   __getOpenEpicRegistryForTests,
@@ -86,6 +87,14 @@ vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
 
 vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
   TileCanvas: () => <div data-testid="tile-canvas-stub" />,
+}));
+
+// A marker for the pane's `resources.subscribe` lease: the suite asks only
+// whether the shell holds one, not what the stream does.
+vi.mock("@/providers/resources-stream-mount", () => ({
+  ResourcesStreamMount: (props: { readonly epicId: string }) => (
+    <div data-testid="resources-stream" data-epic-id={props.epicId} />
+  ),
 }));
 
 interface ControlledStream {
@@ -280,6 +289,33 @@ describe("<EpicShell />", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     // RESTORED, not nulled - see `previousWorkerFactory`.
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
+  });
+
+  it("holds the epic's resources stream in the pane off the installed app", async () => {
+    installControlledFactory();
+    const queryClient = new QueryClient();
+    renderShell(queryClient);
+    await waitForSessionReady();
+
+    expect(
+      screen.getByTestId("resources-stream").getAttribute("data-epic-id"),
+    ).toBe(EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("opens no pane resources stream on the installed app", async () => {
+    setMobileApp(true);
+    try {
+      installControlledFactory();
+      const queryClient = new QueryClient();
+      renderShell(queryClient);
+      await waitForSessionReady();
+
+      expect(screen.queryByTestId("resources-stream")).toBeNull();
+      queryClient.clear();
+    } finally {
+      setMobileApp(false);
+    }
   });
 
   it("renders the stable shell frame while the session is not ready", () => {

@@ -24,6 +24,7 @@ import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snap
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   EpicSessionPresentationContext,
   type EpicSessionPresentation,
@@ -139,7 +140,10 @@ function EpicShellSessionBody(
   return (
     <SnapshotLoadingProvider value={snapshotContextValue}>
       {props.active ? <EpicConnectionToasts epicId={props.epicId} /> : null}
-      <ResourcesStreamMount epicId={props.epicId} />
+      {/* The installed app shows this epic's resource chips only inside the
+          tab switcher sheet, which holds its own lease while open
+          (`MobileTabSwitcherMount`), so the pane itself opens no stream. */}
+      {isMobileApp() ? null : <ResourcesStreamMount epicId={props.epicId} />}
       <CanvasColumn
         statusRow={
           <EpicShellStatusRow
