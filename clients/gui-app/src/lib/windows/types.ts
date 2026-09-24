@@ -114,7 +114,13 @@ export interface DesktopPerWindowStatePatch {
 export type DesktopAuthSessionStatus =
   | "signed-out"
   | "signing-in"
-  | "signed-in";
+  | "signed-in"
+  | "unverified";
+
+export type DesktopLocalAuthSessionRestoreResult =
+  | "restored"
+  | "superseded"
+  | "unavailable";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -877,13 +883,18 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
+    /** Absent on older shells; only main's stored pair can establish local identity. */
+    restoreLocal?(expected: {
+      readonly userId: string;
+      readonly token: string;
+    }): Promise<DesktopLocalAuthSessionRestoreResult>;
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
     /**
      * Withdraws main's verification of the session it holds - the renderer's
-     * TERMINAL verdict loss, which `set` cannot carry because the status an
-     * `unverified` flattens to signs sibling windows out. Optional +
+     * TERMINAL verdict loss. Local restoration preserves an existing signed-in
+     * session, so it cannot carry that loss. Optional +
      * capability-probed like `perWindowState.clear`: a desktop shell built
      * before the channel existed has no `revoke`, and the bridge degrades to
      * the pre-channel behaviour (main keeps its verification until the
