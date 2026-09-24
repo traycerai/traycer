@@ -45,8 +45,10 @@ bunx nx run @traycer-clients/traycer-cli:build
 
 ## Pre-commit hooks
 
-We use [pre-commit](https://pre-commit.com) for hygiene and affected workspace
-checks (build, compile, lint, and format). Install once:
+We use [pre-commit](https://pre-commit.com) for hygiene and local workspace
+checks: lint on the files your branch changed, format, and an incremental
+compile of the affected projects. CI additionally lints whole projects and runs
+the `build` targets. Install once:
 
 ```sh
 pipx install pre-commit   # or: brew install pre-commit
