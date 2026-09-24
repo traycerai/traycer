@@ -1207,7 +1207,13 @@ export const chatApprovalStateSchema = lazySchema(() =>
 );
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
 
-export const chatFileEditApprovalStateSchema = lazySchema(() =>
+/**
+ * Frozen file-edit approval card, as every line through `chat.subscribe@1.16`
+ * ships it. `1.17` adds `cautious` and `displayFacts` on the live schema below.
+ *
+ * Do NOT add fields here. Add them to `chatFileEditApprovalStateSchema` below.
+ */
+export const chatFileEditApprovalStateSchemaPreCautious = lazySchema(() =>
   z.object({
     approvalId: z.string(),
     toolName: z.string(),
@@ -1216,6 +1222,28 @@ export const chatFileEditApprovalStateSchema = lazySchema(() =>
     operation: checkpointFileOperationSchema,
     input: z.unknown().nullable(),
     requestedAt: z.number(),
+  }),
+);
+export type ChatFileEditApprovalStatePreCautious = z.infer<
+  typeof chatFileEditApprovalStateSchemaPreCautious
+>;
+
+/**
+ * The live file-edit approval card (`chat.subscribe@1.17`): `1.16`'s card plus
+ * the two keys the command card gained on the same line, for the same reason.
+ *
+ * Set when a user's ask rule forced this edit to a person: `cautious`, so the
+ * edit is never approved by "Approve all" or a one-key shortcut, and the one
+ * `displayFacts` line saying which settings' rule asked - never the rule's
+ * content. Optional and stripped by name below `1.17`, exactly as on
+ * `chatApprovalStateSchema`, and pending-only: neither key is journaled.
+ */
+export const chatFileEditApprovalStateSchema = lazySchema(() =>
+  chatFileEditApprovalStateSchemaPreCautious.extend({
+    /** Card-only facts - see `runtimeApprovalDisplayFactSchema`. */
+    displayFacts: z.array(runtimeApprovalDisplayFactSchema).optional(),
+    /** See `chatApprovalStateSchema.cautious`. */
+    cautious: z.boolean().optional(),
   }),
 );
 export type ChatFileEditApprovalState = z.infer<
@@ -1987,7 +2015,7 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
     // composer's missing-worktree error + send gate. `[]` when the binding is null
     // or every bound directory exists. Never persisted - see worktree-schemas.ts.
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     // Cumulative file changes for the whole chat (first-snapshot → current),
     // computed host-side from checkpoint manifests + current disk content.
     // Drives the pinned accumulated-changes panel above the composer.
@@ -2060,6 +2088,8 @@ export const chatSnapshotSchema = lazySchema(() =>
     // and `[]` is simply true of every line that carries a full snapshot.
     portForwards: z.array(chatPortForwardSchema).default([]),
     pendingApprovals: z.array(chatApprovalStateSchema),
+    // The live file-edit card (`1.17`); the V17 base is frozen pre-`cautious`.
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
     backgroundItems: z.array(backgroundItemSchema).optional(),
     // The live fallback traversal, or absent when there is none
     // (`chat.subscribe@1.10`). Optional rather than nullable so an older host's
@@ -2452,6 +2482,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   EventSchema extends z.ZodType,
   ActionSchema extends z.ZodType,
   ApprovalSchema extends z.ZodType,
+  FileEditApprovalSchema extends z.ZodType,
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
   ExtraActionAckFields extends z.ZodRawShape,
@@ -2461,6 +2492,11 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly event: EventSchema;
   readonly action: ActionSchema;
   readonly approval: ApprovalSchema;
+  /**
+   * The file-edit card: frozen pre-`cautious` on every line through `1.16`,
+   * live on `1.17`, the same axis `approval` moves on.
+   */
+  readonly fileEditApproval: FileEditApprovalSchema;
   readonly interviewAnswered: InterviewAnsweredSchema;
   readonly interviewErrored: InterviewErroredSchema;
   /**
@@ -2540,7 +2576,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
         kind: z.literal("fileEditApprovalRequested"),
         ...textFrameFields,
         ...chatReferenceFields,
-        approval: chatFileEditApprovalStateSchema,
+        approval: schemas.fileEditApproval,
       }),
     ),
     lazySchema(() =>
@@ -2641,6 +2677,7 @@ const chatSubscribeCommonServerFrameSchemasV18 =
     event: chatEventSchema,
     action: chatActionSchemaV17ToV19,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {},
@@ -2686,6 +2723,7 @@ const chatSubscribeCommonServerFrameSchemasV110 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: fallbackGraceHoldLeaseFields,
@@ -2704,6 +2742,7 @@ const chatSubscribeCommonServerFrameSchemasV111 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: fallbackGraceHoldLeaseFields,
@@ -2725,6 +2764,7 @@ const chatSubscribeCommonServerFrameSchemasV112 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2744,6 +2784,7 @@ const chatSubscribeCommonServerFrameSchemasV113 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2761,6 +2802,7 @@ const chatSubscribeCommonServerFrameSchemasV114 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2778,6 +2820,7 @@ const chatSubscribeCommonServerFrameSchemasV115 =
     event: chatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreTier,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2796,6 +2839,7 @@ const chatSubscribeCommonServerFrameSchemasV116 =
     event: chatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreDisplayFacts,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2813,6 +2857,7 @@ const chatSubscribeCommonServerFrameSchemas =
     event: chatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2829,6 +2874,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     event: chatEventSchemaPreInReplyTo,
     action: chatActionSchemaV15,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
     extraActionAckFields: {},
@@ -2849,6 +2895,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV15,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
     extraActionAckFields: {},
@@ -3698,7 +3745,7 @@ const chatSnapshotSchemaV10 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   }),
 );
@@ -3764,7 +3811,7 @@ const chatSubscribeServerFrameSchemaV10 = lazySchema(() =>
       kind: z.literal("fileEditApprovalRequested"),
       ...textFrameFields,
       ...chatReferenceFields,
-      approval: chatFileEditApprovalStateSchema,
+      approval: chatFileEditApprovalStateSchemaPreCautious,
     }),
     z.object({
       kind: z.literal("fileEditApprovalResolved"),
@@ -4018,7 +4065,7 @@ const chatSnapshotSchemaV11 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV11).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4085,7 +4132,7 @@ const chatSnapshotSchemaV12 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV12).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4150,7 +4197,7 @@ const chatSnapshotSchemaV13 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV13).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4220,7 +4267,7 @@ const chatSnapshotSchemaV14 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4292,7 +4339,7 @@ const chatSnapshotSchemaV15 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4454,7 +4501,7 @@ const chatSnapshotSchemaV16 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     // The shipped command shape - see the `V16` managedCommandsChanged frame.
@@ -4496,6 +4543,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV16,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
     extraActionAckFields: {},
@@ -4762,7 +4810,7 @@ const chatWindowedSnapshotSchemaV18 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     /**
      * How many files the chat has touched. The SUMMARIES arrive on their own
      * chunked frames, for the reason the skeleton never joined the snapshot:
@@ -4851,7 +4899,7 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
     // Pre-cron: `1.10` through `1.16` inherit this binding, and only the live
     // snapshot (`1.17`) re-widens it.
@@ -4949,6 +4997,8 @@ const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
 export const chatWindowedSnapshotSchema = lazySchema(() =>
   chatWindowedSnapshotSchemaV116.extend({
     pendingApprovals: z.array(chatApprovalStateSchema),
+    // Both cards gain `cautious` and `displayFacts` on this line.
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
     backgroundItems: z.array(backgroundItemSchema).optional(),
     // The provider's predicted next prompt - see `chatSuggestedPromptSchema`.
     suggestedPrompt: chatSuggestedPromptSchema.optional(),
@@ -5215,7 +5265,7 @@ const chatWindowedSnapshotSchemaV19 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchemaPreCautious),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),

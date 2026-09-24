@@ -384,8 +384,10 @@ function ApprovalRow(props: ApprovalRowProps) {
  * Bash or grep card at all: the input panel renders those tools as a single
  * `$ …` command line and never lists their fields. Producer text, rendered as
  * plain text; the producer bounds its length.
+ *
+ * The file-edit card renders the same list for its one rule line.
  */
-function ApprovalDisplayFacts(props: {
+export function ApprovalDisplayFacts(props: {
   readonly facts: NonNullable<ChatApprovalState["displayFacts"]>;
 }) {
   return (
