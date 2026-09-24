@@ -342,6 +342,11 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
       const target = clampScale(startScale * update.ratio);
       const current = binding.viewer.currentScale;
       if (Math.abs(target - current) < PINCH_SCALE_EPSILON) return;
+      // A scale change re-anchors on the location pdf.js last recorded from
+      // a scroll event, and the drag above has not raised one yet - so it
+      // would put the document back where it was before the drag. Recording
+      // the location now is what the scroll event would have done.
+      binding.viewer.update();
       // pdf.js reads `origin` against the container's own offset position,
       // so the focal is expressed relative to the container's offset parent.
       const rect = container.getBoundingClientRect();
