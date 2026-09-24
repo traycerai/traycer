@@ -125,18 +125,15 @@ describe("withHostNodeOptions", () => {
     assertOnlyFlagTokens(result);
   });
 
-  it(
-    "strips an inherited old-space cap while preserving unrelated and canonical flags",
-    () => {
-      const result = withHostNodeOptions(
-        "--max-old-space-size=4096 --trace-warnings",
-      );
+  it("strips an inherited old-space cap while preserving unrelated and canonical flags", () => {
+    const result = withHostNodeOptions(
+      "--max-old-space-size=4096 --trace-warnings",
+    );
 
-      expect(result).toBe(`--trace-warnings ${CANONICAL}`);
-      expect(result).not.toContain("--max-old-space-size=4096");
-      assertOnlyFlagTokens(result);
-    },
-  );
+    expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+    expect(result).not.toContain("--max-old-space-size=4096");
+    assertOnlyFlagTokens(result);
+  });
 
   // Node.js v24.18.0 CLI docs: https://nodejs.org/download/release/v24.18.0/docs/api/cli.html
   // Lines 380-385 allow dash/underscore aliases; 1358-1362 describe the
