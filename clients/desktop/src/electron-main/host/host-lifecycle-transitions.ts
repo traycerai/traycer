@@ -10,7 +10,7 @@ import type {
   HostLifecycleView,
   LocalHostCapability,
 } from "../../ipc-contracts/host-lifecycle-types";
-import { log } from "../app/logger";
+import { log, type SafeLogFields } from "../app/logger";
 import type {
   ConvergeReadyOk,
   ConvergeReadyVersionPolicy,
@@ -143,6 +143,13 @@ export class HostLifecycleService {
   private noneCommitted = false;
   /** The policy `rev` the published presence was derived from, or `null`. */
   private presenceRev: number | null = null;
+  /**
+   * Presence writes that failed since the last one that landed. The first
+   * failure of a streak is a WARN and the rest are DEBUG: the observation tick
+   * retries every `pollIntervalMs` until one lands, and a line per tick would
+   * bury the one that says why.
+   */
+  private presenceFailures = 0;
   /**
    * The verdict a quit wrote (`handoff`, or a quit prompt's answer). While it
    * is held, a mode change or an observed CLI write does not overwrite it:
@@ -302,13 +309,25 @@ export class HostLifecycleService {
 
   /**
    * One observation: follow a policy change nobody in this process made (the
-   * CLI) with a non-destructive presence rewrite, then refresh the view. A
-   * presence that was never published (the identity probe failed, or the
-   * lanes are off) is not started here.
+   * CLI) with a non-destructive presence rewrite, then refresh the view.
+   *
+   * It is also the retry of a presence that never landed - an identity probe
+   * that timed out on a loaded machine, or a failed write. Without one the
+   * supervisor never adopts this desktop, so Linked's promise (the host ends
+   * with the app, crash included) silently does not hold for the rest of its
+   * life (F-WIN-2). The supervisor adopts on whichever tick first sees the
+   * presence alive, so a late write restores it. A held quit verdict is what
+   * gets published if one is held; with the lanes off there is nothing to
+   * publish.
    */
   private async observe(): Promise<void> {
     const read = await this.store.readPolicy();
-    if (
+    if (this.lanesActive() && this.presenceRev === null) {
+      await this.publishPresence(
+        this.quitVerdict ?? presenceVerdictForMode(read.mode),
+        read.rev,
+      );
+    } else if (
       this.lanesActive() &&
       this.quitVerdict === null &&
       this.presenceRev !== null &&
@@ -614,12 +633,29 @@ export class HostLifecycleService {
   ): Promise<QuitVerdictWriteOutcome> {
     try {
       const outcome = await this.store.writePresence(onExit, rev);
-      if (outcome === "written") this.presenceRev = rev;
+      if (outcome === "written") {
+        this.presenceRev = rev;
+        if (this.presenceFailures > 0) {
+          log.info("[host-lifecycle] presence written after retry", {
+            onExit,
+            rev,
+            attempts: this.presenceFailures + 1,
+          });
+          this.presenceFailures = 0;
+        }
+        return outcome;
+      }
+      this.notePresenceFailure("[host-lifecycle] presence not written", {
+        reason: "identity-unavailable",
+        onExit,
+        rev,
+      });
       return outcome;
     } catch (error) {
-      log.warn("[host-lifecycle] presence write failed", {
-        rev,
+      this.notePresenceFailure("[host-lifecycle] presence write failed", {
         reason: "write-failed",
+        onExit,
+        rev,
         code: errnoCode(error),
       });
       return "write-failed";
@@ -627,6 +663,21 @@ export class HostLifecycleService {
   }
 
   // ---- Plumbing --------------------------------------------------------------
+
+  /**
+   * A presence write that did not land. WARN for the first of a streak, DEBUG
+   * for the retries after it (see `presenceFailures`); a write that lands
+   * ends the streak with one INFO naming the attempts.
+   */
+  private notePresenceFailure(message: string, fields: SafeLogFields): void {
+    this.presenceFailures += 1;
+    const line = { ...fields, attempt: this.presenceFailures };
+    if (this.presenceFailures === 1) {
+      log.warn(message, line);
+    } else {
+      log.debug(message, line);
+    }
+  }
 
   private async emitIfChanged(): Promise<void> {
     if (this.disposed || this.listeners.size === 0) return;

@@ -170,20 +170,16 @@ export class HostLifecyclePolicyStore {
    * `rev` the verdict was derived from. A new desktop always overwrites
    * whatever record is there, so a record a crashed instance left behind is
    * replaced rather than reasoned about.
+   *
+   * `identity-unavailable` is returned, not logged: the caller retries it and
+   * owns how often that is worth a line (`HostLifecycleService`).
    */
   async writePresence(
     onExit: DesktopPresenceOnExit,
     policyRev: number,
   ): Promise<DesktopPresenceWriteOutcome> {
     const identity = await this.readOwnStartIdentity();
-    if (identity === null) {
-      log.warn("[host-lifecycle] presence not written", {
-        reason: "identity-unavailable",
-        onExit,
-        rev: policyRev,
-      });
-      return "identity-unavailable";
-    }
+    if (identity === null) return "identity-unavailable";
     const presence: DesktopPresence = {
       v: 1,
       pid: this.ownPid,

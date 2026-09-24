@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import type { DesktopPresenceOnExit } from "@traycer/protocol/config/desktop-presence";
 import {
   serializeHostLifecyclePolicy,
@@ -37,7 +38,7 @@ import {
 } from "../host-lifecycle-transitions";
 
 vi.mock("../../app/logger", () => ({
-  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
   describeLogError: (cause: unknown) => String(cause),
 }));
 
@@ -176,15 +177,16 @@ let hostHome: string;
 let pidFile: string;
 let created: HostLifecycleService[];
 
-function makeHarness(
+function makeHarnessWithIdentity(
   capability: LocalHostCapability,
   pollIntervalMs: number,
+  readOwnStartIdentity: () => Promise<ProcessStartIdentity | null>,
 ): Harness {
   const store = new HostLifecyclePolicyStore({
     hostHomeDir: hostHome,
     pidMetadataFile: pidFile,
     ownPid: OWN_PID,
-    readOwnStartIdentity: () => Promise.resolve(OWN_IDENTITY),
+    readOwnStartIdentity,
     now: () => new Date("2026-09-24T10:00:00.000Z"),
   });
   const controller = new FakeController();
@@ -202,6 +204,15 @@ function makeHarness(
     views.push(view);
   });
   return { service, store, controller, records, views };
+}
+
+function makeHarness(
+  capability: LocalHostCapability,
+  pollIntervalMs: number,
+): Harness {
+  return makeHarnessWithIdentity(capability, pollIntervalMs, () =>
+    Promise.resolve(OWN_IDENTITY),
+  );
 }
 
 async function writeCliPolicy(
@@ -975,5 +986,189 @@ describe("refreshDefinitionAfterWrite (M1)", () => {
 
     expect(result.kind).toBe("applied");
     expect(harness.controller.refreshCalls.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-WIN-2: a presence that never landed - a timed-out identity probe at
+// launch, or a failed write - is retried by `observe()` on every later tick
+// instead of being lost for the process's whole life. Mechanism, not just end
+// state: call counts on `store.writePresence` and the attempt-numbered log
+// lines `notePresenceFailure` produces.
+//
+// A short poll interval (real timers, like the existing "poll backstop"
+// test above) drives the ticks; `identitySequence` controls exactly which
+// call to `readOwnStartIdentity` fails and which succeeds.
+// ---------------------------------------------------------------------------
+describe("presence retry (F-WIN-2)", () => {
+  /** Answers `answers[call]`, repeating the last entry once exhausted. */
+  function identitySequence(
+    answers: readonly (ProcessStartIdentity | null)[],
+  ): () => Promise<ProcessStartIdentity | null> {
+    let call = 0;
+    return () => {
+      const index = Math.min(call, answers.length - 1);
+      call += 1;
+      return Promise.resolve(answers[index] ?? null);
+    };
+  }
+
+  /** Wait for one more observation tick to complete, via a fired watcher edge. */
+  async function fireOneTick(
+    harness: Harness,
+    writeSpy: MockInstance<HostLifecyclePolicyStore["writePresence"]>,
+    expectedCalls: number,
+  ): Promise<void> {
+    harness.records.fire();
+    await vi.waitFor(() => {
+      expect(writeSpy).toHaveBeenCalledTimes(expectedCalls);
+    });
+  }
+
+  it("D1: a launch presence that failed identity is retried on the next tick and lands with an attempts count", async () => {
+    const harness = makeHarnessWithIdentity(
+      "managed",
+      POLL_MS,
+      identitySequence([null, OWN_IDENTITY]),
+    );
+    const writeSpy = vi.spyOn(harness.store, "writePresence");
+    await writeCliPolicy(harness.store, 2, "ask");
+
+    await harness.service.writeLaunchPresence();
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(await harness.store.readPresence()).toBeNull();
+
+    const infoCallsBefore = vi.mocked(log.info).mock.calls.length;
+    harness.service.startObserving();
+    await fireOneTick(harness, writeSpy, 2);
+    const presence = await harness.store.readPresence();
+    expect(presence?.onExit).toBe("keep");
+    expect(presence?.policyRev).toBe(2);
+    const infoCalls = vi.mocked(log.info).mock.calls.slice(infoCallsBefore);
+    expect(infoCalls).toContainEqual([
+      "[host-lifecycle] presence written after retry",
+      { onExit: "keep", rev: 2, attempts: 2 },
+    ]);
+
+    // The write already landed: a further tick does not call it again.
+    harness.records.fire();
+    await settle();
+    expect(writeSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("D2: repeated tick failures warn once for the streak, then log DEBUG for the rest", async () => {
+    const harness = makeHarnessWithIdentity("managed", POLL_MS, () =>
+      Promise.resolve(null),
+    );
+    const writeSpy = vi.spyOn(harness.store, "writePresence");
+    await writeCliPolicy(harness.store, 1, "ask");
+
+    const warnCallsBefore = vi.mocked(log.warn).mock.calls.length;
+    const debugCallsBefore = vi.mocked(log.debug).mock.calls.length;
+    harness.service.startObserving();
+    await vi.waitFor(() => {
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+    });
+    await fireOneTick(harness, writeSpy, 2);
+    await fireOneTick(harness, writeSpy, 3);
+
+    const warnCalls = vi
+      .mocked(log.warn)
+      .mock.calls.slice(warnCallsBefore)
+      .filter(
+        ([message]) => message === "[host-lifecycle] presence not written",
+      );
+    const debugCalls = vi
+      .mocked(log.debug)
+      .mock.calls.slice(debugCallsBefore)
+      .filter(
+        ([message]) => message === "[host-lifecycle] presence not written",
+      );
+    expect(warnCalls.length).toBe(1);
+    expect(warnCalls[0]?.[1]).toMatchObject({ attempt: 1 });
+    expect(debugCalls.length).toBe(2);
+    expect(
+      debugCalls.map(([, fields]) => (fields as { attempt: number }).attempt),
+    ).toEqual([2, 3]);
+  });
+
+  it("D3: a quit verdict held through a failed identity probe is what the retry publishes, not the mode's verdict", async () => {
+    const harness = makeHarnessWithIdentity(
+      "managed",
+      POLL_MS,
+      identitySequence([null, OWN_IDENTITY]),
+    );
+    // "ask"'s presence verdict is "keep" - the retry must publish the held
+    // "stop" quit verdict instead.
+    await writeCliPolicy(harness.store, 1, "ask");
+
+    expect(await harness.service.writeQuitVerdict("stop")).toBe(
+      "identity-unavailable",
+    );
+    expect(await harness.store.readPresence()).toBeNull();
+
+    const writeSpy = vi.spyOn(harness.store, "writePresence");
+    harness.service.startObserving();
+    await fireOneTick(harness, writeSpy, 1);
+    const presence = await harness.store.readPresence();
+    expect(presence?.onExit).toBe("stop");
+  });
+
+  it("D4a: booted with the none capability, observation ticks never call writePresence", async () => {
+    const harness = makeHarnessWithIdentity("none", POLL_MS, () =>
+      Promise.resolve(null),
+    );
+    const writeSpy = vi.spyOn(harness.store, "writePresence");
+    harness.service.startObserving();
+    harness.records.fire();
+    harness.records.fire();
+    await settle();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("D4b: after none is committed this session, observation ticks never call writePresence", async () => {
+    const harness = makeHarnessWithIdentity("managed", POLL_MS, () =>
+      Promise.resolve(OWN_IDENTITY),
+    );
+    await harness.service.writeLaunchPresence();
+    const committed = await runNone(harness, "force");
+    expect(committed.kind).toBe("applied");
+
+    const writeSpy = vi.spyOn(harness.store, "writePresence");
+    harness.service.startObserving();
+    harness.records.fire();
+    harness.records.fire();
+    await settle();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("D5: a thrown write (write-failed) at launch is also retried on the next tick", async () => {
+    const harness = makeHarnessWithIdentity("managed", POLL_MS, () =>
+      Promise.resolve(OWN_IDENTITY),
+    );
+    await writeCliPolicy(harness.store, 3, "ask");
+    const realWritePresence = harness.store.writePresence.bind(harness.store);
+    const writeSpy = vi
+      .spyOn(harness.store, "writePresence")
+      .mockImplementationOnce(async () => {
+        throw new Error("disk full");
+      });
+
+    const warnCallsBefore = vi.mocked(log.warn).mock.calls.length;
+    await harness.service.writeLaunchPresence();
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(await harness.store.readPresence()).toBeNull();
+    const warnCalls = vi.mocked(log.warn).mock.calls.slice(warnCallsBefore);
+    expect(warnCalls).toContainEqual([
+      "[host-lifecycle] presence write failed",
+      expect.objectContaining({ reason: "write-failed", attempt: 1 }),
+    ]);
+
+    writeSpy.mockImplementation(realWritePresence);
+    harness.service.startObserving();
+    await fireOneTick(harness, writeSpy, 2);
+    const presence = await harness.store.readPresence();
+    expect(presence?.onExit).toBe("keep");
+    expect(presence?.policyRev).toBe(3);
   });
 });

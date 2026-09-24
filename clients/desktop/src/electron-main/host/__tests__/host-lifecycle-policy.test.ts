@@ -35,6 +35,8 @@ vi.mock("../../app/logger", () => ({
   describeLogError: (cause: unknown) => String(cause),
 }));
 
+import { log } from "../../app/logger";
+
 const OWN_PID = 4242;
 const NOW = new Date("2026-09-24T10:00:00.000Z");
 
@@ -313,8 +315,9 @@ describe("HostLifecyclePolicyStore presence", () => {
     });
   });
 
-  it("writePresence with a null identity writes no file", async () => {
+  it("D6: writePresence with a null identity returns identity-unavailable, writes no file, and logs nothing (the caller retries and owns the log line)", async () => {
     const store = makeStore(null);
+    const warnCallsBefore = vi.mocked(log.warn).mock.calls.length;
     expect(await store.writePresence("keep", 1)).toBe("identity-unavailable");
     expect(await store.readPresence()).toBeNull();
     let exists = true;
@@ -324,6 +327,7 @@ describe("HostLifecyclePolicyStore presence", () => {
       exists = false;
     }
     expect(exists).toBe(false);
+    expect(vi.mocked(log.warn).mock.calls.length).toBe(warnCallsBefore);
   });
 
   it("removeOwnPresence removes a record naming this pid and identity", async () => {
