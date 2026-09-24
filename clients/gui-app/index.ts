@@ -5,6 +5,7 @@ export {
   setMobileAppPlatform,
   setPhoneLayoutOnly,
 } from "@/lib/mobile-app";
+export { deferRestoredEpicOnColdBoot } from "@/lib/mobile-cold-boot-landing";
 export {
   DESKTOP_RETENTION_PROFILE,
   MOBILE_RETENTION_PROFILE,

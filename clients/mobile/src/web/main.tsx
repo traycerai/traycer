@@ -14,6 +14,7 @@ import {
   DESKTOP_RETENTION_PROFILE,
   MOBILE_RETENTION_PROFILE,
   TraycerApp,
+  deferRestoredEpicOnColdBoot,
   hostRpcRegistry,
   setMobileApp,
   setMobileAppPlatform,
@@ -201,6 +202,12 @@ function bootstrap(): void {
       ? MOBILE_RETENTION_PROFILE
       : DESKTOP_RETENTION_PROFILE,
   );
+  // MEMORY, too: a cold launch lands on History instead of mounting the epic
+  // the user last had open, so its session and runtime worker start only when
+  // they open it again. Before the first render, because the restored
+  // selection is what the shell mounts; self-gated on the product flag set
+  // above, so the dev browser tab keeps its restored epic.
+  deferRestoredEpicOnColdBoot();
   // The shell's platform, for copy that must name the right update channel
   // (TestFlight / the App Store vs Google Play). Gated on the same native
   // check as the flag above: the dev browser tab reports platform "web" and

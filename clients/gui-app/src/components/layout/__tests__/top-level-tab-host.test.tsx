@@ -95,6 +95,8 @@ import {
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { setMobileApp } from "@/lib/mobile-app";
+import { deferRestoredEpicOnColdBoot } from "@/lib/mobile-cold-boot-landing";
 
 const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
 
@@ -829,6 +831,85 @@ describe("<TopLevelTabHost />", () => {
         .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
         .contains(screen.getByTestId("landing-terminal-panel-body")),
     ).toBe(true);
+  });
+});
+
+describe("TopLevelTabHost on a mobile cold boot (deferRestoredEpicOnColdBoot)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+  });
+
+  it("lands on History without mounting the restored epic, and keeps its tab", async () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    setSingle(EPIC_A, [EPIC_A, DRAFT_A]);
+    setMobileApp(true);
+
+    deferRestoredEpicOnColdBoot();
+    render(<TopLevelTabHost />);
+
+    expect(await screen.findByTestId("history-surface-body")).toBeTruthy();
+    expect(screen.queryByTestId("epic-surface-content-epic-a")).toBeNull();
+    expect(screen.queryByTestId("top-level-surface-epic-epic-a")).toBeNull();
+    const layout = useTabsStore.getState();
+    expect(layout.stripOrder.map(tabRefKey)).toContain(tabRefKey(EPIC_A));
+    expect(layout.stripOrder.map(tabRefKey)).toContain(tabRefKey(DRAFT_A));
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(EPIC_A.id);
+
+    // Opening it again is an ordinary activation of the tab that stayed.
+    act(() => useTabsStore.getState().focusRef(EPIC_A));
+    expect(
+      await screen.findByTestId("epic-surface-content-epic-a"),
+    ).toBeTruthy();
+  });
+
+  it("moves off an epic that is one side of a restored split", async () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    setSplit(EPIC_A, DRAFT_A, "right");
+    setMobileApp(true);
+
+    deferRestoredEpicOnColdBoot();
+    render(<TopLevelTabHost />);
+
+    expect(await screen.findByTestId("history-surface-body")).toBeTruthy();
+    expect(screen.queryByTestId("epic-surface-content-epic-a")).toBeNull();
+  });
+
+  it("leaves a restored draft selection alone", () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    setSingle(DRAFT_A, [EPIC_A, DRAFT_A]);
+    setMobileApp(true);
+
+    deferRestoredEpicOnColdBoot();
+
+    const layout = useTabsStore.getState();
+    expect(layout.activeItemId).toBe(`tab:draft:${DRAFT_A.id}`);
+    expect(layout.systemTabs.history).toBeNull();
+  });
+
+  it("leaves the restored epic selected off the installed app", async () => {
+    seedSources([EPIC_A]);
+    setSingle(EPIC_A, [EPIC_A]);
+
+    deferRestoredEpicOnColdBoot();
+    render(<TopLevelTabHost />);
+
+    expect(
+      await screen.findByTestId("epic-surface-content-epic-a"),
+    ).toBeTruthy();
+    expect(useTabsStore.getState().systemTabs.history).toBeNull();
   });
 });
 
