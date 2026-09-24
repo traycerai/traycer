@@ -39,6 +39,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   BrowsersPanelActions,
   BrowsersPanelBody,
+  BrowsersPanelEmptyState,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import {
@@ -992,7 +993,36 @@ describe("BrowsersPanelBody", () => {
 
     expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
     expect(screen.getByText("No browsers yet.")).toBeTruthy();
+    expect(screen.getByText("Agents open theirs here too.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add browser" })).toBeTruthy();
+  });
+
+  it("says there are no browsers on this host, not none at all, when the task has browsers on another machine", () => {
+    // "No browsers yet." above a row saying the task has a browser elsewhere
+    // contradicts itself, and "Agents open theirs here too." points at the
+    // wrong machine: the row exists because an agent's browser was placed on
+    // another one. The mobile switcher renders this same component.
+    const onShowHost = vi.fn();
+    render(
+      wrapper(
+        <BrowsersPanelEmptyState
+          onAddBrowser={() => undefined}
+          isAdding={false}
+          elsewhere={[{ hostId: "host-2", tabCount: 1 }]}
+          onShowHost={onShowHost}
+        />,
+      ),
+    );
+
+    expect(screen.getByText("No browsers on this host.")).toBeTruthy();
+    expect(screen.queryByText("No browsers yet.")).toBeNull();
+    expect(screen.queryByText("Agents open theirs here too.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add browser" })).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "1 browser on Work Mac" }),
+    );
+    expect(onShowHost).toHaveBeenCalledWith("host-2");
   });
 
   // B3: closing the last tab leaves the session dormant on the host. The panel
