@@ -941,7 +941,17 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // The host-level forwards listing: only the newest answer means anything.
-  "portForward.listForHost": { ...LATEST_SCHEDULING, poll: null },
+  //
+  // Opt-in polling (`poll: true`), for one caller: Settings ▸ Overview ▸ Ports,
+  // whose tab trigger carries a count of these rows. The host has no change
+  // signal for port forwards - nothing is pushed when a forward stops, binds or
+  // is cut from another machine - so with no cadence the count kept whatever
+  // the page read on open. Every 15 seconds while the page is open and the
+  // window is visible (never in the background) was the user's call.
+  "portForward.listForHost": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
   // Stopping a forward and cutting a lease both tear down live sockets.
   "portForward.stop": {
     mode: "fifo",

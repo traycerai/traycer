@@ -5,12 +5,20 @@ import {
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
 
-interface HostUpdateCompletion {
+export interface HostUpdateCompletion {
   readonly dismissed: boolean;
   readonly dismiss: (() => void) | null;
 }
 
-/** Dismiss and auto-collapse successful update notices in host Settings. */
+/**
+ * Dismiss and auto-collapse successful update notices in host Settings.
+ *
+ * The Overview calls this once, at PANEL level, and hands the answer to both
+ * readers: the Status tab's success card and the header's "Updated to vX"
+ * pill. Status mounts only once visited, so a timer that lived in the card
+ * would never start for someone who stayed on another tab, and the pill
+ * would never leave.
+ */
 export function useHostUpdateCompletion(
   view: FleetUpdateView,
 ): HostUpdateCompletion {

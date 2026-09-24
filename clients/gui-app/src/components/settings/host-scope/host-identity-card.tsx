@@ -73,6 +73,13 @@ export function HostIdentityCard(props: {
    */
   readonly nameInput: ReactNode | null;
   /**
+   * Whether the name, its pencil and the Local/Remote tag may wrap onto a
+   * second line. `false` on a phone, whose name row never wraps: the name
+   * gives up its width and truncates, and the pencil, the tag and the
+   * `actions` beside them keep theirs.
+   */
+  readonly nameRowWraps: boolean;
+  /**
    * What the HOST says is working (`host.status@1.2`'s breakdown + total, or
    * the @1.1 count alone). `busySessionCount`/`busyBreakdown` of `null` mean
    * the host did not say — which is not the same as zero and must not render
@@ -114,6 +121,24 @@ export function HostIdentityCard(props: {
    * opposite the title.
    */
   readonly healthAction: ReactNode;
+  /**
+   * The live update pill, last on the health line, or `null`.
+   *
+   * A SLOT like `healthAction`, for the same reason: the pill reads the
+   * page's update projection, its completion timer and the selected tab,
+   * and all three are the panel's. The panel withholds it on Status (the
+   * update card is the answer there), while the health word reads
+   * "Restarting…", and on a phone, where it is a strip above the section
+   * dropdown instead.
+   */
+  readonly updatePill: ReactNode;
+  /**
+   * What sits under the header inside the same card: the Overview's tab bar
+   * and tab bodies. The header is PINNED - it never shrinks - and the card is
+   * a column that gives up its automatic floor (`min-h-0`), so under a bounded
+   * pane the children take what is left and scroll inside it. Unbounded (a
+   * phone), the card is as tall as its contents and scrolls with the page.
+   */
   readonly children: ReactNode;
 }): ReactNode {
   const { host } = props;
@@ -129,17 +154,23 @@ export function HostIdentityCard(props: {
 
   return (
     <section
-      className="overflow-hidden rounded-xl border border-border/60 bg-card/40"
+      className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-card/40"
       data-testid="host-identity-card"
       aria-label={`${props.displayName} overview`}
     >
-      <div className="flex min-w-0 items-start gap-3 px-5 py-4">
+      <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 py-4">
         <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
           <HostGlyph host={host} className="size-4.5" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-x-2 gap-y-1",
+                props.nameRowWraps && "flex-wrap",
+              )}
+              data-testid="host-identity-name-row"
+            >
               {props.nameInput === null ? (
                 <>
                   <h2 className="min-w-0 truncate font-semibold text-foreground text-title-sm">
@@ -221,6 +252,7 @@ export function HostIdentityCard(props: {
               busySessionCount={props.busySessionCount}
               busyBreakdown={props.busyBreakdown}
             />
+            {props.updatePill}
           </div>
         </div>
       </div>

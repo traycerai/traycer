@@ -110,8 +110,8 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -924,7 +924,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
     phase = "quiet";
     await vi.advanceTimersByTimeAsync(11_000);
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("installation");
     fireEvent.click(
       await screen.findByTestId("host-overview-service-deregister"),
     );

@@ -42,7 +42,11 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
-import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { HOST_OVERVIEW_TABS } from "@/components/settings/panels/host-overview.definitions";
+import {
+  buildOverviewHostFixture,
+  selectHostOverviewTab,
+} from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 afterEach(() => {
   cleanup();
@@ -104,7 +108,8 @@ interface OverviewSemanticSnapshot {
   readonly kindTagLabel: string | null;
   readonly recoveryConsolePresent: boolean;
   /**
-   * The danger-zone removal controls the surface comparison filters out.
+   * Every testid inside the Danger zone — the group and its removal controls —
+   * which the surface comparison filters out.
    *
    * Captured rather than merely excluded, because "excluded" and "unasserted"
    * are not the same thing and the difference is where a regression hides: with
@@ -127,14 +132,16 @@ interface OverviewSemanticSnapshot {
    * the remainder directly comparable: a placeholder would itself differ,
    * because one side never had the fragment at all.
    *
-   * Only the REMOVAL ROW is dropped out of the danger zone — not the zone. An
-   * earlier version discarded the whole subtree, which took the SHARED
-   * File-edit-snapshots row's prose with it and left a future `isLocalMachine`
-   * fork there invisible: the same blind spot, one card over. The removal row
-   * alone is the settled local/remote exception (its presence is still compared
-   * via `removalTestIds` above, and the zone's behaviour is covered end-to-end
-   * by `host-danger-zone.test.tsx`); everything else — identity card, Updates,
-   * Installation, and the shared danger-zone row — is compared verbatim.
+   * The Danger zone is dropped whole, and the whole zone is now exactly the
+   * removal plane: it draws removal rows only, and nothing at all for a host
+   * with no removal action, so its heading splits local from remote just as
+   * the row under it does. The File edit snapshots row that once shared the
+   * zone — the reason an earlier version dropped only the removal row — lives
+   * on the Data tab now, where its prose is compared with everything else. The
+   * zone's presence is still compared via `removalTestIds` above, and its
+   * behaviour is covered end-to-end by `host-danger-zone.test.tsx`; everything
+   * else — identity card, Updates, Ports, Data, Installation — is compared
+   * verbatim.
    */
   readonly bodyTextWithoutLocalOnlyDifferences: string;
 }
@@ -169,11 +176,12 @@ const LOCAL_ONLY_SNAPSHOT_DIFFERENCES = [
   // The kind tag beside the name reads "Local" on one and "Remote" on the
   // other. One tag, one slot, one word different — asserted verbatim below.
   "kindTagLabel",
-  // The danger zone's removal row sits on a third capability plane the page was
-  // never meant to unify: "Remove Traycer" uninstalls components from THIS
-  // computer over the CLI bridge, "Remove from account" ends registry
-  // membership and touches nothing on the machine. They are, in that file's own
-  // words, "not two versions of one action". Asserted below per variant.
+  // The Danger zone sits on a third capability plane the page was never meant
+  // to unify: "Remove Traycer" uninstalls components from THIS computer over
+  // the CLI bridge, "Remove from account" ends registry membership and touches
+  // nothing on the machine. They are, in that file's own words, "not two
+  // versions of one action", and the zone draws nothing else. Asserted below
+  // per variant.
   "removalTestIds",
 ] as const satisfies readonly (keyof OverviewSemanticSnapshot)[];
 
@@ -202,8 +210,7 @@ function normalizeTestId(testId: string, hostId: string): string {
 }
 
 /**
- * The Danger Zone's REMOVAL verb, filtered out by name rather than folded
- * into a broader "ignore the danger zone" carve-out.
+ * The Danger Zone — the page's REMOVAL plane, set aside as one subtree.
  *
  * `HostDangerZone`'s own comments settle this: "Remove Traycer" uninstalls
  * components from THIS computer over the CLI bridge; "Remove from account"
@@ -212,22 +219,22 @@ function normalizeTestId(testId: string, hostId: string): string {
  * fixture's `MockRunnerHost` carries none) gets NEITHER control, and a
  * registered remote host gets the account one. That is not the Overview
  * restructure's "one page, same components" claim failing; it is a third
- * capability plane the page was never meant to unify. The snapshots row this
- * suite DOES share — clear file-edit snapshots, its size read — stays in the
- * comparison, so a real regression there still fails the test.
+ * capability plane the page was never meant to unify.
+ *
+ * The whole group rather than its removal controls, because the zone draws
+ * removal rows ONLY and renders nothing without one: its heading and its own
+ * testid split local from remote exactly as the row does. Set aside is not
+ * unasserted — `removalTestIds` captures every testid in here and the tests
+ * pin it per variant, so a row of any other kind growing in the zone fails.
+ * The snapshots row the zone used to share (clear file-edit snapshots, its
+ * size read) is on the Data tab now and stays in the comparison, so a real
+ * regression there still fails the test.
  */
-const DANGER_ZONE_REMOVAL_TEST_IDS: ReadonlySet<string> = new Set([
-  "settings-remove-traycer",
-  "settings-remove-traycer-spinner",
-  "settings-quit-after-uninstall",
-  "settings-remove-host-from-account",
-  "settings-remove-host-from-account-spinner",
-]);
-const DANGER_ZONE_REMOVAL_BUTTON_NAMES: ReadonlySet<string> = new Set([
-  "Remove Traycer",
-  "Quit Traycer",
-  "Remove from account",
-]);
+const DANGER_ZONE_SELECTOR = '[data-testid="host-danger-zone"]';
+
+function insideDangerZone(node: Element): boolean {
+  return node.closest(DANGER_ZONE_SELECTOR) !== null;
+}
 
 function accessibleButtonName(button: Element): string {
   const ariaLabel = button.getAttribute("aria-label");
@@ -325,17 +332,30 @@ async function renderOverviewSnapshot(options: {
   const displayedName = (await screen.findByText(options.effectiveName))
     .textContent;
 
-  const testIds = Array.from(view.container.querySelectorAll("[data-testid]"))
-    .map((node) => node.getAttribute("data-testid") ?? "")
-    .filter((testId) => !DANGER_ZONE_REMOVAL_TEST_IDS.has(testId))
-    .map((testId) => normalizeTestId(testId, options.hostId))
+  // Visit every tab so its body force-mounts: the comparison below reads the
+  // WHOLE container, and an unvisited tab's body is not in the DOM at all
+  // (`host-overview-tabs.tsx`'s `forceMount={visited.has(value) ? true :
+  // undefined}`) — without this, only the default Status tab's controls would
+  // ever reach the snapshot, and the Danger Zone's local/remote removal split
+  // (the whole point of `removalTestIds`) would silently compare two empty
+  // lists.
+  for (const tab of HOST_OVERVIEW_TABS) {
+    await selectHostOverviewTab(tab);
+  }
+
+  const testIdNodes = Array.from(
+    view.container.querySelectorAll("[data-testid]"),
+  );
+  const testIds = testIdNodes
+    .filter((node) => !insideDangerZone(node))
+    .map((node) =>
+      normalizeTestId(node.getAttribute("data-testid") ?? "", options.hostId),
+    )
     .sort();
 
-  const removalTestIds = Array.from(
-    view.container.querySelectorAll("[data-testid]"),
-  )
+  const removalTestIds = testIdNodes
+    .filter((node) => insideDangerZone(node))
     .map((node) => node.getAttribute("data-testid") ?? "")
-    .filter((testId) => DANGER_ZONE_REMOVAL_TEST_IDS.has(testId))
     .sort();
 
   // REACH OF THIS COMPARISON: the rendered panel subtree only. Radix renders
@@ -346,14 +366,13 @@ async function renderOverviewSnapshot(options: {
   //
   // Node-exact subtraction, never global string deletion.
   //
-  // An earlier version lifted out the WHOLE danger-zone subtree and deleted the
-  // tag text as a string. Both were too blunt, in the precise class of
-  // blind spot this comparison exists to close: the danger zone has one SHARED
-  // RPC-backed row (File edit snapshots) whose prose must match, so discarding
-  // the subtree would let a future `isLocalMachine` fork there stay green; and
-  // deleting "This computer" as a string would also erase those words from any
-  // real fork that happened to contain them. Removing the exact nodes leaves
-  // everything else — including the shared danger-zone row — compared verbatim.
+  // Deleting the kind tag's word as a string would also erase it from any real
+  // fork that happened to contain it — the blind spot this comparison exists
+  // to close. Removing the exact nodes leaves everything else compared
+  // verbatim. The Danger zone goes as ONE node: it holds removal rows and
+  // nothing else, and the shared File edit snapshots row that once made
+  // dropping it whole too blunt now lives on the Data tab, inside the
+  // comparison (see `DANGER_ZONE_SELECTOR`).
   const bodyRoot = view.container.cloneNode(true);
   if (!(bodyRoot instanceof HTMLElement)) {
     throw new Error("expected an element clone for the body-text comparison");
@@ -366,17 +385,25 @@ async function renderOverviewSnapshot(options: {
     // `SHARED_ROW_NAME`.
     .split(options.hostId)
     .join("<HOST_ID>")
+    // The Ports tab's port-forwards read never settles in this fixture, so its
+    // loading line renders `AgentSpinningDots`' braille glyph the whole
+    // time — real-clock-driven, one 80ms frame at a
+    // time, so which frame two SEQUENTIAL renders land on is not a fact about
+    // local/remote parity. Normalized for the same reason the host id is:
+    // real variance the comparison must not fail on.
+    .replace(/[⠀-⣿]/gu, "<SPINNER_FRAME>")
     .replace(/\s+/gu, " ")
     .trim();
 
   const buttonNames = within(view.container)
     .getAllByRole("button")
+    .filter((button) => !insideDangerZone(button))
     .map(accessibleButtonName)
-    .filter((name) => !DANGER_ZONE_REMOVAL_BUTTON_NAMES.has(name))
     .sort();
 
   const headingTexts = within(view.container)
     .getAllByRole("heading")
+    .filter((heading) => !insideDangerZone(heading))
     .map((heading) => heading.textContent.trim())
     .sort();
 
@@ -417,6 +444,27 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(omitLocalOnlyDifferences(remote)).toEqual(
       omitLocalOnlyDifferences(local),
     );
+
+    // The Installation tab's shared half is INSIDE that equality, not beside
+    // it: About this host's rows (their labels are compared as prose, their
+    // per-host Host ID normalized like every other id), the install record and
+    // the OS service group. Pinned on `local` — `remote` equals it — so the
+    // comparison cannot pass by both sides losing them. The command-line tools
+    // hint follows its presence rule on both: it needs a local CLI bridge,
+    // which neither variant's `MockRunnerHost` carries.
+    expect(local.testIds).toEqual(
+      expect.arrayContaining([
+        "host-overview-about",
+        "host-overview-about-host-id",
+        "host-overview-about-added",
+        "host-overview-about-last-seen",
+        "host-overview-about-version",
+        "host-overview-about-platform",
+        "host-overview-install-record",
+        "host-overview-service",
+      ]),
+    );
+    expect(local.testIds).not.toContain("host-overview-command-line-tools");
 
     // The name came from `host.identity.get`'s `effectiveName` in BOTH cases —
     // not the scope row's `name`, which was deliberately different.
@@ -470,23 +518,34 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
 
     // The third named difference, asserted rather than just filtered.
     //
-    // A registered remote host gets the account-removal control. The local
-    // variant gets NEITHER control here — not because local hosts have none,
-    // but because this fixture's `MockRunnerHost` carries no CLI bridge and
-    // `RemoveTraycerRow` renders nothing without one. Both halves are stated so
-    // that deleting the remote row, or growing a local one that should not
-    // exist without a bridge, fails here instead of passing as "they agree".
+    // A registered remote host gets the zone with the account-removal control
+    // in it, and nothing else. The local variant gets NO zone here — not
+    // because local hosts have no removal verb, but because this fixture's
+    // `MockRunnerHost` carries no CLI bridge and `HostDangerZone` draws nothing
+    // without one. Both halves are stated so that deleting the remote row,
+    // growing a local zone that should not exist without a bridge, or adding a
+    // row of any other kind to the zone fails here instead of passing as "they
+    // agree".
     expect(remote.removalTestIds).toEqual([
+      "host-danger-zone",
       "settings-remove-host-from-account",
     ]);
     expect(local.removalTestIds).toEqual([]);
   });
 
-  it("shows the RPC's hostVersion on the identity line, and NEVER the stale registry row version", async () => {
+  it("shows the RPC's hostVersion on the health line and the version card, and the registry version only in About this host's labelled row", async () => {
     // The reviewer's actual finding: both a `host.status.hostVersion` and the
-    // registry row's `version` used to render on one card at once. The row
-    // fixture defaults `version` to "1.4.2" (`hostScopeOptionFixture`); this
-    // pins the RPC's "1.5.0" as the ONLY version shown, for both variants.
+    // registry row's `version` used to render as the host's version at once.
+    // The registry says "1.4.2" here twice over — the scope row's `version`
+    // (`hostScopeOptionFixture`'s default) and the account record's
+    // `status.appVersion` (`registryItemFor`) — against the RPC's "1.5.0".
+    //
+    // The account's figure has ONE sanctioned place now: Installation ▸ About
+    // this host shows what the account last heard, labelled "Last reported
+    // version" (a recorded product decision). Everywhere that states the
+    // version the host is RUNNING — the header's health line and the Status
+    // tab's version card — must still say "1.5.0" and never "1.4.2", for both
+    // variants, and "1.4.2" must appear nowhere but that one labelled row.
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -494,9 +553,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       rowName: SHARED_ROW_NAME,
       hostVersion: "1.5.0",
     });
-    const localCard = screen.getByTestId("host-identity-card");
-    expect(localCard.textContent).toContain("v1.5.0");
-    expect(localCard.textContent).not.toContain("1.4.2");
+    expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
     cleanup();
 
     const remote = await renderOverviewSnapshot({
@@ -506,9 +563,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       rowName: SHARED_ROW_NAME,
       hostVersion: "1.5.0",
     });
-    const remoteCard = screen.getByTestId("host-identity-card");
-    expect(remoteCard.textContent).toContain("v1.5.0");
-    expect(remoteCard.textContent).not.toContain("1.4.2");
+    expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
 
     // Belt and braces on the fixture itself: if this ever reads "1.5.0" back
     // from the row instead of the RPC, the whole pin above is vacuous.
@@ -551,24 +606,49 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
   }
   nodes.push(...settledTags);
 
-  // Only the REMOVAL row is the settled danger-zone exception. Located by
-  // walking from its control up to the row that is a direct child of the
-  // group's content wrapper, so the shared snapshots row beside it stays in the
-  // compared prose.
-  const group = root.querySelector('[data-testid="host-danger-zone"]');
-  const content = group?.querySelector(":scope > div") ?? null;
-  if (content !== null) {
-    for (const testId of DANGER_ZONE_REMOVAL_TEST_IDS) {
-      const control = content.querySelector(`[data-testid="${testId}"]`);
-      if (control === null) continue;
-      let row: Element = control;
-      while (row.parentElement !== null && row.parentElement !== content) {
-        row = row.parentElement;
-      }
-      if (row.parentElement === content) nodes.push(row);
-    }
-  }
+  // The Danger zone, whole: it holds removal rows and nothing else, so the
+  // group IS the settled exception (see `DANGER_ZONE_SELECTOR`).
+  const dangerZone = root.querySelector(DANGER_ZONE_SELECTOR);
+  if (dangerZone !== null) nodes.push(dangerZone);
   return nodes;
+}
+
+/**
+ * The version invariant, read off the page currently rendered: the RPC's
+ * `running` version on the header's health line and on the Status tab's
+ * version card, the registry's `reported` one on neither, and `reported`
+ * exactly once on the whole page — as the value of About this host's "Last
+ * reported version" row.
+ */
+function expectRunningVersionOnly(versions: {
+  readonly running: string;
+  readonly reported: string;
+}): void {
+  // The health line is the header row the health word sits on — NOT the whole
+  // `host-identity-card`, which is a section around the tab bodies too and so
+  // contains About this host.
+  const healthLine = screen.getByTestId("host-identity-health").closest("div");
+  if (healthLine === null) {
+    throw new Error("expected the health word inside the health line");
+  }
+  expect(healthLine.textContent).toContain(`v${versions.running}`);
+  expect(healthLine.textContent).not.toContain(versions.reported);
+
+  expect(screen.getByTestId("host-overview-version").textContent).toBe(
+    `v${versions.running}`,
+  );
+  expect(
+    screen.getByTestId("host-overview-version-card").textContent,
+  ).not.toContain(versions.reported);
+
+  const aboutVersion = screen.getByTestId("host-overview-about-version");
+  expect(aboutVersion.textContent).toBe(`v${versions.reported}`);
+  expect(aboutVersion.closest("dd")?.previousElementSibling?.textContent).toBe(
+    "Last reported version",
+  );
+  const reportedOccurrences =
+    document.body.textContent.split(versions.reported).length - 1;
+  expect(reportedOccurrences).toBe(1);
 }
 
 /**
