@@ -603,8 +603,9 @@ describe("chat-head canonical encoding", () => {
           permissionMode: "supervised",
           reasoningEffort: null,
           agentMode: "regular",
-          // `serviceTier` and `profileId` are absent - both `.default(null)`
-          // in the shared run-settings schema, so this is a valid stored value.
+          // `serviceTier`, `profileId` and `identityId` are absent - all three
+          // `.default(null)` in the shared run-settings schema, so this is a
+          // valid stored value.
         },
       },
     };
@@ -623,6 +624,7 @@ describe("chat-head canonical encoding", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
     // This fixture states a deliberate floor, so it survives the round trip
     // verbatim; the DEFAULT (absent -> null, on the writer as on the reader) is

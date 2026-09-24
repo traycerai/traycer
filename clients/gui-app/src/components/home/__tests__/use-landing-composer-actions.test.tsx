@@ -1114,6 +1114,7 @@ describe("useLandingComposerActions", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
     expect(
       useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
@@ -1863,6 +1864,7 @@ describe("useLandingComposerActions", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     queryClient.clear();
@@ -4068,6 +4070,7 @@ function defaultToolbar() {
     },
     reasoning: "high" as const,
     serviceTier: "" as const,
+    identityId: null,
     permission: "supervised" as const,
   };
 }

@@ -349,6 +349,9 @@ function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
     // `??` guards a pre-profile persisted blob (the field is missing, not
     // `null`, on an old serialized `ChatRunSettings`).
     profileId: (a.profileId ?? null) === (b.profileId ?? null),
+    // Same `??` guard: an identity-less persisted blob is MISSING the key, not
+    // holding `null`, and it must compare equal to a fresh ambient commit.
+    identityId: (a.identityId ?? null) === (b.identityId ?? null),
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }

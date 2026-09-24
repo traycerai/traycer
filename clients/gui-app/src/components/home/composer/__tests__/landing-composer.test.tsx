@@ -10,6 +10,7 @@ const DRAFT_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const GLOBAL_SETTINGS: ChatRunSettings = {
@@ -20,6 +21,7 @@ const GLOBAL_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 describe("landingComposerSettingsSeedForDraft", () => {

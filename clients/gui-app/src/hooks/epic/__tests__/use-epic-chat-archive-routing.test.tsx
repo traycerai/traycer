@@ -25,7 +25,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
@@ -110,9 +110,9 @@ interface RoutingFixture {
   readonly queryClient: QueryClient;
   readonly handle: OpenedStoreForTest;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
-  readonly localRecords: ChatRecordSummaryV11[];
-  readonly remoteRecords: ChatRecordSummaryV11[];
-  readonly viewerForeign: ChatRecordSummaryV11[];
+  readonly localRecords: ChatRecordSummaryV12[];
+  readonly remoteRecords: ChatRecordSummaryV12[];
+  readonly viewerForeign: ChatRecordSummaryV12[];
   readonly archiveCalls: MutationCall[];
   readonly deleteCalls: MutationCall[];
   readonly listCallsByHost: Record<string, number>;
@@ -127,8 +127,8 @@ interface RoutingFixture {
 }
 
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -145,6 +145,7 @@ function record(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }
@@ -225,7 +226,7 @@ function withHostId(
   };
 }
 
-function staleViewerReplica(): ChatRecordSummaryV11 {
+function staleViewerReplica(): ChatRecordSummaryV12 {
   return record({
     chatId: REMOTE_CHAT_ID,
     originHostId: REMOTE.hostId,
@@ -236,7 +237,7 @@ function staleViewerReplica(): ChatRecordSummaryV11 {
 
 function deliverStaleList(
   handle: OpenedStoreForTest,
-  rows: readonly ChatRecordSummaryV11[],
+  rows: readonly ChatRecordSummaryV12[],
 ): void {
   const issuedAtSeq = handle.store.getState().peekChatIngestSeq();
   handle.store.getState().applyChatRecords(rows, issuedAtSeq);
@@ -289,7 +290,7 @@ function lastCallHost(messenger: MockHostMessenger<HostRpcRegistry>): string {
 }
 
 function bumpArchived(
-  rows: ChatRecordSummaryV11[],
+  rows: ChatRecordSummaryV12[],
   chatId: string,
   archived: boolean,
 ): void {
@@ -310,9 +311,9 @@ function createRoutingFixture(): RoutingFixture {
       mutations: { retry: false },
     },
   });
-  const localRecords: ChatRecordSummaryV11[] = [];
-  const remoteRecords: ChatRecordSummaryV11[] = [];
-  const viewerForeign: ChatRecordSummaryV11[] = [];
+  const localRecords: ChatRecordSummaryV12[] = [];
+  const remoteRecords: ChatRecordSummaryV12[] = [];
+  const viewerForeign: ChatRecordSummaryV12[] = [];
   const archiveCalls: MutationCall[] = [];
   const deleteCalls: MutationCall[] = [];
   const listCallsByHost: Record<string, number> = {};

@@ -61,6 +61,7 @@ const FAILED_TUPLE: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "acct-north",
+  identityId: null,
 };
 const TARGET_TUPLE: ChatRunSettings = {
   harnessId: "codex",
@@ -70,6 +71,7 @@ const TARGET_TUPLE: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "acct-south",
+  identityId: null,
 };
 // Duplicate account LABEL ("acct-north") as `FAILED_TUPLE`, but a different
 // provider (claude, not codex) and a different model family entirely.
@@ -81,6 +83,7 @@ const PREFERRED_TUPLE: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "acct-north",
+  identityId: null,
 };
 
 const FAILED_IDENTITY = "Astra Codex (acct-north)";

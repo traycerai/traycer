@@ -141,6 +141,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: composerMode === "terminal",

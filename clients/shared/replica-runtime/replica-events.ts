@@ -396,8 +396,24 @@ export interface DocReadyEvent {
 
 /**
  * Why a body is not being served. A CLOSED set: a client handed only free text
- * would have to string-match to choose between reseeding the epic and rendering
- * an unavailable affordance, and those are different products of one frame.
+ * would have to string-match to choose between reseeding the container and
+ * rendering an unavailable affordance, and those are different products of one
+ * frame.
+ *
+ * ## Two doc lanes, and why "not found" has two spellings
+ *
+ * `artifact.subscribe` and `agentIdentity.file.subscribe` are separate methods,
+ * versioned separately and forever, but they carry the same CLASS of thing - a
+ * `Y.XmlFragment` a human co-edits - so both decode into this one vocabulary.
+ * `"artifact-not-found"` and `"file-not-found"` are therefore the SAME fact
+ * under two addresses, and a consumer must handle them identically.
+ *
+ * They are two members rather than one because the artifact spelling predates
+ * the second doc lane and is already named in the epic adapter, its tests and
+ * the GUI's body translation - renaming it is a package this change does not
+ * own. What is NOT acceptable is emitting `"artifact-not-found"` for an identity
+ * file, which would put a lie in every log line and read as a copy-paste bug.
+ * Collapsing the two is a fine follow-up; inventing a third is not.
  */
 export type DocUnavailableCode =
   /**
@@ -410,6 +426,19 @@ export type DocUnavailableCode =
   | "stale-authority-epoch"
   /** No such artifact at this epoch, or it is tombstoned. Terminal. */
   | "artifact-not-found"
+  /**
+   * No such path under this identity at this epoch, or it is deleted. Terminal,
+   * and the identity lane's spelling of `"artifact-not-found"` - see above.
+   */
+  | "file-not-found"
+  /**
+   * The path exists and is a BLOB, which has bytes rather than a CRDT. Terminal,
+   * and distinct from a not-found because the consumer's next move is different:
+   * fetch the bytes through the file plane rather than report a missing file.
+   * Rendering it as an empty document is the one wrong answer - it is the one a
+   * user will save over.
+   */
+  | "not-a-fragment"
   /** It exists and the body cannot currently be materialised. See `terminal`. */
   | "body-unavailable";
 

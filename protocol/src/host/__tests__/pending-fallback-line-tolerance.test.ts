@@ -25,7 +25,25 @@ import {
 
 // ─── Shared fixtures ────────────────────────────────────────────────────────
 
-function chatRunSettingsFixture(model: string) {
+/**
+ * The settings tuple, in the TWO spellings this file has to keep apart.
+ *
+ * `chat.subscribe@1.10` binds `chatRunSettingsSchemaPreAuto`, a hand-frozen
+ * copy that is short of the live tuple's `identityId`; the live snapshot
+ * schemas bind the live tuple, where the field is defaulted and therefore
+ * materializes on every parse. One fixture cannot serve both: fed the live
+ * tuple, `@1.10` strips the key and "round-trips intact" fails; fed the wire
+ * tuple, the live schema adds it back and the same assertion fails the other
+ * way. So the builder is a parameter, and each test states which line it is
+ * talking about.
+ *
+ * That split is the freeze working, not a fixture problem - it is the same
+ * thing the "strips the key" sweep below asserts, one field over.
+ */
+type RunSettingsFixtureBuilder = (model: string) => object;
+
+/** As `chat.subscribe@1.0`-`@1.12` carry it: no `identityId`. */
+function wireChatRunSettingsFixture(model: string) {
   return {
     harnessId: "claude" as const,
     model,
@@ -37,31 +55,36 @@ function chatRunSettingsFixture(model: string) {
   };
 }
 
-function fallbackImpendingActionFixture() {
+/** As the LIVE snapshot schemas carry it. */
+function liveChatRunSettingsFixture(model: string) {
+  return { ...wireChatRunSettingsFixture(model), identityId: null };
+}
+
+function fallbackImpendingActionFixture(settings: RunSettingsFixtureBuilder) {
   return {
     planId: "plan-1",
     rung: "profile" as const,
-    target: chatRunSettingsFixture("claude-opus-5"),
+    target: settings("claude-opus-5"),
     targetModelFamily: null,
     resumesAt: null,
     pending: null,
   };
 }
 
-function pendingFallbackFixture() {
+function pendingFallbackFixture(settings: RunSettingsFixtureBuilder) {
   return {
     traversalId: "traversal-1",
     revision: 3,
     state: "choosing" as const,
     reason: "rate_limited",
-    failedTuple: chatRunSettingsFixture("gpt-5"),
-    targetTuple: chatRunSettingsFixture("claude-opus-5"),
+    failedTuple: settings("gpt-5"),
+    targetTuple: settings("claude-opus-5"),
     // F5 (D202's sibling item): the impending-action preview, additive on
     // `pendingFallbackSchema` since `chat.subscribe@1.10`. Populated, not
     // `null` - a `null` here would make every "strips the KEY" assertion in
     // Half 2 below pass whether or not the nested field was ever projected
     // away, since the container itself is what those assertions delete.
-    impendingAction: fallbackImpendingActionFixture(),
+    impendingAction: fallbackImpendingActionFixture(settings),
     deadline: 1_700_000_000_000,
     graceRemainingMs: 5_000,
     attempt: 2,
@@ -75,9 +98,9 @@ function pendingFallbackFixture() {
 // this fixture forgot to populate would silently mark itself "carried"
 // without ever having been sent.
 function assertFixtureMatchesSchema() {
-  expect(Object.keys(pendingFallbackFixture()).sort()).toEqual(
-    Object.keys(pendingFallbackSchema.shape).sort(),
-  );
+  expect(
+    Object.keys(pendingFallbackFixture(liveChatRunSettingsFixture)).sort(),
+  ).toEqual(Object.keys(pendingFallbackSchema.shape).sort());
 }
 
 // The minimal chat record every `chat.subscribe` line's frozen (or live)
@@ -163,7 +186,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
   });
 
   it("round-trips pendingFallback intact on a snapshot frame", () => {
-    const pendingFallback = pendingFallbackFixture();
+    const pendingFallback = pendingFallbackFixture(wireChatRunSettingsFixture);
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
         snapshot: { ...baseWindowedSnapshot(), pendingFallback },
@@ -175,7 +198,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
   });
 
   it("round-trips pendingFallback intact on a turnStateChanged frame", () => {
-    const pendingFallback = pendingFallbackFixture();
+    const pendingFallback = pendingFallbackFixture(wireChatRunSettingsFixture);
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
         runStatus: "running",
@@ -193,7 +216,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
   // Direct schema-level corroboration for the two DTOs the coordinator named
   // explicitly, independent of which wire frame embeds them.
   it("chatWindowedSnapshotSchema retains pendingFallback intact", () => {
-    const pendingFallback = pendingFallbackFixture();
+    const pendingFallback = pendingFallbackFixture(liveChatRunSettingsFixture);
     const parsed = chatWindowedSnapshotSchema.parse({
       ...baseWindowedSnapshot(),
       pendingFallback,
@@ -202,7 +225,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
   });
 
   it("chatSnapshotSchema (the full, non-windowed live snapshot) retains pendingFallback intact", () => {
-    const pendingFallback = pendingFallbackFixture();
+    const pendingFallback = pendingFallbackFixture(liveChatRunSettingsFixture);
     const parsed = chatSnapshotSchema.parse({
       chat: baseChat(),
       ...baseAux(),
@@ -243,7 +266,9 @@ describe("every frozen chat.subscribe line tolerates pendingFallback without gai
       const isWindowed = minor >= 8;
 
       it("parses a snapshot frame carrying pendingFallback, and strips the key", () => {
-        const pendingFallback = pendingFallbackFixture();
+        const pendingFallback = pendingFallbackFixture(
+          wireChatRunSettingsFixture,
+        );
         const snapshot = isWindowed
           ? { ...baseWindowedSnapshot(), pendingFallback }
           : {
@@ -267,7 +292,9 @@ describe("every frozen chat.subscribe line tolerates pendingFallback without gai
       });
 
       it("parses a turnStateChanged frame carrying pendingFallback, and strips the key", () => {
-        const pendingFallback = pendingFallbackFixture();
+        const pendingFallback = pendingFallbackFixture(
+          wireChatRunSettingsFixture,
+        );
         const result = contract.serverFrameSchema.safeParse(
           frame("turnStateChanged", {
             runStatus: "running",
@@ -289,21 +316,21 @@ describe("every frozen chat.subscribe line tolerates pendingFallback without gai
   }
 });
 
-function pendingReturnFixture() {
+function pendingReturnFixture(settings: RunSettingsFixtureBuilder) {
   return {
     traversalId: "traversal-return-1",
     revision: 4,
-    preferredTuple: chatRunSettingsFixture("gpt-5"),
-    fallbackTuple: chatRunSettingsFixture("claude-opus-5"),
+    preferredTuple: settings("gpt-5"),
+    fallbackTuple: settings("claude-opus-5"),
     queuedItemsMoving: 2,
     offeredAt: 1_700_000_000_000,
   };
 }
 
 function assertReturnFixtureMatchesSchema() {
-  expect(Object.keys(pendingReturnFixture()).sort()).toEqual(
-    Object.keys(pendingReturnSchema.shape).sort(),
-  );
+  expect(
+    Object.keys(pendingReturnFixture(liveChatRunSettingsFixture)).sort(),
+  ).toEqual(Object.keys(pendingReturnSchema.shape).sort());
 }
 
 describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
@@ -312,7 +339,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
   });
 
   it("round-trips pendingReturn intact on a snapshot frame", () => {
-    const pendingReturn = pendingReturnFixture();
+    const pendingReturn = pendingReturnFixture(wireChatRunSettingsFixture);
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
         snapshot: { ...baseWindowedSnapshot(), pendingReturn },
@@ -323,7 +350,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
   });
 
   it("round-trips pendingReturn intact on a turnStateChanged frame", () => {
-    const pendingReturn = pendingReturnFixture();
+    const pendingReturn = pendingReturnFixture(wireChatRunSettingsFixture);
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
         runStatus: "running",
@@ -338,7 +365,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
   });
 
   it("chatWindowedSnapshotSchema retains pendingReturn intact", () => {
-    const pendingReturn = pendingReturnFixture();
+    const pendingReturn = pendingReturnFixture(liveChatRunSettingsFixture);
     const parsed = chatWindowedSnapshotSchema.parse({
       ...baseWindowedSnapshot(),
       pendingReturn,
@@ -347,7 +374,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
   });
 
   it("chatSnapshotSchema retains pendingReturn intact", () => {
-    const pendingReturn = pendingReturnFixture();
+    const pendingReturn = pendingReturnFixture(liveChatRunSettingsFixture);
     const parsed = chatSnapshotSchema.parse({
       chat: baseChat(),
       ...baseAux(),
@@ -371,7 +398,7 @@ describe("every frozen chat.subscribe line tolerates pendingReturn without gaini
       const isWindowed = minor >= 8;
 
       it("parses a snapshot frame carrying pendingReturn, and strips the key", () => {
-        const pendingReturn = pendingReturnFixture();
+        const pendingReturn = pendingReturnFixture(wireChatRunSettingsFixture);
         const snapshot = isWindowed
           ? { ...baseWindowedSnapshot(), pendingReturn }
           : {
@@ -393,7 +420,7 @@ describe("every frozen chat.subscribe line tolerates pendingReturn without gaini
       });
 
       it("parses a turnStateChanged frame carrying pendingReturn, and strips the key", () => {
-        const pendingReturn = pendingReturnFixture();
+        const pendingReturn = pendingReturnFixture(wireChatRunSettingsFixture);
         const result = contract.serverFrameSchema.safeParse(
           frame("turnStateChanged", {
             runStatus: "running",
@@ -441,7 +468,7 @@ describe("every frozen chat.subscribe line tolerates pendingReturn without gaini
  * being carried. `resetsAt`/`resetsAtSource` in particular are the pair the
  * wait affordance's copy reads.
  */
-function lastFailedAttemptFixture() {
+function lastFailedAttemptFixture(settings: RunSettingsFixtureBuilder) {
   return {
     userMessageId: "user-message-d152-1",
     turnId: "turn-d152-1",
@@ -467,14 +494,14 @@ function lastFailedAttemptFixture() {
     // Non-null on purpose. `null` is the degraded arm (no replay envelope), so
     // a fixture that used it would round-trip the ABSENCE of a tuple and never
     // prove the nested `chatRunSettings` shape survives this line.
-    failedTuple: chatRunSettingsFixture("claude-sonnet-5"),
+    failedTuple: settings("claude-sonnet-5"),
   };
 }
 
 function assertLastFailedFixtureMatchesSchema() {
-  expect(Object.keys(lastFailedAttemptFixture()).sort()).toEqual(
-    Object.keys(lastFailedAttemptSchema.shape).sort(),
-  );
+  expect(
+    Object.keys(lastFailedAttemptFixture(liveChatRunSettingsFixture)).sort(),
+  ).toEqual(Object.keys(lastFailedAttemptSchema.shape).sort());
 }
 
 describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () => {
@@ -483,7 +510,9 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
   });
 
   it("round-trips lastFailedAttempt intact on a snapshot frame", () => {
-    const lastFailedAttempt = lastFailedAttemptFixture();
+    const lastFailedAttempt = lastFailedAttemptFixture(
+      wireChatRunSettingsFixture,
+    );
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
         snapshot: { ...baseWindowedSnapshot(), lastFailedAttempt },
@@ -494,7 +523,9 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
   });
 
   it("round-trips lastFailedAttempt intact on a turnStateChanged frame", () => {
-    const lastFailedAttempt = lastFailedAttemptFixture();
+    const lastFailedAttempt = lastFailedAttemptFixture(
+      wireChatRunSettingsFixture,
+    );
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
         runStatus: "running",
@@ -509,7 +540,9 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
   });
 
   it("chatWindowedSnapshotSchema retains lastFailedAttempt intact", () => {
-    const lastFailedAttempt = lastFailedAttemptFixture();
+    const lastFailedAttempt = lastFailedAttemptFixture(
+      liveChatRunSettingsFixture,
+    );
     const parsed = chatWindowedSnapshotSchema.parse({
       ...baseWindowedSnapshot(),
       lastFailedAttempt,
@@ -518,7 +551,9 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
   });
 
   it("chatSnapshotSchema retains lastFailedAttempt intact", () => {
-    const lastFailedAttempt = lastFailedAttemptFixture();
+    const lastFailedAttempt = lastFailedAttemptFixture(
+      liveChatRunSettingsFixture,
+    );
     const parsed = chatSnapshotSchema.parse({
       chat: baseChat(),
       ...baseAux(),
@@ -538,7 +573,9 @@ describe("every frozen chat.subscribe line tolerates lastFailedAttempt without g
       const isWindowed = minor >= 8;
 
       it("parses a snapshot frame carrying lastFailedAttempt, and strips the key", () => {
-        const lastFailedAttempt = lastFailedAttemptFixture();
+        const lastFailedAttempt = lastFailedAttemptFixture(
+          wireChatRunSettingsFixture,
+        );
         const snapshot = isWindowed
           ? { ...baseWindowedSnapshot(), lastFailedAttempt }
           : {
@@ -560,7 +597,9 @@ describe("every frozen chat.subscribe line tolerates lastFailedAttempt without g
       });
 
       it("parses a turnStateChanged frame carrying lastFailedAttempt, and strips the key", () => {
-        const lastFailedAttempt = lastFailedAttemptFixture();
+        const lastFailedAttempt = lastFailedAttemptFixture(
+          wireChatRunSettingsFixture,
+        );
         const result = contract.serverFrameSchema.safeParse(
           frame("turnStateChanged", {
             runStatus: "running",

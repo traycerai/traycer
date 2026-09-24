@@ -43,6 +43,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const EPIC_ID = "epic-v3-resend";
@@ -143,6 +144,8 @@ function markSnapshotLoadedAndActable(
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   handle.store.setState({
     connectionStatus: "open",

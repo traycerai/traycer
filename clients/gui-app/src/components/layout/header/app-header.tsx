@@ -4,6 +4,7 @@ import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
+import { IdentitiesButton } from "@/components/layout/header/identities-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
 import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
 import { DesktopMenuBar } from "@/components/layout/header/desktop-menu-bar";
@@ -151,6 +152,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       >
         {!navDisabled ? <AppUpdateHeaderButton /> : null}
         {!navDisabled ? <HeaderUsageControls /> : null}
+        {!navDisabled ? <IdentitiesButton /> : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />

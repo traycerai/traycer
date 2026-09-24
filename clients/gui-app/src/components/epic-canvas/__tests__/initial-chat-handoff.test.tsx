@@ -50,6 +50,7 @@ const HANDOFF_SETTINGS = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 } satisfies ChatRunSettings;
 
 const testState = vi.hoisted(() => ({

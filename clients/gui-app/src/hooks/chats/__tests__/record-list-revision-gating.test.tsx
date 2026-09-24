@@ -36,7 +36,7 @@ import type {
   RecordListRecencyPatch,
   RecordListStamp,
 } from "@traycer/protocol/host/epic/record-list-revision";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -110,8 +110,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 function chatRow(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -128,6 +128,7 @@ function chatRow(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }

@@ -29,8 +29,9 @@ export function buildChatRunSettings(input: {
   permission: PermissionMode;
   reasoning: ReasoningLevel;
   serviceTier: ServiceTier;
+  identityId: string | null;
 }): ChatRunSettings {
-  const { selection, permission, reasoning, serviceTier } = input;
+  const { selection, permission, reasoning, serviceTier, identityId } = input;
   const trimmedServiceTier = serviceTier.trim();
   return {
     harnessId: selection.harnessId,
@@ -45,6 +46,10 @@ export function buildChatRunSettings(input: {
     // mode; nothing reads it back.
     agentMode: "regular",
     profileId: selection.profileId,
+    // The composer's identity picker, or `null` (the host's stock identity).
+    // Required on the input for the reason it is required on the tuple: a
+    // builder that forgot it would silently strip the chat's identity.
+    identityId,
   };
 }
 

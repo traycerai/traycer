@@ -21,15 +21,15 @@
  * header explains the `getCurrentUserId: () => null` convention.
  */
 import { describe, expect, it } from "vitest";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import { createChatRecordTable } from "../runtime/chat-record-table";
 
 const CHAT_ID = "chat-doc-1";
 
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: CHAT_ID,
     ownerUserId: "user-a",
@@ -46,6 +46,7 @@ function record(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }

@@ -15,6 +15,11 @@ import {
   epicSchema,
   epicSchemaPreReasonix,
 } from "@traycer/protocol/persistence/_internal/epic-schemas";
+import {
+  identityDocumentRecordSchema,
+  identityRecordValueSchema,
+  identitySkillReservationRecordSchema,
+} from "@traycer/protocol/persistence/_internal/identity-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
 
 /**
@@ -40,6 +45,18 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
  *   `drafts` scope. Same tenant envelope (`parts`) as `chat-head`; the
  *   payload is the `draft/v1` dialect. Images are blobs, so v1 names no
  *   shards and the envelope is empty.
+ * - `identity` / `identity-document` - the two host-written shapes in an agent
+ *   identity's ROOT room: the identity's own settings at
+ *   `doc.getMap("identity")`, and ONE value of `doc.getMap("documents")`. Two
+ *   records rather than one nested shape, because the documents map's leniency
+ *   is per entry: a file path a reader cannot parse is dropped without taking
+ *   the identity's settings with it. The room's `meta` reuses `room-metadata`
+ *   unchanged, and its `files` map is the file plane's manifest - neither is a
+ *   record of its own here.
+ * - `identity-skill-reservation` - ONE value of the same room's
+ *   `doc.getMap("skillReservations")`: a host's claim on a skill name while it
+ *   installs that skill, so a second install of the name from any host is
+ *   refused rather than merged into the first.
  *
  * Cloud-catalog / task-ref / workspace-association caches are owned by
  * the cloud data client (internal, not in this repo) and are NOT versioned
@@ -111,6 +128,24 @@ export const draftHeadRecordV100 = defineRecordContract({
   schema: draftHeadRecordSchema,
 });
 
+export const identityRecordV100 = defineRecordContract({
+  name: "identity",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  schema: identityRecordValueSchema,
+});
+
+export const identityDocumentRecordV100 = defineRecordContract({
+  name: "identity-document",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  schema: identityDocumentRecordSchema,
+});
+
+export const identitySkillReservationRecordV100 = defineRecordContract({
+  name: "identity-skill-reservation",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  schema: identitySkillReservationRecordSchema,
+});
+
 export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   epic: {
     2: {
@@ -170,6 +205,46 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
       downgradePathsFromLatest: {},
     },
   },
+  // Both identity records open at 1.0, so there is no previous version to
+  // upgrade FROM and no older major to downgrade TO. The empty maps are the
+  // shape a first line always has here (`room-metadata` and `draft-head` carry
+  // the same pair); the paths arrive with the first real evolution of either
+  // shape, and `COMPATIBILITY.md`'s same-major rules govern what may land
+  // without one.
+  identity: {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: identityRecordV100, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "identity-document": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: identityDocumentRecordV100,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Opens at 1.0 on the identity records' terms above.
+  "identity-skill-reservation": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: identitySkillReservationRecordV100,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 });
 
 export type PersistenceRecordRegistry = typeof persistenceRecordRegistry;
@@ -184,3 +259,12 @@ export type RoomMetadata = RecordValue<
 export type ChatHead = RecordValue<PersistenceRecordRegistry, "chat-head">;
 export type ChatShard = RecordValue<PersistenceRecordRegistry, "chat-shard">;
 export type DraftHead = RecordValue<PersistenceRecordRegistry, "draft-head">;
+export type Identity = RecordValue<PersistenceRecordRegistry, "identity">;
+export type IdentityDocument = RecordValue<
+  PersistenceRecordRegistry,
+  "identity-document"
+>;
+export type IdentitySkillReservationRecord = RecordValue<
+  PersistenceRecordRegistry,
+  "identity-skill-reservation"
+>;

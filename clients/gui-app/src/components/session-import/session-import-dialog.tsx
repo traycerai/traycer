@@ -1,4 +1,6 @@
 import { use, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import type { AgentIdentitySummary } from "@traycer/protocol/host/agent-identity/schemas";
 import {
   Dialog,
   DialogContent,
@@ -6,24 +8,44 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
-import { scopedHostReadiness } from "@/components/settings/host-scope/scoped-host-readiness";
+import {
+  scopedHostReadiness,
+  type ScopedHostReadiness,
+} from "@/components/settings/host-scope/scoped-host-readiness";
 import {
   useHostScopeFor,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
+import { HermesImportPanel } from "@/components/session-import/hermes-import-panel";
 import { SessionImportWizard } from "@/components/session-import/session-import-wizard";
-import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
+import {
+  useSessionImportScan,
+  type SessionImportScanHandle,
+} from "@/components/session-import/use-session-import-scan";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useSessionImportAvailableFor } from "@/hooks/session-import/use-session-import-available";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
-import { HostRuntimeContext, useHostBinding } from "@/lib/host";
+import {
+  HostRuntimeContext,
+  useHostBinding,
+  useOptionalHostClient,
+} from "@/lib/host";
 import {
   StreamRuntimeContext,
   useStreamRuntimeBinding,
 } from "@/lib/host/stream-runtime-context";
+import { identityTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import { useSessionImportRun } from "@/stores/session-import/session-import-run-store";
+
+/** The unary the Hermes rows are gated on; a host without it has no importer. */
+export const HERMES_IMPORT_SCAN_METHOD = "agentIdentity.import.hermes.scan";
+
+type ImportMode = "sessions" | "hermes";
 
 /**
  * The import dialog is bound to the host its entry point named for its lifetime.
@@ -96,6 +118,15 @@ function SessionImportDialogBody(props: {
   // above - a scan through it would list the wrong machine's sessions.
   const runIdle = useSessionImportRun(streamHostId).status === "idle";
   const scan = useSessionImportScan(runIdle && hostReady && scanSupported);
+  // The Hermes rows appear only when the PICKED host advertises the importer:
+  // an older host negotiates the family away, and the sessions wizard is then
+  // the whole dialog, exactly as before the rows existed.
+  const hermesSupported = useHostSupportsMethod(
+    scope.hostId,
+    HERMES_IMPORT_SCAN_METHOD,
+  );
+  const [mode, setMode] = useState<ImportMode>("sessions");
+  const hermesMode = hermesSupported && mode === "hermes";
   return (
     <Dialog
       open
@@ -110,38 +141,124 @@ function SessionImportDialogBody(props: {
         <DialogHeader>
           <DialogTitle>Import your work</DialogTitle>
           <DialogDescription>
-            Bring work you already started in Claude Code, Codex, or OpenCode
-            into Traycer as tasks.
+            {hermesMode
+              ? "Bring a Hermes profile's persona, memories and skills into a Traycer identity."
+              : "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks."}
           </DialogDescription>
         </DialogHeader>
+        {hermesSupported ? (
+          <Tabs
+            value={mode}
+            onValueChange={(value) => {
+              if (value === "sessions" || value === "hermes") setMode(value);
+            }}
+          >
+            <TabsList
+              variant="line"
+              size="sm"
+              data-testid="session-import-mode"
+            >
+              <TabsTrigger value="sessions">Sessions</TabsTrigger>
+              <TabsTrigger value="hermes">Hermes profile</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        ) : null}
         {/* The pinned filters and footer share the dialog's full width. */}
         <div className="-mx-4 -mb-4 flex min-h-0 flex-1 flex-col">
-          {hostReady && scanSupported ? (
-            <SessionImportWizard
-              hostPicker={null}
-              surface="dialog"
-              scan={scan}
-              // Submit means go: the dialog gets out of the way and the
-              // app-wide progress toast takes over. Reopening while the run is
-              // live shows the inline progress view - this closes a surface,
-              // never a run.
-              onImportStarted={onClose}
-              onTaskOpened={onClose}
-              onBeforeTaskOpen={null}
-              secondaryAction={{ label: "Close", onSelect: onClose }}
-            />
-          ) : (
-            <SessionImportHostNotice
-              scope={scope}
-              connecting={readiness === "connecting"}
-              refusal={
-                hostReady ? `${scope.hostLabel} can't import sessions` : null
-              }
-            />
-          )}
+          <SessionImportDialogSurface
+            scope={scope}
+            readiness={readiness}
+            scanSupported={scanSupported}
+            hermesMode={hermesMode}
+            scan={scan}
+            onClose={onClose}
+          />
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Which surface fills the dialog: the Hermes rows, the sessions wizard, or
+ * the notice that says why the picked host can serve neither.
+ */
+function SessionImportDialogSurface(props: {
+  readonly scope: HostScope;
+  readonly readiness: ScopedHostReadiness;
+  readonly scanSupported: boolean;
+  readonly hermesMode: boolean;
+  readonly scan: SessionImportScanHandle;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { scope, readiness, scanSupported, hermesMode, scan, onClose } = props;
+  const hostReady = readiness === "ready";
+  if (hermesMode && hostReady && scope.hostId !== null) {
+    return <HermesImportSection hostId={scope.hostId} onClose={onClose} />;
+  }
+  if (hostReady && scanSupported && !hermesMode) {
+    return (
+      <SessionImportWizard
+        hostPicker={null}
+        surface="dialog"
+        scan={scan}
+        // Submit means go: the dialog gets out of the way and the
+        // app-wide progress toast takes over. Reopening while the run is
+        // live shows the inline progress view - this closes a surface,
+        // never a run.
+        onImportStarted={onClose}
+        onTaskOpened={onClose}
+        onBeforeTaskOpen={null}
+        secondaryAction={{ label: "Close", onSelect: onClose }}
+      />
+    );
+  }
+  return (
+    <SessionImportHostNotice
+      scope={scope}
+      connecting={readiness === "connecting"}
+      refusal={
+        hostReady && !hermesMode
+          ? `${scope.hostLabel} can't import sessions`
+          : null
+      }
+    />
+  );
+}
+
+/**
+ * The Hermes rows over the picked host's unary client (the dialog's
+ * re-provided `HostRuntimeContext`), which is the client the scan and the
+ * run go to. An imported identity opens in a tab bound to THAT host, as the
+ * Identities list does.
+ */
+function HermesImportSection(props: {
+  readonly hostId: string;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { hostId, onClose } = props;
+  const client = useOptionalHostClient();
+  const navigate = useNavigate();
+  const onOpenIdentity = (identity: AgentIdentitySummary): void => {
+    onClose();
+    useIdentityTabsStore.getState().openTab({
+      identityId: identity.identityId,
+      hostId,
+      title: identity.title,
+    });
+    navigateToTabIntent(
+      navigate,
+      identityTabIntent(identity.identityId),
+      undefined,
+    );
+  };
+  return (
+    <HermesImportPanel
+      hostId={hostId}
+      client={client}
+      onOpenIdentity={onOpenIdentity}
+      onClose={onClose}
+    />
   );
 }
 

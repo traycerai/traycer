@@ -325,6 +325,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
       serviceTier: null,
       agentMode: "regular",
       profileId,
+      identityId: null,
     },
     workspaceSeed: {
       workspace: { folders: [], folderInfoByPath: {}, primaryPath: null },

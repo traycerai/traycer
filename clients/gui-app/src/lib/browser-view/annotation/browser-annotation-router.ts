@@ -4,6 +4,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-annotation";
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import { displayTitle } from "@/lib/display-title";
+import { chatListedAsArchived } from "@/lib/chats/chat-list-visibility";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
 
 export type AnnotationRoute = Omit<
@@ -31,7 +32,7 @@ export function resolveAnnotationRoute(
     (chatId) => {
       if (!Object.hasOwn(input.chats.byId, chatId)) return [];
       const chat = input.chats.byId[chatId];
-      if (chat.archivedAt !== null) return [];
+      if (chatListedAsArchived(chat)) return [];
       if (chat.hostId !== null && chat.hostId !== input.browserHostId) {
         return [];
       }

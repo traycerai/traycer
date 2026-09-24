@@ -109,6 +109,9 @@ export function chatProjectionFromPendingCreation(
     // instead would disable rename on the row the user just created, in exactly
     // the window the create-then-rename flow lives in.
     docResident: false,
+    // `epic.createChat` creates conversations; an evolution chat is minted by
+    // its host and never passes through this stand-in.
+    chatKind: "conversation",
     settings: null,
     archivedAt: null,
   };

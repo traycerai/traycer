@@ -13,6 +13,7 @@ const TEST_SETTINGS = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
+  identityId: null,
 };
 
 const USER_SENDER = { type: "user" as const, userId: "owner-1" };

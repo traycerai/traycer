@@ -6,6 +6,7 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import {
   createLayoutItem,
   emptySystemTabs,
@@ -377,7 +378,9 @@ function sanitizeDesktopLayout(
   const sourceKeys = new Set(tabSourceRefs().map(refKey));
   const missing = flattenLayoutRefs(persisted).filter(
     (ref) =>
-      (ref.kind === "epic" || ref.kind === "draft") &&
+      (ref.kind === "epic" ||
+        ref.kind === "draft" ||
+        ref.kind === "identity") &&
       !sourceKeys.has(refKey(ref)),
   );
   const withoutMissing = missing.reduce(removeMissingRef, persisted);
@@ -568,6 +571,12 @@ function routeForRef(layout: PersistedTabStripLayout, ref: TabRef): string {
       : `/epics/${encodeURIComponent(tab.epicId)}/${encodeURIComponent(tab.tabId)}`;
   }
   if (ref.kind === "draft") return `/draft/${encodeURIComponent(ref.id)}`;
+  if (ref.kind === "identity") {
+    const tab = useIdentityTabsStore.getState().tabsById[ref.id];
+    return tab === undefined
+      ? "/"
+      : `/identities/${encodeURIComponent(tab.identityId)}`;
+  }
   // A `home` ref never reaches here: it is not a layout ref (`validRef` refuses
   // one) and not a source ref, so nothing this module walks can produce it.
   if (ref.kind === "home") return "/";
@@ -597,10 +606,19 @@ function routeRef(route: string | null): TabRef | null {
     const tabId = decodeRouteSegment(epicMatch[2]);
     return tabId === null ? null : { kind: "epic", id: tabId };
   }
+  const identityRef = identityRouteRef(pathname);
+  if (identityRef !== null) return identityRef;
   const draftMatch = pathname?.match(/^\/draft\/([^/]+)\/?$/);
   if (draftMatch === null || draftMatch === undefined) return null;
   const draftId = decodeRouteSegment(draftMatch[1]);
   return draftId === null ? null : { kind: "draft", id: draftId };
+}
+
+function identityRouteRef(pathname: string | null): TabRef | null {
+  const match = pathname?.match(/^\/identities\/([^/]+)\/?$/);
+  if (match === null || match === undefined) return null;
+  const identityId = decodeRouteSegment(match[1]);
+  return identityId === null ? null : { kind: "identity", id: identityId };
 }
 
 function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
@@ -616,6 +634,13 @@ function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
   }
   if (ref.kind === "draft")
     return pathname === `/draft/${encodeURIComponent(ref.id)}`;
+  if (ref.kind === "identity") {
+    const tab = useIdentityTabsStore.getState().tabsById[ref.id];
+    return (
+      tab !== undefined &&
+      pathname === `/identities/${encodeURIComponent(tab.identityId)}`
+    );
+  }
   if (ref.kind === "history")
     return pathname === "/epics" || pathname === "/epics/";
   return isSettingsRoutePath(pathname);

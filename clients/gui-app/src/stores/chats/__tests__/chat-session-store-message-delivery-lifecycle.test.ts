@@ -61,6 +61,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 interface Harness {
@@ -132,6 +133,8 @@ function emitSnapshot(
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   callbacks.onSnapshot({
     kind: "snapshot",

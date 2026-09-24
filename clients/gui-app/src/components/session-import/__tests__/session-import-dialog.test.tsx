@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   hostScopeFixture,
   hostScopeOptionFixture,
@@ -72,6 +73,28 @@ const scanSupportedMock = vi.hoisted(() => ({ value: true }));
 
 vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailableFor: () => scanSupportedMock.value,
+}));
+
+/**
+ * The Hermes mode toggle is gated on this method; every existing case in this
+ * suite needs it `false` so it sees no toggle, exactly as before the Hermes
+ * rows existed. Only the Hermes-specific case below flips it.
+ */
+const hermesSupportedMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (_hostId: string | null, method: string) =>
+    method === "agentIdentity.import.hermes.scan" && hermesSupportedMock.value,
+}));
+
+/**
+ * Stubbed exactly as the sessions wizard is: this suite is about which
+ * surface (Hermes rows vs. sessions wizard vs. notice) the dialog chooses,
+ * not the Hermes panel's own scan/row/run behaviour (covered by
+ * `hermes-import-panel.test.tsx`).
+ */
+vi.mock("@/components/session-import/hermes-import-panel", () => ({
+  HermesImportPanel: () => <div data-testid="hermes-import-panel-stub" />,
 }));
 
 vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
@@ -260,6 +283,7 @@ describe("<SessionImportDialog />", () => {
     scopeStatusOverrideMock.value = null;
     streamOnHostMock.hostId = null;
     scanSupportedMock.value = true;
+    hermesSupportedMock.value = false;
     scanTrackerMock.reset();
     hostScopeCallsMock.scopedHostIds = [];
   });
@@ -425,5 +449,25 @@ describe("<SessionImportDialog />", () => {
     );
     expect(hostScopeCallsMock.scopedHostIds.at(-1)).toBe("host-a");
     expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
+  });
+
+  it("shows the mode toggle and swaps in the Hermes panel when the host advertises the Hermes importer", async () => {
+    hermesSupportedMock.value = true;
+
+    renderDialog({ initialHostId: null, onClose: undefined });
+
+    expect(screen.getByTestId("session-import-mode")).not.toBeNull();
+    expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
+    expect(screen.queryByTestId("hermes-import-panel-stub")).toBeNull();
+
+    // Radix `TabsTrigger` selects on `onMouseDown` - `userEvent` synthesizes
+    // the full pointer sequence, matching real interaction.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "Hermes profile" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hermes-import-panel-stub")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
   });
 });

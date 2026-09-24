@@ -254,7 +254,7 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (33) ───────────────────────────────────────────
+  // ── Static zustand stores (34) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -344,6 +344,10 @@ export const PERSIST_STORES = [
   // it replaces were: it names a machine to watch, not an account.
   { camelName: "watchHost", leaf: "watch-host", kind: "static" },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
+  // The open Identities tabs (`stores/identities/identity-tabs-store.ts`):
+  // the source records the `identity` tab kind projects from, as `tabs` holds
+  // the system tabs and `draft` the landing drafts.
+  { camelName: "identityTabs", leaf: "identity-tabs", kind: "static" },
   {
     camelName: "workspaceFolders",
     leaf: "workspace-folders",

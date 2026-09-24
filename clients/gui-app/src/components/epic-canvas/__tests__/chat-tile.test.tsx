@@ -475,6 +475,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -484,6 +485,7 @@ const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 const INITIAL_HANDOFF_CONTENT: JsonContent = {
   type: "doc",
@@ -502,6 +504,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -511,6 +514,7 @@ const SESSION_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 // `SESSION_SETTINGS` twin with `permissionMode: "auto"`, for the next-step
 // clamp cases. Installed as the CHAT'S OWN persisted settings (rather than
@@ -721,6 +725,8 @@ function emitChatSnapshotWithMessages(input: {
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: {
         role: input.access,

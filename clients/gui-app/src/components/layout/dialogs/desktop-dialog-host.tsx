@@ -1,4 +1,5 @@
 import { DraftsDialog } from "@/components/composer/drafts/drafts-dialog";
+import { IdentitiesDialog } from "@/components/identities/identities-dialog";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
@@ -29,6 +30,9 @@ export function DesktopDialogHost(): ReactNode {
     (state) => state.draftsEntryPoint,
   );
   const activeDialog = useDesktopDialogStore((state) => state.activeDialog);
+  const identitiesRequest = useDesktopDialogStore(
+    (state) => state.identitiesRequest,
+  );
   const updateUnsyncedEpics = useDesktopDialogStore(
     (state) => state.updateUnsyncedEpics,
   );
@@ -63,6 +67,15 @@ export function DesktopDialogHost(): ReactNode {
           hostId={hostId}
           entryPoint={draftsEntryPoint}
           activeEpicId={activeEpicId}
+          onClose={close}
+        />
+      ) : null}
+      {activeDialog === "identities" ? (
+        <IdentitiesDialog
+          // A composer names its run target; the header and palette mean the
+          // app-wide host.
+          hostId={identitiesRequest.hostId ?? hostId}
+          mode={identitiesRequest.mode}
           onClose={close}
         />
       ) : null}

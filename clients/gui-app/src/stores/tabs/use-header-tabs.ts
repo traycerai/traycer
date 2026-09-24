@@ -7,6 +7,10 @@ import {
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import {
+  useIdentityTabsStore,
+  type IdentityTab,
+} from "@/stores/identities/identity-tabs-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   makeSelectHeaderItem,
@@ -91,6 +95,18 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabs = useLandingDraftStore(
     useShallow((s) => s.drafts.filter(isOpenLandingDraft)),
   );
+  const identityTabs = useIdentityTabsStore(
+    useShallow((s) =>
+      s.openTabOrder.flatMap((id) => {
+        const tab = s.tabsById[id];
+        return tab === undefined ? [] : [tab];
+      }),
+    ),
+  );
+  const identityTabsById = useMemo(
+    () => new Map<string, IdentityTab>(identityTabs.map((t) => [t.id, t])),
+    [identityTabs],
+  );
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
 
   const epicTabsById = useMemo(
@@ -109,6 +125,7 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
         resolveRef(ref, {
           epicTabsById,
           draftTabsById,
+          identityTabsById,
           systemTabs,
           structuralLockRevision,
           epicSessionHostRevision: epicSessionHostRevisionValue,
@@ -118,6 +135,7 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
       draftTabsById,
       epicSessionHostRevisionValue,
       epicTabsById,
+      identityTabsById,
       stripOrder,
       structuralLockRevision,
       systemTabs,
@@ -175,6 +193,18 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
   const draftTabs = useLandingDraftStore(
     useShallow((s) => s.drafts.filter(isOpenLandingDraft)),
   );
+  const identityTabs = useIdentityTabsStore(
+    useShallow((s) =>
+      s.openTabOrder.flatMap((id) => {
+        const tab = s.tabsById[id];
+        return tab === undefined ? [] : [tab];
+      }),
+    ),
+  );
+  const identityTabsById = useMemo(
+    () => new Map<string, IdentityTab>(identityTabs.map((t) => [t.id, t])),
+    [identityTabs],
+  );
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((tab) => [tab.tabId, tab])),
@@ -192,6 +222,7 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
         projectHeaderStripItem(item, {
           epicTabsById,
           draftTabsById,
+          identityTabsById,
           systemTabs,
           structuralLockRevision,
           epicSessionHostRevision: epicSessionHostRevisionValue,
@@ -201,6 +232,7 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
       draftTabsById,
       epicSessionHostRevisionValue,
       epicTabsById,
+      identityTabsById,
       items,
       structuralLockRevision,
       systemTabs,
@@ -323,6 +355,9 @@ export function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
       state.drafts.find((candidate) => candidate.id === ref.id) ?? null;
     return found !== null && isOpenLandingDraft(found) ? found : null;
   });
+  const identity = useIdentityTabsStore((state) =>
+    ref?.kind === "identity" ? (state.tabsById[ref.id] ?? null) : null,
+  );
   const system = useTabsStore((state) => {
     if (ref?.kind === "history") return state.systemTabs.history;
     if (ref?.kind === "settings") return state.systemTabs.settings;
@@ -344,6 +379,15 @@ export function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
     return draft === null
       ? null
       : memoizedHeaderTab(draftHeaderTabCache, draft, TAB_KINDS.draft.build);
+  }
+  if (ref.kind === "identity") {
+    return identity === null
+      ? null
+      : memoizedHeaderTab(
+          identityHeaderTabCache,
+          identity,
+          TAB_KINDS.identity.build,
+        );
   }
   if (ref.kind === "history") {
     return system === null
@@ -416,6 +460,7 @@ const epicHeaderTabCache = new WeakMap<
   Map<EpicHeaderTabCacheKey, HeaderTab>
 >();
 const draftHeaderTabCache = new WeakMap<LandingDraftTab, HeaderTab>();
+const identityHeaderTabCache = new WeakMap<IdentityTab, HeaderTab>();
 const historyHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
 const settingsHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
 
@@ -434,6 +479,7 @@ function memoizedHeaderTab<S extends object>(
 interface HeaderTabSources {
   readonly epicTabsById: ReadonlyMap<string, EpicViewTab>;
   readonly draftTabsById: ReadonlyMap<string, LandingDraftTab>;
+  readonly identityTabsById: ReadonlyMap<string, IdentityTab>;
   readonly systemTabs: {
     readonly history: SystemTab | null;
     readonly settings: SystemTab | null;
@@ -482,7 +528,7 @@ function resolveRef(
   ref: TabRef,
   sources: HeaderTabSources,
 ): ReadonlyArray<HeaderTab> {
-  const { epicTabsById, draftTabsById, systemTabs } = sources;
+  const { epicTabsById, draftTabsById, identityTabsById, systemTabs } = sources;
   if (ref.kind === "epic") {
     const source = epicTabsById.get(ref.id);
     if (source === undefined) return [];
@@ -501,6 +547,17 @@ function resolveRef(
       memoizedHeaderTab(draftHeaderTabCache, source, TAB_KINDS.draft.build),
     ];
   }
+  if (ref.kind === "identity") {
+    const source = identityTabsById.get(ref.id);
+    if (source === undefined) return [];
+    return [
+      memoizedHeaderTab(
+        identityHeaderTabCache,
+        source,
+        TAB_KINDS.identity.build,
+      ),
+    ];
+  }
   if (ref.kind === "history") {
     const source = systemTabs.history;
     if (source === null) return [];
@@ -517,6 +574,16 @@ function resolveRef(
 }
 
 /** Non-hook variant for keybinding dispatch and close-flow. */
+function identityTabsByIdSnapshot(): ReadonlyMap<string, IdentityTab> {
+  const state = useIdentityTabsStore.getState();
+  return new Map<string, IdentityTab>(
+    state.openTabOrder.flatMap((id) => {
+      const tab = state.tabsById[id];
+      return tab === undefined ? [] : [[id, tab] as const];
+    }),
+  );
+}
+
 export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
   const stripOrder = useTabsStore.getState().stripOrder;
   const canvasState = useEpicCanvasStore.getState();
@@ -534,10 +601,12 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabsById = new Map<string, LandingDraftTab>(
     draftTabs.map((t) => [t.id, t]),
   );
+  const identityTabsById = identityTabsByIdSnapshot();
   return stripOrder.flatMap((ref) =>
     resolveRef(ref, {
       epicTabsById,
       draftTabsById,
+      identityTabsById,
       systemTabs,
       structuralLockRevision: getTabStructuralLockRevision(),
       epicSessionHostRevision: getEpicSessionHostRevision(),

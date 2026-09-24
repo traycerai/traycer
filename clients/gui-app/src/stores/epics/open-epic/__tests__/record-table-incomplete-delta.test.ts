@@ -22,7 +22,7 @@
  * would cost a snapshot per delta, which is the entire saving this epic buys.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   TuiAgentRecordSummaryV11,
   TuiAgentRecordSummaryV12,
@@ -46,8 +46,8 @@ const VIEWER_ID = "viewer-1";
 const HOST_ID = "host-1";
 
 function chatRow(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "c1",
     ownerUserId: VIEWER_ID,
@@ -64,12 +64,13 @@ function chatRow(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }
 
 /** The stream's chat row: everything the list row has EXCEPT the home. */
-function chatStreamRow(overrides: Partial<ChatRecordSummaryV11>) {
+function chatStreamRow(overrides: Partial<ChatRecordSummaryV12>) {
   const { docResident: _home, ...rest } = chatRow(overrides);
   return rest;
 }

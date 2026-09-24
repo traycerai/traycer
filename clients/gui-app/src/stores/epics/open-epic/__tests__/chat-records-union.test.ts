@@ -20,7 +20,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type {
   ChatRecordHeadStamp,
-  ChatRecordSummaryV11,
   ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -82,14 +81,14 @@ function docChatEntry(args: {
 }
 
 /**
- * An `epic.listChatRecords@1.1` row. `docResident: false` by default because
+ * An `epic.listChatRecords@1.2` row. `docResident: false` by default because
  * that is what this builder models - a row the host's chat REGISTRY answered
  * with. Doc-resident cases override it explicitly, so a fixture never inherits
  * a home it did not mean to claim.
  */
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -106,6 +105,7 @@ function record(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }
@@ -221,6 +221,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       updatedAt: 2,
       userId: "user-a",
       hostId: "host-1",
+      chatKind: "conversation",
       isTitleEditedByUser: true,
       // The registry answered for this row, so the home it states is the one
       // that reaches the projection - the post-sweep steady state is exactly
@@ -477,6 +478,33 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     const state = session.handle.store.getState();
     expect(state.chats.byId.both.title).toBe("Renamed");
     expect(state.chats.byId.both.settings?.model).toBe("opus");
+    session.handle.dispose();
+  });
+
+  it("carries the row's kind over a doc entry that states none", () => {
+    const docEntry = docChatEntry({
+      id: "both",
+      title: "Doc",
+      parentId: null,
+      hostId: "host-1",
+    });
+    const session = newSession(seedChats([["both", docEntry]]));
+    expect(session.handle.store.getState().chats.byId.both.chatKind).toBe(
+      "conversation",
+    );
+    session.handle.store
+      .getState()
+      .applyChatRecords(
+        [
+          record({ chatId: "both", kind: "evolution" }),
+          record({ chatId: "c" }),
+        ],
+        null,
+      );
+
+    const state = session.handle.store.getState();
+    expect(state.chats.byId.both.chatKind).toBe("evolution");
+    expect(state.chats.byId.c.chatKind).toBe("conversation");
     session.handle.dispose();
   });
 

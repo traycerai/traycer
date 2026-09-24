@@ -545,6 +545,7 @@ describe("host-agent capability contracts", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: "work",
+        identityId: "identity_1",
       },
     } as const;
 

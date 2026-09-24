@@ -53,6 +53,7 @@ const TEST_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 // Arbitrary fixed host: these tests exercise clearEpicRunSettings's ACROSS-
 // HOST clearing, not host scoping itself, so any single consistent id works.

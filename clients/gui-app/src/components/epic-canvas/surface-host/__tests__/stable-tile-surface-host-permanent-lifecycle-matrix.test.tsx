@@ -337,6 +337,7 @@ const CHAT_RUN_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 function buildChatYMap(chat: EpicCanvasTileRef): Y.Map<unknown> {
@@ -520,6 +521,8 @@ function emitChatSnapshot(
         claudePendingWakes: [],
         messages: [...(messages ?? [buildUserSnapshotMessage(chat, 1)])],
         events: [],
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: "owner-1", canAct: true },
       queue: { status: "idle", items: [] },

@@ -1,12 +1,12 @@
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  UpdateChatRunSettingsRequest,
+  UpdateChatRunSettingsRequestV12,
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { appLogger } from "@/lib/logger";
 
 type UpdateChatRunSettingsMutateAsync = (
-  params: UpdateChatRunSettingsRequest,
+  params: UpdateChatRunSettingsRequestV12,
 ) => Promise<UpdateChatRunSettingsResponse>;
 
 // Module-scoped (not per-component) so every writer of a given chat's
@@ -21,7 +21,7 @@ type UpdateChatRunSettingsMutateAsync = (
 // `enqueuePersistChatRunSettings`) - otherwise every chat ever touched over
 // the app's lifetime would accumulate here with no bound.
 const chains = new Map<string, Promise<void>>();
-const pending = new Map<string, UpdateChatRunSettingsRequest>();
+const pending = new Map<string, UpdateChatRunSettingsRequestV12>();
 
 /** Test-only: number of chats with a chain currently tracked (idle chats are
  *  removed once their chain settles - see the module comment above). */
@@ -43,7 +43,7 @@ export function __chainCountForTests(): number {
  */
 export function enqueuePersistChatRunSettings(
   mutateAsync: UpdateChatRunSettingsMutateAsync,
-  request: UpdateChatRunSettingsRequest,
+  request: UpdateChatRunSettingsRequestV12,
 ): void {
   const { chatId } = request;
   pending.set(chatId, request);

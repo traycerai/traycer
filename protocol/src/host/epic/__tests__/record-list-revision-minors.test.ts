@@ -60,6 +60,7 @@ const CHAT_ROW = {
   visibility: "private",
   origin: "own",
   docResident: false,
+  kind: "conversation",
 } as const;
 
 describe("epic.listChatRecords@1.3", () => {

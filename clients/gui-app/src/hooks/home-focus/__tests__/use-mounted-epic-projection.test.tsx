@@ -44,6 +44,7 @@ function chatProjection(
     updatedAt: 0,
     userId: null,
     hostId: "host-a",
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     docResident: false,
     archivedAt: null,

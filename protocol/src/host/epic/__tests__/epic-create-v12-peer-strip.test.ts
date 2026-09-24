@@ -33,6 +33,7 @@ const settings = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
+  identityId: null,
 };
 
 const initialMessageV12 = {

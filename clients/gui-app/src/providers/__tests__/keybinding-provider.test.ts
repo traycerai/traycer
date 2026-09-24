@@ -132,6 +132,9 @@ function buildRouter(initialPath: string): MockRouter {
       } else if (intent.kind === "home") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
         pathname = "/home";
+      } else if (intent.kind === "identity") {
+        calls.push({ kind: "epic", epicId: null, sectionId: null });
+        pathname = `/identities/${intent.identityId}`;
       } else {
         calls.push({
           kind: "section",

@@ -311,6 +311,12 @@ export function publishedChatSessionState(
       // the whole transcript arrives materialized, so a second copy doubled
       // the peak of an already-large read.
       archivedAt: null,
+      // A published copy is somebody's ordinary conversation, read-only. The
+      // evolution kind names a chat the host runs against an identity's own
+      // review pass, which is never what gets published - and the turn counter
+      // that drives one is meaningless without a live chat to count turns on.
+      kind: "conversation",
+      evolutionTurnsSinceReview: null,
     },
     access: {
       role: "viewer",
