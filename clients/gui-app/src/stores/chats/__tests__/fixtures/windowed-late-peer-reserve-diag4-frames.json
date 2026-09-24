@@ -1,1603 +1,1578 @@
 [
- {
-  "i": 0,
-  "restoresX": false,
-  "envelope": {
-   "kind": "snapshot",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "snapshot": {
-    "chat": {
-     "parentId": null,
-     "id": "chat-windowed-emit",
-     "userId": "owner-1",
-     "hostId": "host-1",
-     "title": "Windowed emit",
-     "createdAt": 1000,
-     "updatedAt": 1790214965848,
-     "isTitleEditedByUser": false,
-     "settings": {
-      "harnessId": "claude",
-      "model": "test-model",
-      "permissionMode": "auto",
-      "reasoningEffort": null,
-      "serviceTier": null,
-      "agentMode": "epic",
-      "profileId": null
-     },
-     "activeSessionChain": {
-      "harnessId": "claude",
-      "sessionId": "session-1",
-      "sessionWorkspaceSnapshot": {
-       "workspaceKind": "session-snapshot",
-       "primaryWorkspace": "/tmp/project",
-       "secondaryWorkspaces": [
-        "/tmp/traycer-home"
-       ]
-      },
-      "coveredUntilMessageId": null,
-      "profileId": null
-     },
-     "claudePendingWakes": [],
-     "archivedAt": null,
-     "pinnedUserProviderHandle": null,
-     "lastDeliveredRolesDigest": null
-    },
-    "access": {
-     "role": "owner",
-     "ownerUserId": "owner-1",
-     "canAct": true
-    },
-    "queue": {
-     "status": "idle",
-     "items": []
-    },
-    "runStatus": "running",
-    "activeTurn": {
-     "turnId": "turn-1",
-     "status": "running",
-     "harnessId": "claude",
-     "model": "test-model",
-     "reasoningEffort": null,
-     "serviceTier": null,
-     "agentMode": "epic",
-     "profileId": null,
-     "sameTurnSteeringSupported": true,
-     "userMessageId": "u1",
-     "startedAt": 1790214965819,
-     "updatedAt": 2001
-    },
-    "pendingApprovals": [
-     {
+  {
+    "i": 0,
+    "restoresX": false,
+    "envelope": {
+      "kind": "snapshot",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "snapshot": {
+        "chat": {
+          "parentId": null,
+          "id": "chat-windowed-emit",
+          "userId": "owner-1",
+          "hostId": "host-1",
+          "title": "Windowed emit",
+          "createdAt": 1000,
+          "updatedAt": 1790214965848,
+          "isTitleEditedByUser": false,
+          "settings": {
+            "harnessId": "claude",
+            "model": "test-model",
+            "permissionMode": "auto",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null
+          },
+          "activeSessionChain": {
+            "harnessId": "claude",
+            "sessionId": "session-1",
+            "sessionWorkspaceSnapshot": {
+              "workspaceKind": "session-snapshot",
+              "primaryWorkspace": "/tmp/project",
+              "secondaryWorkspaces": ["/tmp/traycer-home"]
+            },
+            "coveredUntilMessageId": null,
+            "profileId": null
+          },
+          "claudePendingWakes": [],
+          "archivedAt": null,
+          "pinnedUserProviderHandle": null,
+          "lastDeliveredRolesDigest": null
+        },
+        "access": {
+          "role": "owner",
+          "ownerUserId": "owner-1",
+          "canAct": true
+        },
+        "queue": {
+          "status": "idle",
+          "items": []
+        },
+        "runStatus": "running",
+        "activeTurn": {
+          "turnId": "turn-1",
+          "status": "running",
+          "harnessId": "claude",
+          "model": "test-model",
+          "reasoningEffort": null,
+          "serviceTier": null,
+          "agentMode": "epic",
+          "profileId": null,
+          "sameTurnSteeringSupported": true,
+          "userMessageId": "u1",
+          "startedAt": 1790214965819,
+          "updatedAt": 2001
+        },
+        "pendingApprovals": [
+          {
+            "approvalId": "tool-1:approval",
+            "toolName": "Bash",
+            "description": "git push --force",
+            "input": {
+              "command": "git push --force"
+            },
+            "requestedAt": 1790214965848,
+            "kind": "tool",
+            "planId": null,
+            "actions": [],
+            "reason": null,
+            "reviewing": null
+          }
+        ],
+        "pendingInterviews": [],
+        "worktreeBinding": {
+          "entries": [
+            {
+              "workspacePath": "/tmp/project",
+              "mode": "local",
+              "repoIdentifier": null,
+              "worktreePath": null,
+              "branch": null,
+              "isPrimary": true,
+              "isImported": false,
+              "setupState": "not_required",
+              "setupTerminalSessionId": null,
+              "setupExitCode": null,
+              "setupFailedAt": null,
+              "createdAt": 1,
+              "ownedSubmodules": []
+            }
+          ]
+        },
+        "missingWorktreePaths": [],
+        "pendingFileEditApprovals": [],
+        "accumulatedFileChangeCount": 0,
+        "backgroundItems": [],
+        "managedCommands": [],
+        "heldUpdates": [],
+        "turnInProgress": true,
+        "transcriptEpoch": 1,
+        "rowCount": 2,
+        "indexRevision": null,
+        "tail": {
+          "fromOrdinal": 0,
+          "rowIds": ["u1", "assistant:turn-1"],
+          "messages": [
+            {
+              "role": "user",
+              "messageId": "u1",
+              "sender": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": {
+                "kind": "user",
+                "content": {
+                  "type": "doc",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "push"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "browserAnnotations": []
+              },
+              "timestamp": 1790214965808,
+              "sessionAnchor": null
+            },
+            {
+              "imageResolutions": [],
+              "role": "assistant",
+              "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
+              "sender": {
+                "type": "agent",
+                "harnessId": "claude",
+                "agentId": "test-model",
+                "displayName": "test-model",
+                "reply": {
+                  "expectsReply": false
+                },
+                "inReplyTo": null
+              },
+              "blocks": [],
+              "startedAt": 1790214965819,
+              "blocksVersion": 0,
+              "timestamp": 2001,
+              "turnId": "turn-1",
+              "usage": null,
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "envCredentialVar": null,
+              "turnProfile": {
+                "profileId": null,
+                "labelSnapshot": null
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
+              "type": "turn.started",
+              "timestamp": 1790214965834,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn started.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            }
+          ],
+          "rowContext": {}
+        },
+        "derived": {
+          "latestAssistantUsage": null,
+          "pinnedTodo": null,
+          "pinnedTaskTodoItems": [],
+          "latestForkableAssistantMessageId": null,
+          "restorableSetupInterruption": null,
+          "interviewAnswerability": [],
+          "latestAssistantAuthFailureTurnKey": null,
+          "setupCardWindows": []
+        }
+      }
+    }
+  },
+  {
+    "i": 1,
+    "restoresX": false,
+    "envelope": {
+      "kind": "accumulatedChanges",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "chunk": {
+        "epoch": 1,
+        "generation": 1,
+        "fromIndex": 0,
+        "summaries": [],
+        "isFinal": true
+      }
+    }
+  },
+  {
+    "i": 2,
+    "restoresX": false,
+    "envelope": {
+      "kind": "skeletonChunk",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "chunk": {
+        "epoch": 1,
+        "fromOrdinal": 0,
+        "entries": [
+          {
+            "rowId": "u1",
+            "createdAt": 1790214965808,
+            "role": "user",
+            "byteLength": 273,
+            "bodyDigest": "5drgit0qr3u59",
+            "preview": "push"
+          }
+        ],
+        "isFinal": false
+      }
+    }
+  },
+  {
+    "i": 3,
+    "restoresX": false,
+    "envelope": {
+      "kind": "skeletonChunk",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "chunk": {
+        "epoch": 1,
+        "fromOrdinal": 1,
+        "entries": [
+          {
+            "rowId": "assistant:turn-1",
+            "createdAt": 1790214965819,
+            "role": "assistant",
+            "byteLength": 257,
+            "bodyDigest": "1e07mi91d1g369"
+          }
+        ],
+        "isFinal": true
+      }
+    }
+  },
+  {
+    "i": 4,
+    "restoresX": true,
+    "envelope": {
+      "kind": "snapshot",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "snapshot": {
+        "chat": {
+          "parentId": null,
+          "id": "chat-windowed-emit",
+          "userId": "owner-1",
+          "hostId": "host-1",
+          "title": "Windowed emit",
+          "createdAt": 1000,
+          "updatedAt": 1790214965848,
+          "isTitleEditedByUser": false,
+          "settings": {
+            "harnessId": "claude",
+            "model": "test-model",
+            "permissionMode": "auto",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null
+          },
+          "activeSessionChain": {
+            "harnessId": "claude",
+            "sessionId": "session-1",
+            "sessionWorkspaceSnapshot": {
+              "workspaceKind": "session-snapshot",
+              "primaryWorkspace": "/tmp/project",
+              "secondaryWorkspaces": ["/tmp/traycer-home"]
+            },
+            "coveredUntilMessageId": null,
+            "profileId": null
+          },
+          "claudePendingWakes": [],
+          "archivedAt": null,
+          "pinnedUserProviderHandle": null,
+          "lastDeliveredRolesDigest": null
+        },
+        "access": {
+          "role": "owner",
+          "ownerUserId": "owner-1",
+          "canAct": true
+        },
+        "queue": {
+          "status": "idle",
+          "items": []
+        },
+        "runStatus": "running",
+        "activeTurn": {
+          "turnId": "turn-1",
+          "status": "running",
+          "harnessId": "claude",
+          "model": "test-model",
+          "reasoningEffort": null,
+          "serviceTier": null,
+          "agentMode": "epic",
+          "profileId": null,
+          "sameTurnSteeringSupported": true,
+          "userMessageId": "u1",
+          "startedAt": 1790214965819,
+          "updatedAt": 2001
+        },
+        "pendingApprovals": [
+          {
+            "approvalId": "tool-1:approval",
+            "toolName": "Bash",
+            "description": "git push --force",
+            "input": {
+              "command": "git push --force"
+            },
+            "requestedAt": 1790214965848,
+            "kind": "tool",
+            "planId": null,
+            "actions": [],
+            "reason": null,
+            "reviewing": null
+          }
+        ],
+        "pendingInterviews": [],
+        "worktreeBinding": {
+          "entries": [
+            {
+              "workspacePath": "/tmp/project",
+              "mode": "local",
+              "repoIdentifier": null,
+              "worktreePath": null,
+              "branch": null,
+              "isPrimary": true,
+              "isImported": false,
+              "setupState": "not_required",
+              "setupTerminalSessionId": null,
+              "setupExitCode": null,
+              "setupFailedAt": null,
+              "createdAt": 1,
+              "ownedSubmodules": []
+            }
+          ]
+        },
+        "missingWorktreePaths": [],
+        "pendingFileEditApprovals": [],
+        "accumulatedFileChangeCount": 0,
+        "backgroundItems": [],
+        "managedCommands": [],
+        "heldUpdates": [],
+        "turnInProgress": true,
+        "transcriptEpoch": 1,
+        "rowCount": 2,
+        "indexRevision": 0,
+        "tail": {
+          "fromOrdinal": 0,
+          "rowIds": ["u1", "assistant:turn-1"],
+          "messages": [
+            {
+              "role": "user",
+              "messageId": "u1",
+              "sender": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": {
+                "kind": "user",
+                "content": {
+                  "type": "doc",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "push"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "browserAnnotations": []
+              },
+              "timestamp": 1790214965808,
+              "sessionAnchor": null
+            },
+            {
+              "imageResolutions": [],
+              "role": "assistant",
+              "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
+              "sender": {
+                "type": "agent",
+                "harnessId": "claude",
+                "agentId": "test-model",
+                "displayName": "test-model",
+                "reply": {
+                  "expectsReply": false
+                },
+                "inReplyTo": null
+              },
+              "blocks": [
+                {
+                  "type": "approval",
+                  "blockId": "tool-1:approval",
+                  "status": "streaming",
+                  "timestamp": 1790214965848,
+                  "toolName": "Bash",
+                  "description": "git push --force",
+                  "inputSummary": "git push --force",
+                  "inputDetail": {
+                    "kind": "command",
+                    "command": "git push --force"
+                  },
+                  "decision": null
+                }
+              ],
+              "startedAt": 1790214965819,
+              "blocksVersion": 1,
+              "timestamp": 1790214965848,
+              "turnId": "turn-1",
+              "usage": null,
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "envCredentialVar": null,
+              "turnProfile": {
+                "profileId": null,
+                "labelSnapshot": null
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
+              "type": "turn.started",
+              "timestamp": 1790214965834,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn started.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            },
+            {
+              "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
+              "type": "approval.requested",
+              "timestamp": 1790214965848,
+              "clientActionId": null,
+              "actor": null,
+              "message": "git push --force",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "warning",
+              "metadata": {
+                "actions": [],
+                "input": {
+                  "command": "git push --force"
+                },
+                "kind": "tool",
+                "planId": null,
+                "toolName": "Bash"
+              }
+            }
+          ],
+          "rowContext": {}
+        },
+        "derived": {
+          "latestAssistantUsage": null,
+          "pinnedTodo": null,
+          "pinnedTaskTodoItems": [],
+          "latestForkableAssistantMessageId": null,
+          "restorableSetupInterruption": null,
+          "interviewAnswerability": [],
+          "latestAssistantAuthFailureTurnKey": null,
+          "setupCardWindows": []
+        }
+      }
+    }
+  },
+  {
+    "i": 5,
+    "restoresX": false,
+    "envelope": {
+      "kind": "indexChanged",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "epoch": 1,
+      "rowCount": 2,
+      "indexRevision": 1,
+      "changes": [
+        {
+          "type": "updated",
+          "entries": [
+            {
+              "ordinal": 1,
+              "entry": {
+                "rowId": "assistant:turn-1",
+                "createdAt": 1790214965819,
+                "role": "assistant",
+                "byteLength": 257,
+                "bodyDigest": "1e07mi91d1g369"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "i": 6,
+    "restoresX": false,
+    "envelope": {
+      "kind": "approvalResolved",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
       "approvalId": "tool-1:approval",
-      "toolName": "Bash",
-      "description": "git push --force",
-      "input": {
-       "command": "git push --force"
+      "decision": {
+        "approved": true
       },
-      "requestedAt": 1790214965848,
-      "kind": "tool",
-      "planId": null,
-      "actions": [],
-      "reason": null,
-      "reviewing": null
-     }
-    ],
-    "pendingInterviews": [],
-    "worktreeBinding": {
-     "entries": [
-      {
-       "workspacePath": "/tmp/project",
-       "mode": "local",
-       "repoIdentifier": null,
-       "worktreePath": null,
-       "branch": null,
-       "isPrimary": true,
-       "isImported": false,
-       "setupState": "not_required",
-       "setupTerminalSessionId": null,
-       "setupExitCode": null,
-       "setupFailedAt": null,
-       "createdAt": 1,
-       "ownedSubmodules": []
-      }
-     ]
-    },
-    "missingWorktreePaths": [],
-    "pendingFileEditApprovals": [],
-    "accumulatedFileChangeCount": 0,
-    "backgroundItems": [],
-    "managedCommands": [],
-    "heldUpdates": [],
-    "turnInProgress": true,
-    "transcriptEpoch": 1,
-    "rowCount": 2,
-    "indexRevision": null,
-    "tail": {
-     "fromOrdinal": 0,
-     "rowIds": [
-      "u1",
-      "assistant:turn-1"
-     ],
-     "messages": [
-      {
-       "role": "user",
-       "messageId": "u1",
-       "sender": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": {
-        "kind": "user",
-        "content": {
-         "type": "doc",
-         "content": [
-          {
-           "type": "paragraph",
-           "content": [
-            {
-             "type": "text",
-             "text": "push"
-            }
-           ]
-          }
-         ]
-        },
-        "browserAnnotations": []
-       },
-       "timestamp": 1790214965808,
-       "sessionAnchor": null
-      },
-      {
-       "imageResolutions": [],
-       "role": "assistant",
-       "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
-       "sender": {
-        "type": "agent",
-        "harnessId": "claude",
-        "agentId": "test-model",
-        "displayName": "test-model",
-        "reply": {
-         "expectsReply": false
-        },
-        "inReplyTo": null
-       },
-       "blocks": [],
-       "startedAt": 1790214965819,
-       "blocksVersion": 0,
-       "timestamp": 2001,
-       "turnId": "turn-1",
-       "usage": null,
-       "reasoningEffort": null,
-       "serviceTier": null,
-       "envCredentialVar": null,
-       "turnProfile": {
-        "profileId": null,
-        "labelSnapshot": null
-       }
-      }
-     ],
-     "events": [
-      {
-       "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
-       "type": "turn.started",
-       "timestamp": 1790214965834,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn started.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
-      }
-     ],
-     "rowContext": {}
-    },
-    "derived": {
-     "latestAssistantUsage": null,
-     "pinnedTodo": null,
-     "pinnedTaskTodoItems": [],
-     "latestForkableAssistantMessageId": null,
-     "restorableSetupInterruption": null,
-     "interviewAnswerability": [],
-     "latestAssistantAuthFailureTurnKey": null,
-     "setupCardWindows": []
+      "resolvedAt": 1790214967863
     }
-   }
-  }
- },
- {
-  "i": 1,
-  "restoresX": false,
-  "envelope": {
-   "kind": "accumulatedChanges",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "chunk": {
-    "epoch": 1,
-    "generation": 1,
-    "fromIndex": 0,
-    "summaries": [],
-    "isFinal": true
-   }
-  }
- },
- {
-  "i": 2,
-  "restoresX": false,
-  "envelope": {
-   "kind": "skeletonChunk",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "chunk": {
-    "epoch": 1,
-    "fromOrdinal": 0,
-    "entries": [
-     {
-      "rowId": "u1",
-      "createdAt": 1790214965808,
-      "role": "user",
-      "byteLength": 273,
-      "bodyDigest": "5drgit0qr3u59",
-      "preview": "push"
-     }
-    ],
-    "isFinal": false
-   }
-  }
- },
- {
-  "i": 3,
-  "restoresX": false,
-  "envelope": {
-   "kind": "skeletonChunk",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "chunk": {
-    "epoch": 1,
-    "fromOrdinal": 1,
-    "entries": [
-     {
-      "rowId": "assistant:turn-1",
-      "createdAt": 1790214965819,
-      "role": "assistant",
-      "byteLength": 257,
-      "bodyDigest": "1e07mi91d1g369"
-     }
-    ],
-    "isFinal": true
-   }
-  }
- },
- {
-  "i": 4,
-  "restoresX": true,
-  "envelope": {
-   "kind": "snapshot",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "snapshot": {
-    "chat": {
-     "parentId": null,
-     "id": "chat-windowed-emit",
-     "userId": "owner-1",
-     "hostId": "host-1",
-     "title": "Windowed emit",
-     "createdAt": 1000,
-     "updatedAt": 1790214965848,
-     "isTitleEditedByUser": false,
-     "settings": {
-      "harnessId": "claude",
-      "model": "test-model",
-      "permissionMode": "auto",
-      "reasoningEffort": null,
-      "serviceTier": null,
-      "agentMode": "epic",
-      "profileId": null
-     },
-     "activeSessionChain": {
-      "harnessId": "claude",
-      "sessionId": "session-1",
-      "sessionWorkspaceSnapshot": {
-       "workspaceKind": "session-snapshot",
-       "primaryWorkspace": "/tmp/project",
-       "secondaryWorkspaces": [
-        "/tmp/traycer-home"
-       ]
-      },
-      "coveredUntilMessageId": null,
-      "profileId": null
-     },
-     "claudePendingWakes": [],
-     "archivedAt": null,
-     "pinnedUserProviderHandle": null,
-     "lastDeliveredRolesDigest": null
-    },
-    "access": {
-     "role": "owner",
-     "ownerUserId": "owner-1",
-     "canAct": true
-    },
-    "queue": {
-     "status": "idle",
-     "items": []
-    },
-    "runStatus": "running",
-    "activeTurn": {
-     "turnId": "turn-1",
-     "status": "running",
-     "harnessId": "claude",
-     "model": "test-model",
-     "reasoningEffort": null,
-     "serviceTier": null,
-     "agentMode": "epic",
-     "profileId": null,
-     "sameTurnSteeringSupported": true,
-     "userMessageId": "u1",
-     "startedAt": 1790214965819,
-     "updatedAt": 2001
-    },
-    "pendingApprovals": [
-     {
-      "approvalId": "tool-1:approval",
-      "toolName": "Bash",
-      "description": "git push --force",
-      "input": {
-       "command": "git push --force"
-      },
-      "requestedAt": 1790214965848,
-      "kind": "tool",
-      "planId": null,
-      "actions": [],
-      "reason": null,
-      "reviewing": null
-     }
-    ],
-    "pendingInterviews": [],
-    "worktreeBinding": {
-     "entries": [
-      {
-       "workspacePath": "/tmp/project",
-       "mode": "local",
-       "repoIdentifier": null,
-       "worktreePath": null,
-       "branch": null,
-       "isPrimary": true,
-       "isImported": false,
-       "setupState": "not_required",
-       "setupTerminalSessionId": null,
-       "setupExitCode": null,
-       "setupFailedAt": null,
-       "createdAt": 1,
-       "ownedSubmodules": []
-      }
-     ]
-    },
-    "missingWorktreePaths": [],
-    "pendingFileEditApprovals": [],
-    "accumulatedFileChangeCount": 0,
-    "backgroundItems": [],
-    "managedCommands": [],
-    "heldUpdates": [],
-    "turnInProgress": true,
-    "transcriptEpoch": 1,
-    "rowCount": 2,
-    "indexRevision": 0,
-    "tail": {
-     "fromOrdinal": 0,
-     "rowIds": [
-      "u1",
-      "assistant:turn-1"
-     ],
-     "messages": [
-      {
-       "role": "user",
-       "messageId": "u1",
-       "sender": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": {
-        "kind": "user",
-        "content": {
-         "type": "doc",
-         "content": [
-          {
-           "type": "paragraph",
-           "content": [
-            {
-             "type": "text",
-             "text": "push"
-            }
-           ]
-          }
-         ]
+  },
+  {
+    "i": 7,
+    "restoresX": false,
+    "envelope": {
+      "kind": "eventAppended",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "event": {
+        "eventId": "effect:approval:tool-1:approval:outcome",
+        "type": "approval.resolved",
+        "timestamp": 1790214967863,
+        "clientActionId": "a-approve",
+        "actor": {
+          "type": "user",
+          "userId": "owner-1"
         },
-        "browserAnnotations": []
-       },
-       "timestamp": 1790214965808,
-       "sessionAnchor": null
-      },
-      {
-       "imageResolutions": [],
-       "role": "assistant",
-       "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
-       "sender": {
-        "type": "agent",
-        "harnessId": "claude",
-        "agentId": "test-model",
-        "displayName": "test-model",
-        "reply": {
-         "expectsReply": false
-        },
-        "inReplyTo": null
-       },
-       "blocks": [
-        {
-         "type": "approval",
-         "blockId": "tool-1:approval",
-         "status": "streaming",
-         "timestamp": 1790214965848,
-         "toolName": "Bash",
-         "description": "git push --force",
-         "inputSummary": "git push --force",
-         "inputDetail": {
-          "kind": "command",
-          "command": "git push --force"
-         },
-         "decision": null
+        "message": "Approval granted.",
+        "turnId": "turn-1",
+        "messageId": null,
+        "queueItemId": null,
+        "approvalId": "tool-1:approval",
+        "blockId": null,
+        "severity": "info",
+        "metadata": {
+          "commandId": "approval:tool-1:approval"
         }
-       ],
-       "startedAt": 1790214965819,
-       "blocksVersion": 1,
-       "timestamp": 1790214965848,
-       "turnId": "turn-1",
-       "usage": null,
-       "reasoningEffort": null,
-       "serviceTier": null,
-       "envCredentialVar": null,
-       "turnProfile": {
-        "profileId": null,
-        "labelSnapshot": null
-       }
       }
-     ],
-     "events": [
-      {
-       "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
-       "type": "turn.started",
-       "timestamp": 1790214965834,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn started.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
-      },
-      {
-       "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
-       "type": "approval.requested",
-       "timestamp": 1790214965848,
-       "clientActionId": null,
-       "actor": null,
-       "message": "git push --force",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "warning",
-       "metadata": {
-        "actions": [],
-        "input": {
-         "command": "git push --force"
+    }
+  },
+  {
+    "i": 8,
+    "restoresX": true,
+    "envelope": {
+      "kind": "snapshot",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "snapshot": {
+        "chat": {
+          "parentId": null,
+          "id": "chat-windowed-emit",
+          "userId": "owner-1",
+          "hostId": "host-1",
+          "title": "Windowed emit",
+          "createdAt": 1000,
+          "updatedAt": 1790214967863,
+          "isTitleEditedByUser": false,
+          "settings": {
+            "harnessId": "claude",
+            "model": "test-model",
+            "permissionMode": "auto",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null
+          },
+          "activeSessionChain": {
+            "harnessId": "claude",
+            "sessionId": "session-1",
+            "sessionWorkspaceSnapshot": {
+              "workspaceKind": "session-snapshot",
+              "primaryWorkspace": "/tmp/project",
+              "secondaryWorkspaces": ["/tmp/traycer-home"]
+            },
+            "coveredUntilMessageId": null,
+            "profileId": null
+          },
+          "claudePendingWakes": [],
+          "archivedAt": null,
+          "pinnedUserProviderHandle": null,
+          "lastDeliveredRolesDigest": null
         },
-        "kind": "tool",
-        "planId": null,
-        "toolName": "Bash"
-       }
-      }
-     ],
-     "rowContext": {}
-    },
-    "derived": {
-     "latestAssistantUsage": null,
-     "pinnedTodo": null,
-     "pinnedTaskTodoItems": [],
-     "latestForkableAssistantMessageId": null,
-     "restorableSetupInterruption": null,
-     "interviewAnswerability": [],
-     "latestAssistantAuthFailureTurnKey": null,
-     "setupCardWindows": []
-    }
-   }
-  }
- },
- {
-  "i": 5,
-  "restoresX": false,
-  "envelope": {
-   "kind": "indexChanged",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "epoch": 1,
-   "rowCount": 2,
-   "indexRevision": 1,
-   "changes": [
-    {
-     "type": "updated",
-     "entries": [
-      {
-       "ordinal": 1,
-       "entry": {
-        "rowId": "assistant:turn-1",
-        "createdAt": 1790214965819,
-        "role": "assistant",
-        "byteLength": 257,
-        "bodyDigest": "1e07mi91d1g369"
-       }
-      }
-     ]
-    }
-   ]
-  }
- },
- {
-  "i": 6,
-  "restoresX": false,
-  "envelope": {
-   "kind": "approvalResolved",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "approvalId": "tool-1:approval",
-   "decision": {
-    "approved": true
-   },
-   "resolvedAt": 1790214967863
-  }
- },
- {
-  "i": 7,
-  "restoresX": false,
-  "envelope": {
-   "kind": "eventAppended",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "event": {
-    "eventId": "effect:approval:tool-1:approval:outcome",
-    "type": "approval.resolved",
-    "timestamp": 1790214967863,
-    "clientActionId": "a-approve",
-    "actor": {
-     "type": "user",
-     "userId": "owner-1"
-    },
-    "message": "Approval granted.",
-    "turnId": "turn-1",
-    "messageId": null,
-    "queueItemId": null,
-    "approvalId": "tool-1:approval",
-    "blockId": null,
-    "severity": "info",
-    "metadata": {
-     "commandId": "approval:tool-1:approval"
-    }
-   }
-  }
- },
- {
-  "i": 8,
-  "restoresX": true,
-  "envelope": {
-   "kind": "snapshot",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "snapshot": {
-    "chat": {
-     "parentId": null,
-     "id": "chat-windowed-emit",
-     "userId": "owner-1",
-     "hostId": "host-1",
-     "title": "Windowed emit",
-     "createdAt": 1000,
-     "updatedAt": 1790214967863,
-     "isTitleEditedByUser": false,
-     "settings": {
-      "harnessId": "claude",
-      "model": "test-model",
-      "permissionMode": "auto",
-      "reasoningEffort": null,
-      "serviceTier": null,
-      "agentMode": "epic",
-      "profileId": null
-     },
-     "activeSessionChain": {
-      "harnessId": "claude",
-      "sessionId": "session-1",
-      "sessionWorkspaceSnapshot": {
-       "workspaceKind": "session-snapshot",
-       "primaryWorkspace": "/tmp/project",
-       "secondaryWorkspaces": [
-        "/tmp/traycer-home"
-       ]
-      },
-      "coveredUntilMessageId": null,
-      "profileId": null
-     },
-     "claudePendingWakes": [],
-     "archivedAt": null,
-     "pinnedUserProviderHandle": null,
-     "lastDeliveredRolesDigest": null
-    },
-    "access": {
-     "role": "owner",
-     "ownerUserId": "owner-1",
-     "canAct": true
-    },
-    "queue": {
-     "status": "idle",
-     "items": []
-    },
-    "runStatus": "running",
-    "activeTurn": {
-     "turnId": "turn-1",
-     "status": "running",
-     "harnessId": "claude",
-     "model": "test-model",
-     "reasoningEffort": null,
-     "serviceTier": null,
-     "agentMode": "epic",
-     "profileId": null,
-     "sameTurnSteeringSupported": true,
-     "userMessageId": "u1",
-     "startedAt": 1790214965819,
-     "updatedAt": 2001
-    },
-    "pendingApprovals": [],
-    "pendingInterviews": [],
-    "worktreeBinding": {
-     "entries": [
-      {
-       "workspacePath": "/tmp/project",
-       "mode": "local",
-       "repoIdentifier": null,
-       "worktreePath": null,
-       "branch": null,
-       "isPrimary": true,
-       "isImported": false,
-       "setupState": "not_required",
-       "setupTerminalSessionId": null,
-       "setupExitCode": null,
-       "setupFailedAt": null,
-       "createdAt": 1,
-       "ownedSubmodules": []
-      }
-     ]
-    },
-    "missingWorktreePaths": [],
-    "pendingFileEditApprovals": [],
-    "accumulatedFileChangeCount": 0,
-    "backgroundItems": [],
-    "managedCommands": [],
-    "heldUpdates": [],
-    "turnInProgress": true,
-    "transcriptEpoch": 1,
-    "rowCount": 2,
-    "indexRevision": 1,
-    "tail": {
-     "fromOrdinal": 0,
-     "rowIds": [
-      "u1",
-      "assistant:turn-1"
-     ],
-     "messages": [
-      {
-       "role": "user",
-       "messageId": "u1",
-       "sender": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": {
-        "kind": "user",
-        "content": {
-         "type": "doc",
-         "content": [
-          {
-           "type": "paragraph",
-           "content": [
+        "access": {
+          "role": "owner",
+          "ownerUserId": "owner-1",
+          "canAct": true
+        },
+        "queue": {
+          "status": "idle",
+          "items": []
+        },
+        "runStatus": "running",
+        "activeTurn": {
+          "turnId": "turn-1",
+          "status": "running",
+          "harnessId": "claude",
+          "model": "test-model",
+          "reasoningEffort": null,
+          "serviceTier": null,
+          "agentMode": "epic",
+          "profileId": null,
+          "sameTurnSteeringSupported": true,
+          "userMessageId": "u1",
+          "startedAt": 1790214965819,
+          "updatedAt": 2001
+        },
+        "pendingApprovals": [],
+        "pendingInterviews": [],
+        "worktreeBinding": {
+          "entries": [
             {
-             "type": "text",
-             "text": "push"
+              "workspacePath": "/tmp/project",
+              "mode": "local",
+              "repoIdentifier": null,
+              "worktreePath": null,
+              "branch": null,
+              "isPrimary": true,
+              "isImported": false,
+              "setupState": "not_required",
+              "setupTerminalSessionId": null,
+              "setupExitCode": null,
+              "setupFailedAt": null,
+              "createdAt": 1,
+              "ownedSubmodules": []
             }
-           ]
-          }
-         ]
+          ]
         },
-        "browserAnnotations": []
-       },
-       "timestamp": 1790214965808,
-       "sessionAnchor": null
-      },
-      {
-       "imageResolutions": [],
-       "role": "assistant",
-       "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
-       "sender": {
-        "type": "agent",
-        "harnessId": "claude",
-        "agentId": "test-model",
-        "displayName": "test-model",
-        "reply": {
-         "expectsReply": false
-        },
-        "inReplyTo": null
-       },
-       "blocks": [
-        {
-         "type": "approval",
-         "blockId": "tool-1:approval",
-         "status": "streaming",
-         "timestamp": 1790214965848,
-         "toolName": "Bash",
-         "description": "git push --force",
-         "inputSummary": "git push --force",
-         "inputDetail": {
-          "kind": "command",
-          "command": "git push --force"
-         },
-         "decision": null
-        }
-       ],
-       "startedAt": 1790214965819,
-       "blocksVersion": 1,
-       "timestamp": 1790214965848,
-       "turnId": "turn-1",
-       "usage": null,
-       "reasoningEffort": null,
-       "serviceTier": null,
-       "envCredentialVar": null,
-       "turnProfile": {
-        "profileId": null,
-        "labelSnapshot": null
-       }
-      }
-     ],
-     "events": [
-      {
-       "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
-       "type": "turn.started",
-       "timestamp": 1790214965834,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn started.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
-      },
-      {
-       "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
-       "type": "approval.requested",
-       "timestamp": 1790214965848,
-       "clientActionId": null,
-       "actor": null,
-       "message": "git push --force",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "warning",
-       "metadata": {
-        "actions": [],
-        "input": {
-         "command": "git push --force"
-        },
-        "kind": "tool",
-        "planId": null,
-        "toolName": "Bash"
-       }
-      },
-      {
-       "eventId": "effect:approval:tool-1:approval:outcome",
-       "type": "approval.resolved",
-       "timestamp": 1790214967863,
-       "clientActionId": "a-approve",
-       "actor": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": "Approval granted.",
-       "turnId": "turn-1",
-       "messageId": null,
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "info",
-       "metadata": {
-        "commandId": "approval:tool-1:approval"
-       }
-      }
-     ],
-     "rowContext": {}
-    },
-    "derived": {
-     "latestAssistantUsage": null,
-     "pinnedTodo": null,
-     "pinnedTaskTodoItems": [],
-     "latestForkableAssistantMessageId": null,
-     "restorableSetupInterruption": null,
-     "interviewAnswerability": [],
-     "latestAssistantAuthFailureTurnKey": null,
-     "setupCardWindows": []
-    }
-   }
-  }
- },
- {
-  "i": 9,
-  "restoresX": false,
-  "envelope": {
-   "kind": "indexChanged",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "epoch": 1,
-   "rowCount": 2,
-   "indexRevision": 2,
-   "changes": [
-    {
-     "type": "updated",
-     "entries": [
-      {
-       "ordinal": 1,
-       "entry": {
-        "rowId": "assistant:turn-1",
-        "createdAt": 1790214965819,
-        "role": "assistant",
-        "byteLength": 257,
-        "bodyDigest": "1d0ixj80554k0o"
-       }
-      }
-     ]
-    }
-   ]
-  }
- },
- {
-  "i": 10,
-  "restoresX": false,
-  "envelope": {
-   "kind": "blockDelta",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "event": {
-    "type": "text.delta",
-    "blockId": "text-after",
-    "timestamp": 2100,
-    "delta": "more content"
-   }
-  }
- },
- {
-  "i": 11,
-  "restoresX": false,
-  "envelope": {
-   "kind": "blockDelta",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "event": {
-    "type": "turn.completed",
-    "blockId": "turn-1",
-    "timestamp": 2101,
-    "turnId": "turn-1"
-   }
-  }
- },
- {
-  "i": 12,
-  "restoresX": false,
-  "envelope": {
-   "kind": "turnStateChanged",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "runStatus": "running",
-   "activeTurn": {
-    "turnId": "turn-1",
-    "status": "completed",
-    "harnessId": "claude",
-    "model": "test-model",
-    "reasoningEffort": null,
-    "serviceTier": null,
-    "agentMode": "epic",
-    "profileId": null,
-    "sameTurnSteeringSupported": true,
-    "userMessageId": "u1",
-    "startedAt": 1790214965819,
-    "updatedAt": 2101
-   },
-   "backgroundItems": [],
-   "turnInProgress": true
-  }
- },
- {
-  "i": 13,
-  "restoresX": false,
-  "envelope": {
-   "kind": "eventAppended",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "event": {
-    "eventId": "2012a20a-5f37-4505-9e02-52b8f77d355b",
-    "type": "turn.completed",
-    "timestamp": 1790214967872,
-    "clientActionId": null,
-    "actor": null,
-    "message": "Turn completed.",
-    "turnId": "turn-1",
-    "messageId": "u1",
-    "queueItemId": null,
-    "approvalId": null,
-    "blockId": null,
-    "severity": "info",
-    "metadata": null
-   }
-  }
- },
- {
-  "i": 14,
-  "restoresX": true,
-  "envelope": {
-   "kind": "snapshot",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "snapshot": {
-    "chat": {
-     "parentId": null,
-     "id": "chat-windowed-emit",
-     "userId": "owner-1",
-     "hostId": "host-1",
-     "title": "Windowed emit",
-     "createdAt": 1000,
-     "updatedAt": 2101,
-     "isTitleEditedByUser": false,
-     "settings": {
-      "harnessId": "claude",
-      "model": "test-model",
-      "permissionMode": "auto",
-      "reasoningEffort": null,
-      "serviceTier": null,
-      "agentMode": "epic",
-      "profileId": null
-     },
-     "activeSessionChain": {
-      "harnessId": "claude",
-      "sessionId": "session-1",
-      "sessionWorkspaceSnapshot": {
-       "workspaceKind": "session-snapshot",
-       "primaryWorkspace": "/tmp/project",
-       "secondaryWorkspaces": [
-        "/tmp/traycer-home"
-       ]
-      },
-      "coveredUntilMessageId": null,
-      "profileId": null
-     },
-     "claudePendingWakes": [],
-     "archivedAt": null,
-     "pinnedUserProviderHandle": null,
-     "lastDeliveredRolesDigest": null
-    },
-    "access": {
-     "role": "owner",
-     "ownerUserId": "owner-1",
-     "canAct": true
-    },
-    "queue": {
-     "status": "idle",
-     "items": []
-    },
-    "runStatus": "running",
-    "activeTurn": {
-     "turnId": "turn-1",
-     "status": "completed",
-     "harnessId": "claude",
-     "model": "test-model",
-     "reasoningEffort": null,
-     "serviceTier": null,
-     "agentMode": "epic",
-     "profileId": null,
-     "sameTurnSteeringSupported": true,
-     "userMessageId": "u1",
-     "startedAt": 1790214965819,
-     "updatedAt": 2101
-    },
-    "pendingApprovals": [],
-    "pendingInterviews": [],
-    "worktreeBinding": {
-     "entries": [
-      {
-       "workspacePath": "/tmp/project",
-       "mode": "local",
-       "repoIdentifier": null,
-       "worktreePath": null,
-       "branch": null,
-       "isPrimary": true,
-       "isImported": false,
-       "setupState": "not_required",
-       "setupTerminalSessionId": null,
-       "setupExitCode": null,
-       "setupFailedAt": null,
-       "createdAt": 1,
-       "ownedSubmodules": []
-      }
-     ]
-    },
-    "missingWorktreePaths": [],
-    "pendingFileEditApprovals": [],
-    "accumulatedFileChangeCount": 0,
-    "backgroundItems": [],
-    "managedCommands": [],
-    "heldUpdates": [],
-    "turnInProgress": true,
-    "transcriptEpoch": 1,
-    "rowCount": 2,
-    "indexRevision": 2,
-    "tail": {
-     "fromOrdinal": 0,
-     "rowIds": [
-      "u1",
-      "assistant:turn-1"
-     ],
-     "messages": [
-      {
-       "role": "user",
-       "messageId": "u1",
-       "sender": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": {
-        "kind": "user",
-        "content": {
-         "type": "doc",
-         "content": [
-          {
-           "type": "paragraph",
-           "content": [
+        "missingWorktreePaths": [],
+        "pendingFileEditApprovals": [],
+        "accumulatedFileChangeCount": 0,
+        "backgroundItems": [],
+        "managedCommands": [],
+        "heldUpdates": [],
+        "turnInProgress": true,
+        "transcriptEpoch": 1,
+        "rowCount": 2,
+        "indexRevision": 1,
+        "tail": {
+          "fromOrdinal": 0,
+          "rowIds": ["u1", "assistant:turn-1"],
+          "messages": [
             {
-             "type": "text",
-             "text": "push"
-            }
-           ]
-          }
-         ]
-        },
-        "browserAnnotations": []
-       },
-       "timestamp": 1790214965808,
-       "sessionAnchor": null
-      },
-      {
-       "imageResolutions": [],
-       "role": "assistant",
-       "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
-       "sender": {
-        "type": "agent",
-        "harnessId": "claude",
-        "agentId": "test-model",
-        "displayName": "test-model",
-        "reply": {
-         "expectsReply": false
-        },
-        "inReplyTo": null
-       },
-       "blocks": [
-        {
-         "type": "approval",
-         "blockId": "tool-1:approval",
-         "status": "streaming",
-         "timestamp": 1790214965848,
-         "toolName": "Bash",
-         "description": "git push --force",
-         "inputSummary": "git push --force",
-         "inputDetail": {
-          "kind": "command",
-          "command": "git push --force"
-         },
-         "decision": null
-        },
-        {
-         "type": "text",
-         "blockId": "text-after",
-         "status": "completed",
-         "timestamp": 2101,
-         "text": "more content",
-         "providerNotice": null
-        }
-       ],
-       "startedAt": 1790214965819,
-       "blocksVersion": 3,
-       "timestamp": 2101,
-       "turnId": "turn-1",
-       "usage": null,
-       "reasoningEffort": null,
-       "serviceTier": null,
-       "envCredentialVar": null,
-       "turnProfile": {
-        "profileId": null,
-        "labelSnapshot": null
-       }
-      }
-     ],
-     "events": [
-      {
-       "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
-       "type": "turn.started",
-       "timestamp": 1790214965834,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn started.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
-      },
-      {
-       "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
-       "type": "approval.requested",
-       "timestamp": 1790214965848,
-       "clientActionId": null,
-       "actor": null,
-       "message": "git push --force",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "warning",
-       "metadata": {
-        "actions": [],
-        "input": {
-         "command": "git push --force"
-        },
-        "kind": "tool",
-        "planId": null,
-        "toolName": "Bash"
-       }
-      },
-      {
-       "eventId": "effect:approval:tool-1:approval:outcome",
-       "type": "approval.resolved",
-       "timestamp": 1790214967863,
-       "clientActionId": "a-approve",
-       "actor": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": "Approval granted.",
-       "turnId": "turn-1",
-       "messageId": null,
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "info",
-       "metadata": {
-        "commandId": "approval:tool-1:approval"
-       }
-      },
-      {
-       "eventId": "2012a20a-5f37-4505-9e02-52b8f77d355b",
-       "type": "turn.completed",
-       "timestamp": 1790214967872,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn completed.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
-      }
-     ],
-     "rowContext": {}
-    },
-    "derived": {
-     "latestAssistantUsage": null,
-     "pinnedTodo": null,
-     "pinnedTaskTodoItems": [],
-     "latestForkableAssistantMessageId": null,
-     "restorableSetupInterruption": null,
-     "interviewAnswerability": [],
-     "latestAssistantAuthFailureTurnKey": null,
-     "setupCardWindows": []
-    }
-   }
-  }
- },
- {
-  "i": 15,
-  "restoresX": false,
-  "envelope": {
-   "kind": "indexChanged",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "epoch": 1,
-   "rowCount": 2,
-   "indexRevision": 3,
-   "changes": [
-    {
-     "type": "updated",
-     "entries": [
-      {
-       "ordinal": 1,
-       "entry": {
-        "rowId": "assistant:turn-1",
-        "createdAt": 1790214965819,
-        "role": "assistant",
-        "byteLength": 377,
-        "bodyDigest": "izjnh81gkqd4g"
-       }
-      }
-     ]
-    }
-   ]
-  }
- },
- {
-  "i": 16,
-  "restoresX": false,
-  "envelope": {
-   "kind": "turnStateChanged",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "runStatus": "idle",
-   "activeTurn": null,
-   "backgroundItems": [],
-   "turnInProgress": false
-  }
- },
- {
-  "i": 17,
-  "restoresX": false,
-  "envelope": {
-   "kind": "snapshot",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "snapshot": {
-    "chat": {
-     "parentId": null,
-     "id": "chat-windowed-emit",
-     "userId": "owner-1",
-     "hostId": "host-1",
-     "title": "Windowed emit",
-     "createdAt": 1000,
-     "updatedAt": 1790214967886,
-     "isTitleEditedByUser": false,
-     "settings": {
-      "harnessId": "claude",
-      "model": "test-model",
-      "permissionMode": "auto",
-      "reasoningEffort": null,
-      "serviceTier": null,
-      "agentMode": "epic",
-      "profileId": null
-     },
-     "activeSessionChain": {
-      "harnessId": "claude",
-      "sessionId": "session-1",
-      "sessionWorkspaceSnapshot": {
-       "workspaceKind": "session-snapshot",
-       "primaryWorkspace": "/tmp/project",
-       "secondaryWorkspaces": [
-        "/tmp/traycer-home"
-       ]
-      },
-      "coveredUntilMessageId": null,
-      "profileId": null
-     },
-     "claudePendingWakes": [],
-     "archivedAt": null,
-     "pinnedUserProviderHandle": null,
-     "lastDeliveredRolesDigest": null
-    },
-    "access": {
-     "role": "owner",
-     "ownerUserId": "owner-1",
-     "canAct": true
-    },
-    "queue": {
-     "status": "idle",
-     "items": []
-    },
-    "runStatus": "idle",
-    "activeTurn": null,
-    "pendingApprovals": [],
-    "pendingInterviews": [],
-    "worktreeBinding": {
-     "entries": [
-      {
-       "workspacePath": "/tmp/project",
-       "mode": "local",
-       "repoIdentifier": null,
-       "worktreePath": null,
-       "branch": null,
-       "isPrimary": true,
-       "isImported": false,
-       "setupState": "not_required",
-       "setupTerminalSessionId": null,
-       "setupExitCode": null,
-       "setupFailedAt": null,
-       "createdAt": 1,
-       "ownedSubmodules": []
-      }
-     ]
-    },
-    "missingWorktreePaths": [],
-    "pendingFileEditApprovals": [],
-    "accumulatedFileChangeCount": 0,
-    "backgroundItems": [],
-    "managedCommands": [],
-    "heldUpdates": [],
-    "turnInProgress": false,
-    "transcriptEpoch": 1,
-    "rowCount": 2,
-    "indexRevision": 3,
-    "tail": {
-     "fromOrdinal": 0,
-     "rowIds": [
-      "u1",
-      "assistant:turn-1"
-     ],
-     "messages": [
-      {
-       "role": "user",
-       "messageId": "u1",
-       "sender": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": {
-        "kind": "user",
-        "content": {
-         "type": "doc",
-         "content": [
-          {
-           "type": "paragraph",
-           "content": [
+              "role": "user",
+              "messageId": "u1",
+              "sender": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": {
+                "kind": "user",
+                "content": {
+                  "type": "doc",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "push"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "browserAnnotations": []
+              },
+              "timestamp": 1790214965808,
+              "sessionAnchor": null
+            },
             {
-             "type": "text",
-             "text": "push"
+              "imageResolutions": [],
+              "role": "assistant",
+              "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
+              "sender": {
+                "type": "agent",
+                "harnessId": "claude",
+                "agentId": "test-model",
+                "displayName": "test-model",
+                "reply": {
+                  "expectsReply": false
+                },
+                "inReplyTo": null
+              },
+              "blocks": [
+                {
+                  "type": "approval",
+                  "blockId": "tool-1:approval",
+                  "status": "streaming",
+                  "timestamp": 1790214965848,
+                  "toolName": "Bash",
+                  "description": "git push --force",
+                  "inputSummary": "git push --force",
+                  "inputDetail": {
+                    "kind": "command",
+                    "command": "git push --force"
+                  },
+                  "decision": null
+                }
+              ],
+              "startedAt": 1790214965819,
+              "blocksVersion": 1,
+              "timestamp": 1790214965848,
+              "turnId": "turn-1",
+              "usage": null,
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "envCredentialVar": null,
+              "turnProfile": {
+                "profileId": null,
+                "labelSnapshot": null
+              }
             }
-           ]
-          }
-         ]
+          ],
+          "events": [
+            {
+              "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
+              "type": "turn.started",
+              "timestamp": 1790214965834,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn started.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            },
+            {
+              "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
+              "type": "approval.requested",
+              "timestamp": 1790214965848,
+              "clientActionId": null,
+              "actor": null,
+              "message": "git push --force",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "warning",
+              "metadata": {
+                "actions": [],
+                "input": {
+                  "command": "git push --force"
+                },
+                "kind": "tool",
+                "planId": null,
+                "toolName": "Bash"
+              }
+            },
+            {
+              "eventId": "effect:approval:tool-1:approval:outcome",
+              "type": "approval.resolved",
+              "timestamp": 1790214967863,
+              "clientActionId": "a-approve",
+              "actor": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": "Approval granted.",
+              "turnId": "turn-1",
+              "messageId": null,
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "info",
+              "metadata": {
+                "commandId": "approval:tool-1:approval"
+              }
+            }
+          ],
+          "rowContext": {}
         },
-        "browserAnnotations": []
-       },
-       "timestamp": 1790214965808,
-       "sessionAnchor": null
-      },
-      {
-       "role": "assistant",
-       "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
-       "sender": {
-        "type": "agent",
-        "harnessId": "claude",
-        "agentId": "test-model",
-        "displayName": "test-model",
-        "reply": {
-         "expectsReply": false
-        },
-        "inReplyTo": null
-       },
-       "blocks": [
-        {
-         "blockId": "tool-1:approval",
-         "status": "streaming",
-         "timestamp": 1790214965848,
-         "type": "approval",
-         "toolName": "Bash",
-         "description": "git push --force",
-         "inputSummary": "git push --force",
-         "inputDetail": {
-          "kind": "command",
-          "command": "git push --force"
-         },
-         "decision": null
-        },
-        {
-         "blockId": "text-after",
-         "status": "completed",
-         "timestamp": 2101,
-         "type": "text",
-         "text": "more content",
-         "providerNotice": null
+        "derived": {
+          "latestAssistantUsage": null,
+          "pinnedTodo": null,
+          "pinnedTaskTodoItems": [],
+          "latestForkableAssistantMessageId": null,
+          "restorableSetupInterruption": null,
+          "interviewAnswerability": [],
+          "latestAssistantAuthFailureTurnKey": null,
+          "setupCardWindows": []
         }
-       ],
-       "startedAt": 1790214965819,
-       "blocksVersion": 3,
-       "timestamp": 1790214967886,
-       "turnId": "turn-1",
-       "usage": null,
-       "reasoningEffort": null,
-       "serviceTier": null,
-       "envCredentialVar": null,
-       "imageResolutions": [],
-       "turnProfile": {
+      }
+    }
+  },
+  {
+    "i": 9,
+    "restoresX": false,
+    "envelope": {
+      "kind": "indexChanged",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "epoch": 1,
+      "rowCount": 2,
+      "indexRevision": 2,
+      "changes": [
+        {
+          "type": "updated",
+          "entries": [
+            {
+              "ordinal": 1,
+              "entry": {
+                "rowId": "assistant:turn-1",
+                "createdAt": 1790214965819,
+                "role": "assistant",
+                "byteLength": 257,
+                "bodyDigest": "1d0ixj80554k0o"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "i": 10,
+    "restoresX": false,
+    "envelope": {
+      "kind": "blockDelta",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "event": {
+        "type": "text.delta",
+        "blockId": "text-after",
+        "timestamp": 2100,
+        "delta": "more content"
+      }
+    }
+  },
+  {
+    "i": 11,
+    "restoresX": false,
+    "envelope": {
+      "kind": "blockDelta",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "event": {
+        "type": "turn.completed",
+        "blockId": "turn-1",
+        "timestamp": 2101,
+        "turnId": "turn-1"
+      }
+    }
+  },
+  {
+    "i": 12,
+    "restoresX": false,
+    "envelope": {
+      "kind": "turnStateChanged",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "runStatus": "running",
+      "activeTurn": {
+        "turnId": "turn-1",
+        "status": "completed",
+        "harnessId": "claude",
+        "model": "test-model",
+        "reasoningEffort": null,
+        "serviceTier": null,
+        "agentMode": "epic",
         "profileId": null,
-        "labelSnapshot": null
-       }
-      }
-     ],
-     "events": [
-      {
-       "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
-       "type": "turn.started",
-       "timestamp": 1790214965834,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn started.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
+        "sameTurnSteeringSupported": true,
+        "userMessageId": "u1",
+        "startedAt": 1790214965819,
+        "updatedAt": 2101
       },
-      {
-       "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
-       "type": "approval.requested",
-       "timestamp": 1790214965848,
-       "clientActionId": null,
-       "actor": null,
-       "message": "git push --force",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "warning",
-       "metadata": {
-        "actions": [],
-        "input": {
-         "command": "git push --force"
+      "backgroundItems": [],
+      "turnInProgress": true
+    }
+  },
+  {
+    "i": 13,
+    "restoresX": false,
+    "envelope": {
+      "kind": "eventAppended",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "event": {
+        "eventId": "2012a20a-5f37-4505-9e02-52b8f77d355b",
+        "type": "turn.completed",
+        "timestamp": 1790214967872,
+        "clientActionId": null,
+        "actor": null,
+        "message": "Turn completed.",
+        "turnId": "turn-1",
+        "messageId": "u1",
+        "queueItemId": null,
+        "approvalId": null,
+        "blockId": null,
+        "severity": "info",
+        "metadata": null
+      }
+    }
+  },
+  {
+    "i": 14,
+    "restoresX": true,
+    "envelope": {
+      "kind": "snapshot",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "snapshot": {
+        "chat": {
+          "parentId": null,
+          "id": "chat-windowed-emit",
+          "userId": "owner-1",
+          "hostId": "host-1",
+          "title": "Windowed emit",
+          "createdAt": 1000,
+          "updatedAt": 2101,
+          "isTitleEditedByUser": false,
+          "settings": {
+            "harnessId": "claude",
+            "model": "test-model",
+            "permissionMode": "auto",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null
+          },
+          "activeSessionChain": {
+            "harnessId": "claude",
+            "sessionId": "session-1",
+            "sessionWorkspaceSnapshot": {
+              "workspaceKind": "session-snapshot",
+              "primaryWorkspace": "/tmp/project",
+              "secondaryWorkspaces": ["/tmp/traycer-home"]
+            },
+            "coveredUntilMessageId": null,
+            "profileId": null
+          },
+          "claudePendingWakes": [],
+          "archivedAt": null,
+          "pinnedUserProviderHandle": null,
+          "lastDeliveredRolesDigest": null
         },
-        "kind": "tool",
-        "planId": null,
-        "toolName": "Bash"
-       }
-      },
-      {
-       "eventId": "effect:approval:tool-1:approval:outcome",
-       "type": "approval.resolved",
-       "timestamp": 1790214967863,
-       "clientActionId": "a-approve",
-       "actor": {
-        "type": "user",
-        "userId": "owner-1"
-       },
-       "message": "Approval granted.",
-       "turnId": "turn-1",
-       "messageId": null,
-       "queueItemId": null,
-       "approvalId": "tool-1:approval",
-       "blockId": null,
-       "severity": "info",
-       "metadata": {
-        "commandId": "approval:tool-1:approval"
-       }
-      },
-      {
-       "eventId": "2012a20a-5f37-4505-9e02-52b8f77d355b",
-       "type": "turn.completed",
-       "timestamp": 1790214967872,
-       "clientActionId": null,
-       "actor": null,
-       "message": "Turn completed.",
-       "turnId": "turn-1",
-       "messageId": "u1",
-       "queueItemId": null,
-       "approvalId": null,
-       "blockId": null,
-       "severity": "info",
-       "metadata": null
+        "access": {
+          "role": "owner",
+          "ownerUserId": "owner-1",
+          "canAct": true
+        },
+        "queue": {
+          "status": "idle",
+          "items": []
+        },
+        "runStatus": "running",
+        "activeTurn": {
+          "turnId": "turn-1",
+          "status": "completed",
+          "harnessId": "claude",
+          "model": "test-model",
+          "reasoningEffort": null,
+          "serviceTier": null,
+          "agentMode": "epic",
+          "profileId": null,
+          "sameTurnSteeringSupported": true,
+          "userMessageId": "u1",
+          "startedAt": 1790214965819,
+          "updatedAt": 2101
+        },
+        "pendingApprovals": [],
+        "pendingInterviews": [],
+        "worktreeBinding": {
+          "entries": [
+            {
+              "workspacePath": "/tmp/project",
+              "mode": "local",
+              "repoIdentifier": null,
+              "worktreePath": null,
+              "branch": null,
+              "isPrimary": true,
+              "isImported": false,
+              "setupState": "not_required",
+              "setupTerminalSessionId": null,
+              "setupExitCode": null,
+              "setupFailedAt": null,
+              "createdAt": 1,
+              "ownedSubmodules": []
+            }
+          ]
+        },
+        "missingWorktreePaths": [],
+        "pendingFileEditApprovals": [],
+        "accumulatedFileChangeCount": 0,
+        "backgroundItems": [],
+        "managedCommands": [],
+        "heldUpdates": [],
+        "turnInProgress": true,
+        "transcriptEpoch": 1,
+        "rowCount": 2,
+        "indexRevision": 2,
+        "tail": {
+          "fromOrdinal": 0,
+          "rowIds": ["u1", "assistant:turn-1"],
+          "messages": [
+            {
+              "role": "user",
+              "messageId": "u1",
+              "sender": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": {
+                "kind": "user",
+                "content": {
+                  "type": "doc",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "push"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "browserAnnotations": []
+              },
+              "timestamp": 1790214965808,
+              "sessionAnchor": null
+            },
+            {
+              "imageResolutions": [],
+              "role": "assistant",
+              "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
+              "sender": {
+                "type": "agent",
+                "harnessId": "claude",
+                "agentId": "test-model",
+                "displayName": "test-model",
+                "reply": {
+                  "expectsReply": false
+                },
+                "inReplyTo": null
+              },
+              "blocks": [
+                {
+                  "type": "approval",
+                  "blockId": "tool-1:approval",
+                  "status": "streaming",
+                  "timestamp": 1790214965848,
+                  "toolName": "Bash",
+                  "description": "git push --force",
+                  "inputSummary": "git push --force",
+                  "inputDetail": {
+                    "kind": "command",
+                    "command": "git push --force"
+                  },
+                  "decision": null
+                },
+                {
+                  "type": "text",
+                  "blockId": "text-after",
+                  "status": "completed",
+                  "timestamp": 2101,
+                  "text": "more content",
+                  "providerNotice": null
+                }
+              ],
+              "startedAt": 1790214965819,
+              "blocksVersion": 3,
+              "timestamp": 2101,
+              "turnId": "turn-1",
+              "usage": null,
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "envCredentialVar": null,
+              "turnProfile": {
+                "profileId": null,
+                "labelSnapshot": null
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
+              "type": "turn.started",
+              "timestamp": 1790214965834,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn started.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            },
+            {
+              "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
+              "type": "approval.requested",
+              "timestamp": 1790214965848,
+              "clientActionId": null,
+              "actor": null,
+              "message": "git push --force",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "warning",
+              "metadata": {
+                "actions": [],
+                "input": {
+                  "command": "git push --force"
+                },
+                "kind": "tool",
+                "planId": null,
+                "toolName": "Bash"
+              }
+            },
+            {
+              "eventId": "effect:approval:tool-1:approval:outcome",
+              "type": "approval.resolved",
+              "timestamp": 1790214967863,
+              "clientActionId": "a-approve",
+              "actor": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": "Approval granted.",
+              "turnId": "turn-1",
+              "messageId": null,
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "info",
+              "metadata": {
+                "commandId": "approval:tool-1:approval"
+              }
+            },
+            {
+              "eventId": "2012a20a-5f37-4505-9e02-52b8f77d355b",
+              "type": "turn.completed",
+              "timestamp": 1790214967872,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn completed.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            }
+          ],
+          "rowContext": {}
+        },
+        "derived": {
+          "latestAssistantUsage": null,
+          "pinnedTodo": null,
+          "pinnedTaskTodoItems": [],
+          "latestForkableAssistantMessageId": null,
+          "restorableSetupInterruption": null,
+          "interviewAnswerability": [],
+          "latestAssistantAuthFailureTurnKey": null,
+          "setupCardWindows": []
+        }
       }
-     ],
-     "rowContext": {}
-    },
-    "derived": {
-     "latestAssistantUsage": null,
-     "pinnedTodo": null,
-     "pinnedTaskTodoItems": [],
-     "latestForkableAssistantMessageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
-     "restorableSetupInterruption": null,
-     "interviewAnswerability": [],
-     "latestAssistantAuthFailureTurnKey": null,
-     "setupCardWindows": []
     }
-   }
-  }
- },
- {
-  "i": 18,
-  "restoresX": false,
-  "envelope": {
-   "kind": "accumulatedChanges",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "chunk": {
-    "epoch": 1,
-    "generation": 2,
-    "fromIndex": 0,
-    "summaries": [],
-    "isFinal": true
-   }
-  }
- },
- {
-  "i": 19,
-  "restoresX": false,
-  "envelope": {
-   "kind": "indexChanged",
-   "hasBinaryPayload": false,
-   "epicId": "epic-windowed-emit",
-   "chatId": "chat-windowed-emit",
-   "epoch": 1,
-   "rowCount": 2,
-   "indexRevision": 4,
-   "changes": [
-    {
-     "type": "updated",
-     "entries": [
-      {
-       "ordinal": 1,
-       "entry": {
-        "rowId": "assistant:turn-1",
-        "createdAt": 1790214965819,
-        "role": "assistant",
-        "byteLength": 377,
-        "bodyDigest": "1dv39ka09lzhdi"
-       }
+  },
+  {
+    "i": 15,
+    "restoresX": false,
+    "envelope": {
+      "kind": "indexChanged",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "epoch": 1,
+      "rowCount": 2,
+      "indexRevision": 3,
+      "changes": [
+        {
+          "type": "updated",
+          "entries": [
+            {
+              "ordinal": 1,
+              "entry": {
+                "rowId": "assistant:turn-1",
+                "createdAt": 1790214965819,
+                "role": "assistant",
+                "byteLength": 377,
+                "bodyDigest": "izjnh81gkqd4g"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "i": 16,
+    "restoresX": false,
+    "envelope": {
+      "kind": "turnStateChanged",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "runStatus": "idle",
+      "activeTurn": null,
+      "backgroundItems": [],
+      "turnInProgress": false
+    }
+  },
+  {
+    "i": 17,
+    "restoresX": false,
+    "envelope": {
+      "kind": "snapshot",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "snapshot": {
+        "chat": {
+          "parentId": null,
+          "id": "chat-windowed-emit",
+          "userId": "owner-1",
+          "hostId": "host-1",
+          "title": "Windowed emit",
+          "createdAt": 1000,
+          "updatedAt": 1790214967886,
+          "isTitleEditedByUser": false,
+          "settings": {
+            "harnessId": "claude",
+            "model": "test-model",
+            "permissionMode": "auto",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null
+          },
+          "activeSessionChain": {
+            "harnessId": "claude",
+            "sessionId": "session-1",
+            "sessionWorkspaceSnapshot": {
+              "workspaceKind": "session-snapshot",
+              "primaryWorkspace": "/tmp/project",
+              "secondaryWorkspaces": ["/tmp/traycer-home"]
+            },
+            "coveredUntilMessageId": null,
+            "profileId": null
+          },
+          "claudePendingWakes": [],
+          "archivedAt": null,
+          "pinnedUserProviderHandle": null,
+          "lastDeliveredRolesDigest": null
+        },
+        "access": {
+          "role": "owner",
+          "ownerUserId": "owner-1",
+          "canAct": true
+        },
+        "queue": {
+          "status": "idle",
+          "items": []
+        },
+        "runStatus": "idle",
+        "activeTurn": null,
+        "pendingApprovals": [],
+        "pendingInterviews": [],
+        "worktreeBinding": {
+          "entries": [
+            {
+              "workspacePath": "/tmp/project",
+              "mode": "local",
+              "repoIdentifier": null,
+              "worktreePath": null,
+              "branch": null,
+              "isPrimary": true,
+              "isImported": false,
+              "setupState": "not_required",
+              "setupTerminalSessionId": null,
+              "setupExitCode": null,
+              "setupFailedAt": null,
+              "createdAt": 1,
+              "ownedSubmodules": []
+            }
+          ]
+        },
+        "missingWorktreePaths": [],
+        "pendingFileEditApprovals": [],
+        "accumulatedFileChangeCount": 0,
+        "backgroundItems": [],
+        "managedCommands": [],
+        "heldUpdates": [],
+        "turnInProgress": false,
+        "transcriptEpoch": 1,
+        "rowCount": 2,
+        "indexRevision": 3,
+        "tail": {
+          "fromOrdinal": 0,
+          "rowIds": ["u1", "assistant:turn-1"],
+          "messages": [
+            {
+              "role": "user",
+              "messageId": "u1",
+              "sender": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": {
+                "kind": "user",
+                "content": {
+                  "type": "doc",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "push"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "browserAnnotations": []
+              },
+              "timestamp": 1790214965808,
+              "sessionAnchor": null
+            },
+            {
+              "role": "assistant",
+              "messageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
+              "sender": {
+                "type": "agent",
+                "harnessId": "claude",
+                "agentId": "test-model",
+                "displayName": "test-model",
+                "reply": {
+                  "expectsReply": false
+                },
+                "inReplyTo": null
+              },
+              "blocks": [
+                {
+                  "blockId": "tool-1:approval",
+                  "status": "streaming",
+                  "timestamp": 1790214965848,
+                  "type": "approval",
+                  "toolName": "Bash",
+                  "description": "git push --force",
+                  "inputSummary": "git push --force",
+                  "inputDetail": {
+                    "kind": "command",
+                    "command": "git push --force"
+                  },
+                  "decision": null
+                },
+                {
+                  "blockId": "text-after",
+                  "status": "completed",
+                  "timestamp": 2101,
+                  "type": "text",
+                  "text": "more content",
+                  "providerNotice": null
+                }
+              ],
+              "startedAt": 1790214965819,
+              "blocksVersion": 3,
+              "timestamp": 1790214967886,
+              "turnId": "turn-1",
+              "usage": null,
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "envCredentialVar": null,
+              "imageResolutions": [],
+              "turnProfile": {
+                "profileId": null,
+                "labelSnapshot": null
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventId": "ec208bbf-43ef-4286-93e5-1d9d0c2ab33e",
+              "type": "turn.started",
+              "timestamp": 1790214965834,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn started.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            },
+            {
+              "eventId": "d73f25d2-01a3-412a-a765-884df417cdc3",
+              "type": "approval.requested",
+              "timestamp": 1790214965848,
+              "clientActionId": null,
+              "actor": null,
+              "message": "git push --force",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "warning",
+              "metadata": {
+                "actions": [],
+                "input": {
+                  "command": "git push --force"
+                },
+                "kind": "tool",
+                "planId": null,
+                "toolName": "Bash"
+              }
+            },
+            {
+              "eventId": "effect:approval:tool-1:approval:outcome",
+              "type": "approval.resolved",
+              "timestamp": 1790214967863,
+              "clientActionId": "a-approve",
+              "actor": {
+                "type": "user",
+                "userId": "owner-1"
+              },
+              "message": "Approval granted.",
+              "turnId": "turn-1",
+              "messageId": null,
+              "queueItemId": null,
+              "approvalId": "tool-1:approval",
+              "blockId": null,
+              "severity": "info",
+              "metadata": {
+                "commandId": "approval:tool-1:approval"
+              }
+            },
+            {
+              "eventId": "2012a20a-5f37-4505-9e02-52b8f77d355b",
+              "type": "turn.completed",
+              "timestamp": 1790214967872,
+              "clientActionId": null,
+              "actor": null,
+              "message": "Turn completed.",
+              "turnId": "turn-1",
+              "messageId": "u1",
+              "queueItemId": null,
+              "approvalId": null,
+              "blockId": null,
+              "severity": "info",
+              "metadata": null
+            }
+          ],
+          "rowContext": {}
+        },
+        "derived": {
+          "latestAssistantUsage": null,
+          "pinnedTodo": null,
+          "pinnedTaskTodoItems": [],
+          "latestForkableAssistantMessageId": "d41e88e1-aa42-498b-810f-e70f933d0438",
+          "restorableSetupInterruption": null,
+          "interviewAnswerability": [],
+          "latestAssistantAuthFailureTurnKey": null,
+          "setupCardWindows": []
+        }
       }
-     ]
     }
-   ]
+  },
+  {
+    "i": 18,
+    "restoresX": false,
+    "envelope": {
+      "kind": "accumulatedChanges",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "chunk": {
+        "epoch": 1,
+        "generation": 2,
+        "fromIndex": 0,
+        "summaries": [],
+        "isFinal": true
+      }
+    }
+  },
+  {
+    "i": 19,
+    "restoresX": false,
+    "envelope": {
+      "kind": "indexChanged",
+      "hasBinaryPayload": false,
+      "epicId": "epic-windowed-emit",
+      "chatId": "chat-windowed-emit",
+      "epoch": 1,
+      "rowCount": 2,
+      "indexRevision": 4,
+      "changes": [
+        {
+          "type": "updated",
+          "entries": [
+            {
+              "ordinal": 1,
+              "entry": {
+                "rowId": "assistant:turn-1",
+                "createdAt": 1790214965819,
+                "role": "assistant",
+                "byteLength": 377,
+                "bodyDigest": "1dv39ka09lzhdi"
+              }
+            }
+          ]
+        }
+      ]
+    }
   }
- }
 ]

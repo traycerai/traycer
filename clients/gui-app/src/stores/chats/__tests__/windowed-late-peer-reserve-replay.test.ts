@@ -291,7 +291,9 @@ const streamingDumpSchema = z.object({
   frames: dumpedFramesSchema,
 });
 
-function textOfBlocks(blocks: ReadonlyArray<{ readonly blockId: string }>): string {
+function textOfBlocks(
+  blocks: ReadonlyArray<{ readonly blockId: string }>,
+): string {
   const found = blocks.find((block) => block.blockId === "text-1");
   if (found === undefined) return "";
   const asJson = JSON.parse(JSON.stringify(found)) as { text?: string };
