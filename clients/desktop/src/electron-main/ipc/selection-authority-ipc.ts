@@ -150,7 +150,12 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     // against at adoption can never disagree.
     identity: () => {
       const current = identity.current();
-      return { userId: current.identityKey, generation: current.generation };
+      // The local identity can select this machine without cloud verification.
+      // The account's inventory stream still requires that verification.
+      return {
+        userId: bridge.authSession.get().verified ? current.identityKey : null,
+        generation: current.generation,
+      };
     },
     onAuthChanged: (listener) => {
       bridge.authSession.on("change", listener);
