@@ -44,14 +44,17 @@ const PROJECT_LINT_CONFIG =
 export const MAX_FILES_PER_PROJECT = 200;
 
 /**
- * @param {{ changedPaths: string[], projectOf: (path: string) => string | null }} input
- *   changedPaths: repo-relative, `/`-separated. projectOf: the repo-relative
- *   root of the nearest project with a `lint:files` script, or null.
+ * @param {{ changedPaths: string[], projectOf: (path: string) => string | null, exists: (path: string) => boolean }} input
+ *   changedPaths: repo-relative, `/`-separated, deletions included.
+ *   projectOf: the repo-relative root of the nearest project with a
+ *   `lint:files` script, or null. exists: whether the path is still on disk;
+ *   a deleted config still selects whole-project lint, a deleted source file
+ *   is not linted.
  * @returns {{ mode: "repo", reason: string }
  *   | { mode: "projects", runs: { project: string, files: string[] | null, reason: string }[] }}
  *   `files: null` means lint the whole project.
  */
-export function planLint({ changedPaths, projectOf }) {
+export function planLint({ changedPaths, projectOf, exists }) {
   const repoConfig = changedPaths.find((path) =>
     REPO_LINT_CONFIG.some((pattern) => pattern.test(path)),
   );
@@ -69,7 +72,7 @@ export function planLint({ changedPaths, projectOf }) {
     byProject.set(project, entry);
     if (PROJECT_LINT_CONFIG.test(relativePath)) {
       entry.configChange ??= relativePath;
-    } else if (LINTABLE_SOURCE.test(relativePath)) {
+    } else if (LINTABLE_SOURCE.test(relativePath) && exists(path)) {
       entry.files.push(relativePath);
     }
   }
@@ -115,15 +118,22 @@ function main(baseRef) {
   const mergeBase = git(root, ["merge-base", baseRef, "HEAD"]).trim();
   // Against the working tree: during a commit pre-commit has stashed the
   // unstaged edits, so this is exactly the branch plus the staged change.
+  // Deletions stay in: a deleted lint config changes results for files that
+  // did not change, so it must still select whole-project lint. Renames are
+  // split into delete + add for the same reason. planLint drops a deleted
+  // SOURCE file itself, after config detection, since config files are
+  // sources too (oxlint.config.ts).
   const changedPaths = git(root, [
     "diff",
     "--name-only",
-    "--diff-filter=ACMR",
+    "--no-renames",
+    "--diff-filter=ACMD",
     "-z",
     mergeBase,
   ])
     .split("\0")
-    .filter((path) => path !== "" && existsSync(join(root, path)));
+    .filter((path) => path !== "");
+  const exists = (path) => existsSync(join(root, path));
 
   const projectRoots = new Map();
   const projectOf = (path) => {
@@ -147,7 +157,7 @@ function main(baseRef) {
     }
   };
 
-  const plan = planLint({ changedPaths, projectOf });
+  const plan = planLint({ changedPaths, projectOf, exists });
   if (plan.mode === "repo") {
     console.log(`lint: ${plan.reason}; linting every affected project.`);
     return run(
