@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildIdentityFileTree,
+  defaultIdentityFilePath,
   formatByteLength,
   identityFileGroupOf,
   isPreviewableImage,
@@ -198,6 +199,51 @@ describe("buildIdentityFileTree - sort", () => {
     const tree = buildIdentityFileTree(documents, EMPTY_FILES);
     const soul = tree.find((group) => group.id === "soul");
     expect(soul?.files.map((f) => f.path)).toEqual(["A.md", "Z.md"]);
+  });
+});
+
+describe("defaultIdentityFilePath", () => {
+  it("opens the root document before a root blob that sorts ahead of it (finding 43)", () => {
+    // `avatar.png` sorts before `SOUL.md` inside the soul group, so "first
+    // file of the first non-empty group" would land on the image.
+    const documents = documentsSlice(["SOUL.md"]);
+    const files = filesSlice({
+      "avatar.png": blobEntry({
+        current: {
+          sha256: "c".repeat(64),
+          byteLength: 10,
+          mediaType: "image/png",
+          createdAt: 1000,
+          createdBy: "user-1",
+          producer: { type: "agent", chatId: "chat-1" },
+        },
+      }),
+    });
+
+    expect(
+      defaultIdentityFilePath(buildIdentityFileTree(documents, files)),
+    ).toBe("SOUL.md");
+  });
+
+  it("falls through to a document in a later group when the root has none", () => {
+    const documents = documentsSlice(["memories/x.md"]);
+    const files = filesSlice({ "bin/tool": blobEntry({}) });
+
+    expect(
+      defaultIdentityFilePath(buildIdentityFileTree(documents, files)),
+    ).toBe("memories/x.md");
+  });
+
+  it("falls back to the first file of any kind, and null for an empty tree", () => {
+    const files = filesSlice({ "logo.png": blobEntry({}) });
+    expect(
+      defaultIdentityFilePath(buildIdentityFileTree(EMPTY_DOCUMENTS, files)),
+    ).toBe("logo.png");
+    expect(
+      defaultIdentityFilePath(
+        buildIdentityFileTree(EMPTY_DOCUMENTS, EMPTY_FILES),
+      ),
+    ).toBeNull();
   });
 });
 

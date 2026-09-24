@@ -12,6 +12,10 @@ import {
 } from "@/lib/persistent-history";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  resetIdentityTabsStoreForTests,
+  useIdentityTabsStore,
+} from "@/stores/identities/identity-tabs-store";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 
 const WINDOW_ID = "history-prune-test-window";
@@ -85,6 +89,7 @@ beforeEach(() => {
     mostRecentTabIdByEpicId: {},
   });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  resetIdentityTabsStoreForTests();
 });
 
 afterEach(() => {
@@ -210,6 +215,36 @@ describe("HistoryPruneProvider", () => {
     // Current is never pruned; self-heal of a dead current entry is left to the
     // route mechanisms, not this layer.
     expect(controller.getEntries()).toEqual(["/epics/e1/t1"]);
+    expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("prunes a closed identity tab's forward entry without a load (finding 41)", () => {
+    seedCanvasTabs([{ tabId: "t1", epicId: "e1" }]);
+    useIdentityTabsStore
+      .getState()
+      .openTab({ identityId: "id-1", hostId: "host-a", title: "Soul" });
+    const history = seedPersistentHistory(
+      ["/epics/e1/t1", "/identities/id-1"],
+      0,
+    );
+    const controller = controllerFor(history);
+    const router = makeRouter(history);
+    const loadSpy = vi.spyOn(router, "load");
+
+    render(<HistoryPruneProvider router={router} />);
+    // Non-vacuity: while the tab is held, the entry survives boot sanitation.
+    expect(controller.getEntries()).toEqual([
+      "/epics/e1/t1",
+      "/identities/id-1",
+    ]);
+
+    act(() => {
+      useIdentityTabsStore.getState().closeTab("id-1");
+    });
+    flushFrames();
+
+    expect(controller.getEntries()).toEqual(["/epics/e1/t1"]);
+    expect(controller.canGoForward()).toBe(false);
     expect(loadSpy).not.toHaveBeenCalled();
   });
 

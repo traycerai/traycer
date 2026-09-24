@@ -14,6 +14,7 @@ export {
   deliveryRestoreAckKey,
   epicCanvasKey,
   githubMentionFiltersKey,
+  identityTabsKey,
   lastLocalHostIdKey,
   interviewDraftKey,
   interviewDraftKeyPrefix,

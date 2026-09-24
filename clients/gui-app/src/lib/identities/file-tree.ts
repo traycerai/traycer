@@ -118,6 +118,32 @@ export function buildIdentityFileTree(
   }));
 }
 
+/**
+ * The file an identity opens on when nothing has been picked: its first root
+ * MARKDOWN document (the soul), then the first document anywhere, then - only
+ * when the identity holds no document at all - its first file of any kind.
+ *
+ * Kind before position, deliberately: the root group holds blobs as well as
+ * documents, and a root asset such as `avatar.png` sorts before `SOUL.md`, so
+ * "the first root file" would open every fresh tab on an image preview
+ * instead of the soul editor (finding 43).
+ */
+export function defaultIdentityFilePath(
+  groups: readonly IdentityTreeGroup[],
+): string | null {
+  const soul = groups.find((group) => group.id === "soul");
+  const rootDocument = soul?.files.find((file) => file.kind === "document");
+  if (rootDocument !== undefined) return rootDocument.path;
+  for (const group of groups) {
+    const document = group.files.find((file) => file.kind === "document");
+    if (document !== undefined) return document.path;
+  }
+  for (const group of groups) {
+    if (group.files.length > 0) return group.files[0].path;
+  }
+  return null;
+}
+
 /** Whether a media type is one the body can render as an image. */
 export function isPreviewableImage(mediaType: string): boolean {
   return /^image\/(png|jpeg|gif|webp|svg\+xml|avif)$/.test(mediaType);

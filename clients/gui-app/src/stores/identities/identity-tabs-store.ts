@@ -11,13 +11,17 @@
  * is ignored - because two tabs for one identity would need two tab ids for
  * one route, and the route is what a deep link has to resolve.
  *
- * Persisted like the tabs store, so a restored strip can re-project its
+ * Persisted like the epic canvas store, so a restored strip can re-project its
  * identity tabs; `tabSourceRefs()` prunes any strip ref this store no longer
- * holds.
+ * holds. ACCOUNT-SCOPED like the canvas too: a record names an identity the
+ * signed-in account owns, so the bucket is keyed by the canonical user id and
+ * `IdentityTabsPersistLifecycleBridge` retargets it on sign-in and wipes it on
+ * sign-out. The store itself boots on the anonymous bucket and never reads
+ * another account's.
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { basePersistOptions, identityTabsKey } from "@/lib/persist";
 
 export interface IdentityTab {
   /** The tab id, which IS the identity id. */
@@ -49,8 +53,6 @@ interface IdentityTabsState {
   clearActiveTab: () => void;
   setTitle: (id: string, title: string) => void;
 }
-
-export const IDENTITY_TABS_PERSIST_KEY = persistKey(STORE_KEYS.identityTabs);
 
 interface PersistedIdentityTabsState {
   readonly tabsById: Readonly<Record<string, IdentityTab | undefined>>;
@@ -123,7 +125,9 @@ export const useIdentityTabsStore = create<IdentityTabsState>()(
       },
     }),
     {
-      ...basePersistOptions(IDENTITY_TABS_PERSIST_KEY),
+      // The anonymous bucket at boot; the lifecycle bridge retargets it to
+      // the signed-in account's before anything reads it.
+      ...basePersistOptions(identityTabsKey(null)),
       partialize: (state): PersistedIdentityTabsState => ({
         tabsById: state.tabsById,
         openTabOrder: state.openTabOrder,

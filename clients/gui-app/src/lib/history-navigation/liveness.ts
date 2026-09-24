@@ -3,8 +3,9 @@ import {
   isOpenLandingDraft,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import { isOpenIdentityTab } from "@/stores/identities/identity-tabs-store";
 import { parseNestedFocusTargetFromHref } from "@/lib/epic-nested-focus-route";
-import { hrefPathname } from "@/lib/routes";
+import { hrefPathname, readIdentityIdFromPath } from "@/lib/routes";
 
 /**
  * Conservative liveness predicate for a persisted history entry.
@@ -31,11 +32,19 @@ import { hrefPathname } from "@/lib/routes";
  *   start-task draft is retained in the store (T10) but is not a strip
  *   source; Back onto `/draft/:id` would landing-correct. `/draft/new` is a
  *   distinct route and is always kept.
+ * - `/identities/$identityId` — dead when the identity tab is not open.
+ *   Closing an identity tab DELETES its source record, so "not held" is the
+ *   store's proof the source is gone; kept here rather than left to the
+ *   external-route resolver, which would otherwise read a Back onto the
+ *   closed tab as a deep link and recreate it on the effective host.
  *
  * Reads `getState()` at call time so the prune scheduler re-evaluates liveness
  * against the live stores at execution, not at install time.
  */
 export function isHistoryEntryDead(href: string): boolean {
+  const identityId = parseIdentityTabHref(href);
+  if (identityId !== null) return !isOpenIdentityTab(identityId);
+
   const epicTab = parseEpicTabHref(href);
 
   // /epics/$epicId/$tabId — a known tab (open or closed) is always alive
@@ -100,4 +109,13 @@ export function parseEpicTabHref(href: string): ParsedEpicTabHref | null {
     return null;
   }
   return { epicId: segments[1], tabId: segments[2] };
+}
+
+/**
+ * The identity id of an `/identities/$identityId` href, or `null` for any
+ * other route shape. Shared by liveness pruning and the back/forward
+ * skip-eligibility scan, as `parseEpicTabHref` is for epic tabs.
+ */
+export function parseIdentityTabHref(href: string): string | null {
+  return readIdentityIdFromPath(hrefPathname(href));
 }

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  resetIdentityTabsStoreForTests,
+  useIdentityTabsStore,
+} from "@/stores/identities/identity-tabs-store";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -65,11 +69,13 @@ beforeEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+  resetIdentityTabsStoreForTests();
 });
 
 afterEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+  resetIdentityTabsStoreForTests();
 });
 
 describe("isHistoryEntryDead — conservative liveness", () => {
@@ -295,5 +301,25 @@ describe("isHistoryEntryDead — conservative liveness", () => {
 
   it("never prunes the /draft/new route even with an empty store", () => {
     expect(isHistoryEntryDead("/draft/new")).toBe(false);
+  });
+
+  // Finding 41: closing an identity tab DELETES its record, which is the
+  // store's proof the source is gone. Left to the external-route resolver, a
+  // Back onto the entry would read as a deep link and recreate the tab.
+  it("keeps an identity href while its tab is open, prunes it once closed", () => {
+    useIdentityTabsStore
+      .getState()
+      .openTab({ identityId: "id-1", hostId: "host-a", title: "Soul" });
+    expect(isHistoryEntryDead("/identities/id-1")).toBe(false);
+    expect(isHistoryEntryDead("/identities/id-1?panel=history#x")).toBe(false);
+
+    useIdentityTabsStore.getState().closeTab("id-1");
+    expect(isHistoryEntryDead("/identities/id-1")).toBe(true);
+  });
+
+  it("prunes an identity href the store never held", () => {
+    expect(isHistoryEntryDead("/identities/never-opened")).toBe(true);
+    // The list route is not a tab and is never pruned.
+    expect(isHistoryEntryDead("/identities")).toBe(false);
   });
 });

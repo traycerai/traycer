@@ -53,6 +53,15 @@ export const epicCanvasKey = (identity: string | null): string =>
 export const landingTerminalsKey = (identity: string | null): string =>
   scopedPersistKey("landing-terminals", scopeBucket(identity));
 
+// The open Identities tabs (`stores/identities/identity-tabs-store.ts`).
+// Identity-scoped like the epic canvas, whose tab strip it is the identity
+// half of: a record names an account's identity id, its title and the host it
+// is bound to, so an identity-free bucket would hand the next account on this
+// profile another account's identities to reopen. The lifecycle bridge
+// retargets on sign-in and wipes the bucket on sign-out, same as the canvas.
+export const identityTabsKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.identityTabs, scopeBucket(identity));
+
 // Per-surface host pins (git-diff / file-tree / new-terminal / composer).
 // Identity-scoped like composer run settings (G1): a pin names an account's
 // host id, so another account must never inherit it across a user switch.
@@ -202,7 +211,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (10) ───────────────────────────────────────────
+  // ── Scoped zustand stores (11) ───────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -229,6 +238,11 @@ export const PERSIST_STORES = [
     leaf: "landing-terminals",
     kind: "scoped",
   },
+  // The open Identities tabs (`stores/identities/identity-tabs-store.ts`):
+  // the source records the `identity` tab kind projects from, as `tabs` holds
+  // the system tabs and `draft` the landing drafts. Account-scoped, since a
+  // record names an identity the signed-in account owns.
+  { camelName: "identityTabs", leaf: "identity-tabs", kind: "scoped" },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
   {
     camelName: "surfaceHostSelection",
@@ -254,7 +268,7 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (34) ───────────────────────────────────────────
+  // ── Static zustand stores (33) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -344,10 +358,6 @@ export const PERSIST_STORES = [
   // it replaces were: it names a machine to watch, not an account.
   { camelName: "watchHost", leaf: "watch-host", kind: "static" },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
-  // The open Identities tabs (`stores/identities/identity-tabs-store.ts`):
-  // the source records the `identity` tab kind projects from, as `tabs` holds
-  // the system tabs and `draft` the landing drafts.
-  { camelName: "identityTabs", leaf: "identity-tabs", kind: "static" },
   {
     camelName: "workspaceFolders",
     leaf: "workspace-folders",

@@ -100,6 +100,19 @@ export function HermesImportPanel(props: {
     setTargetMemory((current) => rememberHermesTarget(current, next));
   };
 
+  /**
+   * Editing the folder RETIRES the scan: the rows and the Import action
+   * describe the directory that was scanned, and a run always submits that
+   * directory, so leaving them up under a different path would import the
+   * previous profile while the field names the new one (finding 49). The
+   * results return on the next Scan.
+   */
+  const changeDirectory = (next: string): void => {
+    setDirectory(next);
+    if (scanState.phase !== "idle") setScanState({ phase: "idle" });
+    if (runState.phase !== "idle") setRunState({ phase: "idle" });
+  };
+
   const submitScan = async (): Promise<void> => {
     const trimmed = directory.trim();
     if (trimmed.length === 0 || scan.isPending) return;
@@ -194,7 +207,7 @@ export function HermesImportPanel(props: {
           aria-label="Hermes profile folder"
           placeholder={HERMES_DEFAULT_DIRECTORY}
           disabled={scan.isPending || run.isPending}
-          onChange={(event) => setDirectory(event.target.value)}
+          onChange={(event) => changeDirectory(event.target.value)}
           data-testid="hermes-import-directory"
         />
         <Button

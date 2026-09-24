@@ -224,6 +224,33 @@ describe("<HermesImportPanel /> scan", () => {
   });
 });
 
+describe("<HermesImportPanel /> directory edits after a scan (finding 49)", () => {
+  it("retires the scanned rows and the Import action when the folder is changed", async () => {
+    renderPanel(null);
+    await scanProfile();
+    expect(screen.getByTestId("hermes-import-rows")).not.toBeNull();
+
+    fireEvent.change(screen.getByTestId("hermes-import-directory"), {
+      target: { value: "~/.hermes/profiles/other" },
+    });
+
+    // The rows and the run action described the SCANNED directory; under a
+    // different path they would import the previous profile.
+    expect(screen.queryByTestId("hermes-import-rows")).toBeNull();
+    expect(screen.queryByTestId("hermes-import-summary")).toBeNull();
+    expect(screen.queryByTestId("hermes-import-run")).toBeNull();
+    expect(runMock).not.toHaveBeenCalled();
+
+    // A fresh Scan of the new folder brings them back for that folder.
+    scanMock.mockResolvedValue({ ...PROFILE_RESPONSE, profileName: "other" });
+    fireEvent.click(screen.getByTestId("hermes-import-scan"));
+    await screen.findByTestId("hermes-import-summary");
+    expect(scanMock).toHaveBeenLastCalledWith({
+      directory: "~/.hermes/profiles/other",
+    });
+  });
+});
+
 describe("<HermesImportPanel /> scanned rows and selection", () => {
   it("renders every row with its default selection and the bundled marker", async () => {
     renderPanel(null);

@@ -2603,6 +2603,29 @@ export function useEpicNodeArchived(nodeId: string): boolean {
 }
 
 /**
+ * Whether the sidebar LISTS this node as archived - the presentation
+ * counterpart of {@link useEpicNodeArchived}, which is the record's real
+ * archive flag and stays what a mutation toggles against.
+ *
+ * The two part company on exactly one row: an identity's evolution chat is
+ * partitioned under Archived (`chatListedAsArchived`) while its `archivedAt`
+ * is still `null`, because the host archives it only when the pass ends. The
+ * row's dimming and its "archived" description follow the partition it sits
+ * in; the Archive/Unarchive affordance follows the record.
+ */
+export function useEpicNodeListedAsArchived(nodeId: string): boolean {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return chatListedAsArchived(s.chats.byId[nodeId]);
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].archivedAt !== null;
+    }
+    return false;
+  });
+}
+
+/**
  * Provider-optional counterpart to {@link useEpicNodeArchived} for canvas tab
  * icons. The shared tab icon also renders in provider-less drag previews and
  * graph surfaces, so it resolves the epic through the session registry and

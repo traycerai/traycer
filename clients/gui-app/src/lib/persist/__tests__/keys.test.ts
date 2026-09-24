@@ -16,6 +16,7 @@ import {
   interviewDraftKey,
   surfaceHostSelectionKey,
   interviewDraftKeyPrefix,
+  identityTabsKey,
   landingTerminalsKey,
   openEpicKey,
   persistKey,
@@ -164,6 +165,10 @@ describe("persist key builders — output-preserving against current source", ()
     // by userId).
     expect(epicCanvasKey(null)).toBe("traycer-gui-app:epic-canvas:anon");
     expect(epicCanvasKey("u1")).toBe("traycer-gui-app:epic-canvas:u1");
+    // Source: src/stores/identities/identity-tabs-store.ts (bucketed by
+    // userId, retargeted by `IdentityTabsPersistLifecycleBridge`).
+    expect(identityTabsKey(null)).toBe("traycer-gui-app:identity-tabs:anon");
+    expect(identityTabsKey("u1")).toBe("traycer-gui-app:identity-tabs:u1");
     // Source: src/stores/home/landing-panel-store.ts.
     expect(landingTerminalsKey(null)).toBe(
       "traycer-gui-app:landing-terminals:anon",

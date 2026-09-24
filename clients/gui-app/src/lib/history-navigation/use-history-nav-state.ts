@@ -2,6 +2,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { getHistoryController } from "@/lib/persistent-history";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import {
   findEligibleOffset,
   isHistoryEntryEligible,
@@ -73,9 +74,14 @@ export function useHistoryNavState(): HistoryNavState {
       if (controller === null) return router.history.subscribe(onStoreChange);
       const unsubscribeController = controller.subscribe(onStoreChange);
       const unsubscribeCanvas = useEpicCanvasStore.subscribe(onStoreChange);
+      // The identity half of the strip's sources: closing an identity tab
+      // flips its entries' eligibility with no history event, same as a Task.
+      const unsubscribeIdentities =
+        useIdentityTabsStore.subscribe(onStoreChange);
       return () => {
         unsubscribeController();
         unsubscribeCanvas();
+        unsubscribeIdentities();
       };
     },
     [controller, router],
@@ -89,8 +95,9 @@ export function useHistoryNavState(): HistoryNavState {
     const entries = controller.getEntries();
     const index = controller.getIndex();
     const canvasState = useEpicCanvasStore.getState();
+    const identityTabs = useIdentityTabsStore.getState();
     const isEligible = (href: string) =>
-      isHistoryEntryEligible(href, canvasState);
+      isHistoryEntryEligible(href, canvasState, identityTabs);
     const canGoBack =
       findEligibleOffset(entries, index, -1, isEligible) !== null;
     const canGoForward =

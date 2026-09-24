@@ -47,6 +47,7 @@ import {
   subscribeOpenIdentitySessions,
 } from "@/stores/identities/open-identity/session-registry";
 import { createOpenIdentityStore } from "@/stores/identities/open-identity/store";
+import { syncIdentityTabTitle } from "@/stores/identities/identity-tab-title-sync";
 import {
   OpenIdentityContext,
   type OpenIdentityGate,
@@ -145,6 +146,14 @@ export function OpenIdentityProvider(
     readHandle,
     readHandle,
   );
+
+  // The tab source follows the session's authoritative title (finding 42):
+  // an external-store subscription for the session's lifetime, which is the
+  // sanctioned effect shape here.
+  useEffect(() => {
+    if (handle === null) return;
+    return syncIdentityTabTitle(handle);
+  }, [handle]);
 
   const gate = useMemo<OpenIdentityGate>(() => {
     if (handle !== null) return { kind: "ready", handle };

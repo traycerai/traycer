@@ -155,6 +155,7 @@ import {
   useEpicChatIds,
   useEpicConnectionStatus,
   useEpicNodeArchived,
+  useEpicNodeListedAsArchived,
   useEpicNodeUpdatedAt,
   useEpicNodeHostId,
   useEpicNodeHostIds,
@@ -1654,7 +1655,14 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     mutationHostId,
     SET_CHAT_ARCHIVED_METHOD,
   );
+  // The record's REAL archive flag, which the toggle below mutates against.
   const isArchived = useEpicNodeArchived(nodeId);
+  // What the row LOOKS like: the partition it is listed in. Differs from the
+  // flag for an evolution chat whose pass is still running - listed under
+  // Archived, `archivedAt` still `null` - so the dimming and the "archived"
+  // description read this, and the Archive/Unarchive affordance reads the
+  // flag (finding 45).
+  const listedAsArchived = useEpicNodeListedAsArchived(nodeId);
   const archiveChat = useEpicArchiveChat();
   const toggleArchive = useCallback(() => {
     if (!canMutate || !archiveSupported) return;
@@ -2077,6 +2085,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       archive={archiveRow}
+      listedAsArchived={listedAsArchived}
       selectionMode={selectionMode}
       isSelected={selectedIds.has(nodeId)}
       selectedIds={selectedIds}
@@ -2127,6 +2136,12 @@ interface ChatNodeShellProps {
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly archive: ChatRowArchiveInputs;
+  /**
+   * The row's archived PRESENTATION - dimming and description - which
+   * follows the partition it is listed in, not `archive.isArchived`, the
+   * record flag the affordance toggles. See `useEpicNodeListedAsArchived`.
+   */
+  readonly listedAsArchived: boolean;
   readonly treeFilter: TreeFilterFn;
   readonly selectionMode: boolean;
   readonly isSelected: boolean;
@@ -2228,6 +2243,7 @@ function ChatNodeShellBody(
     deletePending,
     onConfirmDelete,
     archive: archiveRow,
+    listedAsArchived,
     treeFilter,
     selectionMode,
     isSelected,
@@ -2334,7 +2350,7 @@ function ChatNodeShellBody(
             onKeyDown={onRenameKeyDown}
             nodeName={nodeName}
             nodeId={nodeId}
-            isArchived={archiveRow.isArchived}
+            isArchived={listedAsArchived}
           />
         ) : (
           <ChatRowButton
@@ -2354,7 +2370,7 @@ function ChatNodeShellBody(
             selectionMode={selectionMode}
             isSelected={isSelected}
             onToggleSelection={onToggleSelection}
-            isArchived={archiveRow.isArchived}
+            isArchived={listedAsArchived}
             reserveArchiveSlot={decision.showButton || archiveRow.pending}
             showSharedIndicator={sharing.showIndicator}
           />

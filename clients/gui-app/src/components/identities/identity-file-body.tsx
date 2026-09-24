@@ -33,6 +33,10 @@ import {
   useOpenIdentityState,
 } from "@/lib/identity-selectors";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type {
+  IdentityFileBodyAvailability,
+  IdentityShardState,
+} from "@/stores/identities/open-identity/types";
 
 export interface IdentityFileBodyProps {
   readonly identityId: string;
@@ -89,12 +93,42 @@ function BodyNotice(props: {
   );
 }
 
+/**
+ * Why the document is read-only right now, or `null` while it is editable.
+ *
+ * Two sources, in the order a person would want to hear them: the BODY lane's
+ * own `retrying` availability (the host said `bodyUnavailable` and kept the
+ * subscription), then the SHARD the document lives in - the index lane reports
+ * every shard room the host can reach, and a document whose room is
+ * `retrying` or `unavailable` keeps its last bytes readable but must not take
+ * edits the host has nowhere to land (finding 40). A shard the host has not
+ * reported at all is not a refusal, so it does not lock the editor.
+ */
+function documentReadOnlyReason(
+  availability: IdentityFileBodyAvailability | null,
+  shard: IdentityShardState | null,
+): string | null {
+  if (availability?.kind === "retrying") return availability.reason;
+  if (shard === "retrying") {
+    return "The host is reconnecting to this file's room.";
+  }
+  if (shard === "unavailable") {
+    return "The host cannot reach this file's room.";
+  }
+  return null;
+}
+
 function IdentityDocumentBody(props: { readonly path: string }): ReactNode {
   const { path } = props;
   const fragment = useIdentityFileFragment(path);
   const doc = useIdentityFileDoc(path);
   const awareness = useIdentityFileAwareness(path);
   const availability = useIdentityFileBodyAvailability(path);
+  const shard = useOpenIdentityState((state) => {
+    const document = state.documents.byPath[path];
+    if (document === undefined) return null;
+    return state.shards[document.shardRoomId] ?? null;
+  });
   if (availability?.kind === "unavailable") {
     return (
       <BodyNotice testId="identity-document-unavailable">
@@ -115,10 +149,7 @@ function IdentityDocumentBody(props: { readonly path: string }): ReactNode {
       fragment={fragment}
       doc={doc}
       awareness={awareness}
-      readOnly={availability?.kind === "retrying"}
-      retryingReason={
-        availability?.kind === "retrying" ? availability.reason : null
-      }
+      readOnlyReason={documentReadOnlyReason(availability, shard)}
     />
   );
 }
@@ -128,10 +159,11 @@ function IdentityDocumentEditor(props: {
   readonly fragment: Y.XmlFragment;
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
-  readonly readOnly: boolean;
-  readonly retryingReason: string | null;
+  /** Why the editor is read-only, or `null` while it accepts edits. */
+  readonly readOnlyReason: string | null;
 }): ReactNode {
-  const { fragment, doc, awareness, readOnly, retryingReason } = props;
+  const { fragment, doc, awareness, readOnlyReason } = props;
+  const readOnly = readOnlyReason !== null;
   const connection = useOpenIdentityState((state) => state.connection);
   const profile = useAuthStore((s) => s.profile);
   const user = useMemo(
@@ -156,12 +188,12 @@ function IdentityDocumentEditor(props: {
       data-testid="identity-document-editor"
       data-path={props.path}
     >
-      {retryingReason !== null ? (
+      {readOnlyReason !== null ? (
         <p
           className="mx-auto mb-3 w-full max-w-3xl rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-ui-xs text-warning-foreground"
           data-testid="identity-document-retrying"
         >
-          Read-only while the host recovers this file: {retryingReason}
+          Read-only while the host recovers this file: {readOnlyReason}
         </p>
       ) : null}
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
