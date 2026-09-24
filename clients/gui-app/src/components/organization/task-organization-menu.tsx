@@ -117,10 +117,12 @@ export function TaskOrganizationMenu(props: {
                 !view.appearances.some((a) => a.taskId === props.taskId)
               }
               onSelect={() => {
+                const canvas = useEpicCanvasStore.getState();
                 const openTasks = new Set(
-                  Object.values(useEpicCanvasStore.getState().tabsById).flatMap(
-                    (tab) => (tab ? [tab.epicId] : []),
-                  ),
+                  canvas.openTabOrder.flatMap((id) => {
+                    const tab = canvas.tabsById[id];
+                    return tab ? [tab.epicId] : [];
+                  }),
                 );
                 const isOpen = view.groups.memberships.some(
                   (m) => m.groupId === group.groupId && openTasks.has(m.taskId),

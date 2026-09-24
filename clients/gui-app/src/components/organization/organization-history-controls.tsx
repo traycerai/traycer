@@ -129,6 +129,15 @@ function GroupHistoryFilters(props: OrganizationFilterProps) {
   const organization = useOrganization();
   const selectedGroups = props.search.groupIds ?? [];
   const selectedGroupSet = new Set(selectedGroups);
+  const groups = new Map(
+    (organization?.view?.groups.groups ?? []).map((group) => [
+      group.groupId,
+      group.name,
+    ]),
+  );
+  for (const groupId of selectedGroups) {
+    if (!groups.has(groupId)) groups.set(groupId, "Unavailable group");
+  }
   return (
     <FilterSection label="Groups" trailing={null}>
       <div className="max-h-44 overflow-y-auto">
@@ -143,16 +152,16 @@ function GroupHistoryFilters(props: OrganizationFilterProps) {
             })
           }
         />
-        {organization?.view?.groups.groups.map((group) => (
+        {[...groups].map(([groupId, name]) => (
           <FilterOption
-            key={group.groupId}
-            label={group.name}
+            key={groupId}
+            label={name}
             truncateLabelFromStart={false}
             count={undefined}
-            checked={selectedGroupSet.has(group.groupId)}
+            checked={selectedGroupSet.has(groupId)}
             onToggle={() =>
               props.onSearchChange({
-                groupIds: toggled(selectedGroups, group.groupId),
+                groupIds: toggled(selectedGroups, groupId),
               })
             }
           />
@@ -174,6 +183,8 @@ function LabelFilterStatus(props: {
   else if (props.empty) message = "No labels yet";
   if (message === null) return null;
   return (
-    <p className="px-1 py-1.5 text-ui-xs text-muted-foreground">{message}</p>
+    <p role="status" className="px-1 py-1.5 text-ui-xs text-muted-foreground">
+      {message}
+    </p>
   );
 }

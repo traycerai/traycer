@@ -28,6 +28,7 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   OrganizationDialogHost,
   type OrganizationDialog,
@@ -145,6 +146,7 @@ function renderDialog(dialog: OrganizationDialog) {
 }
 
 function resetOrganization(): void {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   state.command.mockReset();
   state.command.mockImplementation(() => Promise.resolve());
   state.organization.view.catalog = [];
@@ -227,6 +229,98 @@ describe("organization Revision 2", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(document.activeElement).toBe(launcher));
+  });
+
+  it("moves a closed task without reopening retained tabs, but opens a live group member", async () => {
+    const user = userEvent.setup();
+    const closedMemberTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("closed-member", "Closed member");
+    const closedTaskTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("closed-task", "Closed task");
+    useEpicCanvasStore.setState({ openTabOrder: [], activeTabId: null });
+    state.organization.view.groups = {
+      version: "0",
+      groups: [
+        { groupId: "group-1", name: "Project", color: "#445566", position: 0 },
+      ],
+      memberships: [
+        { taskId: "closed-member", groupId: "group-1", position: 0 },
+      ],
+    };
+    state.organization.view.appearances = [
+      { taskId: "closed-member", version: "0", color: null, icon: null },
+      { taskId: "closed-task", version: "0", color: null, icon: null },
+    ];
+
+    render(
+      <TaskOrganizationDropdown
+        taskId="closed-task"
+        canEdit
+        title="Closed task"
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Organize Closed task" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
+    const firstProjectItem = screen.getByRole("menuitem", { name: "Project" });
+    firstProjectItem.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(state.command).toHaveBeenCalledOnce());
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+    expect(
+      useEpicCanvasStore.getState().tabsById[closedMemberTabId],
+    ).toBeDefined();
+    expect(
+      useEpicCanvasStore.getState().tabsById[closedTaskTabId],
+    ).toBeDefined();
+
+    cleanup();
+    state.command.mockClear();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    const openMemberTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("open-member", "Open member");
+    const closedAgainTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("closed-again", "Closed again");
+    useEpicCanvasStore.setState({
+      openTabOrder: [openMemberTabId],
+      activeTabId: openMemberTabId,
+    });
+    state.organization.view.groups.memberships = [
+      { taskId: "open-member", groupId: "group-1", position: 0 },
+    ];
+    state.organization.view.appearances = [
+      { taskId: "open-member", version: "0", color: null, icon: null },
+      { taskId: "closed-again", version: "0", color: null, icon: null },
+    ];
+
+    render(
+      <TaskOrganizationDropdown
+        taskId="closed-again"
+        canEdit
+        title="Closed again"
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Organize Closed again" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
+    const secondProjectItem = screen.getByRole("menuitem", {
+      name: "Project",
+    });
+    secondProjectItem.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(state.command).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([
+        openMemberTabId,
+        closedAgainTabId,
+      ]),
+    );
   });
 
   it("enters the appearance submenu through keyboard navigation", async () => {

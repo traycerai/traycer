@@ -71,6 +71,7 @@ export function OrganizationProvider({
   );
   const scope = `${hostId}:${userId}`;
   useLayoutEffect(() => {
+    if (accountUserId === null) return;
     const state = useTabsStore.getState();
     const customizations = Object.fromEntries(
       Object.entries(state.customizations ?? {}).map(([id, appearance]) => [

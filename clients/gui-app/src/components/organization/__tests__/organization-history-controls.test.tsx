@@ -131,4 +131,35 @@ describe("organization history filters", () => {
       groupIds: ["group-1"],
     });
   });
+
+  it("keeps a selected group that disappeared from the catalog deselectable", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn<(patch: HistorySearchPatch) => void>();
+    renderFilters(
+      {
+        ...DEFAULT_HISTORY_SEARCH,
+        labelNames: ["Imported"],
+        groupIds: ["missing-group"],
+        includeUngrouped: true,
+      },
+      onSearchChange,
+    );
+
+    const unavailable = screen.getByRole("checkbox", {
+      name: "Unavailable group",
+    });
+    expect(unavailable.getAttribute("aria-checked")).toBe("true");
+    await user.click(unavailable);
+    expect(onSearchChange.mock.calls[0]?.[0]).toEqual({ groupIds: [] });
+
+    await user.click(screen.getByRole("checkbox", { name: "No group" }));
+    expect(onSearchChange.mock.calls[1]?.[0]).toEqual({
+      includeUngrouped: false,
+    });
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Imported" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
 });

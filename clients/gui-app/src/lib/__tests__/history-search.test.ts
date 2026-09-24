@@ -12,7 +12,7 @@ describe("history search params", () => {
   it("parses typed history params and defaults active search to relevance", () => {
     const search = parseHistorySearch({
       historyQuery: "  api  ",
-      historyRepos: ["traycer/server", " traycer/gui-app "],
+      historyRepos: ["traycer/server", " traycer/gui-app ", "traycer/gui-app"],
       historyRepoMode: "all",
       historyWorkspaces: [
         "host-1:%2FUsers%2Fme%2Fgui-app",
@@ -124,7 +124,7 @@ describe("history search params", () => {
 
   it("round-trips label and group categories, including all-mode and Ungrouped", () => {
     const parsed = parseHistorySearch({
-      historyLabels: ["zeta", " alpha ", "zeta"],
+      historyLabels: ["zeta", " alpha ", "zeta", " alpha  "],
       historyLabelMode: "all",
       historyGroups: ["group-b", " group-a "],
       historyUngrouped: true,

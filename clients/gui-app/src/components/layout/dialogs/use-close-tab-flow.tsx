@@ -23,6 +23,7 @@ import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 
 export interface CloseTabFlow {
@@ -65,8 +66,15 @@ export function useCloseTabFlow(): CloseTabFlow {
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
       const finalize = () => {
+        const canvas = useEpicCanvasStore.getState();
+        const hasAnotherTaskTab =
+          tab.kind === "epic" &&
+          canvas.openTabOrder.some(
+            (id) => id !== tab.id && canvas.tabsById[id]?.epicId === tab.epicId,
+          );
         const grouped =
           tab.kind === "epic" &&
+          !hasAnotherTaskTab &&
           organization?.view?.groups.memberships.some(
             (member) => member.taskId === tab.epicId,
           );

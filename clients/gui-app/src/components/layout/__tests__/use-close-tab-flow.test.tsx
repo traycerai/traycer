@@ -5,6 +5,7 @@ import {
   render,
   renderHook,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
@@ -653,6 +654,46 @@ describe("useCloseTabFlow", () => {
       await Promise.resolve();
     });
     expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+  });
+
+  it("keeps cloud membership when another tab for the same task remains open", async () => {
+    const firstTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-duplicate", "First view");
+    const secondTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-duplicate", "Second view");
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-duplicate", groupId: "group-a", position: 0 },
+      ]),
+    );
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(
+        epicHeaderTab("epic-duplicate", firstTabId, "First view"),
+      );
+    });
+
+    expect(organizationState.command).not.toHaveBeenCalled();
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([secondTabId]);
+
+    act(() => {
+      result.current.requestCloseTab(
+        epicHeaderTab("epic-duplicate", secondTabId, "Second view"),
+      );
+    });
+    await waitFor(() =>
+      expect(organizationState.command).toHaveBeenCalledOnce(),
+    );
+    expect(organizationState.command.mock.calls[0]?.[0]).toEqual({
+      kind: "groups",
+      operations: [{ operation: "removeTask", taskId: "epic-duplicate" }],
+    });
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
   });
 
   it("leaves an individually closed task open when membership removal is rejected", async () => {

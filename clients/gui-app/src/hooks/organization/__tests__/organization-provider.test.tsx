@@ -10,7 +10,11 @@ import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 
 const state = vi.hoisted(() => {
-  const identity = {
+  const identity: {
+    hostId: string;
+    userId: string;
+    authUserId: string | null;
+  } = {
     hostId: "host-1",
     userId: "user-1",
     authUserId: "user-1",
@@ -52,12 +56,15 @@ vi.mock("@/stores/auth/auth-store", () => ({
   useAuthStore: <T,>(
     selector: (auth: {
       readonly status: "signed-in";
-      readonly contextMetadata: { readonly userId: string };
+      readonly contextMetadata: { readonly userId: string } | null;
     }) => T,
   ): T =>
     selector({
       status: "signed-in",
-      contextMetadata: { userId: state.identity.authUserId },
+      contextMetadata:
+        state.identity.authUserId === null
+          ? null
+          : { userId: state.identity.authUserId },
     }),
 }));
 
@@ -340,5 +347,86 @@ describe("OrganizationProvider lifecycle projection", () => {
 
     await waitFor(() => expect(tabGroupId(taskTabId)).toBeNull());
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(taskTabId);
+  });
+
+  it("preserves a cold-start customization while identity is unknown, then keeps it for the same account", async () => {
+    const taskTabId = openTask("task-unknown-identity");
+    const key = `epic:${taskTabId}`;
+    const persisted = {
+      color: "#123456",
+      icon: "UX",
+      groupId: "saved-group",
+      pendingGroupId: "pending-group",
+      organizationOwnerId: "user-1",
+    };
+    useTabsStore.setState({
+      groups: {
+        "saved-group": {
+          name: "Saved group",
+          color: "#8ab4f8",
+          collapsed: true,
+        },
+      },
+      customizations: { [key]: persisted },
+    });
+    state.view = { ...emptyView(), ready: false };
+    state.identity.authUserId = null;
+    const queryClient = new QueryClient();
+    const rendered = renderProvider(queryClient, null);
+
+    expect(useTabsStore.getState().customizations?.[key]).toEqual(persisted);
+
+    state.identity.authUserId = "user-1";
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() =>
+      expect(useTabsStore.getState().customizations?.[key]).toEqual(persisted),
+    );
+  });
+
+  it("clears a persisted customization when the cold-start identity resolves to another account", async () => {
+    const taskTabId = openTask("task-other-identity");
+    const key = `epic:${taskTabId}`;
+    useTabsStore.setState({
+      customizations: {
+        [key]: {
+          color: "#123456",
+          icon: "UX",
+          groupId: "saved-group",
+          pendingGroupId: "pending-group",
+          organizationOwnerId: "user-1",
+        },
+      },
+    });
+    state.view = { ...emptyView(), ready: false };
+    state.identity.authUserId = null;
+    const queryClient = new QueryClient();
+    const rendered = renderProvider(queryClient, null);
+
+    state.identity.authUserId = "user-2";
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      const customization = useTabsStore.getState().customizations?.[key];
+      expect(customization).toMatchObject({
+        color: null,
+        icon: null,
+        groupId: null,
+      });
+      expect(customization?.pendingGroupId).toBeUndefined();
+      expect(customization?.organizationOwnerId).toBeUndefined();
+    });
   });
 });

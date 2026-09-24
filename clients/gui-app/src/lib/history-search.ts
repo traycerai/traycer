@@ -323,12 +323,13 @@ function normalizeArray<T extends string>(
 function normalizeRepos(
   value: string | string[] | undefined,
 ): ReadonlyArray<string> {
-  return normalizeArray(value)
-    .flatMap((repo) => {
-      const trimmed = repo.trim();
-      return trimmed.length > 0 ? [trimmed] : [];
-    })
-    .sort((left, right) => left.localeCompare(right));
+  const names = normalizeArray(value).flatMap((name) => {
+    const trimmed = name.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+  return Array.from(new Set(names)).sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function normalizeChatHosts(
