@@ -862,12 +862,11 @@ export function BackgroundItemsPanel(props: {
   };
   // Count every affected row, not just root tree groups - a parent command
   // with running children would otherwise understate the dialog's blast
-  // radius. Wakeup rows are excluded: host-owned wakes survive a session
-  // stop (the handler never touches them), so counting them would be a
-  // false promise.
+  // radius. Scheduled jobs share the provider session and end with it.
+  // Wakeup rows are excluded: host-owned wakes survive a session stop (the
+  // handler never touches them), so counting them would be a false promise.
   const panelItemCount =
-    items.filter((item) => item.kind !== "wakeup" && item.kind !== "cron")
-      .length +
+    items.filter((item) => item.kind !== "wakeup").length +
     managedCommands.length;
 
   return (
@@ -1020,6 +1019,7 @@ export function BackgroundItemsPanel(props: {
         open={confirmingSessionStop}
         onOpenChange={setConfirmingSessionStop}
         itemCount={panelItemCount}
+        scheduledJobCount={scheduledJobCount}
         turnActive={props.turnActive}
         isPending={props.sessionStopPending}
         onConfirm={confirmSessionStop}
@@ -1033,6 +1033,7 @@ function SessionStopConfirmDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly itemCount: number;
+  readonly scheduledJobCount: number;
   readonly turnActive: boolean;
   readonly isPending: boolean;
   readonly onConfirm: () => void;
@@ -1047,6 +1048,7 @@ function SessionStopConfirmDialog(props: {
       description={sessionStopDialogDescription({
         providerLabel: props.escalation.providerLabel,
         itemCount: props.itemCount,
+        scheduledJobCount: props.scheduledJobCount,
         turnActive: props.turnActive,
       })}
       cascadeSummary={null}
@@ -1065,6 +1067,7 @@ function SessionStopConfirmDialog(props: {
 function sessionStopDialogDescription(input: {
   readonly providerLabel: string;
   readonly itemCount: number;
+  readonly scheduledJobCount: number;
   readonly turnActive: boolean;
 }): string {
   const blastRadius =
@@ -1074,6 +1077,11 @@ function sessionStopDialogDescription(input: {
   return [
     `This ${input.providerLabel} version can't stop background commands individually.`,
     blastRadius,
+    ...(input.scheduledJobCount > 0
+      ? [
+          `This includes ${input.scheduledJobCount} scheduled ${input.scheduledJobCount === 1 ? "job" : "jobs"}.`,
+        ]
+      : []),
     ...(input.turnActive ? ["The active turn will also be stopped."] : []),
   ].join(" ");
 }

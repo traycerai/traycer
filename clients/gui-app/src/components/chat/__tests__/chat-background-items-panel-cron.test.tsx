@@ -57,7 +57,11 @@ const CRON_ITEM: BackgroundItem = {
 
 function renderCronPanel(
   items: ReadonlyArray<BackgroundItem>,
-  handlers: { onStopItem: () => string | null; onStopAll: () => string | null },
+  handlers: {
+    onStopItem: () => string | null;
+    onStopAll: () => string | null;
+    onStopSession: () => string | null;
+  },
 ) {
   return render(
     <QueryClientProvider client={queryClient}>
@@ -78,7 +82,7 @@ function renderCronPanel(
           onItemClick={() => undefined}
           onStopItem={handlers.onStopItem}
           onStopAll={handlers.onStopAll}
-          onStopSession={() => null}
+          onStopSession={handlers.onStopSession}
         />
       </TabHostProvider>
     </QueryClientProvider>,
@@ -100,6 +104,7 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
     renderCronPanel([CRON_ITEM], {
       onStopItem: () => null,
       onStopAll: () => null,
+      onStopSession: () => null,
     });
     openPanel();
     expect(screen.getByText(/Every 5 minutes/)).toBeTruthy();
@@ -113,6 +118,7 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
     renderCronPanel([CRON_ITEM], {
       onStopItem: () => null,
       onStopAll: () => null,
+      onStopSession: () => null,
     });
     openPanel();
     const text = document.body.textContent;
@@ -129,7 +135,11 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
   it("offers no per-row stop and no Stop all when only crons are listed", () => {
     const onStopItem = vi.fn(() => null);
     const onStopAll = vi.fn(() => null);
-    renderCronPanel([CRON_ITEM], { onStopItem, onStopAll });
+    renderCronPanel([CRON_ITEM], {
+      onStopItem,
+      onStopAll,
+      onStopSession: () => null,
+    });
     openPanel();
     expect(screen.queryByRole("button", { name: /stop|cancel/i })).toBeNull();
     expect(screen.queryByTestId("background-stop-all")).toBeNull();
@@ -138,6 +148,8 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
   });
 
   it("a cron does not add a Stop all beside a task: the task keeps its stop, the cron gets none", () => {
+    const onStopAll = vi.fn(() => null);
+    const onStopSession = vi.fn(() => null);
     const command: BackgroundItem = {
       taskId: "task-1",
       kind: "command",
@@ -149,7 +161,8 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
     };
     renderCronPanel([command, CRON_ITEM], {
       onStopItem: () => null,
-      onStopAll: () => null,
+      onStopAll,
+      onStopSession,
     });
     openPanel();
     const stops = screen.getAllByRole("button", { name: /^Stop/ });
@@ -157,5 +170,40 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
     expect(
       screen.queryByRole("button", { name: /cron|scheduled job.*stop/i }),
     ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Stop other items" }));
+    expect(onStopAll).toHaveBeenCalledTimes(1);
+    expect(onStopSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+
+  it("counts and names scheduled jobs before stopping a session for a gated command", () => {
+    const gatedCommand: BackgroundItem = {
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    };
+    const onStopSession = vi.fn(() => "action-1");
+    renderCronPanel([gatedCommand, CRON_ITEM], {
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession,
+    });
+
+    openPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Stop other items" }));
+
+    const dialog = screen.getByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain(
+      "Stopping the session ends all 2 background items.",
+    );
+    expect(dialog.textContent).toContain("1 scheduled job");
+    expect(onStopSession).not.toHaveBeenCalled();
   });
 });
