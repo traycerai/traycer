@@ -8,6 +8,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -40,19 +41,25 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 the head, 1.16 still installed", () => {
-  it("advances latestMinor to 17 and binds the new and previous lines", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18 head, 1.16 still installed", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.18", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(17);
+    expect(line.latestMinor).toBe(18);
     expect(line.versions[17].contract).toBe(chatSubscribeV117);
     expect(line.versions[16].contract).toBe(chatSubscribeV116);
   });
 
-  it("1.17 binds the live windowed schemas on both sides", () => {
-    expect(chatSubscribeV117.serverFrameSchema).toBe(
+  it("1.17 binds the live client schema and a frozen server schema; 1.18 the live pair", () => {
+    expect(chatSubscribeV117.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV117.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV117.clientFrameSchema).toBe(
+    expect(chatSubscribeV118.serverFrameSchema).toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV118.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
     );
   });

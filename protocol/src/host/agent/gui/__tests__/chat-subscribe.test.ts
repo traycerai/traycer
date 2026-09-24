@@ -24,6 +24,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2284,7 +2285,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 17 as chatSubscribeV117", () => {
+  it("registers chat.subscribe major 1 latestMinor 18 as chatSubscribeV118", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2324,7 +2325,11 @@ describe("chat.subscribe registry membership", () => {
     // `17` adds the sender-host line: `sentFromHostId` on `send` /
     // `editUserMessage` and on the queued prompt item - tolerated the same
     // way in both directions, the host filling `null` for a `<=1.16` client.
-    expect(entry[1].latestMinor).toBe(17);
+    //
+    // `18` adds the bound-identity line: `identityId` on the active turn, on
+    // the snapshot and on `turnStateChanged` - tolerated the same way, a
+    // `<=1.17` peer's decoder dropping the key.
+    expect(entry[1].latestMinor).toBe(18);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2337,6 +2342,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[15].contract).toBe(chatSubscribeV115);
     expect(entry[1].versions[16].contract).toBe(chatSubscribeV116);
     expect(entry[1].versions[17].contract).toBe(chatSubscribeV117);
+    expect(entry[1].versions[18].contract).toBe(chatSubscribeV118);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2371,6 +2377,10 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV117.schemaVersion).toEqual({
       major: 1,
       minor: 17,
+    });
+    expect(chatSubscribeV118.schemaVersion).toEqual({
+      major: 1,
+      minor: 18,
     });
   });
 

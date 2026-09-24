@@ -843,6 +843,7 @@ describe("useRenderedMessages", () => {
       const activeTurn = {
         agentMode: "regular" as const,
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-codex-retry",
         status: "running" as const,
         harnessId: "codex" as const,
@@ -947,6 +948,7 @@ describe("useRenderedMessages", () => {
     const activeTurn = {
       agentMode: "regular" as const,
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-codex-same-ms",
       status: "running" as const,
       harnessId: "codex" as const,
@@ -1175,6 +1177,7 @@ describe("useRenderedMessages", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-retry-boundary",
         status: "running",
         harnessId: "codex",
@@ -1517,6 +1520,7 @@ describe("useRenderedMessages", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-active-profile",
         status: "starting",
         harnessId: "claude",
@@ -1750,6 +1754,7 @@ describe("useRenderedMessages", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-1",
         status: "running",
         harnessId: "claude",
@@ -3131,6 +3136,7 @@ describe("useRenderedMessages", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3253,6 +3259,7 @@ describe("useRenderedMessages", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3315,6 +3322,7 @@ describe("useRenderedMessages", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3366,6 +3374,7 @@ describe("useRenderedMessages", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-2",
       status: "running",
       harnessId: "claude",
@@ -3493,6 +3502,7 @@ describe("useRenderedMessages", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3672,6 +3682,7 @@ describe("useRenderedMessages", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-1",
         status: "running",
         harnessId: "claude",
@@ -3695,6 +3706,7 @@ describe("useRenderedMessages", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3789,6 +3801,7 @@ function forkEvent(input: {
 const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
   agentMode: "regular",
   sameTurnSteeringSupported: false,
+  identityId: null,
   turnId: "turn-setup",
   status: "running",
   harnessId: "claude",
@@ -6335,6 +6348,7 @@ describe("useRenderedMessages turn.stopped", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-pre-setup",
       status: "running",
       harnessId: "claude",
@@ -6636,6 +6650,7 @@ describe("useRenderedMessages turn.stopped", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",

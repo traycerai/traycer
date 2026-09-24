@@ -422,6 +422,7 @@ function emitChatSnapshot(
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: true,
+        identityId: null,
         turnId: "turn-1",
         status: "running",
         harnessId: QUEUED_SETTINGS.harnessId,

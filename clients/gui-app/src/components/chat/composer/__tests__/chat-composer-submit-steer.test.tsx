@@ -38,6 +38,7 @@ const DIRTY: JsonContent = {
 const MATCHING_TURN: ChatActiveTurn = {
   agentMode: "regular",
   sameTurnSteeringSupported: true,
+  identityId: null,
   turnId: "turn-1",
   status: "running",
   harnessId: "claude",

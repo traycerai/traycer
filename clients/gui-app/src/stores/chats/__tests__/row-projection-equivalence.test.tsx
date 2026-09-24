@@ -160,6 +160,7 @@ function activeTurn(turnId: string): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
+    identityId: null,
     turnId,
     status: "running",
     harnessId: "claude",

@@ -9549,6 +9549,7 @@ describe("createChatSessionStore", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -9612,6 +9613,7 @@ describe("createChatSessionStore", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -9704,6 +9706,7 @@ describe("createChatSessionStore", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -9763,6 +9766,7 @@ describe("createChatSessionStore", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -9881,6 +9885,7 @@ describe("createChatSessionStore", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -9956,6 +9961,7 @@ describe("createChatSessionStore", () => {
     const turnOne: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -10584,6 +10590,7 @@ describe("createChatSessionStore", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
@@ -10657,6 +10664,7 @@ describe("createChatSessionStore", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-2",
         status: "running",
         harnessId: "claude",
@@ -10695,6 +10703,7 @@ describe("createChatSessionStore", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-local",
         status: "starting",
         harnessId: "claude",
@@ -10765,6 +10774,7 @@ describe("createChatSessionStore", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-local",
           status: "starting",
           harnessId: "claude",
@@ -10796,6 +10806,7 @@ describe("createChatSessionStore", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-provider",
         status: "running",
         harnessId: "claude",
@@ -10940,6 +10951,7 @@ describe("createChatSessionStore", () => {
         activeTurn: {
           agentMode: "regular",
           sameTurnSteeringSupported: false,
+          identityId: null,
           turnId: "turn-split",
           status: "running",
           harnessId: "claude",
@@ -11087,6 +11099,7 @@ describe("createChatSessionStore", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-1",
         status: "running",
         harnessId: "claude",
@@ -12125,6 +12138,7 @@ function runningActiveTurn(): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: false,
+    identityId: null,
     turnId: "turn-1",
     status: "running",
     harnessId: "codex",
@@ -12149,6 +12163,7 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
     activeTurn: {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
+      identityId: null,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
@@ -12531,6 +12546,7 @@ describe("in-flight block finalization on stop / steer", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId,
         status: "running",
         harnessId: "codex",
@@ -13054,6 +13070,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       activeTurn: {
         agentMode: "regular",
         sameTurnSteeringSupported: false,
+        identityId: null,
         turnId: "turn-live-auth-1",
         status: "running",
         harnessId: "codex",

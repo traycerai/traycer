@@ -455,6 +455,7 @@ function driftedTurn(): ChatActiveTurn {
   return {
     agentMode: "regular",
     sameTurnSteeringSupported: true,
+    identityId: null,
     turnId: "turn-1",
     status: "running",
     harnessId: "codex",
