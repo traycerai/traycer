@@ -65,8 +65,11 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
       },
     });
     if (projection === null) return { create: newChat, existing: [] };
-    const existing = projection.chats.allIds.map((id) => {
+    const existing = projection.chats.allIds.flatMap((id) => {
       const chat = projection.chats.byId[id];
+      // An identity's evolution chat is the host's background review pass;
+      // this list has no Archived view to show it under, so it is left out.
+      if (chat.chatKind === "evolution") return [];
       // A chat with no recorded hostId falls back to (and thus matches) the
       // epic's host, so only a real, differing hostId ever earns a badge.
       // Requires `activeHostId` to be genuinely resolved first - while it's
@@ -79,20 +82,22 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
         chat.hostId !== activeHostId
           ? chatHostBadgeLabel(hostLabelById, chat.hostId)
           : null;
-      return openerExistingLeaf(
-        "chats",
-        ctx,
-        {
-          id: chat.id,
-          instanceId: uuidv4(),
-          type: "chat",
-          // Read surface: an untitled Agent renders the render-tier "Untitled
-          // agent" fallback, NOT the creation-tier "New chat" default title.
-          name: displayTitle(chat.title, "agent"),
-          hostId: chat.hostId ?? defaultHostId,
-        },
-        hostBadge,
-      );
+      return [
+        openerExistingLeaf(
+          "chats",
+          ctx,
+          {
+            id: chat.id,
+            instanceId: uuidv4(),
+            type: "chat",
+            // Read surface: an untitled Agent renders the render-tier "Untitled
+            // agent" fallback, NOT the creation-tier "New chat" default title.
+            name: displayTitle(chat.title, "agent"),
+            hostId: chat.hostId ?? defaultHostId,
+          },
+          hostBadge,
+        ),
+      ];
     });
     return { create: newChat, existing };
   }, [ctx, projection, activeHostId, defaultHostId, hostLabelById]);

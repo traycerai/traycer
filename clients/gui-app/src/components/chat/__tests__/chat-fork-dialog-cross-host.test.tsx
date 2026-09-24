@@ -472,6 +472,7 @@ const SETTINGS_SEED: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 const SOURCE_FOLDER = {

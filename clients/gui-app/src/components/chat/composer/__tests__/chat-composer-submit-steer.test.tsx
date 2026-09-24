@@ -641,6 +641,7 @@ function mountSubmit(input: MountSubmitInput): {
       },
       reasoning: "medium",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

@@ -88,6 +88,8 @@ const chat: Chat = {
   archivedAt: null,
   pinnedUserProviderHandle: null,
   lastDeliveredRolesDigest: null,
+  kind: "conversation",
+  evolutionTurnsSinceReview: null,
 };
 
 const event: ChatEvent = {
@@ -2809,6 +2811,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     serviceTier: null,
     agentMode: "regular" as const,
     profileId: null,
+    identityId: null,
   };
 
   const reasonixActiveTurn = {

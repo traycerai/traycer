@@ -8,6 +8,7 @@ import {
   type ComposerDictationControl,
 } from "@/components/home/toolbar/composer-mic-button";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { ComposerIdentityPicker } from "@/components/home/pickers/composer-identity-picker";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -66,6 +67,13 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
 
   return (
     <div className="flex min-w-0 items-center justify-end gap-1">
+      {/* The run target is the identity's host too: the list is read there
+          and the pick rides this composer's settings tuple to it. */}
+      <ComposerIdentityPicker
+        store={store}
+        hostId={runTargetHostId}
+        disabled={settingsLocked}
+      />
       <HarnessModelPicker
         labelDisplay="responsive"
         store={store}

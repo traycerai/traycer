@@ -1,8 +1,11 @@
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   House,
+  IdCard,
   LayersPlus,
   LogOut,
   Pin,
@@ -79,6 +82,10 @@ export function MobileNavDrawer(): ReactNode {
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
   const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const identitiesSupported = useHostSupportsMethod(
+    useEffectiveHostId(),
+    "agentIdentity.list",
+  );
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();
@@ -241,6 +248,21 @@ export function MobileNavDrawer(): ReactNode {
           <LayersPlus className="size-4" />
           <span className="flex-1 text-left">Drafts</span>
         </Button>
+        {identitiesSupported ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className={ROW_CLASS}
+            data-testid="mobile-nav-identities"
+            onClick={() => {
+              close();
+              useDesktopDialogStore.getState().openIdentities();
+            }}
+          >
+            <IdCard className="size-4" />
+            <span className="flex-1 text-left">Identities</span>
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="ghost"

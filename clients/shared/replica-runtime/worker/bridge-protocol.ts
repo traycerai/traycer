@@ -52,7 +52,10 @@ import {
   earlyMetaEpicSchema,
   type EarlyMetaEpic,
 } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
+} from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -515,7 +518,7 @@ export type ConfirmedChatMutation =
 
 export interface RuntimeCommandMap {
   "apply-chat-records": {
-    readonly records: readonly ChatRecordSummaryV11[];
+    readonly records: readonly ChatRecordSummaryV12[];
     readonly issuedAtSeq: number | null;
   };
   /**

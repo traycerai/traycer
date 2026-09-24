@@ -957,6 +957,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
           serviceTier: null,
           agentMode: "regular",
           profileId: null,
+          identityId: null,
         };
   return {
     id,
@@ -966,6 +967,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     updatedAt: 0,
     userId: null,
     hostId: "host-a",
+    chatKind: "conversation",
     isTitleEditedByUser: false,
     // Ordinary registry-backed chat - this suite exercises selector
     // behavior, not doc residency.

@@ -31,6 +31,20 @@ vi.mock("@/hooks/settings/use-open-permission-settings", () => ({
   useOpenPermissionSettings: (hostId: string | null) =>
     useOpenPermissionSettingsMock(hostId),
 }));
+// And again for the identity section: its model reads the host's
+// `agentIdentity.*` support and list through host hooks. `null` is the model's
+// own "this host serves no identities" answer, so the sheet renders exactly as
+// it did before the section existed; the section is covered on its own in
+// `composer-identity-sheet-section.test.tsx`.
+vi.mock(
+  "@/components/home/pickers/composer-identity-model",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/home/pickers/composer-identity-model")
+    >()),
+    useComposerIdentityModel: () => null,
+  }),
+);
 
 afterEach(() => {
   cleanup();
@@ -52,6 +66,7 @@ function makeStore(modelSlug: string) {
       selection: { harnessId: "claude", modelSlug, profileId: null },
       reasoning: "",
       serviceTier: "",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

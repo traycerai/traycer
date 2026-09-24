@@ -3,11 +3,13 @@ import {
   isOpenLandingDraft,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import type { TabRef } from "@/stores/tabs/types";
 
 /**
  * The canonical set of refs a strip layout may reference: every open Epic tab
- * in canvas order, then every open, non-retired landing draft. Closed drafts
+ * in canvas order, then every open, non-retired landing draft, then every open
+ * identity tab. Closed drafts
  * stay in the store for history (T11) but are not strip sources. Retirement
  * can precede another window's storage-event cleanup of its local row.
  *
@@ -26,5 +28,9 @@ export function tabSourceRefs(): ReadonlyArray<TabRef> {
     .getState()
     .drafts.filter(isOpenLandingDraft)
     .map<TabRef>((draft) => ({ kind: "draft", id: draft.id }));
-  return [...epics, ...drafts];
+  const identities = useIdentityTabsStore.getState();
+  const identityRefs = identities.openTabOrder.flatMap<TabRef>((id) =>
+    identities.tabsById[id] === undefined ? [] : [{ kind: "identity", id }],
+  );
+  return [...epics, ...drafts, ...identityRefs];
 }

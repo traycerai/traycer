@@ -44,6 +44,7 @@ function queuedItem(queueItemId: string, messageId: string): ChatQueuedItem {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     },
     accountContext: { type: "PERSONAL" },
     sentFromHostId: null,

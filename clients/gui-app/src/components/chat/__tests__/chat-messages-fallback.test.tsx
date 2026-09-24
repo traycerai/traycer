@@ -154,6 +154,7 @@ const FAILED_TUPLE: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "acct-north",
+  identityId: null,
 };
 const TARGET_TUPLE: ChatRunSettings = {
   harnessId: "codex",
@@ -163,6 +164,7 @@ const TARGET_TUPLE: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "acct-south",
+  identityId: null,
 };
 const PREFERRED_TUPLE: ChatRunSettings = {
   harnessId: "claude",
@@ -172,6 +174,7 @@ const PREFERRED_TUPLE: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "acct-north",
+  identityId: null,
 };
 
 // HAND-WRITTEN literal expected strings - deliberately NOT computed via
@@ -341,6 +344,8 @@ function emptyChat(): Chat {
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
 }
 
@@ -508,6 +513,8 @@ function windowedSnapshotBase(input: {
         activeSessionChain: null,
         claudePendingWakes: [],
         pinnedUserProviderHandle: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

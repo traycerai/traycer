@@ -1490,6 +1490,7 @@ describe("tab command coordinator transactions", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
     const REMOTE_SETTINGS: ChatRunSettings = {
       harnessId: "codex",
@@ -1499,6 +1500,7 @@ describe("tab command coordinator transactions", () => {
       serviceTier: null,
       agentMode: "epic",
       profileId: null,
+      identityId: null,
     };
     const EXPLICIT_SETTINGS: ChatRunSettings = {
       harnessId: "claude",
@@ -1508,6 +1510,7 @@ describe("tab command coordinator transactions", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
 
     let composerKey: string;

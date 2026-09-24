@@ -55,6 +55,15 @@ export interface ComposerToolbarValues {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  /**
+   * The identity the chat runs as, or `null` for none (the host's stock
+   * identity). Not catalog-resolved: the harness/model catalog knows nothing
+   * about identities, and a selection the identity list no longer returns is
+   * the picker's "Removed" state to show, not this store's to clear - clearing
+   * it behind the user's back would silently rewrite the chat's tuple on a
+   * list that merely failed to load.
+   */
+  readonly identityId: string | null;
 }
 
 export interface ComposerToolbarCatalog {
@@ -149,6 +158,8 @@ interface ComposerToolbarDerived {
    * good, on every device sharing the chat.
    */
   readonly selectionHealedForDisplay: boolean;
+  /** `values.identityId`, carried through unchanged (see the raw field). */
+  readonly identityId: string | null;
 }
 
 export interface ComposerToolbarState extends ComposerToolbarDerived {
@@ -183,6 +194,9 @@ export interface ComposerToolbarActions {
   readonly applyComposerSelection: (input: ApplyComposerSelectionInput) => void;
   readonly setReasoning: (next: ReasoningLevel) => void;
   readonly setServiceTier: (next: ServiceTier) => void;
+  /** Commit the chat's identity (`null` = none). Emits like any other edit,
+   *  so it rides the same settings tuple to `queueSettingsUpdate`. */
+  readonly setIdentityId: (next: string | null) => void;
   /**
    * Replace the raw values when the seed identity changes (draft swap,
    * settings restored from persistence). No-op when `seedKey` matches the
@@ -307,6 +321,9 @@ export function createComposerToolbarStore(
       setServiceTier: (next) => {
         update({ serviceTier: next });
       },
+      setIdentityId: (next) => {
+        update({ identityId: next });
+      },
 
       applySeed: (seedKey, values) => {
         const state = get();
@@ -354,6 +371,7 @@ function settingsFromDerived(derived: ComposerToolbarDerived): ChatRunSettings {
     // site shared with the picker display); the codex-adapter still re-filters
     // on the wire as defense-in-depth.
     serviceTier: derived.serviceTier,
+    identityId: derived.identityId,
   });
 }
 
@@ -464,6 +482,7 @@ function deriveToolbarState(
     harnessLabel: selectedHarness?.label ?? null,
     selectionCatalogConfirmed,
     selectionHealedForDisplay,
+    identityId: values.identityId,
   };
   // Preserve the previous `selection` reference when nothing changed so slice
   // subscribers (picker, send gate) don't wake on every catalog push. Must

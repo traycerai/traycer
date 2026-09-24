@@ -30,6 +30,7 @@ import type {
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatKind } from "@traycer/protocol/persistence/epic/foundation";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -126,6 +127,17 @@ export interface ChatProjection {
    * unknown window is one round trip rather than a poll interval.
    */
   readonly docResident: boolean | null;
+  /**
+   * What the chat IS. `evolution` is an identity's review pass, which the
+   * sidebar and every chat list filter out while it runs; `conversation` is
+   * every other chat. Carried from whichever plane served the row - the record
+   * row's `kind`, or the doc entry's - and never inferred from anything else.
+   *
+   * `chatKind` and not the wire's `kind`: `ChatProjection` shares unions with
+   * `ArtifactProjection`, whose `kind` is the discriminant those unions narrow
+   * on, and a chat carrying a `kind` of its own would stop them narrowing.
+   */
+  readonly chatKind: ChatKind;
   /** Persisted run settings (harness/model/permission). `null` until set. */
   readonly settings: ChatRunSettings | null;
   /**
@@ -156,6 +168,14 @@ export interface ChatsSlice {
  */
 export interface HeldChatRecordRow extends ChatRecordSummary {
   readonly docResident: boolean | null;
+  /**
+   * What the chat is - see {@link ChatProjection.chatKind}. Required here although
+   * the older planes never carry it: a row from a list or stream minor that
+   * predates the field IS a `conversation`, since no host that could write an
+   * evolution chat speaks those minors. The seeding site states that, rather
+   * than every reader re-deriving it.
+   */
+  readonly kind: ChatKind;
 }
 
 /**

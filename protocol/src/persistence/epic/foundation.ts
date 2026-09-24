@@ -9,6 +9,41 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
 /**
+ * What a chat IS, as opposed to what it runs on. `conversation` is every chat a
+ * user starts or an agent spawns; `evolution` is an identity's review pass, which
+ * the sidebar and every chat list filter out while it runs.
+ *
+ * Shared by the doc chat entry (`chatSchema.kind`) and the record-plane rows the
+ * GUI's lists are actually fed from (`host/epic/chat-records.ts`), so the two
+ * cannot grow different members. Always used with `.default("conversation")`:
+ * an absent key is a chat written before the field existed.
+ */
+export const chatKindSchema = lazySchema(() =>
+  z.enum(["conversation", "evolution"]),
+);
+export type ChatKind = z.infer<typeof chatKindSchema>;
+
+/**
+ * The grammar of an agent identity's id - one ASCII alphanumeric, then up to 35
+ * more alphanumerics or underscores (36 max, no dash, no dot, no slash). The
+ * same rule `packages/common` enforces where identities are minted; the protocol
+ * cannot import it, so it is restated here and must move with it.
+ *
+ * Checked at the wire so a malformed id - a traversal string, an empty one -
+ * is a 400 at parse rather than a throw inside a host resolver that joins it
+ * into a room id, a blob key or a directory. Defined HERE, in the persistence
+ * base, because the chat's run-settings tuple carries an `identityId` and
+ * `persistence/` must not depend on `host/`; `host/agent-identity/schemas.ts`
+ * re-exports it for the `agentIdentity.*` family.
+ */
+export const AGENT_IDENTITY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]{0,35}$/;
+
+export const agentIdentityIdSchema = lazySchema(() =>
+  z.string().regex(AGENT_IDENTITY_ID_PATTERN),
+);
+export type AgentIdentityId = z.infer<typeof agentIdentityIdSchema>;
+
+/**
  * Foundational sub-schemas used across the epic persistence shape:
  * parent reference, token usage, harness ids, permission mode, and chat
  * run settings.
@@ -272,6 +307,28 @@ export const chatRunSettingsSchema = lazySchema(() =>
     // on. `null` = the ambient/host login, so chats persisted before profiles
     // existed still parse cleanly. See the multi-profile decision log.
     profileId: z.string().nullable().default(null),
+    // Which agent IDENTITY this chat runs as - the soul, memories and skills
+    // injected into its system prompt, and the single skill root its run sees.
+    // `null` is the ordinary state and means the host-managed STOCK identity,
+    // not an absence: a run always has exactly one active skill root, so "no
+    // identity" is a default rather than a missing value. Defaulted so chats
+    // persisted before identities existed still parse cleanly - the `profileId`
+    // precedent above, field for field.
+    //
+    // No narrow patch method accompanies it. The identity changes with the same
+    // frequency as the model, so it rides the existing whole-tuple settings
+    // write; see the strict variant's comment below for why a partial tuple is
+    // a validation error on a write path.
+    //
+    // FROZEN COPIES ARE DELIBERATELY NOT FOLLOWING THIS. Every
+    // `chatRunSettingsSchema*` copy below is hand-frozen field-for-field for
+    // exactly this case, and so are `chatRunSettingsSchemaV10` / `V20` in
+    // `host/epic/chat-records.ts`. What DOES pick the field up by reference is
+    // `snapshotChatRunSettingsSchema` (`persistence/chat-sync/open-harness.ts`),
+    // which derives from this live shape on purpose - so a published chat
+    // carries its identity. That is a chat-sync record change and rides the
+    // still-unreleased 1.6 minor; see the note in `chat-sync/version.ts`.
+    identityId: agentIdentityIdSchema.nullable().default(null),
   }),
 );
 export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
@@ -313,6 +370,14 @@ export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
  * every released `chat.subscribe` line below `1.7` reaches the permission mode
  * only through this tuple, so pinning it here is what stops an `auto` chat's
  * settings from being served onto a line whose client rejects the value.
+ *
+ * It is also short a FIELD the live tuple now carries - `identityId` - and that
+ * is the plain hand-frozen rule doing its job rather than a third axis. A
+ * released line must not gain a key at all, whatever its schema would tolerate
+ * (`protocol/README.md`'s additivity note, and the providers.list #258 rule):
+ * schema tolerance says nothing about a consumer that skips the parse. A client
+ * on one of these minors simply never learns a chat has an identity, which is
+ * exactly what it showed before identities existed.
  */
 export const chatRunSettingsSchemaPreReasonix = lazySchema(() =>
   z.object({
@@ -341,6 +406,12 @@ export type ChatRunSettingsPreReasonix = z.infer<
 // `epic.updateChatProfile`); there is deliberately no narrow model/harness
 // update - changing the model invalidates the reasoning/thinking/tier
 // selection, so it is only expressible as a full tuple.
+//
+// `identityId` is REQUIRED here like every other field, which is the point:
+// a writer on a line that binds this tuple must say which identity the chat
+// runs as, and `null` is a statement ("the stock identity"), not an omission.
+// The released line that predates the field binds the frozen copy below
+// instead - see `chatRunSettingsStrictSchemaPreIdentity`.
 /**
  * Wire-freeze copy of the LIVE settings tuple with `permissionMode` pinned
  * pre-`auto`, and ONLY `permissionMode`.
@@ -378,6 +449,10 @@ export type ChatRunSettingsPreReasonix = z.infer<
  * schema and is not weakened by it. Distinct from
  * `chatRunSettingsSchemaPreReasonix`, which pins BOTH axes for the lines below
  * `1.7`, where no such sharing forces the compromise.
+ *
+ * Like the pre-Reasonix copy, it is short the live tuple's `identityId`. Same
+ * rule, same reason: `1.7`-`1.12` are released, and a released line does not
+ * gain a key. `1.13` binds the live tuple and is the first that may carry one.
  */
 export const chatRunSettingsSchemaPreAuto = lazySchema(() =>
   z.object({
@@ -403,5 +478,37 @@ export const chatRunSettingsStrictSchema = lazySchema(() =>
     serviceTier: z.string().nullable(),
     agentMode: agentModeSchema,
     profileId: z.string().nullable(),
+    identityId: agentIdentityIdSchema.nullable(),
   }),
 );
+export type ChatRunSettingsStrict = z.infer<typeof chatRunSettingsStrictSchema>;
+
+/**
+ * Wire-freeze copy of the strict tuple as it stood before `identityId`.
+ *
+ * Bound by `epic.updateChatRunSettings@1.1`, which SHIPPED in `host-v1.3.x`
+ * and must stay byte-identical: every field here is required, so adding one
+ * would refuse the write every shipped `@1.1` client sends, and defaulting it
+ * instead would clear a chat's identity on each of those writes. Identity
+ * writes ride `@1.2`, which binds the live strict tuple above.
+ *
+ * Hand-frozen field-for-field rather than `.omit()`-derived, on the discipline
+ * every frozen copy of this tuple follows: a later field on the live tuple
+ * must not leak onto the released line. The enums stay LIVE, as they do on
+ * `updateChatRunSettingsTupleSchemaV10`: this is a client->host request, and
+ * pinning a roster would make a harness unsettable rather than version-gated.
+ */
+export const chatRunSettingsStrictSchemaPreIdentity = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+  }),
+);
+export type ChatRunSettingsStrictPreIdentity = z.infer<
+  typeof chatRunSettingsStrictSchemaPreIdentity
+>;

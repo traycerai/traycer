@@ -17,10 +17,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SelectAllToggle } from "@/components/ui/select-all-toggle";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { Textarea } from "@/components/ui/textarea";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
+import type { IdentitySkillTarget } from "@/lib/identities/skill-install-target";
 import { cn } from "@/lib/utils";
 import { submitComposer } from "./provider-skill-composer-flow";
 import {
@@ -32,7 +40,129 @@ import {
   SKILL_DESCRIPTION_SOFT_LIMIT,
   type SkillAuthoring,
   type SkillComposerStep,
+  type SkillDestination,
 } from "./provider-skill-composer-model";
+
+/** The provider whose Skills tab opened the composer, as an install target. */
+export interface SkillComposerProviderTarget {
+  readonly label: string;
+  readonly authoring: SkillAuthoring;
+  readonly listScope: ProviderNativeScope;
+  /** The provider's own skills root, when the listing has revealed it. */
+  readonly root: string | null;
+  readonly canProviderScope: boolean;
+  readonly onMutate: (
+    mutation: ProvidersSkillsMutateAction,
+  ) => Promise<SkillsMutateData>;
+}
+
+export type SkillComposerTargetKey =
+  | { readonly kind: "provider" }
+  | { readonly kind: "identity"; readonly identityId: string };
+
+/**
+ * An identity installs from a source only: the identity installer is the
+ * provider installer's inspect/import pair, and there is no identity-side
+ * "write one from scratch" (a new SKILL.md is a file in the identity's tree).
+ */
+const IDENTITY_AUTHORING: SkillAuthoring = {
+  canWrite: false,
+  canImport: true,
+  canInspect: true,
+  canAuthor: true,
+};
+
+/** The selected target, reduced to what the draft and the flow read. */
+interface ResolvedSkillTarget {
+  readonly value: string;
+  readonly kind: "provider" | "identity";
+  readonly label: string;
+  readonly authoring: SkillAuthoring;
+  readonly listScope: ProviderNativeScope;
+  readonly canProviderScope: boolean;
+  readonly installedSelectable: boolean;
+  readonly destinationFor: (providerScoped: boolean) => SkillDestination;
+  readonly onMutate: (
+    mutation: ProvidersSkillsMutateAction,
+  ) => Promise<SkillsMutateData>;
+}
+
+const PROVIDER_TARGET_VALUE = "provider";
+const IDENTITY_TARGET_PREFIX = "identity:";
+
+function targetValue(key: SkillComposerTargetKey): string {
+  return key.kind === "provider"
+    ? PROVIDER_TARGET_VALUE
+    : `${IDENTITY_TARGET_PREFIX}${key.identityId}`;
+}
+
+function resolveTargets(
+  provider: SkillComposerProviderTarget | null,
+  identities: readonly IdentitySkillTarget[],
+): readonly ResolvedSkillTarget[] {
+  const targets: ResolvedSkillTarget[] = [];
+  if (provider !== null) {
+    targets.push({
+      value: PROVIDER_TARGET_VALUE,
+      kind: "provider",
+      label: provider.label,
+      authoring: provider.authoring,
+      listScope: provider.listScope,
+      canProviderScope: provider.canProviderScope,
+      installedSelectable: true,
+      destinationFor: (providerScoped) =>
+        skillDestination({
+          providerScoped,
+          providerLabel: provider.label,
+          providerRoot: provider.root,
+        }),
+      onMutate: provider.onMutate,
+    });
+  }
+  for (const identity of identities) {
+    targets.push({
+      value: `${IDENTITY_TARGET_PREFIX}${identity.identityId}`,
+      kind: "identity",
+      label: identity.title,
+      authoring: IDENTITY_AUTHORING,
+      // Inspect against an identity names no provider scope; the flow still
+      // threads one through, and the identity adapter ignores it.
+      listScope: provider?.listScope ?? "global",
+      canProviderScope: false,
+      installedSelectable: false,
+      destinationFor: () => ({
+        display: `the ${identity.title} identity's skills`,
+        exact: false,
+      }),
+      onMutate: identity.onMutate,
+    });
+  }
+  return targets;
+}
+
+/**
+ * The selected target once it has left the list (an identity deleted while the
+ * dialog was open). It is never swapped for another target - an inspection or
+ * a selection made for it must not be submitted somewhere else - so it stays
+ * selected, unavailable, until the user picks another.
+ */
+function unavailableTarget(value: string): ResolvedSkillTarget {
+  return {
+    value,
+    kind: "identity",
+    label: "Unavailable",
+    authoring: IDENTITY_AUTHORING,
+    listScope: "global",
+    canProviderScope: false,
+    installedSelectable: false,
+    destinationFor: () => ({ display: "an unavailable target", exact: false }),
+    onMutate: () =>
+      Promise.reject(new Error("This install target is no longer available.")),
+  };
+}
+
+const UNAVAILABLE_TARGET_BLOCKER =
+  "The selected target is gone. Choose where to install.";
 
 /**
  * The one surface for getting a skill onto disk.
@@ -41,24 +171,25 @@ import {
  * either a direct install (one candidate) or a picker. "or write one from
  * scratch" swaps to the authoring form. There is no Write/Import tab strip.
  *
+ * WHERE it lands is a target: the provider whose Skills tab opened it, or an
+ * identity (its `skills/` folder, through `agentIdentity.skills.*`). With more
+ * than one target an "Install into" selector leads the form; switching target
+ * starts the source step over, because an inspected list's "installed" badges
+ * were computed against the previous destination.
+ *
  * Mounted only while open (the caller renders it conditionally), which keeps
  * the draft state's lifetime equal to the dialog's: closing it is what discards
  * a draft, and there is no stale half-filled form waiting behind the button.
  */
 export function ProviderSkillComposerDialog(props: {
-  readonly providerLabel: string;
-  readonly authoring: SkillAuthoring;
-  readonly listScope: ProviderNativeScope;
-  /** The provider's own skills root, when the listing has revealed it. */
-  readonly providerRoot: string | null;
-  readonly canProviderScope: boolean;
+  readonly provider: SkillComposerProviderTarget | null;
+  readonly identities: readonly IdentitySkillTarget[];
+  readonly initialTarget: SkillComposerTargetKey;
   readonly pending: boolean;
-  readonly onMutate: (
-    mutation: ProvidersSkillsMutateAction,
-  ) => Promise<SkillsMutateData>;
   readonly onClose: () => void;
 }): ReactNode {
   const draft = useComposerDraft(props);
+  const { target } = draft;
 
   return (
     <Dialog
@@ -79,11 +210,23 @@ export function ProviderSkillComposerDialog(props: {
             )}
           </DialogTitle>
           <DialogDescription>
-            <ComposerDescription step={draft.step} />
+            <ComposerDescription
+              step={draft.step}
+              installedSelectable={target.installedSelectable}
+            />
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
+          {draft.targets.length > 1 || draft.unavailable ? (
+            <TargetField
+              targets={draft.targets}
+              value={target.value}
+              disabled={props.pending}
+              onChange={draft.selectTarget}
+            />
+          ) : null}
+
           {draft.error === null ? null : (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
               {draft.error}
@@ -100,7 +243,7 @@ export function ProviderSkillComposerDialog(props: {
               body={draft.body}
               setBody={draft.setBody}
               disabled={props.pending}
-              canImport={props.authoring.canImport}
+              canImport={target.authoring.canImport}
               onImport={draft.goToImport}
             />
           ) : null}
@@ -109,13 +252,14 @@ export function ProviderSkillComposerDialog(props: {
               source={draft.source}
               setSource={draft.setSource}
               disabled={props.pending}
-              canWrite={props.authoring.canWrite}
+              canWrite={target.authoring.canWrite}
               onWrite={draft.goToWrite}
             />
           ) : null}
           {draft.step === "picker" && draft.inspectSession !== null ? (
             <PickerFields
               candidates={draft.inspectSession.candidates}
+              installedSelectable={target.installedSelectable}
               selectedNames={draft.selectedNames}
               note={draft.pickerNote}
               disabled={props.pending}
@@ -129,9 +273,12 @@ export function ProviderSkillComposerDialog(props: {
                 );
               }}
               onToggleAll={() => {
-                const candidateNames = draft.inspectSession?.candidates.map(
-                  (candidate) => candidate.name,
-                );
+                const candidateNames = draft.inspectSession?.candidates
+                  .filter(
+                    (candidate) =>
+                      target.installedSelectable || !candidate.installed,
+                  )
+                  .map((candidate) => candidate.name);
                 if (candidateNames === undefined) return;
                 const selected = new Set(draft.selectedNames);
                 draft.setSelectedNames(
@@ -146,7 +293,7 @@ export function ProviderSkillComposerDialog(props: {
 
           {draft.showScope ? (
             <SkillScopeFieldset
-              providerLabel={props.providerLabel}
+              providerLabel={target.label}
               providerScoped={draft.effectiveProviderScoped}
               disabled={props.pending}
               onChange={draft.setProviderScoped}
@@ -191,7 +338,7 @@ export function ProviderSkillComposerDialog(props: {
               {submitLabel(
                 draft.step,
                 draft.selectedNames.length,
-                props.authoring.canInspect,
+                target.authoring.canInspect,
               )}
             </Button>
           </div>
@@ -201,52 +348,86 @@ export function ProviderSkillComposerDialog(props: {
   );
 }
 
+function initialModeFor(authoring: SkillAuthoring): "import" | "write" {
+  return !authoring.canImport ? "write" : "import";
+}
+
 function useComposerDraft(props: {
-  readonly authoring: SkillAuthoring;
-  readonly listScope: ProviderNativeScope;
-  readonly providerLabel: string;
-  readonly providerRoot: string | null;
-  readonly canProviderScope: boolean;
+  readonly provider: SkillComposerProviderTarget | null;
+  readonly identities: readonly IdentitySkillTarget[];
+  readonly initialTarget: SkillComposerTargetKey;
   readonly pending: boolean;
-  readonly onMutate: (
-    mutation: ProvidersSkillsMutateAction,
-  ) => Promise<SkillsMutateData>;
   readonly onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"import" | "write">(
-    !props.authoring.canImport ? "write" : "import",
+  const targets = resolveTargets(props.provider, props.identities);
+  const [targetKey, setTargetKey] = useState(() =>
+    targetValue(props.initialTarget),
+  );
+  const found = targets.find((candidate) => candidate.value === targetKey);
+  const unavailable = found === undefined;
+  const target = found ?? unavailableTarget(targetKey);
+  const [mode, setMode] = useState<"import" | "write">(() =>
+    initialModeFor(target.authoring),
   );
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [body, setBody] = useState(skillBodyScaffold);
   const [source, setSource] = useState("");
   const [providerScoped, setProviderScoped] = useState(false);
-  const [inspectSession, setInspectSession] = useState<{
+  const [inspected, setInspected] = useState<{
+    /** The destination the inspection was made against. */
+    readonly destinationKey: string;
     readonly token: string;
     readonly candidates: readonly ProviderSkillInspectCandidate[];
   } | null>(null);
-  const [selectedNames, setSelectedNames] = useState<readonly string[]>([]);
+  const [pickedNames, setSelectedNames] = useState<readonly string[]>([]);
   const [pickerNote, setPickerNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const step: SkillComposerStep = inspectSession !== null ? "picker" : mode;
-  const effectiveProviderScoped = props.canProviderScope && providerScoped;
   const nameError = useMemo(() => skillNameError(name), [name]);
-  const blocker = skillSubmitBlocker({
-    step,
-    name,
-    description,
-    source,
-    selectedNames,
-  });
-  const destination = skillDestination({
-    providerScoped: effectiveProviderScoped,
-    providerLabel: props.providerLabel,
-    providerRoot: props.providerRoot,
-  });
-  const showScope = step !== "picker" && props.canProviderScope;
+
+  // A mode the current target cannot serve (write, on an identity) reads as
+  // the one it can, so switching target never strands the form.
+  const effectiveMode =
+    (mode === "write" && !target.authoring.canWrite) ||
+    (mode === "import" && !target.authoring.canImport)
+      ? initialModeFor(target.authoring)
+      : mode;
+  const effectiveProviderScoped = target.canProviderScope && providerScoped;
+  // An inspection - and the names picked from it - belongs to the destination
+  // it was made against. Any change of destination (another target, the other
+  // scope, the target leaving the list) drops both, so a token minted for one
+  // destination is never submitted to another.
+  const destinationKey = `${target.value}\u0000${String(effectiveProviderScoped)}`;
+  const inspectSession =
+    !unavailable && inspected?.destinationKey === destinationKey
+      ? { token: inspected.token, candidates: inspected.candidates }
+      : null;
+  const selectedNames = inspectSession === null ? [] : pickedNames;
+  const step: SkillComposerStep =
+    inspectSession !== null ? "picker" : effectiveMode;
+  const blocker = unavailable
+    ? UNAVAILABLE_TARGET_BLOCKER
+    : skillSubmitBlocker({
+        step,
+        name,
+        description,
+        source,
+        selectedNames,
+      });
+  const destination = target.destinationFor(effectiveProviderScoped);
+  const showScope = step !== "picker" && target.canProviderScope;
+
+  function setInspectSession(
+    session: {
+      readonly token: string;
+      readonly candidates: readonly ProviderSkillInspectCandidate[];
+    } | null,
+  ): void {
+    setInspected(session === null ? null : { destinationKey, ...session });
+  }
 
   function onSubmit(): void {
+    if (unavailable) return;
     void submitComposer({
       step,
       pending: props.pending,
@@ -259,11 +440,12 @@ function useComposerDraft(props: {
         providerScoped: effectiveProviderScoped,
         selectedNames,
         inspectSession,
-        canInspect: props.authoring.canInspect,
-        listScope: props.listScope,
+        canInspect: target.authoring.canInspect,
+        listScope: target.listScope,
+        installedSelectable: target.installedSelectable,
       },
       sink: {
-        onMutate: props.onMutate,
+        onMutate: target.onMutate,
         onClose: props.onClose,
         setError,
         setInspectSession,
@@ -274,13 +456,21 @@ function useComposerDraft(props: {
   }
 
   function resetTransient(): void {
-    setInspectSession(null);
+    setInspected(null);
     setSelectedNames([]);
     setPickerNote(null);
     setError(null);
   }
 
   return {
+    targets,
+    target,
+    unavailable,
+    selectTarget: (value: string) => {
+      if (value === target.value) return;
+      setTargetKey(value);
+      resetTransient();
+    },
     name,
     setName,
     nameError,
@@ -313,13 +503,59 @@ function useComposerDraft(props: {
   };
 }
 
+function TargetField({
+  targets,
+  value,
+  disabled,
+  onChange,
+}: {
+  readonly targets: readonly ResolvedSkillTarget[];
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: (value: string) => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span
+        id="skill-install-target-label"
+        className="text-ui-sm font-medium text-foreground"
+      >
+        Install into
+      </span>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger
+          size="sm"
+          aria-labelledby="skill-install-target-label"
+          className="w-full"
+          data-testid="skill-install-target"
+        >
+          <SelectValue placeholder="Choose where to install" />
+        </SelectTrigger>
+        <SelectContent>
+          {targets.map((candidate) => (
+            <SelectItem key={candidate.value} value={candidate.value}>
+              {candidate.kind === "identity"
+                ? `Identity: ${candidate.label}`
+                : candidate.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function ComposerDescription({
   step,
+  installedSelectable,
 }: {
   readonly step: SkillComposerStep;
+  readonly installedSelectable: boolean;
 }): ReactNode {
   if (step === "picker") {
-    return "Selecting an installed skill overwrites it from this source.";
+    return installedSelectable
+      ? "Selecting an installed skill overwrites it from this source."
+      : "A skill already in this identity can't be replaced from here. Remove it first to install it again.";
   }
   if (step === "import") {
     return "Paste a source. The host clones or copies it and finds every SKILL.md.";
@@ -507,6 +743,7 @@ function ImportFields({
 
 function PickerFields({
   candidates,
+  installedSelectable,
   selectedNames,
   note,
   disabled,
@@ -515,6 +752,7 @@ function PickerFields({
   onBack,
 }: {
   readonly candidates: readonly ProviderSkillInspectCandidate[];
+  readonly installedSelectable: boolean;
   readonly selectedNames: readonly string[];
   readonly note: string | null;
   readonly disabled: boolean;
@@ -523,6 +761,9 @@ function PickerFields({
   readonly onBack: () => void;
 }): ReactNode {
   const selected = new Set(selectedNames);
+  const selectableCount = candidates.filter(
+    (candidate) => installedSelectable || !candidate.installed,
+  ).length;
   return (
     <div className="flex flex-col gap-3">
       {note === null ? null : (
@@ -536,7 +777,7 @@ function PickerFields({
         </span>
         <SelectAllToggle
           accessibleLabel="Select all skills"
-          selectableCount={candidates.length}
+          selectableCount={selectableCount}
           selectedCount={selectedNames.length}
           disabled={disabled}
           testId="skill-picker-select-all"
@@ -549,7 +790,7 @@ function PickerFields({
             key={candidate.relPath}
             candidate={candidate}
             checked={selected.has(candidate.name)}
-            disabled={disabled}
+            disabled={disabled || (!installedSelectable && candidate.installed)}
             onToggle={onToggle}
           />
         ))}

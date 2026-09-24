@@ -272,6 +272,7 @@ const SETTINGS = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
+  identityId: null,
 };
 
 const UPDATED_SETTINGS = {
@@ -282,6 +283,7 @@ const UPDATED_SETTINGS = {
   serviceTier: null,
   agentMode: "epic" as const,
   profileId: null,
+  identityId: null,
 };
 
 const FILE_APPROVAL: ChatFileEditApprovalState = {
@@ -745,6 +747,8 @@ function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   input.callbacks.onSnapshot({
     kind: "snapshot",
@@ -810,6 +814,8 @@ function emitSnapshotWithWorktree(
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -10746,6 +10752,8 @@ describe("createChatSessionStore", () => {
           archivedAt: null,
           pinnedUserProviderHandle: null,
           lastDeliveredRolesDigest: null,
+          kind: "conversation",
+          evolutionTurnsSinceReview: null,
         },
         access: {
           role: "owner",
@@ -10919,6 +10927,8 @@ describe("createChatSessionStore", () => {
           archivedAt: null,
           pinnedUserProviderHandle: null,
           lastDeliveredRolesDigest: null,
+          kind: "conversation",
+          evolutionTurnsSinceReview: null,
         },
         access: {
           role: "owner",

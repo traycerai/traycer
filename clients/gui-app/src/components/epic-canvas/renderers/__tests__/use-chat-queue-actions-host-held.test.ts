@@ -46,6 +46,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 function docWithImageHash(hash: string): JsonContent {

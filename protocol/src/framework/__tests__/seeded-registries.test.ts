@@ -109,12 +109,15 @@ describe("seeded protocol registries", () => {
     });
   });
 
-  it("persistence owns the epic, room-metadata, chat-sync and draft-head records", () => {
+  it("persistence owns the epic, room-metadata, chat-sync, draft-head and identity records", () => {
     expect(Object.keys(persistenceRecordRegistry).sort()).toEqual([
       "chat-head",
       "chat-shard",
       "draft-head",
       "epic",
+      "identity",
+      "identity-document",
+      "identity-skill-reservation",
       "room-metadata",
     ]);
     expect(Object.keys(persistenceRecordRegistry.epic).sort()).toEqual([
@@ -133,6 +136,20 @@ describe("seeded protocol registries", () => {
     expect(Object.keys(persistenceRecordRegistry["draft-head"]).sort()).toEqual(
       ["1"],
     );
+    // Two records rather than one nested shape, deliberately: the `documents`
+    // map's leniency is per ENTRY, so a file path a reader cannot parse must
+    // not take the identity's own settings down with it.
+    expect(Object.keys(persistenceRecordRegistry.identity).sort()).toEqual([
+      "1",
+    ]);
+    expect(
+      Object.keys(persistenceRecordRegistry["identity-document"]).sort(),
+    ).toEqual(["1"]);
+    expect(
+      Object.keys(
+        persistenceRecordRegistry["identity-skill-reservation"],
+      ).sort(),
+    ).toEqual(["1"]);
   });
 
   it("registers both chat-sync records on one version line", () => {

@@ -16,6 +16,7 @@ import {
   chatSubscribeClientFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
   chatSubscribeSnapshotServerFrameShallowSchema,
+  chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -86,6 +87,14 @@ function resumeQueueFrame(): ChatSubscribeClientFrame {
   };
 }
 
+// Parsed through the LIVE client-frame schema rather than `1.7`'s, because the
+// return type is the live one and the two tuples have parted company:
+// `1.7`-`1.12` bind `chatRunSettingsSchemaPreAuto`, which is frozen short of
+// `identityId`. Parsing here with `1.7` would build a value the declared type
+// says is impossible. The projection assertions below are unaffected - a `1.7`
+// peer takes the identity path, and the pre-`1.7` lines reparse through their
+// own schema, which strips the field exactly as it strips every other
+// post-freeze addition.
 function sendFrame(): ChatSubscribeClientFrame {
   // A `1.7` peer's frame, normalized up through the live schema exactly as the
   // host's resolver does it: the frozen line has no `sentFromHostId`, and the

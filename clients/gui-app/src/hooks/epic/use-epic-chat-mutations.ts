@@ -16,7 +16,7 @@ import type {
   SetChatArchivedResponse,
   UpdateChatProfileRequest,
   UpdateChatProfileResponse,
-  UpdateChatRunSettingsRequest,
+  UpdateChatRunSettingsRequestV12,
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -506,7 +506,7 @@ function invalidateBindingsForEpic(
 export function useEpicUpdateChatRunSettings(): UseMutationResult<
   UpdateChatRunSettingsResponse,
   HostRpcError,
-  UpdateChatRunSettingsRequest
+  UpdateChatRunSettingsRequestV12
 > {
   const client = useTabHostClient();
   const queryClient = useQueryClient();
@@ -514,7 +514,7 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
     HostRpcRegistry,
     "epic.updateChatRunSettings",
     { hostId: string | null },
-    UpdateChatRunSettingsRequest
+    UpdateChatRunSettingsRequestV12
   >({
     client,
     method: "epic.updateChatRunSettings",

@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useIdentityTabsStore } from "@/stores/identities/identity-tabs-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -182,6 +183,7 @@ function MobileHeaderTitleSlot(props: MobileHeaderTitleSlotProps): ReactNode {
  */
 type MobileHeaderSurface =
   | { readonly kind: "epic"; readonly tabId: string }
+  | { readonly kind: "identity"; readonly tabId: string }
   | { readonly kind: "history" }
   | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
@@ -233,6 +235,8 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
           };
         case "draft":
           return COMPOSER_SURFACE;
+        case "identity":
+          return { kind: "identity", tabId: focused.id };
       }
     }),
   );
@@ -288,6 +292,11 @@ function useMobileHeaderTitle(
     epicTabId === null ? null : (state.tabsById[epicTabId]?.name ?? null),
   );
   const liveTitle = useRegisteredEpicTitle(epicId);
+  const identityTitle = useIdentityTabsStore((state) =>
+    surface.kind === "identity"
+      ? (state.tabsById[surface.tabId]?.title ?? null)
+      : null,
+  );
   // An epic whose name has not resolved yet falls through to no title rather
   // than to a placeholder, so the header never flashes a stand-in and then
   // swaps it for the real name.
@@ -295,6 +304,7 @@ function useMobileHeaderTitle(
   if (surface.kind === "settings") return "Settings";
   if (surface.kind === "history") return "History";
   if (surface.kind === "home") return "Home";
+  if (surface.kind === "identity") return identityTitle;
   // Titles name a place you navigated TO. The composer surfaces - landing and
   // drafts - are where you already are, and each one opens with a hero greeting
   // that carries the page, so "Traycer" and "New task" were both labelling the

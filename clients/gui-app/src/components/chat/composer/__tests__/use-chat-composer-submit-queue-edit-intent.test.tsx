@@ -127,6 +127,7 @@ function mountSubmit(
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
       serviceTier: "auto",
+      identityId: null,
     },
     onSettingsChange: null,
     tuiOnly: false,

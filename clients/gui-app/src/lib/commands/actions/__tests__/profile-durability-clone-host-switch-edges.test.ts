@@ -50,6 +50,7 @@ const BASE_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: "source-work-uuid",
+  identityId: null,
 };
 
 function profile(

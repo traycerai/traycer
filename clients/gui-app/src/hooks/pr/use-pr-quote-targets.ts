@@ -41,12 +41,16 @@ export function usePrQuoteTargets(args: {
 
   const targets = useMemo<readonly PrQuoteTarget[]>(() => {
     const entries: PrQuoteTarget[] = [
-      ...chats.map((chat) => ({
-        id: chat.id,
-        kind: "chat" as const,
-        title: displayTitle(chat.title, "chat"),
-        updatedAt: chat.updatedAt,
-      })),
+      // An identity's evolution chat is a background pass, not a place to
+      // quote a PR into.
+      ...chats
+        .filter((chat) => chat.chatKind !== "evolution")
+        .map((chat) => ({
+          id: chat.id,
+          kind: "chat" as const,
+          title: displayTitle(chat.title, "chat"),
+          updatedAt: chat.updatedAt,
+        })),
       ...agents.map((agent) => ({
         id: agent.id,
         kind: "terminal-agent" as const,

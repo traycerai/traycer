@@ -53,6 +53,7 @@ function renderSheet(overrides: {
       judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
       onOpenPermissionSettings={overrides.onOpenPermissionSettings}
+      identitySection={null}
     />,
   );
 }

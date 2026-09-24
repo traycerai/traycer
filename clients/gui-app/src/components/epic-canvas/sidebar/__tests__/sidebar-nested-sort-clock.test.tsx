@@ -199,6 +199,7 @@ function record(
     ownerUserId: OWNER_USER_ID,
     originHostId: FOREIGN_HOST_ID,
     title: OLD_ID,
+    kind: "conversation",
     isTitleEditedByUser: false,
     parentChatId: PARENT_ID,
     createdAt: 1,

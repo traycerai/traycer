@@ -3,6 +3,8 @@ import { useStore } from "zustand";
 
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
+import { ComposerIdentitySheetSection } from "@/components/home/mobile/composer-identity-sheet-section";
+import { useComposerIdentityModel } from "@/components/home/pickers/composer-identity-model";
 import {
   autoModeOfferableHere,
   catalogSupportedPermissionModes,
@@ -24,6 +26,8 @@ import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { cn } from "@/lib/utils";
 
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
@@ -92,6 +96,11 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   );
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
+  const setIdentityId = useStore(store, (s) => s.setIdentityId);
+  // The desktop toolbar's identity dropdown, mirrored into the options sheet;
+  // same model, same host (the run target), same gate.
+  const identityModel = useComposerIdentityModel(store, runTargetHostId);
+  const identityRemoved = identityModel?.resolution.kind === "removed";
   // Same two inputs the desktop toolbar computes, from the same helpers - see
   // `ComposerToolbar`.
   const harnesses = useStore(store, (s) => s.catalog.harnesses);
@@ -181,14 +190,29 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           either - this is also the only route to the agent-mode rows, which
           must stay reachable; the sheet's own rows carry the lock. */}
       <ToolbarPillButton
-        aria-label={`Permissions: ${permissionOption.label}`}
+        aria-label={
+          identityRemoved
+            ? `Permissions: ${permissionOption.label}. Identity removed`
+            : `Permissions: ${permissionOption.label}`
+        }
         data-testid="composer-mobile-options-trigger"
-        className="size-8 shrink-0 justify-center px-0"
+        className="relative size-8 shrink-0 justify-center px-0"
         onClick={() => {
           setOptionsOpen(true);
         }}
       >
         <PermissionIcon className="size-4 shrink-0" />
+        {/* The sheet is the only place the phone row shows the identity, so a
+            removed one flags its trigger - otherwise it would be invisible
+            until the sheet was opened for something else. */}
+        <span
+          aria-hidden
+          data-testid="composer-mobile-identity-removed-dot"
+          className={cn(
+            "absolute right-1 top-1 size-1.5 rounded-full bg-warning",
+            !identityRemoved && "hidden",
+          )}
+        />
       </ToolbarPillButton>
       <div className="ml-auto flex min-w-0 shrink items-center gap-1">
         <HarnessModelPicker
@@ -235,6 +259,22 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
         judgeBilling={judgeBilling}
         settingsLocked={settingsLocked}
         onOpenPermissionSettings={openPermissionSettings}
+        identitySection={
+          identityModel === null ? null : (
+            <ComposerIdentitySheetSection
+              model={identityModel}
+              disabled={settingsLocked}
+              onSelect={setIdentityId}
+              onOpenIdentities={(mode) => {
+                // Close the drawer first: the dialog must not open under it.
+                setOptionsOpen(false);
+                useDesktopDialogStore
+                  .getState()
+                  .openIdentitiesFor({ hostId: identityModel.hostId, mode });
+              }}
+            />
+          )
+        }
       />
     </div>
   );

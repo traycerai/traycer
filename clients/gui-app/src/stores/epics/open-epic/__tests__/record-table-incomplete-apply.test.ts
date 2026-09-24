@@ -21,7 +21,7 @@
  * `hooks/chats/__tests__/record-list-revision-gating.test.tsx`.
  */
 import { describe, expect, it } from "vitest";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordSummaryStreamV13 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   AgentSessionState,
@@ -39,8 +39,8 @@ const EPIC_ID = "epic-incomplete";
 const OWNER_A = "user-a";
 
 function chatRow(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: OWNER_A,
@@ -57,6 +57,7 @@ function chatRow(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }

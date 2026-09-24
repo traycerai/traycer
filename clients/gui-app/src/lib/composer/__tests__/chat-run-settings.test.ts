@@ -36,6 +36,7 @@ describe("chat run settings", () => {
         permission: "supervised",
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       }),
     ).toEqual({
       harnessId: "codex",
@@ -45,6 +46,7 @@ describe("chat run settings", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     expect(
@@ -53,6 +55,7 @@ describe("chat run settings", () => {
         permission: "full_access",
         reasoning: "",
         serviceTier: "",
+        identityId: null,
       }),
     ).toEqual({
       harnessId: "codex",
@@ -62,6 +65,7 @@ describe("chat run settings", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     expect(
@@ -74,6 +78,7 @@ describe("chat run settings", () => {
         permission: "auto_accept_edits",
         reasoning: "medium",
         serviceTier: "fast",
+        identityId: null,
       }),
     ).toEqual({
       harnessId: "opencode",
@@ -83,6 +88,7 @@ describe("chat run settings", () => {
       serviceTier: "fast",
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
   });
 
@@ -96,6 +102,7 @@ describe("chat run settings", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+        identityId: null,
       }),
     ).toBe("supervised");
     expect(
@@ -107,6 +114,7 @@ describe("chat run settings", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+        identityId: null,
       }),
     ).toBe("auto_accept_edits");
     expect(
@@ -118,6 +126,7 @@ describe("chat run settings", () => {
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+        identityId: null,
       }),
     ).toBe("full_access");
   });

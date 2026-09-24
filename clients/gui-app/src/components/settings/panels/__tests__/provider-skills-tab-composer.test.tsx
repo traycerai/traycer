@@ -14,6 +14,16 @@ const skillMocks = vi.hoisted(() => ({
   inspectScopes: [] as string[],
 }));
 
+// The composer's identity targets read the host's identity list; this
+// suite opens the composer without a QueryClient or host binding.
+vi.mock("@/hooks/identities/use-identity-skill-targets", () => ({
+  useActiveHostIdentitySkillTargets: () => ({
+    supported: false,
+    targets: [],
+    pending: false,
+  }),
+}));
+
 // Entry-button suite never switches scope; stub shared hook so F5 workspace
 // resolution does not require a QueryClient. Dynamic import: `vi.mock` is
 // hoisted above static imports.

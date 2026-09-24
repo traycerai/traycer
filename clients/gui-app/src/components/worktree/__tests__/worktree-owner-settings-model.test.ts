@@ -15,6 +15,7 @@ const BASE_CHAT_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 function claudeHarnessEntry(): GuiHarnessCatalogEntry {

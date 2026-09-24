@@ -37,6 +37,7 @@ describe("landing draft store: forkDraft", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     };
     useLandingDraftStore
       .getState()

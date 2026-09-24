@@ -176,6 +176,8 @@ function emptyChat(): Chat {
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
 }
 
@@ -263,6 +265,8 @@ function deferredWindowedSnapshot(
         activeSessionChain: null,
         claudePendingWakes: [],
         pinnedUserProviderHandle: null,
+        kind: "conversation",
+        evolutionTurnsSinceReview: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

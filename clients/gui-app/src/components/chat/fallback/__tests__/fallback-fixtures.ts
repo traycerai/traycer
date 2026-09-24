@@ -42,6 +42,7 @@ export function chatRunSettings(input: {
     serviceTier: null,
     agentMode: "regular",
     profileId: input.profileId,
+    identityId: null,
   };
 }
 

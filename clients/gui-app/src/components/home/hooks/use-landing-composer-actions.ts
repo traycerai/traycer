@@ -158,6 +158,7 @@ export interface LandingComposerSubmitArgs {
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
+    readonly identityId: string | null;
   };
 }
 
@@ -533,6 +534,7 @@ export function useLandingComposerActions(
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
+        identityId: toolbar.identityId,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);

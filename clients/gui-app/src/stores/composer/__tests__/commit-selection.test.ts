@@ -32,6 +32,7 @@ describe("commitProfileSelection", () => {
       serviceTier: "standard",
       agentMode: "regular",
       profileId: "profile-b",
+      identityId: null,
     });
 
     const emitted: Array<{
@@ -51,6 +52,7 @@ describe("commitProfileSelection", () => {
         },
         reasoning: "high",
         serviceTier: "fast",
+        identityId: null,
       },
       onSettingsChange: (settings) =>
         emitted.push({
@@ -99,6 +101,7 @@ describe("commitSelection - provider switch", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "profile-b",
+      identityId: null,
     });
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
       harnessId: "claude",
@@ -108,6 +111,7 @@ describe("commitSelection - provider switch", () => {
       serviceTier: "fast",
       agentMode: "regular",
       profileId: "profile-a",
+      identityId: null,
     });
 
     const emitted: Array<{ modelSlug: string; profileId: string | null }> = [];
@@ -122,6 +126,7 @@ describe("commitSelection - provider switch", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: (settings) =>
         emitted.push({
@@ -163,6 +168,7 @@ describe("commitSelection - host scoping", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      identityId: null,
     });
 
     const store = createComposerToolbarStore({
@@ -176,6 +182,7 @@ describe("commitSelection - host scoping", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,
@@ -202,6 +209,7 @@ describe("commitSelection - host scoping", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,
@@ -235,6 +243,7 @@ describe("commitSelection - host scoping", () => {
         },
         reasoning: "high",
         serviceTier: "",
+        identityId: null,
       },
       onSettingsChange: null,
       tuiOnly: false,

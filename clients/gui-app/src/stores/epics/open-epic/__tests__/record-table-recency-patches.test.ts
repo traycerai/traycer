@@ -10,7 +10,7 @@
  * broken guard to pass for the wrong reason.
  */
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type {
   AgentSessionLastExit,
@@ -30,8 +30,8 @@ const OWNER_B = "user-b";
 
 /** Mirrors `chat-record-key-collision.test.ts`'s `record()` fixture. */
 function chatRow(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: "chat-1",
     ownerUserId: OWNER_A,
@@ -48,6 +48,7 @@ function chatRow(
     visibility: "private",
     origin: "own",
     docResident: false,
+    kind: "conversation",
     ...overrides,
   };
 }

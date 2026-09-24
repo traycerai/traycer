@@ -70,6 +70,7 @@ const SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 const OK_CLIENT: DraftBlobClient = {
@@ -174,6 +175,8 @@ function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
+    kind: "conversation",
+    evolutionTurnsSinceReview: null,
   };
   callbacks.onSnapshot({
     kind: "snapshot",

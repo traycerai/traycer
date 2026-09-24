@@ -590,6 +590,8 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
       return <EpicTabSurface tab={props.tab} />;
     case "draft":
       return tabSurfaceDescriptor("draft").render(props.tab);
+    case "identity":
+      return tabSurfaceDescriptor("identity").render(props.tab);
     case "history":
       return tabSurfaceDescriptor("history").render(props.tab);
     case "settings":

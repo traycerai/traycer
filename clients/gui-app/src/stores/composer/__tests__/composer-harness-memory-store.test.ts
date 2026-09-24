@@ -30,6 +30,7 @@ const CLAUDE_SETTINGS: ChatRunSettings = {
   serviceTier: "flex",
   agentMode: "epic",
   profileId: null,
+  identityId: null,
 };
 
 const CODEX_SETTINGS: ChatRunSettings = {
@@ -40,6 +41,7 @@ const CODEX_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  identityId: null,
 };
 
 function resetStores(): void {
