@@ -89,7 +89,12 @@ import { registerSelectionAuthorityIpc } from "./selection-authority-ipc";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
-import { registerPlatformIpc } from "./platform-ipc";
+import {
+  registerHostLifecycleIpc,
+  registerPlatformIpc,
+  type HostLifecycleIpcService,
+} from "./platform-ipc";
+import type { LocalHostCapability } from "../../ipc-contracts/host-lifecycle-types";
 import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
@@ -596,6 +601,20 @@ export class RunnerIpcBridge {
       this.zoomController = options.zoomController ?? new NullZoomController();
       this.quitState = new NeverQuittingShellState();
     }
+  }
+
+  /**
+   * The host-lifecycle surface (`registerHostLifecycleIpc`). Separate from
+   * `install` because its service is built from the lifecycle policy desktop
+   * startup reads before the bridge exists; startup calls this immediately
+   * after `install`, before any window loads. `dispose` sweeps its channels
+   * with every other one.
+   */
+  installHostLifecycle(
+    service: HostLifecycleIpcService,
+    localHostCapability: LocalHostCapability,
+  ): void {
+    registerHostLifecycleIpc(this, service, localHostCapability);
   }
 
   install(): void {

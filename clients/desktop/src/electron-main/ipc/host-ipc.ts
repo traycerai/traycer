@@ -6,6 +6,7 @@ import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-type
 import type { HostRestartRequestResult } from "../../ipc-contracts/host-management-types";
 import type { GuardedMutationOutcome } from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
+import { appliedLocalHostCapability } from "../host/local-host-capability";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 // Collapses a restart-intent outcome to the wire result every restart
@@ -49,6 +50,16 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.requestHostRespawn,
     async (): Promise<HostRestartRequestResult> => {
+      // A desktop booted in the lifecycle policy's `none` mode runs no local
+      // host, so there is nothing to respawn - and starting one would undo
+      // the mode. Declined, not thrown: it is information, not a failure.
+      if (appliedLocalHostCapability() === "none") {
+        return {
+          kind: "declined",
+          message:
+            "This app runs no local host. Change the host lifecycle setting and restart Traycer to use one.",
+        };
+      }
       // `background` = no identity guard, not "not user-initiated": this
       // channel restarts THE local host as a role, whatever currently fills
       // it, so there is no expected host id for a lane-head guard to hold
@@ -71,10 +82,14 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.lastKnownLocalHostId,
     (): Promise<string | null> =>
-      readLastKnownLocalHostId({
-        identityEnrollmentFile: bridge.options.host.identityEnrollmentFile,
-        pidMetadataFile: bridge.options.host.pidMetadataFile,
-      }),
+      // `none` mode: no host is local to this app, whatever the enrollment
+      // record left behind by an earlier host still says.
+      appliedLocalHostCapability() === "none"
+        ? Promise.resolve(null)
+        : readLastKnownLocalHostId({
+            identityEnrollmentFile: bridge.options.host.identityEnrollmentFile,
+            pidMetadataFile: bridge.options.host.pidMetadataFile,
+          }),
   );
 
   bridge.handleInvoke(

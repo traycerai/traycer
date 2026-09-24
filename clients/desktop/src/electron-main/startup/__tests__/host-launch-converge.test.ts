@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../../app/logger";
+import {
+  AUTOMATIC_INTENTS_HELD_MESSAGE,
+  AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
+} from "../../host/host-controller-types";
 import type { IpcHostController } from "../../ipc/runner-ipc-bridge";
 import type {
   ActivateInstalledOk,
@@ -704,6 +709,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
         hostController,
         menu: fakeMenu(),
         signedIn: fakeSignedInGate(false),
+        localHostCapability: "managed",
       }),
       runDeferredBackground: background,
     });
@@ -959,6 +965,115 @@ describe("armLocalHostBootOnSignIn", () => {
     // Settled arms never re-arm, no matter how long the process keeps running.
     await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
     expect(convergeCalls).toEqual([false, false, false]);
+  });
+
+  describe("host lifecycle suspension deferrals", () => {
+    const BOOT_WARN = "[host-controller] local host boot did not complete";
+
+    function bootWarnCount(): number {
+      return vi
+        .mocked(log.warn)
+        .mock.calls.filter(([message]) => message === BOOT_WARN).length;
+    }
+
+    function controllerReturning(
+      results: readonly MutationOutcome<ConvergeReadyOk>[],
+      calls: boolean[],
+    ): IpcHostController {
+      const base = fakeHostController(
+        neverInstalled(false),
+        {
+          kind: "ok",
+          value: {
+            appliedVersion: "1.4.1",
+            runningActivated: true,
+            applied: true,
+          },
+        },
+        { kind: "ok", value: { activated: true } },
+      );
+      return {
+        ...base,
+        convergeReady: (force: boolean) => {
+          const index = Math.min(calls.length, results.length - 1);
+          calls.push(force);
+          return Promise.resolve(results[index]);
+        },
+      };
+    }
+
+    it("QUIESCED deferral retires the ladder: one call, no retry, no WARN", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [{ kind: "deferred", message: AUTOMATIC_INTENTS_QUIESCED_MESSAGE }],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(
+        LOCAL_HOST_BOOT_RETRY_LADDER_MS.reduce((sum, ms) => sum + ms, 0) * 2,
+      );
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    it("HELD deferral retries on the ladder without a WARN, and settles once ok", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [
+            { kind: "deferred", message: AUTOMATIC_INTENTS_HELD_MESSAGE },
+            { kind: "ok", value: { running: true, version: "1.4.0" } },
+          ],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0] - 1);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+      expect(calls).toHaveLength(2);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    it("control: a deferral with any other message still WARNs and retries", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [
+            {
+              kind: "deferred",
+              message: "Another Traycer process is managing the host.",
+            },
+          ],
+          calls,
+        ),
+        fakeSignedInGate(true),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
+      expect(calls).toHaveLength(2);
+    });
   });
 
   it("installs once for a signed-in user on a machine that has never had a host", async () => {

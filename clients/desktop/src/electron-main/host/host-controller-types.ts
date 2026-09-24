@@ -19,7 +19,8 @@ export type MutationKind =
   | "recoverIfDown"
   | "freePortAndRestart"
   | "uninstallHost"
-  | "removeTraycer";
+  | "removeTraycer"
+  | "stopHost";
 
 export interface MutationProgress {
   readonly stage: string | null;
@@ -151,6 +152,18 @@ export type BusyContinuation = "retry-with-force" | "activate";
 // one definition rather than risk wording drift.
 export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
 
+// Emitted verbatim by an automatic intent the host lifecycle suspended (see
+// `HostController.quiesce` / `holdAutomaticIntents`). Two messages because the
+// automatic callers must tell the two apart and nothing else crosses
+// `IpcHostController`: a QUIESCED process committed `none` and starts no local
+// host again until it restarts, so a caller that retries retires instead; a
+// HELD one is inside a stop that may still be refused or cancelled, so it
+// retries on its own pacing. Neither is a failure to report.
+export const AUTOMATIC_INTENTS_QUIESCED_MESSAGE =
+  "This app no longer starts a local host. Restart Traycer to apply the host lifecycle setting.";
+export const AUTOMATIC_INTENTS_HELD_MESSAGE =
+  "Automatic host starts are paused while the host is being stopped.";
+
 // Who asked for a local-host mutation. Three methods take it -
 // `convergeReady`, `registerService` and `freePortAndRestart` - and they use
 // DIFFERENT halves of it, which is the distinction the name has to carry:
@@ -248,6 +261,56 @@ export interface AbandonedByGuard {
 export type GuardedMutationOutcome<TOk> =
   | MutationOutcome<TOk>
   | AbandonedByGuard;
+
+/**
+ * `host stop --if-idle` (the CLI refuses with `E_HOST_BUSY` and touches
+ * nothing when the host has work in progress) or `host stop --force`.
+ */
+export type StopHostMode = "if-idle" | "force";
+
+/**
+ * How the CLI child is spawned.
+ *
+ * - `attached` - piped stdio, like every other lane call. For a stop the app
+ *   outlives (a `→ none` mode change).
+ * - `detached` - its own process group with stdout/stderr going to files in
+ *   the host home, so a child admitted before a quit deadline finishes on its
+ *   own after the app exits instead of dying on a closed pipe.
+ */
+export type StopHostSpawn = "attached" | "detached";
+
+export interface StopHostRequest {
+  readonly mode: StopHostMode;
+  readonly spawn: StopHostSpawn;
+  /**
+   * Withdraws the request while it is still QUEUED: aborted before the lane
+   * reaches it, it spawns nothing and resolves `withdrawn`. Once the child is
+   * spawned this has no effect - an admitted stop runs to completion (the
+   * quit transaction's deadline rule). `null` when the caller never withdraws.
+   */
+  readonly withdrawal: AbortSignal | null;
+}
+
+/**
+ * What a stop request resolves. Like every lane intent it never rejects.
+ *
+ * - `stopped` - the CLI stopped the host (or found none running).
+ * - `host-busy` - `--if-idle` found work in progress (`E_HOST_BUSY`); nothing
+ *   was touched.
+ * - `lock-busy` - another lifecycle actor held the CLI lock past its bounded
+ *   wait (`E_CLI_LOCK_BUSY`); nothing ran.
+ * - `update-active` - a host update attempt is in flight
+ *   (`E_HOST_UPDATE_ATTEMPT_ACTIVE`); nothing ran.
+ * - `withdrawn` - the request was withdrawn before the lane reached it.
+ * - `failed` - anything else, with the CLI's message.
+ */
+export type StopHostOutcome =
+  | { readonly kind: "stopped"; readonly forced: boolean }
+  | { readonly kind: "host-busy"; readonly message: string }
+  | { readonly kind: "lock-busy"; readonly message: string }
+  | { readonly kind: "update-active"; readonly message: string }
+  | { readonly kind: "withdrawn" }
+  | { readonly kind: "failed"; readonly message: string };
 
 /**
  * Narrows a guarded outcome for a caller that submitted a `background`

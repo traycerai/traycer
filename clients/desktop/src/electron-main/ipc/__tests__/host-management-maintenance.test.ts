@@ -122,6 +122,7 @@ const ALL_MUTATION_KINDS: readonly MutationKind[] = [
   "freePortAndRestart",
   "uninstallHost",
   "removeTraycer",
+  "stopHost",
 ];
 
 describe("laneBusyRestartMessage", () => {
@@ -925,6 +926,9 @@ describe("maintenanceInstallVersion IPC", () => {
       freePortAndRestart: false,
       uninstallHost: false,
       removeTraycer: false,
+      // A lifecycle stop is seconds-long and brings nothing up; it can
+      // never be the update tail the latch is waiting on.
+      stopHost: false,
     } satisfies Record<MutationKind, boolean>;
     expect([...ALL_MUTATION_KINDS].sort()).toEqual(
       Object.keys(updateWorkByKind).sort(),

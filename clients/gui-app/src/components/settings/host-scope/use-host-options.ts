@@ -117,6 +117,7 @@ function mutationBringsHostUp(kind: MutationKind): boolean {
     case "deregister":
     case "uninstallHost":
     case "removeTraycer":
+    case "stopHost":
       return false;
   }
 }

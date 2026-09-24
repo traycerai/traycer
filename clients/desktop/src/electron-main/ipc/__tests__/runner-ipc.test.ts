@@ -35,6 +35,7 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { FakeHostController } from "./fake-host-controller";
+import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
   createSigningKey,
   jwksResponse,
@@ -4100,6 +4101,102 @@ describe("RunnerIpcBridge", () => {
       await expect(
         seedFrom({ enrollment: null, pid: null }),
       ).resolves.toBeNull();
+    });
+  });
+
+  // An app booted in `none` lifecycle mode runs no local host, so the two
+  // host-bridge answers that name or revive one must not: the seed would
+  // rewrite this machine's cloud row into a "booting local" entry, and a
+  // respawn would start the host the user switched off. Each pairs with a
+  // `managed` control on the SAME files and controller, so a none-mode answer
+  // cannot pass merely because the fixture had nothing to report.
+  describe("none lifecycle mode", () => {
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), "traycer-host-ipc-none-"));
+    });
+
+    afterEach(async () => {
+      setAppliedLocalHostCapability("managed");
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    async function installEnrolledBridge(): Promise<{
+      readonly hostController: FakeHostController;
+      readonly invoke: (channel: string) => Promise<unknown>;
+      readonly dispose: () => void;
+    }> {
+      const host = new FakeHost();
+      host.identityEnrollmentFile = join(dir, "identity", "enrollment.json");
+      host.pidMetadataFile = join(dir, "pid.json");
+      await mkdir(join(dir, "identity"), { recursive: true });
+      await writeFile(
+        host.identityEnrollmentFile,
+        JSON.stringify({ hostId: "enrolled-current" }),
+      );
+      const hostController = new FakeHostController();
+      const mod = await import("../register-runner-ipc");
+      const bridge = new mod.RunnerIpcBridge({
+        host,
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+      return {
+        hostController,
+        invoke: async (channel) => {
+          const handler = ipcMainState.handlers.get(channel);
+          if (handler === undefined) {
+            throw new Error(`${channel} handler missing`);
+          }
+          return handler(bareEvent());
+        },
+        dispose: () => bridge.dispose(),
+      };
+    }
+
+    it("managed: lastKnownLocalHostId answers the enrolled id (control)", async () => {
+      setAppliedLocalHostCapability("managed");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.lastKnownLocalHostId),
+      ).resolves.toBe("enrolled-current");
+      bridge.dispose();
+    });
+
+    it("none: lastKnownLocalHostId answers null despite an enrollment record", async () => {
+      setAppliedLocalHostCapability("none");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.lastKnownLocalHostId),
+      ).resolves.toBeNull();
+      bridge.dispose();
+    });
+
+    it("managed: requestHostRespawn reaches the controller (control)", async () => {
+      setAppliedLocalHostCapability("managed");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.requestHostRespawn),
+      ).resolves.toEqual({ kind: "restarted" });
+      expect(bridge.hostController.respawnCalls).toBe(1);
+      bridge.dispose();
+    });
+
+    it("none: requestHostRespawn is declined with zero respawn calls", async () => {
+      setAppliedLocalHostCapability("none");
+      const bridge = await installEnrolledBridge();
+      await expect(
+        bridge.invoke(RunnerHostInvoke.requestHostRespawn),
+      ).resolves.toEqual(expect.objectContaining({ kind: "declined" }));
+      expect(bridge.hostController.respawnCalls).toBe(0);
+      bridge.dispose();
     });
   });
 

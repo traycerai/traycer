@@ -303,6 +303,42 @@ export function ownProcessStartIdentity(): ProcessStartIdentity | null {
   return cachedOwnStartIdentity;
 }
 
+let ownStartIdentityAsyncRead: Promise<ProcessStartIdentity | null> | null =
+  null;
+
+/**
+ * {@link ownProcessStartIdentity} through the ASYNC probe, for a process that
+ * must not block its event loop on it: the synchronous read spawns PowerShell
+ * on Windows, which stalls Electron main for seconds. The first answer seeds
+ * the same cache the synchronous read uses, so the two can never disagree
+ * about what this process is - "what we wrote" and "what we are" stay one
+ * value whichever read ran first.
+ */
+export function ownProcessStartIdentityAsync(): Promise<ProcessStartIdentity | null> {
+  if (cachedOwnStartIdentity !== "unread") {
+    return Promise.resolve(cachedOwnStartIdentity);
+  }
+  if (ownStartIdentityAsyncRead === null) {
+    ownStartIdentityAsyncRead = asyncProcessStartIdentityReader(
+      process.pid,
+    ).then(
+      (identity) => {
+        if (cachedOwnStartIdentity === "unread") {
+          cachedOwnStartIdentity = identity;
+        }
+        return cachedOwnStartIdentity;
+      },
+      () => {
+        if (cachedOwnStartIdentity === "unread") {
+          cachedOwnStartIdentity = null;
+        }
+        return cachedOwnStartIdentity;
+      },
+    );
+  }
+  return ownStartIdentityAsyncRead;
+}
+
 // A token recorded under our own pid still needs an identity check, not
 // an unconditional "alive-same": if the OS recycled this pid onto us
 // since the token was written (the token's process is a dead

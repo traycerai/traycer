@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import electronLog from "electron-log";
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type { IpcHostLifecycle } from "../../ipc/runner-ipc-bridge";
 
@@ -63,6 +64,7 @@ function startMonitor(deps: {
     probe: deps.probe,
     readMetadata: deps.readMetadata,
     respawn: deps.respawn,
+    automaticRecoverySuspended: () => false,
     governor: createHostRecoveryGovernor({
       readLiveness: DEAD,
       now: undefined,
@@ -140,6 +142,42 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("makes no respawn and logs no WARN while automatic recovery is suspended, then respawns once when released", async () => {
+    let suspended = true;
+    const respawn = vi.fn(async () => {});
+    vi.mocked(electronLog.warn).mockClear();
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({}),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn,
+      automaticRecoverySuspended: () => suspended,
+      governor: createHostRecoveryGovernor({
+        readLiveness: DEAD,
+        now: undefined,
+      }),
+      readLiveness: DEAD,
+    });
+    await ticks(6);
+    expect(respawn).toHaveBeenCalledTimes(0);
+    expect(electronLog.warn).toHaveBeenCalledTimes(0);
+    // Ownership was kept: releasing the suspension resumes on the next tick.
+    suspended = false;
+    await ticks(2);
+    expect(respawn).toHaveBeenCalledTimes(1);
+    // Anchor for the zero above: the same path, unsuspended, does log the
+    // "auto-respawning" WARN the gate exists to keep off every tick.
+    expect(
+      vi
+        .mocked(electronLog.warn)
+        .mock.calls.filter(([message]) =>
+          String(message).includes("auto-respawning"),
+        ),
+    ).toHaveLength(1);
+    monitor.dispose();
+  });
+
   it("converges via reload instead of respawning when the disk names a reachable replacement", async () => {
     const respawn = vi.fn(async () => {});
     // The supervisor (launchd/systemd) already respawned the host on a new
@@ -183,6 +221,7 @@ describe("startHostHealthMonitor", () => {
       probe: vi.fn(async (url: string) => url === replacement.websocketUrl),
       readMetadata: vi.fn(async () => replacement),
       respawn,
+      automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
         readLiveness: ALIVE,
         now: undefined,
@@ -571,6 +610,7 @@ describe("startHostHealthMonitor", () => {
       probe: vi.fn(async () => false),
       readMetadata: vi.fn(async () => SNAPSHOT),
       respawn,
+      automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
         readLiveness: ALIVE,
         now: undefined,
@@ -601,6 +641,7 @@ describe("startHostHealthMonitor", () => {
       probe: vi.fn(async () => false),
       readMetadata: vi.fn(async () => SNAPSHOT),
       respawn,
+      automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
         readLiveness: ALIVE,
         now: undefined,
@@ -630,6 +671,7 @@ describe("startHostHealthMonitor", () => {
       probe: vi.fn(async () => false),
       readMetadata: vi.fn(async () => SNAPSHOT),
       respawn,
+      automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
         readLiveness,
         now: undefined,
@@ -707,6 +749,7 @@ describe("startHostHealthMonitor", () => {
       probe: vi.fn(async () => false),
       readMetadata: vi.fn(async () => SNAPSHOT),
       respawn,
+      automaticRecoverySuspended: () => false,
       governor: createHostRecoveryGovernor({
         readLiveness,
         now: undefined,

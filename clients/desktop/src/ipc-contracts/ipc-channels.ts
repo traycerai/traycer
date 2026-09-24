@@ -242,6 +242,11 @@ export const RunnerHostInvoke = {
   gpuAccelerationSet: "runnerHost:gpu:set",
   logLevelsGet: "runnerHost:logLevels:get",
   logLevelsSet: "runnerHost:logLevels:set",
+  // Host lifecycle mode (host-lifecycle-modes T05). A capability of its own,
+  // independent of `hostManagement` and registered in `none` mode too, so a
+  // machine that runs no local host can still switch back.
+  hostLifecycleGet: "runnerHost:hostLifecycle:get",
+  hostLifecycleSet: "runnerHost:hostLifecycle:set",
   featureSettingsGet: "runnerHost:featureSettings:get",
   agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
@@ -510,6 +515,9 @@ export const RunnerHostEvent = {
   selectionChanged: "runnerHost:event:selection:selectionChanged",
   selectionLeasesChanged: "runnerHost:event:selection:leasesChanged",
   selectionReattachRequired: "runnerHost:event:selection:reattachRequired",
+  // A fresh `HostLifecycleView` whenever it changed: a mode change from this
+  // app, or a policy / supervisor record written by the CLI.
+  hostLifecycleChange: "runnerHost:event:hostLifecycle:change",
 } as const;
 
 /**
@@ -526,6 +534,9 @@ export const RunnerHostSync = {
   // same pattern that serves `windowId`). No preload-local counter exists, so
   // a reloaded preload can never repeat or reset the sequence.
   selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
+  // `"managed"` or `"none"`: whether this app instance runs the local-host
+  // lanes, pinned at boot from the lifecycle policy (restart-to-apply).
+  localHostCapability: "runnerHost:sync:localHostCapability",
 } as const;
 
 type RunnerHostInvokeChannel =

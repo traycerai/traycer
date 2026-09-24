@@ -14,6 +14,7 @@ export {
   currentProcessIdentityToken,
   getPublishedProcessIdentityVerdict,
   isProcessAlive,
+  ownProcessStartIdentityAsync,
   readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,

@@ -27,6 +27,7 @@ const ALL_MUTATION_KINDS: readonly MutationKind[] = [
   "freePortAndRestart",
   "uninstallHost",
   "removeTraycer",
+  "stopHost",
 ];
 
 describe("hostProgressHeading", () => {

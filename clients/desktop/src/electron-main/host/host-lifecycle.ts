@@ -18,6 +18,8 @@ import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
+import { hostLifecyclePolicyPath } from "@traycer/protocol/config/host-lifecycle-policy";
+import { supervisorRecordPath } from "@traycer/protocol/config/supervisor-record";
 import type {
   DesktopLocalHostSnapshot,
   DesktopPublishedHostSnapshot,
@@ -262,6 +264,21 @@ export class HostLifecycle extends EventEmitter {
    * point its quiet budget restarts from.
    */
   private lastProvisioningActivityAt = 0;
+  /**
+   * `false` once `disableLocalHostTracking` ran: this desktop booted in the
+   * lifecycle policy's `none` mode and runs no local host, so the snapshot
+   * stays `null` for the life of the process whatever `pid.json` says.
+   */
+  private localHostTracking = true;
+  /**
+   * Whether the directory watcher reloads the snapshot on a `pid.json` edge.
+   * Armed exactly where the watcher used to be INSTALLED (the end of
+   * `bootstrap`, and `ensureWatcherInstalled`), so the pid behaviour is
+   * unchanged now that `watchLifecycleRecords` can install the same watcher
+   * earlier, for the lifecycle records alone.
+   */
+  private pidWatchArmed = false;
+  private readonly lifecycleRecordListeners = new Set<() => void>();
 
   constructor(options: HostLifecycleOptions) {
     super();
@@ -270,6 +287,45 @@ export class HostLifecycle extends EventEmitter {
       typeof options.readyTimeoutMs === "number"
         ? options.readyTimeoutMs
         : HOST_READY_TIMEOUT_MS;
+  }
+
+  /**
+   * Stop tracking the local host for the rest of the process: every reload,
+   * bootstrap and repair becomes a no-op and the snapshot stays `null`, which
+   * is what makes every consumer of it (browser-view locality, the fleet's
+   * local entry, the renderer's local-host subscription) read "no local host".
+   * Called once at boot, before anything reads the snapshot, when the
+   * lifecycle policy says `none`.
+   */
+  disableLocalHostTracking(): void {
+    this.localHostTracking = false;
+    this.clearReachabilityRetry();
+    if (this.currentSnapshot !== null) {
+      this.currentSnapshot = null;
+      this.emit("change", null);
+    }
+  }
+
+  /**
+   * Watch the host home for the lifecycle records (`lifecycle-policy.json`,
+   * `supervisor.json`, and `pid.json`, which decides whether a host without a
+   * capable supervisor record is an old supervisor or no host at all).
+   * Idempotent, and re-installs a watcher that died, so a periodic caller can
+   * use it as its own repair. Shares the single directory watcher with the
+   * pid-metadata reload; installing it here does not arm that reload.
+   */
+  async watchLifecycleRecords(): Promise<void> {
+    if (this.disposed) return;
+    await this.ensureWatchableRootDir();
+    this.installWatcher();
+  }
+
+  /** Notified on every watcher edge that may have changed a lifecycle record. */
+  onLifecycleRecordsChanged(listener: () => void): () => void {
+    this.lifecycleRecordListeners.add(listener);
+    return () => {
+      this.lifecycleRecordListeners.delete(listener);
+    };
   }
 
   getSnapshot(): DesktopPublishedHostSnapshot | null {
@@ -303,6 +359,7 @@ export class HostLifecycle extends EventEmitter {
    * out - see the readiness short-circuit below.
    */
   async bootstrap(options: { readonly hostInstalled: boolean }): Promise<void> {
+    if (!this.localHostTracking) return;
     // Ahead of BOTH watcher installs below - the success path and the catch.
     await this.ensureWatchableRootDir();
     try {
@@ -332,13 +389,13 @@ export class HostLifecycle extends EventEmitter {
           );
         }
       }
-      this.installWatcher();
+      this.armPidWatch();
     } catch (cause) {
       // Install the watcher even on failure so a host that comes up
       // *after* the timeout (slow zsh probe, slow Prisma/native init)
       // auto-heals when it eventually publishes pid.json - the renderer
       // doesn't need to click Retry.
-      this.installWatcher();
+      this.armPidWatch();
       const startupError = await this.buildStartupError(cause);
       log.error("[host] startup failed", startupError);
       this.emit("error", startupError);
@@ -357,7 +414,7 @@ export class HostLifecycle extends EventEmitter {
    * rather than through this lifecycle.
    */
   notifyRespawning(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.localHostTracking) return;
     this.currentSnapshot = null;
     this.availability = INITIAL_HOST_AVAILABILITY_STATE;
     this.emit("change", null);
@@ -394,7 +451,7 @@ export class HostLifecycle extends EventEmitter {
    * cost of wiring it into a poll is one field comparison.
    */
   noteEndpointAnswered(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.localHostTracking) return;
     if (this.availability.published === "available") return;
     if (this.repairInFlight) return;
     this.repairInFlight = true;
@@ -479,14 +536,11 @@ export class HostLifecycle extends EventEmitter {
    */
   ensureWatcherInstalled(): void {
     if (this.disposed) return;
-    if (this.watcher !== null) {
-      // Idempotent path: trust the existing watcher. We deliberately
-      // don't tear it down on every respawn - the steady-state cost of
-      // re-creating it on macOS is non-trivial (FSEvents subscription)
-      // and the watcher rarely actually dies.
-      return;
-    }
-    this.installWatcher();
+    // Idempotent: `installWatcher` trusts an existing watcher. We deliberately
+    // don't tear it down on every respawn - the steady-state cost of
+    // re-creating it on macOS is non-trivial (FSEvents subscription) and the
+    // watcher rarely actually dies.
+    this.armPidWatch();
   }
 
   dispose(): void {
@@ -494,6 +548,7 @@ export class HostLifecycle extends EventEmitter {
       return;
     }
     this.disposed = true;
+    this.lifecycleRecordListeners.clear();
     if (this.reachabilityRetryTimer !== null) {
       clearTimeout(this.reachabilityRetryTimer);
       this.reachabilityRetryTimer = null;
@@ -527,7 +582,7 @@ export class HostLifecycle extends EventEmitter {
   }
 
   private async reloadSnapshot(): Promise<DesktopPublishedHostSnapshot | null> {
-    if (this.disposed) {
+    if (this.disposed || !this.localHostTracking) {
       return this.currentSnapshot;
     }
     const generation = this.reloadGeneration + 1;
@@ -721,18 +776,36 @@ export class HostLifecycle extends EventEmitter {
     return { ...named, availability: availability.published };
   }
 
+  private armPidWatch(): void {
+    if (this.localHostTracking) {
+      this.pidWatchArmed = true;
+    }
+    this.installWatcher();
+  }
+
   private installWatcher(): void {
     if (this.watcher !== null) {
       return;
     }
+    const rootDir = this.options.layout.rootDir;
     const targetBasename = basename(this.options.layout.pidMetadataFile);
+    const lifecycleRecordBasenames = new Set([
+      basename(hostLifecyclePolicyPath(rootDir)),
+      basename(supervisorRecordPath(rootDir)),
+      targetBasename,
+    ]);
     try {
-      const watcher = watch(this.options.layout.rootDir, (_event, filename) => {
+      const watcher = watch(rootDir, (_event, filename) => {
         if (filename === null) {
-          this.reloadSnapshotFromWatcher();
+          this.notifyLifecycleRecordsChanged();
+          if (this.pidWatchArmed) this.reloadSnapshotFromWatcher();
           return;
         }
-        if (typeof filename === "string" && filename === targetBasename) {
+        if (typeof filename !== "string") return;
+        if (lifecycleRecordBasenames.has(filename)) {
+          this.notifyLifecycleRecordsChanged();
+        }
+        if (this.pidWatchArmed && filename === targetBasename) {
           this.reloadSnapshotFromWatcher();
         }
       });
@@ -827,6 +900,16 @@ export class HostLifecycle extends EventEmitter {
         );
       }
       await sleep(HOST_POLL_INTERVAL_MS);
+    }
+  }
+
+  private notifyLifecycleRecordsChanged(): void {
+    for (const listener of this.lifecycleRecordListeners) {
+      try {
+        listener();
+      } catch (error: unknown) {
+        log.warn("[host] lifecycle record listener threw", error);
+      }
     }
   }
 

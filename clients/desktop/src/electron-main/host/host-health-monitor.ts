@@ -146,6 +146,16 @@ export interface HostHealthMonitorDeps {
    */
   readonly respawn: () => Promise<void>;
   /**
+   * Whether the host lifecycle has suspended automatic starts - production
+   * passes `HostController.automaticIntentsSuspended`. Read BEFORE the
+   * governor is asked: a suspended controller answers every respawn with
+   * `suppressed`, the grant is handed back, and the next tick would ask again,
+   * so without this gate a dead `pid.json` left behind a committed `none` (or
+   * a host mid-stop under a hold) logs the "auto-respawning" WARN once per
+   * tick for as long as it lasts.
+   */
+  readonly automaticRecoverySuspended: () => boolean;
+  /**
    * The single authority for automatic respawns: owns the busy gate and the
    * attempt budget. This monitor asks; it does not decide.
    */
@@ -246,6 +256,14 @@ export function startHostHealthMonitor(
   const attemptRecovery = async (
     metadata: DesktopLocalHostSnapshot,
   ): Promise<void> => {
+    if (deps.automaticRecoverySuspended()) {
+      // Nothing may start a host right now, so there is nothing to ask the
+      // governor for and nothing to log. Keep recovery ownership: a hold that
+      // is released (a refused stop, a cancelled quit) resumes on the next
+      // tick, and a quiesced process just keeps answering here, silently.
+      recoveryPending = true;
+      return;
+    }
     // The governor owns both the liveness gate and the budget; it re-reads
     // pid.json itself so this is a real decision point, not a formality.
     const decision = await governor.requestRespawn("health-monitor");

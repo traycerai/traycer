@@ -1824,7 +1824,8 @@ export type MutationKind =
   | "recoverIfDown"
   | "freePortAndRestart"
   | "uninstallHost"
-  | "removeTraycer";
+  | "removeTraycer"
+  | "stopHost";
 
 export interface MutationLaneStatus {
   readonly kind: MutationKind;

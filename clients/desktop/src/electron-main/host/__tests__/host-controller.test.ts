@@ -963,9 +963,9 @@ describe("mutation lane: wait-never-reject", () => {
     // pass is manifest-only. The one automatic download stays on the
     // independent lane before apply owns the mutation lane.
     expect(order).toEqual([
-      "host restart --force --defer-if-parked",
+      "host restart --force --defer-if-parked --lifecycle-origin desktop",
       "host download --automatic",
-      "host apply --expected-stage-fingerprint stage-1.8.0",
+      "host apply --expected-stage-fingerprint stage-1.8.0 --lifecycle-origin desktop",
     ]);
   });
 
@@ -3668,11 +3668,18 @@ describe("yank/apply ordering", () => {
     await vi.waitFor(() => {
       // `--force` distinguishes respawn (the explicit force path - the
       // Settings Force-restart offer, tray restart) from the cooperative
-      // `["host", "restart"]` that `activateInstalledCliOwned`/`recoverIfDown`
+      // `["host", "restart", "--lifecycle-origin", "desktop"]` that `activateInstalledCliOwned`/`recoverIfDown`
       // send: respawn must skip the shutdown claim the busy host would deny.
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({
-          args: ["host", "restart", "--force", "--defer-if-parked"],
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            "--lifecycle-origin",
+            "desktop",
+          ],
         }),
       );
     });
@@ -3765,14 +3772,29 @@ describe("platform matrix", () => {
     await controller.installVersion("1.8.0", false);
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "install", "--release", "1.8.0", "--if-idle"],
+        args: [
+          "host",
+          "install",
+          "--release",
+          "1.8.0",
+          "--if-idle",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
 
     await controller.installVersion("1.8.0", true);
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "install", "--release", "1.8.0"],
+        args: [
+          "host",
+          "install",
+          "--release",
+          "1.8.0",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
   });
@@ -3806,6 +3828,8 @@ describe("platform matrix", () => {
           "--release",
           "1.8.0",
           "--no-service-register",
+          "--lifecycle-origin",
+          "desktop",
         ],
       }),
     );
@@ -3936,7 +3960,14 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+      ).toEqual([
+        "host",
+        "restart",
+        "--if-idle",
+        "--defer-if-parked",
+        "--lifecycle-origin",
+        "desktop",
+      ]);
 
       // Call-order proof: `waitForHostReady` must run strictly AFTER the
       // restart spawn, never before it - `completeServiceStart` (which calls
@@ -4088,6 +4119,8 @@ describe("platform matrix", () => {
         "service",
         "install",
         "--takeover",
+        "--lifecycle-origin",
+        "desktop",
       ]);
       const restartCallIndex = vi
         .mocked(streamBundledTraycerCliJson)
@@ -4154,7 +4187,14 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+      ).toEqual([
+        "host",
+        "restart",
+        "--if-idle",
+        "--defer-if-parked",
+        "--lifecycle-origin",
+        "desktop",
+      ]);
       const takeoverCallIndex = vi
         .mocked(streamBundledTraycerCliJson)
         .mock.calls.findIndex(
@@ -4276,7 +4316,14 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+      ).toEqual([
+        "host",
+        "restart",
+        "--if-idle",
+        "--defer-if-parked",
+        "--lifecycle-origin",
+        "desktop",
+      ]);
       expect(waitForHostReady).toHaveBeenCalled();
     });
 
@@ -4314,7 +4361,14 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
+      ).toEqual([
+        "host",
+        "restart",
+        "--force",
+        "--defer-if-parked",
+        "--lifecycle-origin",
+        "desktop",
+      ]);
     });
 
     // A host that is DOWN because its login item is toggled off is a
@@ -4390,7 +4444,14 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
+      ).toEqual([
+        "host",
+        "restart",
+        "--force",
+        "--defer-if-parked",
+        "--lifecycle-origin",
+        "desktop",
+      ]);
     });
 
     it("the CLI defers for a concurrently parked activation: reports deferred and never waits for readiness of a host it did not relaunch", async () => {
@@ -4448,7 +4509,14 @@ describe("platform matrix", () => {
       expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
         expect.objectContaining({
-          args: ["host", "restart", "--if-idle", "--defer-if-parked"],
+          args: [
+            "host",
+            "restart",
+            "--if-idle",
+            "--defer-if-parked",
+            "--lifecycle-origin",
+            "desktop",
+          ],
         }),
       );
     });
@@ -4539,6 +4607,8 @@ describe("platform matrix", () => {
         "service",
         "install",
         "--takeover",
+        "--lifecycle-origin",
+        "desktop",
       ]);
     });
   });
@@ -4605,7 +4675,13 @@ describe("platform matrix", () => {
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: expect.arrayContaining(["host", "service", "install"]),
+        args: expect.arrayContaining([
+          "host",
+          "service",
+          "install",
+          "--lifecycle-origin",
+          "desktop",
+        ]),
       }),
     );
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -5204,7 +5280,13 @@ describe("platform matrix", () => {
     expect(outcome.kind).toBe("failed");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: expect.arrayContaining(["host", "service", "install"]),
+        args: expect.arrayContaining([
+          "host",
+          "service",
+          "install",
+          "--lifecycle-origin",
+          "desktop",
+        ]),
       }),
     );
   });
@@ -5301,7 +5383,14 @@ describe("platform matrix", () => {
     await controller.registerService({ kind: "background" });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "service", "install", "--allow-self-invocation"],
+        args: [
+          "host",
+          "service",
+          "install",
+          "--allow-self-invocation",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
   });
@@ -6079,7 +6168,15 @@ describe("Windows bundled-host --from fallback", () => {
     // the first-install source, never a reason to move a viable install.
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "ensure", "--keep-installed", "--from", archive],
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--from",
+          archive,
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
   });
@@ -6112,7 +6209,15 @@ describe("Windows bundled-host --from fallback", () => {
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "ensure", "--keep-installed", "--from", archive],
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--from",
+          archive,
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
   });
@@ -6138,7 +6243,15 @@ describe("Windows bundled-host --from fallback", () => {
     );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
+      expect.objectContaining({
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
     );
   });
   it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
@@ -6165,7 +6278,15 @@ describe("Windows bundled-host --from fallback", () => {
     );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
+      expect.objectContaining({
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
     );
   });
 });
@@ -6351,7 +6472,14 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "service", "install", "--takeover"],
+        args: [
+          "host",
+          "service",
+          "install",
+          "--takeover",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
@@ -7520,6 +7648,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     "restart",
     "--force",
     "--defer-if-parked",
+    "--lifecycle-origin",
+    "desktop",
   ];
 
   function attemptRecordFields(overrides: {
@@ -9086,7 +9216,14 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
     });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "restart", "--force", "--defer-if-parked"],
+        args: [
+          "host",
+          "restart",
+          "--force",
+          "--defer-if-parked",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
     expect(waitForHostReady).not.toHaveBeenCalled();
@@ -9109,7 +9246,13 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
     });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "restart", "--defer-if-parked"],
+        args: [
+          "host",
+          "restart",
+          "--defer-if-parked",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
     expect(waitForHostReady).not.toHaveBeenCalled();
@@ -9139,6 +9282,8 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
           "1234",
           "--port",
           "5678",
+          "--lifecycle-origin",
+          "desktop",
         ],
       }),
     );
@@ -9166,13 +9311,20 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
   it.each([
     [
       "respawn",
-      ["host", "restart", "--force", "--defer-if-parked"],
+      [
+        "host",
+        "restart",
+        "--force",
+        "--defer-if-parked",
+        "--lifecycle-origin",
+        "desktop",
+      ],
       async (c: HostController) => c.respawn({ kind: "background" }),
       true,
     ],
     [
       "recoverIfDown",
-      ["host", "restart", "--defer-if-parked"],
+      ["host", "restart", "--defer-if-parked", "--lifecycle-origin", "desktop"],
       async (c: HostController) => c.recoverIfDown(),
       false,
     ],
@@ -9186,6 +9338,8 @@ describe("packaged-mac recovery delegates safe-stop to the CLI", () => {
         "1234",
         "--port",
         "5678",
+        "--lifecycle-origin",
+        "desktop",
       ],
       async (c: HostController) =>
         c.freePortAndRestart(1234, 5678, { kind: "background" }),
@@ -9311,7 +9465,13 @@ describe("recoverIfDown", () => {
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "restart", "--defer-if-parked"],
+        args: [
+          "host",
+          "restart",
+          "--defer-if-parked",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
   });
@@ -9434,7 +9594,13 @@ describe("freePortAndRestart (CLI-owned)", () => {
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "free-port-and-restart", "--defer-if-parked"],
+        args: [
+          "host",
+          "free-port-and-restart",
+          "--defer-if-parked",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -9742,7 +9908,15 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "install", "--release", "1.8.0", "--if-idle"],
+        args: [
+          "host",
+          "install",
+          "--release",
+          "1.8.0",
+          "--if-idle",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
 
@@ -9753,7 +9927,14 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     expect(forcedOutcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "install", "--release", "1.8.0"],
+        args: [
+          "host",
+          "install",
+          "--release",
+          "1.8.0",
+          "--lifecycle-origin",
+          "desktop",
+        ],
       }),
     );
   });
@@ -9935,7 +10116,14 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
 // hands off to the CLI-owned raw LaunchAgent (`host service install
 // --takeover`), which does not go through SMAppService/BTM at all.
 describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback", () => {
-  const TAKEOVER_ARGV = ["host", "service", "install", "--takeover"];
+  const TAKEOVER_ARGV = [
+    "host",
+    "service",
+    "install",
+    "--takeover",
+    "--lifecycle-origin",
+    "desktop",
+  ];
 
   function stagePackagedMacWorld(): HostController {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);

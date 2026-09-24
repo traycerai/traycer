@@ -2,6 +2,8 @@ import { log } from "../app/logger";
 import { refreshRegistryUpdateState } from "../ipc/host-management-ipc";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import {
+  AUTOMATIC_INTENTS_HELD_MESSAGE,
+  AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
   backgroundMutationOutcome,
   type ActivateInstalledOk,
   type ApplyStagedOk,
@@ -219,8 +221,10 @@ export const LOCAL_HOST_BOOT_RETRY_LADDER_MS: readonly number[] = [
  *
  * Returns a disposer for the subscription and any pending retry. Settles -
  * disposes itself - only once a host is RUNNING (its own `convergeReady` came
- * back `ok`, or a status read shows a live runtime) or the user has removed
- * Traycer. Notably NOT on `busy`: see the outcome branch below.
+ * back `ok`, or a status read shows a live runtime), the user has removed
+ * Traycer, or the host lifecycle committed `none` for this process (the
+ * controller's quiesced deferral). Notably NOT on `busy`: see the outcome
+ * branch below.
  */
 export function armLocalHostBootOnSignIn(
   hostController: IpcHostController,
@@ -349,6 +353,26 @@ export function armLocalHostBootOnSignIn(
             kind: outcome.kind,
           });
           return;
+        }
+        // The host lifecycle suspended automatic starts, and the message says
+        // which form. Neither is a failed boot, so neither takes the WARN
+        // below. QUIESCED is the user's own `none`: this process starts no
+        // local host again until it restarts, so the ladder retires rather
+        // than logging a deferral every rung, at a five-minute ceiling, for
+        // the rest of the session. HELD is a stop that may still be refused
+        // or cancelled, so the ladder keeps its pacing and tries again.
+        if (outcome.kind === "deferred") {
+          if (outcome.message === AUTOMATIC_INTENTS_QUIESCED_MESSAGE) {
+            log.info("[host-controller] local host boot retired", {
+              reason: "host-lifecycle",
+            });
+            settle();
+            return;
+          }
+          if (outcome.message === AUTOMATIC_INTENTS_HELD_MESSAGE) {
+            scheduleRetry();
+            return;
+          }
         }
         // A RESOLVED non-ok is not a running host, and `busy` is the one that
         // argues otherwise. It reads as "a live host with active work declined

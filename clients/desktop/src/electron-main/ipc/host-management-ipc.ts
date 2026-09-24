@@ -298,7 +298,7 @@ function nullableString(raw: unknown, key: string): string | null {
  *    finished while the page sits locked.
  *
  * Every other kind (register, deregister, respawn, recoverIfDown,
- * freePortAndRestart, uninstallHost, removeTraycer) and the login-item
+ * freePortAndRestart, uninstallHost, removeTraycer, stopHost) and the login-item
  * refresh take the same exclusive lane without ever touching the version.
  * Listed positively so a NEW `MutationKind` defaults to "not an update".
  */
@@ -838,6 +838,8 @@ export function laneBusyRestartMessage(kind: MutationKind): string {
     case "uninstallHost":
     case "removeTraycer":
       return "Traycer is removing this host. There is nothing to restart until that finishes.";
+    case "stopHost":
+      return "Traycer is stopping this host. Start it again once that finishes.";
     case "respawn":
     case "recoverIfDown":
     case "freePortAndRestart":

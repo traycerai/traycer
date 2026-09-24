@@ -97,6 +97,8 @@ export function hostProgressHeading(
       return "Uninstalling Traycer Host…";
     case "removeTraycer":
       return "Removing Traycer…";
+    case "stopHost":
+      return "Stopping Traycer Host…";
   }
 }
 
