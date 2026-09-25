@@ -260,15 +260,19 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>
       </DropdownMenu>
-      <SwitcherRenameDialog
-        open={renameOpen}
-        onOpenChange={setRenameOpen}
-        title={RENAME_TITLE[kind]}
-        initialValue={name}
-        nodeId={nodeId}
-        onSubmit={submitRename}
-      />
-      {isTerminal ? null : (
+      {/* Mounted only while the user can mutate, so losing edit access closes
+          an open dialog instead of leaving it submittable. */}
+      {canMutate ? (
+        <SwitcherRenameDialog
+          open={renameOpen}
+          onOpenChange={setRenameOpen}
+          title={RENAME_TITLE[kind]}
+          initialValue={name}
+          nodeId={nodeId}
+          onSubmit={submitRename}
+        />
+      ) : null}
+      {isTerminal || !canMutate ? null : (
         <ConfirmDestructiveDialog
           blockedReason={null}
           open={confirmOpen}
