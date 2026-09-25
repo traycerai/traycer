@@ -49,6 +49,13 @@ export interface FileAssetState {
   readonly meta: FileAssetMeta | null;
   /** Human-readable one-liner, set only at `status === "fallback"`. */
   readonly reason: string | null;
+  /**
+   * `true` only at `status === "fallback"` when the host found no file at the
+   * path (moved, renamed or deleted while its tab stayed open). A surface
+   * shows that as its own state rather than a preview failure, since
+   * offering to open a file that is gone only ends in an error.
+   */
+  readonly missing: boolean;
   /** `null` until the header arrives. */
   readonly totalBytes: number | null;
   /** Meaningful only at `status === "ready"` - whether `url` resolved from the shared `imageBlobCache` (`fetcher` below never ran) rather than a fresh stream. See `ImagePreviewProps.servedFromCache` for why a consumer needs this. */
@@ -106,6 +113,7 @@ const LOADING_STATE: FileAssetState = {
   url: null,
   meta: null,
   reason: null,
+  missing: false,
   totalBytes: null,
   servedFromCache: false,
 };
@@ -705,6 +713,7 @@ export function useHostFileAsset(args: {
         url: null,
         meta: null,
         reason: decodeFailureReason(renderKind),
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
       },
@@ -764,6 +773,7 @@ export function useHostFileAsset(args: {
             url: null,
             meta,
             reason: null,
+            missing: false,
             totalBytes: header.sizeBytes,
             servedFromCache: false,
           },
@@ -847,6 +857,7 @@ export function useHostFileAsset(args: {
                 url: resolution.url,
                 meta,
                 reason: null,
+                missing: false,
                 totalBytes: header.sizeBytes,
                 // `usedForFetch` is exactly "did the fetcher run" - false
                 // means `imageBlobCache.acquire` resolved this lease from
@@ -867,6 +878,7 @@ export function useHostFileAsset(args: {
                   error instanceof Error
                     ? error.message
                     : "This image could not be loaded.",
+                missing: false,
                 totalBytes: header.sizeBytes,
                 servedFromCache: false,
               },
@@ -897,6 +909,10 @@ export function useHostFileAsset(args: {
             url: null,
             meta: null,
             reason: describeFailure(failure, streamRenderKind),
+            // The host reads the whole file before it sends the header, so
+            // "not found" always lands here, never on the post-header
+            // rejection path above.
+            missing: failure.reason === "not-found",
             totalBytes: null,
             servedFromCache: false,
           },

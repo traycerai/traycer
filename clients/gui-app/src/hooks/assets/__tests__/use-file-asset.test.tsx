@@ -421,32 +421,45 @@ async function flushPromises(): Promise<void> {
 // pixels, read-failed) share the exact same `case "assetError"` plumbing as
 // `not-found` below and only differ in a `FAILURE_MESSAGES` string, which
 // `Record<AssetStreamFailureReason, string>` already makes exhaustive at
-// compile time.
+// compile time. `read-failed` is the exception: it stands in for every
+// `assetError` reason that is NOT `not-found`, the one reason that reports
+// the file as missing.
 const FALLBACK_CASES = [
   {
     reason: "fatal",
     expected: "This image could not be loaded.",
     totalBytes: null,
+    missing: false,
   },
   {
     reason: "interrupted",
     expected: "The image transfer was interrupted.",
     totalBytes: null,
+    missing: false,
   },
   {
     reason: "length-mismatch",
     expected: "The image transfer did not complete.",
     totalBytes: 3,
+    missing: false,
   },
   {
     reason: "not-found",
     expected: "This file could not be found.",
     totalBytes: null,
+    missing: true,
+  },
+  {
+    reason: "read-failed",
+    expected: "This image could not be read.",
+    totalBytes: null,
+    missing: false,
   },
 ] satisfies readonly {
   readonly reason: AssetStreamFailureReason;
   readonly expected: string;
   readonly totalBytes: number | null;
+  readonly missing: boolean;
 }[];
 
 let mockWsStreamClient: MockWsStreamClient;
@@ -541,6 +554,7 @@ describe("useFileAsset", () => {
         height: 80,
       },
       reason: null,
+      missing: false,
       totalBytes: 3,
       servedFromCache: false,
     });
@@ -1253,8 +1267,8 @@ describe("useFileAsset", () => {
   });
 
   it.each(FALLBACK_CASES)(
-    "maps $reason to its exact fallback message",
-    async ({ reason, expected, totalBytes }) => {
+    "maps $reason to its exact fallback message (missing: $missing)",
+    async ({ reason, expected, totalBytes, missing }) => {
       const { result, unmount } = renderHook(() =>
         useFileAsset(WORKSPACE_REQUEST),
       );
@@ -1268,6 +1282,7 @@ describe("useFileAsset", () => {
       expect(result.current.status).toBe("fallback");
 
       expect(result.current.reason).toBe(expected);
+      expect(result.current.missing).toBe(missing);
       expect(result.current.meta).toBeNull();
       expect(result.current.totalBytes).toBe(totalBytes);
       unmount();

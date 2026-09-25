@@ -250,6 +250,7 @@ beforeEach(() => {
     url: "blob:image",
     meta: null,
     reason: null,
+    missing: false,
     totalBytes: 1,
     servedFromCache: false,
   };
