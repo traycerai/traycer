@@ -74,8 +74,12 @@ function tabPinUnavailableReason(input: {
   readonly cloudAuthorized: boolean;
   /** `epic.setPinned@1.1` negotiated - see `useEpicPinLocalHomeSupported`. */
   readonly localHomePinSupported: boolean;
-  /** See `TaskPinnedState.pinnedKnown`: a real pin reading exists to toggle. */
-  readonly pinReadingKnown: boolean;
+  /**
+   * A reading EXISTS but is not an answer (`pinnedKnown: false`): the batch
+   * settled without resolving this epic. Distinct from no reading at all,
+   * which is a question still in flight and keeps the spinner.
+   */
+  readonly pinReadingUnanswered: boolean;
 }):
   | "local-home"
   | "pin-unknown"
@@ -102,10 +106,17 @@ function tabPinUnavailableReason(input: {
     // newer host - a row whose pin reading simply never arrived must not wear
     // it: that host may already speak `@1.1`, and telling the person to update
     // it changes nothing. Checked first because it is the more specific fact.
-    if (!input.pinReadingKnown) return "pin-unknown";
+    if (input.pinReadingUnanswered) return "pin-unknown";
     return input.localHomePinSupported ? null : "local-home";
   }
   if (!input.cloudAuthorized) return "unverified-session";
+  // A cloud-homed row the host settled without resolving - a cloud leg past
+  // its deadline, a 5xx, an errored chunk. Before this arm it had no entry at
+  // all and spun forever, because "still loading" was the only state a
+  // missing reading could render. Opening the menu re-asks
+  // (`useRetryUnansweredTaskPinReading`), so the label resolves itself when
+  // the host answers.
+  if (input.pinReadingUnanswered) return "pin-unknown";
   return null;
 }
 
@@ -162,8 +173,8 @@ function EpicTabMenuItems(props: {
   readonly taskPinned: boolean | null;
   readonly isTaskPinPending: boolean;
   readonly localOnly: boolean;
-  /** See `TaskPinnedState.pinnedKnown`. */
-  readonly pinReadingKnown: boolean;
+  /** See `tabPinUnavailableReason`'s field of the same name. */
+  readonly pinReadingUnanswered: boolean;
   /**
    * The host a pin for THIS row would be dispatched to (`TaskPinnedState.hostId`),
    * `null` to follow the window. Threaded as a prop rather than read here
@@ -178,7 +189,7 @@ function EpicTabMenuItems(props: {
     tabId,
     taskPinned,
     localOnly,
-    pinReadingKnown,
+    pinReadingUnanswered,
     pinDispatchHostId,
     preservedOrphan,
   } = props;
@@ -205,7 +216,7 @@ function EpicTabMenuItems(props: {
     // a negotiated `@1.1` only enables the control where there is a real pin
     // reading to toggle, but a missing reading is a different unavailability
     // from an old host and wears a different sentence.
-    pinReadingKnown,
+    pinReadingUnanswered,
   });
   const pinUnavailable = pinUnavailableReason !== null;
   return (
@@ -303,7 +314,8 @@ export function TabContextMenuContent(
   // offer - the label would guess a pin state and the click would invert the
   // guess, on a host that cannot serve the epic anyway. Such a row keeps the
   // unavailable state it has today, with the corrected copy.
-  const pinReadingKnown = taskPinnedState?.pinnedKnown === true;
+  const pinReadingUnanswered =
+    taskPinnedState !== null && !taskPinnedState.pinnedKnown;
   const preservedOrphan = usePreservedOrphanSession(tab);
 
   const showDuplicate = tab.canDuplicate;
@@ -319,7 +331,7 @@ export function TabContextMenuContent(
           taskPinned={taskPinned}
           isTaskPinPending={isTaskPinPending}
           localOnly={localOnly}
-          pinReadingKnown={pinReadingKnown}
+          pinReadingUnanswered={pinReadingUnanswered}
           pinDispatchHostId={taskPinnedState?.hostId ?? null}
           preservedOrphan={preservedOrphan}
           onEditTitle={onEditTitle}

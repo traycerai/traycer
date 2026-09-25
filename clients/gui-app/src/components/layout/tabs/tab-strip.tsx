@@ -74,6 +74,7 @@ import {
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import {
   useEpicTaskPinnedStates,
+  useRetryUnansweredTaskPinReading,
   type TaskPinnedState,
 } from "@/hooks/epic/use-epic-task-pinned-states-query";
 
@@ -156,6 +157,7 @@ function TabStripBody() {
     chatScopes: indicatorChatScopes,
   } = useHeaderTabIndicators(allTabs);
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
+  const retryUnansweredTaskPinReading = useRetryUnansweredTaskPinReading();
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();
   const hostClient = useHostClient();
@@ -458,6 +460,7 @@ function TabStripBody() {
                           taskPinnedStates={taskPinnedStates}
                           pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
                           onSetTaskPinned={handleSetTaskPinned}
+                          onTaskPinMenuOpen={retryUnansweredTaskPinReading}
                         />
                       ) : null}
                     </Fragment>
@@ -512,6 +515,8 @@ interface HeaderStripItemRendererProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
 const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
@@ -555,6 +560,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
         taskPinnedStates={props.taskPinnedStates}
         pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
         onSetTaskPinned={props.onSetTaskPinned}
+        onTaskPinMenuOpen={props.onTaskPinMenuOpen}
       />
     );
   }
@@ -579,6 +585,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       taskPinnedStates={props.taskPinnedStates}
       pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
       onSetTaskPinned={props.onSetTaskPinned}
+      onTaskPinMenuOpen={props.onTaskPinMenuOpen}
     />
   );
 });
@@ -607,6 +614,8 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }): ReactNode {
   const dnd = useMemo(
     () => ({
@@ -645,6 +654,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
         props.pendingSetPinnedEpicIds.has(props.tab.epicId)
       }
       onSetTaskPinned={props.onSetTaskPinned}
+      onTaskPinMenuOpen={props.onTaskPinMenuOpen}
     />
   );
 });

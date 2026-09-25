@@ -117,6 +117,8 @@ interface TabItemProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** Re-asks for this epic's pin reading when the menu opens without one. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
 export interface HeaderTabDndConfig {
@@ -194,6 +196,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     taskPinnedState,
     isTaskPinPending,
     onSetTaskPinned,
+    onTaskPinMenuOpen,
   } = props;
   const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
   const appearance = tabAppearance(tab);
@@ -462,6 +465,17 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     },
     [displayName, onSetTaskPinned, tab],
   );
+  // Opening the menu is when the pin reading is needed, so a missing one is
+  // re-asked HERE: the batch is `staleTime: Infinity`, and a settled miss (a
+  // cloud leg past its deadline, an errored chunk) was otherwise never retried.
+  const pinReadingKnown = taskPinnedState?.pinnedKnown === true;
+  const handleContextMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open || tabEpicId === null || pinReadingKnown) return;
+      onTaskPinMenuOpen(tabEpicId);
+    },
+    [onTaskPinMenuOpen, pinReadingKnown, tabEpicId],
+  );
 
   const leaderBadge: LeaderBadge | null =
     modifier === null
@@ -477,7 +491,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           ),
         };
   const control = (
-    <ContextMenu>
+    <ContextMenu onOpenChange={handleContextMenuOpenChange}>
       <ContextMenuTrigger asChild>
         <div
           ref={combinedRef}
