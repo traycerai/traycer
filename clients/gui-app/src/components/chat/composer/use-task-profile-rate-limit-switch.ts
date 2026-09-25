@@ -253,13 +253,19 @@ export function useTaskProfileRateLimitSwitch(input: {
   const scope = useMemo<TaskChatScope>(() => {
     if (candidateChatIds.length === 0) return SCOPE_NONE;
     if (!requested) return SCOPE_UNRESOLVED;
-    if (batch.resolving) return SCOPE_RESOLVING;
+    // The composer's model not loaded yet is a transient gate, not an answer:
+    // the batch starts on its own once it resolves. Reporting `resolved` here
+    // (every read `unavailable`) would release the held switch, and a switch
+    // in that window moves only this chat - after which the siblings, pinned
+    // to the old profile, can never match.
+    if (batch.resolving || selectedModelSlug === null) return SCOPE_RESOLVING;
     return { kind: "resolved", otherChatCount, uncheckedChatCount };
   }, [
     batch.resolving,
     candidateChatIds.length,
     otherChatCount,
     requested,
+    selectedModelSlug,
     uncheckedChatCount,
   ]);
 

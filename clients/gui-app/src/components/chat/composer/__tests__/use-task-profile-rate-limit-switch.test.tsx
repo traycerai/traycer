@@ -381,4 +381,38 @@ describe("useTaskProfileRateLimitSwitch", () => {
     expect(batch.checkId).toBeGreaterThan(first);
     expect(batch.enabled).toBe(true);
   });
+  it("stays resolving while the composer's model has not loaded, rather than resolving with every sibling unchecked", () => {
+    const sibling = chat("chat-sibling", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([chat(CURRENT_CHAT_ID, TAB_HOST_ID), sibling]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(sibling.id, settings(undefined));
+    const model: { current: ModelOption | null } = { current: null };
+
+    const { result, rerender } = renderHook(() =>
+      useTaskProfileRateLimitSwitch({
+        enabled: true,
+        episodeKey: "warning-1",
+        harnessId: "claude",
+        profileId: "limited",
+        selectedModel: model.current,
+        epicId: EPIC_ID,
+        chatId: CURRENT_CHAT_ID,
+      }),
+    );
+    act(() => result.current.resolveScope());
+
+    expect(batch.enabled).toBe(false);
+    expect(result.current.scope).toEqual({ kind: "resolving" });
+
+    model.current = SELECTED_MODEL;
+    rerender();
+    expect(batch.enabled).toBe(true);
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 0,
+    });
+  });
 });
