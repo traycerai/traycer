@@ -9,6 +9,7 @@ import {
 } from "./shiki-highlight-cache";
 import {
   ensureActiveThemePair,
+  ensureLanguage,
   getOrCreateHighlighter,
   highlightCode,
   MAX_HIGHLIGHT_CHARS,
@@ -28,6 +29,8 @@ type ReadyListener = () => void;
 class TraycerStreamingHighlighter implements StreamingHighlighter {
   private core: HighlighterCore | null = null;
   private readonly listeners = new Set<ReadyListener>();
+  /** Fence infos whose grammar load already has a readiness notify attached. */
+  private readonly awaitedLanguages = new Set<string>();
   private unsubscribeTheme: (() => void) | null = null;
   /** One-time palette observer - not cleared on core load failure. */
   private observersAttached = false;
@@ -77,6 +80,7 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
     this.core = null;
     this.coreLoad = null;
     this.listeners.clear();
+    this.awaitedLanguages.clear();
     this.unsubscribeTheme?.();
     this.unsubscribeTheme = null;
     this.observersAttached = false;
@@ -121,11 +125,34 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
     }
 
     const html = highlightCode(core, code, lang, theme);
-    if (html === null) return null;
+    if (html === null) {
+      // Either this fence's grammar hasn't been fetched yet, or the info is
+      // outside the curated set. Only the first is worth acting on, and only
+      // once: `ensureLanguage` memoizes the load, so the re-asks this block
+      // makes on every streamed frame ride the same promise, and the notify
+      // that follows it re-renders consumers into the real highlight.
+      this.ensureLanguageLoaded(core, lang);
+      return null;
+    }
     return {
       node: trustedMarkupToReactNodes(html, "html"),
       weight: html.length,
     };
+  }
+
+  private ensureLanguageLoaded(core: HighlighterCore, lang: string): void {
+    if (this.awaitedLanguages.has(lang)) return;
+    const readiness = ensureLanguage(core, lang);
+    if (readiness.state !== "loading") return;
+    // At most ONE notify per fence info, ever. A grammar load settles whether
+    // its chunk arrived or not, so re-attaching per frame would turn a chunk
+    // that can never load into a notify -> re-render -> still-null -> notify
+    // loop. One notify is all a successful load needs, and a failed one has
+    // nothing more to say.
+    this.awaitedLanguages.add(lang);
+    void readiness.load.then(() => {
+      this.notify();
+    });
   }
 
   getCached(code: string, lang: string): ReactNode | null {

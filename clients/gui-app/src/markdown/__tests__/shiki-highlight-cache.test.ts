@@ -3,11 +3,17 @@ import {
   estimatedHighlightBytes,
   getCachedHighlight,
   HIGHLIGHT_CACHE_BYTE_BUDGET,
+  highlightCacheByteBudget,
   highlightCacheBytesForTests,
   highlightCacheSizeForTests,
   resetHighlightCacheForTests,
   setCachedHighlight,
 } from "@/markdown/shiki-highlight-cache";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 /** Highlighted-HTML length whose estimated retained bytes are `fraction` of
  * the budget - the tests think in the budget's own unit rather than hardcoding
@@ -19,6 +25,9 @@ function htmlCharsForBudgetFraction(fraction: number): number {
 
 afterEach(() => {
   resetHighlightCacheForTests();
+  // The profile is a module singleton; leaving it switched would shrink the
+  // budget under every later suite in this file.
+  setRetentionProfile(DESKTOP_RETENTION_PROFILE);
 });
 
 describe("shiki highlight MRU cache", () => {
@@ -100,6 +109,68 @@ describe("shiki highlight MRU cache", () => {
 
     expect(highlightCacheSizeForTests()).toBe(1);
     expect(getCachedHighlight("t", "ts", "small")).toBe("kept");
+  });
+
+  it("takes its budget from the active retention profile", () => {
+    expect(highlightCacheByteBudget()).toBe(HIGHLIGHT_CACHE_BYTE_BUDGET);
+    expect(HIGHLIGHT_CACHE_BYTE_BUDGET).toBe(
+      DESKTOP_RETENTION_PROFILE.highlightCacheBytes,
+    );
+
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+
+    expect(highlightCacheByteBudget()).toBe(
+      MOBILE_RETENTION_PROFILE.highlightCacheBytes,
+    );
+    expect(highlightCacheByteBudget()).toBeLessThan(
+      HIGHLIGHT_CACHE_BYTE_BUDGET,
+    );
+  });
+
+  it("evicts against the mobile budget once the phone's profile is active", () => {
+    // Sized to fit desktop comfortably and to overflow mobile on its own: the
+    // phone must not retain a working set picked for a 4 GB renderer.
+    const htmlChars = htmlCharsForBudgetFraction(1 / 2);
+    setCachedHighlight("t", "ts", "desktop-sized", {
+      node: "kept",
+      htmlChars,
+    });
+    expect(highlightCacheSizeForTests()).toBe(1);
+
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    resetHighlightCacheForTests();
+
+    // Larger than the whole mobile budget, so it is skipped outright rather
+    // than admitted and then evicting everything behind it.
+    setCachedHighlight("t", "ts", "desktop-sized", {
+      node: "too big for the phone",
+      htmlChars,
+    });
+    expect(highlightCacheSizeForTests()).toBe(0);
+
+    // What the phone does keep is bounded by its own budget, not desktop's.
+    const mobileSized = Math.ceil(
+      MOBILE_RETENTION_PROFILE.highlightCacheBytes /
+        (2 * estimatedHighlightBytes(1)),
+    );
+    setCachedHighlight("t", "ts", "phone-a", {
+      node: "a",
+      htmlChars: mobileSized,
+    });
+    setCachedHighlight("t", "ts", "phone-b", {
+      node: "b",
+      htmlChars: mobileSized,
+    });
+    setCachedHighlight("t", "ts", "phone-c", {
+      node: "c",
+      htmlChars: mobileSized,
+    });
+
+    expect(highlightCacheBytesForTests()).toBeLessThanOrEqual(
+      MOBILE_RETENTION_PROFILE.highlightCacheBytes,
+    );
+    expect(getCachedHighlight("t", "ts", "phone-a")).toBe(undefined);
+    expect(getCachedHighlight("t", "ts", "phone-c")).toBe("c");
   });
 
   it("replaces an existing key without double-counting its budget", () => {

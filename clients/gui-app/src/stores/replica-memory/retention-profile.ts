@@ -1,8 +1,8 @@
 import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
 
 /**
- * The four count caps that decide how much of the app stays RESIDENT while
- * the user is elsewhere, chosen once per shell.
+ * The caps that decide how much of the app stays RESIDENT while the user is
+ * elsewhere, chosen once per shell: four counts, and one byte budget.
  *
  * All four used to be bare module constants with no platform branch, so the
  * phone ran the desktop numbers: five hidden-but-mounted top-level surfaces
@@ -32,6 +32,16 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /**
+   * Estimated retained bytes the markdown highlight MRU may hold
+   * (`markdown/shiki-highlight-cache.ts`). The one BYTE cap among the counts,
+   * because what it bounds is one flat pool of parsed React trees rather than
+   * a number of surfaces - and it is per-profile for the same reason the
+   * counts are: the desktop figure was picked to keep a scrollback's worth of
+   * re-highlight CPU off the main thread on a renderer with a 4 GB ceiling,
+   * and a phone that is killed at 2 GB would rather re-highlight.
+   */
+  readonly highlightCacheBytes: number;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -40,6 +50,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  highlightCacheBytes: 128 * 1024 * 1024,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -48,6 +59,11 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  // 16 MB, an eighth of desktop. The highlight cache is pure CPU insurance -
+  // every entry is re-derivable from text the app is holding anyway - so it is
+  // the cheapest thing on the phone to give up, and 128 MB of it is a quarter
+  // of a plausible budget spent on not re-running shiki.
+  highlightCacheBytes: 16 * 1024 * 1024,
 });
 
 /**

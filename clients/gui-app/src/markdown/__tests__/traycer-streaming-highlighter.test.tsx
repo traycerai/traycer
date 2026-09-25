@@ -71,23 +71,58 @@ async function waitForReady(): Promise<void> {
 }
 
 describe("curated core highlighter (smoke)", () => {
-  it("loads only the active preset's theme pair and the curated grammars", async () => {
+  it("loads only the active preset's theme pair, and grammars on demand", async () => {
     const core = await getOrCreateHighlighter();
     const themes = core.getLoadedThemes();
     expect(themes).toHaveLength(2);
     expect(themes).toContain("github-dark");
     expect(themes).toContain("github-light");
 
+    // Grammars arrive per fence info (see `shiki-lang-loading.test.ts`); this
+    // suite's `waitForReady` highlights `ts`, so typescript is what is here.
+    await waitForReady();
     const langs = core.getLoadedLanguages();
     expect(langs).toContain("typescript");
-    expect(langs).toContain("make");
     // Registered aliases resolve for free.
     expect(langs).toContain("ts");
-    expect(langs).toContain("sh");
-    expect(langs).toContain("c#");
-    expect(langs).toContain("yml");
-    // Out-of-set grammars are NOT registered.
+    // Curated grammars nobody has rendered are NOT loaded, and out-of-set ones
+    // are never loadable at all.
+    expect(langs).not.toContain("make");
     expect(langs).not.toContain("haskell");
+  });
+
+  it("falls back to plain for a not-yet-loaded grammar and notifies when it lands", async () => {
+    await waitForReady();
+    const hl = highlighter();
+    const notified = vi.fn();
+    const unsubscribe = hl.subscribe(notified);
+
+    // `make` has not been rendered in this process yet, so the first ask is a
+    // plain render that also starts the fetch.
+    expect(hl.highlight("all:\n\tbun run build\n", "make")).toBeNull();
+    // Re-asks during the load (what a streaming block does every frame) stay
+    // plain and must not pile up readiness notifications.
+    expect(hl.highlight("all:\n\tbun run build\n", "make")).toBeNull();
+
+    await waitFor(() => {
+      expect(notified).toHaveBeenCalledTimes(1);
+    });
+    expect(hl.highlight("all:\n\tbun run build\n", "make")).not.toBeNull();
+    unsubscribe();
+  });
+
+  it("does not notify for a language outside the curated set", async () => {
+    await waitForReady();
+    const hl = highlighter();
+    const notified = vi.fn();
+    const unsubscribe = hl.subscribe(notified);
+
+    expect(hl.highlight("main = putStrLn", "haskell")).toBeNull();
+    // Nothing to fetch, so nothing will ever change: a notify here would be a
+    // re-render that produces the same plain <pre>.
+    await Promise.resolve();
+    expect(notified).not.toHaveBeenCalled();
+    unsubscribe();
   });
 });
 

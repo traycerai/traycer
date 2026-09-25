@@ -12,6 +12,7 @@ import {
 } from "@/stores/tabs/top-level-surface-retention";
 import { DEFAULT_MAX_WARM_CHAT_SESSIONS } from "@/stores/chats/session-registry";
 import { MAX_LINGERING_PLAIN_TERMINALS } from "@/stores/terminals/terminal-session-registry";
+import { HIGHLIGHT_CACHE_BYTE_BUDGET } from "@/markdown/shiki-highlight-cache";
 
 // Every consumer of the active profile reads `getRetentionProfile()` lazily,
 // so a test that switches it must restore the desktop profile afterward or
@@ -37,6 +38,9 @@ describe("RetentionProfile", () => {
     expect(DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals).toBe(
       MAX_LINGERING_PLAIN_TERMINALS,
     );
+    expect(DESKTOP_RETENTION_PROFILE.highlightCacheBytes).toBe(
+      HIGHLIGHT_CACHE_BYTE_BUDGET,
+    );
   });
 
   it("the mobile profile is strictly smaller than desktop in every field", () => {
@@ -51,6 +55,9 @@ describe("RetentionProfile", () => {
     );
     expect(MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals).toBeLessThan(
       DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals,
+    );
+    expect(MOBILE_RETENTION_PROFILE.highlightCacheBytes).toBeLessThan(
+      DESKTOP_RETENTION_PROFILE.highlightCacheBytes,
     );
   });
 

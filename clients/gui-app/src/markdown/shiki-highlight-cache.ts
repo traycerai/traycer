@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
 import { contentFingerprint } from "@/lib/text-hash";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  getRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 /**
  * Global MRU cache for finished highlight renders.
@@ -15,8 +19,8 @@ import { contentFingerprint } from "@/lib/text-hash";
  * without re-running shiki. Keyed by (theme, lang, hash-of-code) so light/dark
  * and preset swaps never collide; old-theme entries age out via the budget.
  *
- * Bounded by ESTIMATED RETAINED BYTES rather than by entry count or by output
- * characters. Block sizes vary by ~1000x, so an entry cap bounds memory
+ * Bounded by the active retention profile's ESTIMATED RETAINED BYTES rather
+ * than by entry count or by output characters. Block sizes vary by ~1000x, so an entry cap bounds memory
  * poorly - but counting highlighted-HTML characters was the deeper mistake:
  * what is retained is a parsed React element tree, not the HTML string it was
  * parsed from. Each shiki span becomes an element object plus a props object
@@ -41,14 +45,31 @@ import { contentFingerprint } from "@/lib/text-hash";
  */
 export const ESTIMATED_BYTES_PER_HTML_CHAR = 10;
 
-/** ~6.4M characters of highlighted HTML at the factor above. */
-// Sized so the byte budget does not quietly shrink the cache's working set:
-// the previous character-count bound admitted ~20M highlighted-HTML chars,
-// which at the estimate below is ~200 MB. Dropping straight to 64 MB cut
-// capacity ~3x and would have traded a measured memory win for unmeasured
-// re-highlight CPU on scrollback. 128 MB keeps most of the old working set
-// while still bounding what the cache can retain.
-export const HIGHLIGHT_CACHE_BYTE_BUDGET = 128 * 1024 * 1024;
+/**
+ * The DESKTOP budget - ~6.4M characters of highlighted HTML at the factor
+ * above - kept as a named constant for the suites that size entries against
+ * it. Sized so the byte budget does not quietly shrink the cache's working
+ * set: the previous character-count bound admitted ~20M highlighted-HTML
+ * chars, which at the estimate above is ~200 MB. Dropping straight to 64 MB
+ * cut capacity ~3x and would have traded a measured memory win for unmeasured
+ * re-highlight CPU on scrollback. 128 MB keeps most of the old working set
+ * while still bounding what the cache can retain.
+ */
+export const HIGHLIGHT_CACHE_BYTE_BUDGET =
+  DESKTOP_RETENTION_PROFILE.highlightCacheBytes;
+
+/**
+ * The LIVE budget, read on every write rather than captured at module load:
+ * the phone selects its retention profile in the Capacitor entry's bootstrap,
+ * which need not beat module evaluation of a markdown module. A profile
+ * switched under a warm cache therefore takes effect at the next settled
+ * block, when the eviction loop below runs against the new bound - there is no
+ * separate shrink pass, because the only shell that switches does it before
+ * anything has rendered.
+ */
+export function highlightCacheByteBudget(): number {
+  return getRetentionProfile().highlightCacheBytes;
+}
 
 export function estimatedHighlightBytes(htmlChars: number): number {
   return htmlChars * ESTIMATED_BYTES_PER_HTML_CHAR;
@@ -106,9 +127,10 @@ export function setCachedHighlight(
 ): void {
   const { node, htmlChars } = render;
   const bytes = estimatedHighlightBytes(htmlChars);
+  const budget = highlightCacheByteBudget();
   // A single block larger than the whole budget would evict everything and
   // then exceed the bound anyway; just skip caching it.
-  if (bytes > HIGHLIGHT_CACHE_BYTE_BUDGET) return;
+  if (bytes > budget) return;
   const key = cacheKey(theme, lang, code);
   const existing = cache.get(key);
   if (existing !== undefined) {
@@ -117,7 +139,7 @@ export function setCachedHighlight(
   }
   cache.set(key, { node, bytes });
   totalBytes += bytes;
-  while (totalBytes > HIGHLIGHT_CACHE_BYTE_BUDGET) {
+  while (totalBytes > budget) {
     const oldestKey = cache.keys().next().value;
     if (oldestKey === undefined) break;
     const oldest = cache.get(oldestKey);
