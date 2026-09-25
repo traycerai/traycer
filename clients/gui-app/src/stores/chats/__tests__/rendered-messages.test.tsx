@@ -1593,24 +1593,28 @@ describe("useRenderedMessages", () => {
     });
   });
 
-  it("does not treat browser or whitespace text as later assistant text", () => {
+  it("does not treat browser-session text as later assistant text", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
       blocks: [
+        plainTextBlock("before-steer", 2001, "Before result"),
         {
-          type: "reasoning",
-          blockId: "before",
-          content: "Before result",
+          type: "steer",
+          blockId: "steer:queue-1",
           status: "completed",
-          timestamp: 2001,
-          startedAt: 2000,
+          timestamp: 2002,
+          queueItemId: "queue-1",
+          messageId: "message-queue-1",
+          mode: "safe_point",
+          sender: null,
+          content: CONTENT,
         },
         {
           type: "text",
           blockId: "browser-text",
           text: "Browser session",
           status: "completed",
-          timestamp: 2002,
+          timestamp: 2003,
           providerNotice: null,
           browserSession: {
             hostId: "host-1",
@@ -1619,12 +1623,37 @@ describe("useRenderedMessages", () => {
             profile: "primary",
           },
         },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+
+    expect(result.current[0]?.role).toBe("assistant");
+    expect(result.current[0]?.hasLaterAssistantText).toBe(false);
+  });
+
+  it("does not treat whitespace-only text as later assistant text", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        plainTextBlock("before-steer", 2001, "Before result"),
+        {
+          type: "steer",
+          blockId: "steer:queue-1",
+          status: "completed",
+          timestamp: 2002,
+          queueItemId: "queue-1",
+          messageId: "message-queue-1",
+          mode: "safe_point",
+          sender: null,
+          content: CONTENT,
+        },
         {
           type: "text",
           blockId: "whitespace-text",
           text: "  ",
           status: "completed",
-          timestamp: 2003,
+          timestamp: 2004,
           providerNotice: null,
         },
       ],
@@ -1632,6 +1661,7 @@ describe("useRenderedMessages", () => {
 
     const { result } = renderRenderedMessages({ messages: [assistant] });
 
+    expect(result.current[0]?.role).toBe("assistant");
     expect(result.current[0]?.hasLaterAssistantText).toBe(false);
   });
 
@@ -1922,12 +1952,8 @@ describe("useRenderedMessages", () => {
       ...streamingAssistant,
       blocks: [
         {
-          type: "text",
-          blockId: "text-1",
-          text: "Thinking aloud",
+          ...streamingAssistant.blocks[0],
           status: "completed",
-          timestamp: 2003,
-          providerNotice: null,
         },
         streamingAssistant.blocks[1],
       ],
