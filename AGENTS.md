@@ -27,7 +27,8 @@ are **not** here — the CLI provisions a signed host from GitHub Releases; see
 bun install
 bun run build
 bun run compile                 # never tsc directly
-bun run lint && bun run format
+bun scripts/lint-changed-files.mjs origin/main  # the branch's tracked changes; CI lints whole projects
+bun run format
 make test-affected              # optional targeted run; CI owns the test gate
 bunx nx run @traycer-clients/traycer-cli:build   # single package
 pre-commit run --all-files      # explicit full-repo static validation
@@ -47,6 +48,11 @@ worktrees queue rather than stacking multi-GB type-checks. CI runs the
 whole-project lint and the `build` targets. Tests run in CI (`test.yml`), not
 in the hook; only re-run checks yourself when diagnosing a hook or CI failure.
 Commits need DCO (`git commit -s`).
+
+**nx runs without its daemon** (`useDaemonProcess: false` in `nx.json`). A
+daemon exits only after three hours without an nx command, so every worktree
+that agents keep committing in held one: one machine carried 18 of them,
+3.26 GB, each saving under a second per nx command. Don't turn it back on.
 
 ## Non-negotiable
 

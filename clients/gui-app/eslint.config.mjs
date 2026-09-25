@@ -2097,13 +2097,13 @@ export default tseslint.config(
       // which exited 0. This rule is the only gate that catches the class
       // before a type-check.
       //
-      // ENFORCED FROM `.oxlintrc.json`, not from here. The
+      // ENFORCED FROM `.oxlintrc.base.json`, not from here. The
       // `oxlint.buildFromOxlintConfigFile` spread at the end of this file
       // switches off in ESLint every rule oxlint already owns, so this entry
       // resolves to `off` - exactly like its seven react neighbours below that
       // also appear in that file. Listing it here keeps the declaration where a
-      // reader looks for it; deleting the `.oxlintrc.json` half would silently
-      // disarm the rule in both.
+      // reader looks for it; deleting the `.oxlintrc.base.json` half would
+      // silently disarm the rule in both.
       "react/jsx-no-duplicate-props": "error",
       "react/jsx-no-target-blank": "error",
       "react/no-danger": "error",
@@ -3169,5 +3169,5 @@ export default tseslint.config(
   // generated config, including the type-aware rules. Keep this last so ESLint
   // retains the repository-specific boundaries and selector-based invariants
   // whose implementations and executable guard tests remain ESLint-specific.
-  ...oxlint.buildFromOxlintConfigFile(".oxlintrc.json"),
+  ...oxlint.buildFromOxlintConfigFile(".oxlintrc.base.json"),
 );

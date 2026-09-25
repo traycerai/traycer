@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@traycer-clients/shared/*": ["../shared/*"],
+      "@traycer-clients/gui-app": [
+        "../gui-app/node_modules/.tmp/declarations/clients/gui-app/index.d.ts"
+      ],
+      "@traycer-clients/gui-app/*": [
+        "../gui-app/node_modules/.tmp/declarations/clients/gui-app/*"
+      ],
+      "@traycer-clients/mobile/*": ["./src/*"],
+      "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
+      "@traycer/protocol/*": ["../../protocol/src/*"],
+      "@/*": ["../gui-app/node_modules/.tmp/declarations/clients/gui-app/src/*"]
+    }
+  }
+}

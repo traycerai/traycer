@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noCheck": true,
+    "incremental": true,
+    "rootDir": "../..",
+    "declarationDir": "./node_modules/.tmp/declarations",
+    "tsBuildInfoFile": "./node_modules/.tmp/declarations/.tsbuildinfo"
+  },
+  "include": ["src", "index.ts"],
+  "exclude": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ]
+}

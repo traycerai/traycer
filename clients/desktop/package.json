@@ -13,7 +13,7 @@
   "scripts": {
     "clean": "rimraf dist",
     "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
-    "compile": "tsgo --noEmit -p tsconfig.json --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "compile": "tsgo --noEmit -p tsconfig.compile.json --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs",
     "build:renderer": "vite build --config vite.renderer.config.ts && bun scripts/assert-single-instance-deps.cjs",
     "build:app": "bun run --cwd ../../protocol validate:registries && bun run clean && bun run build:main && bun run build:renderer",

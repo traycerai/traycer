@@ -112,6 +112,19 @@ export function useEpicCreateArtifact() {
   });
 }
 
+// The command-backed hooks' variables and responses live at module scope, not
+// inside each hook: the hooks' inferred return types name them, and a
+// function-local type cannot appear in gui-app's emitted declarations
+// (TS4060), which desktop and mobile type-check against.
+interface DeleteArtifactVariables {
+  readonly epicId: string;
+  readonly artifactId: string;
+}
+
+interface DeleteArtifactResponse {
+  readonly deleted: boolean;
+}
+
 /**
  * Mutation hook for epic.deleteArtifact.
  * Caller opens a confirm dialog first; on Delete the button enters
@@ -133,14 +146,9 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
         command.intent.artifactId === artifactId,
     ),
   );
-  interface Variables {
-    readonly epicId: string;
-    readonly artifactId: string;
-  }
-  interface Response {
-    readonly deleted: boolean;
-  }
-  const mutateAsync = async (variables: Variables): Promise<Response> => {
+  const mutateAsync = async (
+    variables: DeleteArtifactVariables,
+  ): Promise<DeleteArtifactResponse> => {
     try {
       await enqueueAndWait(handle, {
         kind: "delete-artifact",
@@ -170,14 +178,20 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
       throw normalized;
     }
   };
-  function mutate(variables: Variables): void;
+  function mutate(variables: DeleteArtifactVariables): void;
   function mutate(
-    variables: Variables,
-    callbacks: CommandMutationCallbacks<Response, Variables>,
+    variables: DeleteArtifactVariables,
+    callbacks: CommandMutationCallbacks<
+      DeleteArtifactResponse,
+      DeleteArtifactVariables
+    >,
   ): void;
   function mutate(
-    variables: Variables,
-    ...callbackList: CommandMutationCallbacks<Response, Variables>[]
+    variables: DeleteArtifactVariables,
+    ...callbackList: CommandMutationCallbacks<
+      DeleteArtifactResponse,
+      DeleteArtifactVariables
+    >[]
   ): void {
     const callbacks = callbackList.length > 0 ? callbackList[0] : undefined;
     // The trailing `.catch` covers the CALLBACKS, not the mutation. Both arms
@@ -198,6 +212,17 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
   return { mutate, mutateAsync, isPending };
 }
 
+interface UpdateArtifactStatusVariables {
+  readonly epicId: string;
+  readonly artifactId: string;
+  readonly artifactType: "ticket" | "story";
+  readonly status: 0 | 1 | 2;
+}
+
+interface UpdateArtifactStatusResponse {
+  readonly updated: boolean;
+}
+
 /**
  * Mutation hook for epic.updateArtifactStatus.
  * Only valid for ticket and story artifacts.
@@ -213,16 +238,9 @@ export function useEpicUpdateArtifactStatus(artifactId: string | null) {
         command.intent.artifactId === artifactId,
     ),
   );
-  interface Variables {
-    readonly epicId: string;
-    readonly artifactId: string;
-    readonly artifactType: "ticket" | "story";
-    readonly status: 0 | 1 | 2;
-  }
-  interface Response {
-    readonly updated: boolean;
-  }
-  const mutateAsync = async (variables: Variables): Promise<Response> => {
+  const mutateAsync = async (
+    variables: UpdateArtifactStatusVariables,
+  ): Promise<UpdateArtifactStatusResponse> => {
     try {
       await enqueueAndWait(handle, {
         kind: "update-artifact-status",
@@ -244,7 +262,7 @@ export function useEpicUpdateArtifactStatus(artifactId: string | null) {
       throw normalized;
     }
   };
-  const mutate = (variables: Variables): void => {
+  const mutate = (variables: UpdateArtifactStatusVariables): void => {
     // CONSUMED, exactly as the delete wrapper above consumes it. `mutateAsync`
     // toasts and then RETHROWS, and a refusal here is ordinary rather than
     // exceptional - `enqueueAndWait` throws on a refused write, a host
@@ -261,6 +279,16 @@ function analyticsTicketStatus(status: number): 0 | 1 | 2 {
   if (status === 1) return 1;
   if (status === 2) return 2;
   return 0;
+}
+
+interface RenameArtifactVariables {
+  readonly epicId: string;
+  readonly artifactId: string;
+  readonly title: string;
+}
+
+interface RenameArtifactResponse {
+  readonly updated: boolean;
 }
 
 /**
@@ -280,15 +308,9 @@ export function useEpicRenameArtifact(
         command.intent.artifactId === artifactId,
     ),
   );
-  interface Variables {
-    readonly epicId: string;
-    readonly artifactId: string;
-    readonly title: string;
-  }
-  interface Response {
-    readonly updated: boolean;
-  }
-  const mutateAsync = async (variables: Variables): Promise<Response> => {
+  const mutateAsync = async (
+    variables: RenameArtifactVariables,
+  ): Promise<RenameArtifactResponse> => {
     try {
       await enqueueAndWait(handle, {
         kind: "rename-artifact",
@@ -308,7 +330,7 @@ export function useEpicRenameArtifact(
       throw normalized;
     }
   };
-  const mutate = (variables: Variables): void => {
+  const mutate = (variables: RenameArtifactVariables): void => {
     // Consumed for the same reason the status wrapper above consumes it: the
     // rename's refusal path is the same `enqueueAndWait` throw, and this
     // surface's callers (the mobile switcher rename) are fire-and-forget.

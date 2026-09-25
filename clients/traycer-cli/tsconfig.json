@@ -29,6 +29,7 @@
     "../shared/oxlint.config.ts",
     "../../protocol/**/__tests__/**",
     "../../protocol/**/*.test.ts",
-    "../../protocol/oxlint.config.ts"
+    "../../protocol/oxlint.config.ts",
+    "../../protocol/dist"
   ]
 }

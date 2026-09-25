@@ -130,11 +130,16 @@ function createStableDevContext<K extends keyof EpicSessionDevGlobals>(
  * The RPC client resolved for the same host that owns `EpicSessionContext`.
  * Session-level provisioning prevents sidebar rows from independently mounting
  * host-directory subscriptions just to address the same Epic host.
+ *
+ * Annotated, like {@link handleHostClients}: an inferred `HostClient` of the
+ * registry is spelled out in full, more than the declaration emitter will
+ * serialize (TS7056), and desktop and mobile type-check against gui-app's
+ * emitted declarations.
  */
-export const EpicSessionHostClientContext = createStableDevContext(
-  "__TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__",
-  () => createContext<HostClient<HostRpcRegistry> | null>(null),
-);
+export const EpicSessionHostClientContext: Context<HostClient<HostRpcRegistry> | null> =
+  createStableDevContext("__TRAYCER_EPIC_SESSION_HOST_CLIENT_CONTEXT__", () =>
+    createContext<HostClient<HostRpcRegistry> | null>(null),
+  );
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
 // The R-1 rotation rationale that used to live here now lives at the acquire
@@ -159,10 +164,10 @@ export function getEpicSessionHandleHostId(
  * session has no serving client right now; an absent entry, a handle the
  * provider never saw (tests).
  */
-export const handleHostClients = new WeakMap<
+export const handleHostClients: WeakMap<
   OpenEpicStoreHandle,
   HostClient<HostRpcRegistry> | null
->();
+> = new WeakMap();
 
 export function getEpicSessionHandleHostClient(
   handle: OpenEpicStoreHandle,

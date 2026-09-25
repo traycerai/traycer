@@ -4,6 +4,7 @@ import {
   createHostRuntime,
   createHostRuntimeState,
   type HostRuntimeState,
+  type TypedHostRuntime,
 } from "@/providers/host-runtime-provider";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -15,6 +16,12 @@ import {
 } from "@/lib/host/binding-host-client";
 
 type AppHostRuntimeState = HostRuntimeState<HostRpcRegistry>;
+
+// The exports taken from `runtime` below whose type involves the registry are
+// annotated with it: inferred, the type is spelled out in full, which is more
+// than the declaration emitter will serialize (TS7056), and desktop and mobile
+// type-check against gui-app's emitted declarations.
+type AppHostRuntime = TypedHostRuntime<HostRpcRegistry>;
 
 interface HostRuntimeDevGlobals {
   __TRAYCER_HOST_RUNTIME_STATE__: AppHostRuntimeState | undefined;
@@ -55,8 +62,10 @@ const runtime = createHostRuntime<HostRpcRegistry>(
   createStableHostRuntimeState(),
 );
 
-export const HostRuntimeProvider = runtime.HostRuntimeProvider;
-export const HostRuntimeContext = runtime.HostRuntimeContext;
+export const HostRuntimeProvider: AppHostRuntime["HostRuntimeProvider"] =
+  runtime.HostRuntimeProvider;
+export const HostRuntimeContext: AppHostRuntime["HostRuntimeContext"] =
+  runtime.HostRuntimeContext;
 
 /**
  * The window's ONE `HostClient` instance - the transport spine that owns the
@@ -80,7 +89,8 @@ export const HostRuntimeContext = runtime.HostRuntimeContext;
  * the object is still reachable that way, so the rule is "resolve through a
  * resolver", not "you cannot get here".
  */
-export const useHostRuntimeClient = runtime.useHostClient;
+export const useHostRuntimeClient: AppHostRuntime["useHostClient"] =
+  runtime.useHostClient;
 
 /**
  * The host client for THIS SUBTREE: the binding's own host when it names one,
@@ -173,8 +183,10 @@ export function getAppHostClientSnapshot(): HostClient<HostRpcRegistry> | null {
 
 export const useHostDirectory = runtime.useHostDirectory;
 export const useAuthService = runtime.useAuthService;
-export const useHostBinding = runtime.useHostBinding;
-export const getHostBindingSnapshot = runtime.getBindingSnapshot;
+export const useHostBinding: AppHostRuntime["useHostBinding"] =
+  runtime.useHostBinding;
+export const getHostBindingSnapshot: AppHostRuntime["getBindingSnapshot"] =
+  runtime.getBindingSnapshot;
 
 /**
  * The app-wide effective host id, imperatively, for callers outside React (the

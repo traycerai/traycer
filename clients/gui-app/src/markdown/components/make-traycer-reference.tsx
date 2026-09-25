@@ -2,7 +2,9 @@ import { type ReactNode } from "react";
 import { TraycerReferenceChip } from "./traycer-reference-chip";
 import { useTraycerReferenceOpenHandler } from "./use-traycer-reference-open";
 
-interface TraycerReferenceProps {
+// Exported because the four reference components' types name it, and
+// desktop and mobile type-check against gui-app's emitted declarations.
+export interface TraycerReferenceProps {
   "data-epic-id"?: string;
   "data-title"?: string;
   children?: ReactNode;

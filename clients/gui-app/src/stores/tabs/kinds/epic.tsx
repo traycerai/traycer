@@ -31,7 +31,7 @@ const epicSurface = lazy(() =>
  * stale the moment the session re-points without also touching this
  * `EpicViewTab`. One caller resolves it, `build()` only stamps it.
  */
-interface EpicTabBuildSource {
+export interface EpicTabBuildSource {
   readonly view: EpicViewTab;
   readonly hostId: string | null;
 }

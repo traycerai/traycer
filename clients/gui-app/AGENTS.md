@@ -13,16 +13,20 @@ Tailwind v4, shadcn/ui, Vitest + Testing Library.
 bun run dev
 bun run build
 bun run test
-bun run lint
+bun run lint:files <paths>   # the files you changed; CI runs the whole-project lint
 bun run compile
 bun run react-doctor   # manual after .ts/.tsx changes; not in pre-commit
 ```
 
 Changed-files-only: `npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
 
-After making changes, run `bun run lint` and fix all errors. `@shadcn/lint`
-runs there and reads `components.json` and `src/index.css`, so its errors name
-this app's real variants, sizes and tokens — the fix is in the message.
+After making changes, lint the files you changed with `bun run lint:files
+<paths>` and fix all errors. `@shadcn/lint` runs there and reads
+`components.json` and `src/index.css`, so its errors name this app's real
+variants, sizes and tokens — the fix is in the message. Don't reach for
+`bun run lint` (the whole project) instead: its type-aware pass needs about
+7 GB even on one checker, whichever files you touched, and CI runs it on every
+PR.
 
 **A `shadcn/no-restyle` error is answered in `src/components/ui/`, not in
 `eslint.config.mjs`.** Every design-system component has a CONTRACT in that
@@ -41,6 +45,25 @@ and the reason written above it.
 committing — repo-root `pre-commit` already runs the affected checks (see root
 `AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
 failures. `react-doctor` stays manual (not hooked).
+
+**`bun run compile` also emits declarations for desktop and mobile.** After the
+full check, `tsconfig.declarations.json` writes production-only declarations
+into `node_modules/.tmp/declarations/` with `noCheck` (the check just ran), and
+desktop's and mobile's `tsconfig.compile.json` map `@traycer-clients/gui-app`
+and `@/*` there. Before this, each of them re-checked all of gui-app, and the
+two together were the heaviest step of a gui-app commit (5.2–5.5 GB measured,
+against gui-app's own ~4.8 GB). Three things keep it correct:
+
+- The step's `tsBuildInfoFile` stays inside the declarations directory, which
+  the `compile` target declares as its nx output. A cache restore must bring
+  the declarations and their incremental state back together; build info left
+  outside it skips re-emitting files it believes current, and desktop then
+  checks stale declarations.
+- `tsconfig.json` does not reference `tsconfig.declarations.json`, so editors
+  and tsgolint never load it as a project.
+- An export whose declaration can't be written fails the step: `TS7056` wants
+  an explicit type annotation, and `TS4023` / `TS4060` want the type it names
+  exported or moved to module scope.
 
 ## Map
 

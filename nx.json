@@ -77,5 +77,6 @@
     ],
     "sharedGlobals": []
   },
+  "useDaemonProcess": false,
   "analytics": false
 }
