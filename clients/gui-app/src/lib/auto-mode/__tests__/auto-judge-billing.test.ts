@@ -372,7 +372,7 @@ describe("autoJudgeTarget", () => {
     });
   });
 
-  // The wire accepts `judgeDefaultModel: ""`, and Settings' `defaultJudgeModelFor`
+  // The wire accepts `judgeDefaultModel: ""`, and Settings' `judgeSwitchModel`
   // reads it as "no default"; the composer must reach the same answer for the
   // same row rather than naming a blank model.
   it("under fallback, reads an empty judgeDefaultModel as no default and names the composer's model", () => {
@@ -699,7 +699,7 @@ describe("autoModeMidTurnLock", () => {
         judgeBilling: PROVIDER_NATIVE_BILLING,
       }),
     ).toBe(
-      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
   });
 

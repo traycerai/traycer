@@ -159,6 +159,7 @@ function mountSubmit(args: {
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
 }) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "hash-first-image-submit",
     values: {
       permission: "supervised",

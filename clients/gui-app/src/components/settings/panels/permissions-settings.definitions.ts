@@ -115,15 +115,15 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     kind: "group",
     search: { contributesTo: "judgeTab" },
     label: "Auto mode judge",
-    description:
-      "The model that reviews commands when a conversation runs in Auto mode. Stored on this machine.",
+    description: "Checks each command before it runs in Auto mode.",
     breadcrumb: "Judge",
     availableWhen: alwaysAvailable,
     keywords: [
       "auto mode judge",
       "classifier",
       "automatic",
-      "specific model",
+      "pick a model",
+      "recommended",
       "model",
       "provider",
       "account",
@@ -131,21 +131,6 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
       "inference",
       "premium requests",
       "copilot",
-    ],
-  },
-  builtInReviewers: {
-    kind: "group",
-    search: { contributesTo: "judgeTab" },
-    label: "Providers with a built-in reviewer",
-    description:
-      "Some providers can review their own commands. Faster and free, but your rules don't apply to them, and for their conversations the built-in reviewer wins over the judge above.",
-    breadcrumb: "Judge",
-    availableWhen: alwaysAvailable,
-    keywords: [
-      "built-in reviewer",
-      "classifier",
-      "claude code",
-      "own classifier",
     ],
   },
   ruleSections: {

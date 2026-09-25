@@ -121,6 +121,7 @@ function mountSubmit(
   initialProps: MountProps,
 ) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "queue-edit-intent-submit",
     values: {
       permission: "supervised",

@@ -11,15 +11,12 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
-  defaultJudgeModelFor,
-  firstOfferedJudgeProfileId,
   judgeModelUnavailable,
   judgeModelsFailedLine,
   judgeNoModelsLine,
-  judgeProfileBlocker,
   judgeProfileUnavailable,
   judgeProviderBlocker,
-  judgeSelectionForProvider,
+  judgeSwitchModel,
   judgeWarningCause,
   offeredJudgeProfileIds,
   providerForHarness,
@@ -169,42 +166,6 @@ describe("judgeProviderBlocker", () => {
   });
 });
 
-describe("judgeProfileBlocker", () => {
-  it("says Turned off for a host-wide disabled account", () => {
-    expect(
-      judgeProfileBlocker(profile("p", "managed", { enabled: false })),
-    ).toBe("Turned off");
-  });
-
-  it("says No API key when the provider takes a key and none is stored", () => {
-    expect(
-      judgeProfileBlocker(
-        profile("p", "managed", {
-          apiKey: { supported: true, configured: false },
-        }),
-      ),
-    ).toBe("No API key");
-  });
-
-  it("is null for a configured key, an unsupported key method, or no key state", () => {
-    expect(
-      judgeProfileBlocker(
-        profile("p", "managed", {
-          apiKey: { supported: true, configured: true },
-        }),
-      ),
-    ).toBeNull();
-    expect(
-      judgeProfileBlocker(
-        profile("p", "managed", {
-          apiKey: { supported: false, configured: false },
-        }),
-      ),
-    ).toBeNull();
-    expect(judgeProfileBlocker(profile("p", "managed", {}))).toBeNull();
-  });
-});
-
 describe("providerForHarness", () => {
   const claude = provider("claude-code", []);
   const codex = provider("codex", []);
@@ -219,78 +180,22 @@ describe("providerForHarness", () => {
   });
 });
 
-describe("firstOfferedJudgeProfileId", () => {
-  it("returns the first runnable account as a commit id, skipping blocked ones", () => {
-    const state = provider("claude-code", [
-      profile("off", "managed", { enabled: false }),
-      profile("work", "managed", {}),
-    ]);
-    expect(firstOfferedJudgeProfileId(state)).toBe("work");
-  });
-
-  it("returns null (ambient) when the first runnable account is the ambient one", () => {
+describe("judgeSwitchModel", () => {
+  it("is the row's judgeDefaultModel when it names one", () => {
     expect(
-      firstOfferedJudgeProfileId(
-        provider("claude-code", [profile("ambient", "ambient", {})]),
-      ),
-    ).toBeNull();
-  });
-
-  it("returns null when nothing is runnable or the provider is unknown", () => {
-    expect(
-      firstOfferedJudgeProfileId(
-        provider("claude-code", [
-          profile("off", "managed", { enabled: false }),
-        ]),
-      ),
-    ).toBeNull();
-    expect(firstOfferedJudgeProfileId(undefined)).toBeNull();
-  });
-});
-
-describe("defaultJudgeModelFor", () => {
-  it("prefers the row's judgeDefaultModel", () => {
-    expect(
-      defaultJudgeModelFor(harness({ judgeDefaultModel: "haiku" }), [
-        model("opus"),
-      ]),
+      judgeSwitchModel([harness({ judgeDefaultModel: "haiku" })], "claude"),
     ).toBe("haiku");
   });
 
-  it("falls back to the catalog's first model when the row names none or an empty one", () => {
+  it("is empty - the catalog default once it loads - for no model, an empty one, an unknown row or no catalog", () => {
+    expect(judgeSwitchModel([harness({})], "claude")).toBe("");
     expect(
-      defaultJudgeModelFor(harness({}), [model("opus"), model("haiku")]),
-    ).toBe("opus");
+      judgeSwitchModel([harness({ judgeDefaultModel: "" })], "claude"),
+    ).toBe("");
     expect(
-      defaultJudgeModelFor(harness({ judgeDefaultModel: "" }), [model("opus")]),
-    ).toBe("opus");
-  });
-
-  it("is null when neither is known", () => {
-    expect(defaultJudgeModelFor(harness({}), undefined)).toBeNull();
-    expect(defaultJudgeModelFor(harness({}), [])).toBeNull();
-  });
-});
-
-describe("judgeSelectionForProvider", () => {
-  it("commits the provider, its default model and its first runnable account", () => {
-    expect(
-      judgeSelectionForProvider({
-        row: harness({ judgeDefaultModel: "haiku" }),
-        models: [model("opus")],
-        provider: provider("claude-code", [profile("work", "managed", {})]),
-      }),
-    ).toEqual({ harnessId: "claude", model: "haiku", profileId: "work" });
-  });
-
-  it("is null while the model is not known", () => {
-    expect(
-      judgeSelectionForProvider({
-        row: harness({}),
-        models: undefined,
-        provider: undefined,
-      }),
-    ).toBeNull();
+      judgeSwitchModel([harness({ judgeDefaultModel: "haiku" })], "codex"),
+    ).toBe("");
+    expect(judgeSwitchModel(undefined, "claude")).toBe("");
   });
 });
 

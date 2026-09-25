@@ -135,6 +135,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     options;
   const toolbarLayout = options.toolbarLayout ?? "full";
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "test",
     values: {
       permission: "supervised",

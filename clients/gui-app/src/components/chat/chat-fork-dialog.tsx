@@ -916,6 +916,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 // shows its steps without the button.
                 terminalLoginSurface={null}
                 profileAdmission={null}
+                embedding={null}
               />
             </div>
           </section>
