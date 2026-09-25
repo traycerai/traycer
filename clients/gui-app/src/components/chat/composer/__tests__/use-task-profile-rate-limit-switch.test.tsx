@@ -38,8 +38,11 @@ const epicRecords = vi.hoisted(() => {
 const batch = vi.hoisted(() => ({
   chatIds: [] as ReadonlyArray<string>,
   enabled: false,
+  checkId: 0,
   resolving: false,
   settingsByChatId: new Map<string, ChatRunSettings>(),
+  /** Chats whose read failed. */
+  failed: new Set<string>(),
 }));
 const updateProfile = vi.hoisted(() => vi.fn());
 const tabHostClient = vi.hoisted(() => ({ request: vi.fn() }));
@@ -62,15 +65,22 @@ vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
   useChatRunSettingsBatch: (args: {
     readonly chatIds: ReadonlyArray<string>;
     readonly enabled: boolean;
+    readonly checkId: number;
   }) => {
     batch.chatIds = args.chatIds;
     batch.enabled = args.enabled;
-    const answered = args.enabled && !batch.resolving;
+    batch.checkId = args.checkId;
     return {
       resolving: args.enabled && batch.resolving,
-      settings: args.chatIds.map((chatId) =>
-        answered ? (batch.settingsByChatId.get(chatId) ?? null) : null,
-      ),
+      reads: args.chatIds.map((chatId) => {
+        if (!args.enabled) return { kind: "unavailable" };
+        if (batch.resolving) return { kind: "pending" };
+        if (batch.failed.has(chatId)) return { kind: "failed" };
+        return {
+          kind: "answered",
+          settings: batch.settingsByChatId.get(chatId) ?? null,
+        };
+      }),
     };
   },
 }));
@@ -139,8 +149,10 @@ describe("useTaskProfileRateLimitSwitch", () => {
     });
     batch.chatIds = [];
     batch.enabled = false;
+    batch.checkId = 0;
     batch.resolving = false;
     batch.settingsByChatId.clear();
+    batch.failed.clear();
     updateProfile.mockReset();
   });
 
@@ -202,6 +214,7 @@ describe("useTaskProfileRateLimitSwitch", () => {
     expect(result.current.scope).toEqual({
       kind: "resolved",
       otherChatCount: 1,
+      uncheckedChatCount: 0,
     });
 
     act(() => result.current.switchOtherTaskChats("fresh"));
@@ -235,6 +248,7 @@ describe("useTaskProfileRateLimitSwitch", () => {
     expect(result.current.scope).toEqual({
       kind: "resolved",
       otherChatCount: 1,
+      uncheckedChatCount: 0,
     });
   });
 
@@ -297,6 +311,7 @@ describe("useTaskProfileRateLimitSwitch", () => {
     expect(result.current.scope).toEqual({
       kind: "resolved",
       otherChatCount: 1,
+      uncheckedChatCount: 0,
     });
   });
 
@@ -316,5 +331,54 @@ describe("useTaskProfileRateLimitSwitch", () => {
 
     expect(batch.enabled).toBe(false);
     expect(result.current.scope).toEqual({ kind: "unresolved" });
+  });
+  it("counts a sibling whose read failed as unchecked, and moves only the ones it could read", () => {
+    const readable = chat("chat-readable", TAB_HOST_ID);
+    const broken = chat("chat-broken", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([
+        chat(CURRENT_CHAT_ID, TAB_HOST_ID),
+        readable,
+        broken,
+      ]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(readable.id, settings(undefined));
+    batch.settingsByChatId.set(broken.id, settings(undefined));
+    batch.failed.add(broken.id);
+
+    const { result } = renderSwitch({ current: "warning-1" });
+    act(() => result.current.resolveScope());
+
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 1,
+    });
+    act(() => result.current.switchOtherTaskChats("fresh"));
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+    expect(updateProfile).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: readable.id,
+      profileId: "fresh",
+    });
+  });
+
+  it("makes every resolveScope a new check, so a later tick reads the siblings again", () => {
+    epicRecords.setState({
+      chatRecords: slice([
+        chat(CURRENT_CHAT_ID, TAB_HOST_ID),
+        chat("chat-sibling", TAB_HOST_ID),
+      ]),
+      chats: slice([]),
+    });
+    const { result } = renderSwitch({ current: "warning-1" });
+
+    act(() => result.current.resolveScope());
+    const first = batch.checkId;
+    act(() => result.current.resolveScope());
+
+    expect(batch.checkId).toBeGreaterThan(first);
+    expect(batch.enabled).toBe(true);
   });
 });

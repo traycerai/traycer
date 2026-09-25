@@ -90,48 +90,84 @@ export function useChatRunSettings(args: {
 }
 
 /**
+ * One chat's read in a batch, as far as a consumer may act on it.
+ *
+ * - `answered`: the host replied; `settings` is `null` when it holds no tuple
+ *   for this viewer, which is a real answer ("nothing pinned").
+ * - `failed`: the read errored (after its retries).
+ * - `unavailable`: the read could not run at all - no client, a host that is
+ *   not ready, or a batch the caller has not enabled.
+ * - `pending`: a read is in flight, a refetch of an earlier answer included.
+ *
+ * `failed` and `unavailable` are kept apart from `answered` on purpose: folding
+ * them into `null` made a sibling the host never spoke for indistinguishable
+ * from one with nothing pinned, so a bulk switch could skip it silently.
+ */
+export type ChatRunSettingsRead =
+  | {
+      readonly kind: "answered";
+      readonly settings: GetChatRunSettingsResponse["settings"];
+    }
+  | { readonly kind: "failed" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "pending" };
+
+/**
  * A batch of run-settings reads folded to what a consumer acts on.
  *
- * `settings[i]` answers `chatIds[i]`, `null` while unread, when the host has no
- * tuple for the viewer, or when the read failed. `resolving` is true while any
- * read is still in flight, retries included; a read that cannot run at all (no
- * client, host not ready) is not in flight and does not hold it.
+ * `reads[i]` answers `chatIds[i]`. `resolving` is true while ANY read is in
+ * flight - including a refetch of a cached answer after an invalidation, whose
+ * data may be about to change.
  */
 export interface ChatRunSettingsBatch {
   readonly resolving: boolean;
-  readonly settings: ReadonlyArray<GetChatRunSettingsResponse["settings"]>;
+  readonly reads: ReadonlyArray<ChatRunSettingsRead>;
+}
+
+function readOf(
+  result: UseQueryResult<GetChatRunSettingsResponse, HostRpcError>,
+): ChatRunSettingsRead {
+  if (result.fetchStatus === "fetching") return { kind: "pending" };
+  if (result.status === "success") {
+    return { kind: "answered", settings: result.data.settings };
+  }
+  if (result.status === "error") return { kind: "failed" };
+  return { kind: "unavailable" };
 }
 
 function combineChatRunSettings(
   results: Array<UseQueryResult<GetChatRunSettingsResponse, HostRpcError>>,
 ): ChatRunSettingsBatch {
+  const reads = results.map(readOf);
   return {
-    resolving: results.some(
-      (result) =>
-        result.status === "pending" && result.fetchStatus === "fetching",
-    ),
-    settings: results.map((result) => result.data?.settings ?? null),
+    resolving: reads.some((read) => read.kind === "pending"),
+    reads,
   };
 }
 
 /**
- * Persisted run-settings tuples for a set of chats owned by one host.
+ * Persisted run-settings tuples for a set of chats owned by one host, read
+ * afresh for one explicit check.
  *
  * The caller must establish the ownership boundary before passing `chatIds`:
- * one requester cannot resolve records owned by another host. Keeping the
- * batch on `useHostQueries` starts the independent reads together and reuses
- * the same viewer-scoped cache entries as {@link useChatRunSettings}.
+ * one requester cannot resolve records owned by another host.
+ *
+ * `checkId` is part of the cache key, so each new check reads the host rather
+ * than a tuple cached by an earlier one: a bulk action is about to act on
+ * these answers, and another client may have changed a sibling since. Within a
+ * check the answers are never stale by time; this app's own settings writes
+ * still invalidate them through {@link invalidateChatRunSettings}, and the
+ * refetch that follows reads as `pending` until it lands.
  *
  * Folded through `combine`, so a consumer re-renders when the answer moves,
- * not once per read's own status transitions. Never stale by time: the only
- * writes are this app's own settings mutations, and those invalidate through
- * {@link invalidateChatRunSettings}.
+ * not once per read's own status transitions.
  */
 export function useChatRunSettingsBatch(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatIds: ReadonlyArray<string>;
   readonly enabled: boolean;
+  readonly checkId: number;
 }): ChatRunSettingsBatch {
   const viewerUserId = useCloudChatViewerId();
   const requests = useMemo(
@@ -147,7 +183,7 @@ export function useChatRunSettingsBatch(args: {
     "epic.getChatRunSettings",
     ChatRunSettingsBatch
   >({
-    cacheKeyIdentity: viewerUserId,
+    cacheKeyIdentity: `${viewerUserId}:check-${String(args.checkId)}`,
     client: args.client,
     requests,
     options: {

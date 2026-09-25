@@ -344,6 +344,7 @@ export function ProfileRateLimitSwitchBanner(
                 setIncludeOtherChats(include);
                 if (include) props.onResolveTaskScope();
               }}
+              onRetry={props.onResolveTaskScope}
             />
           ) : null}
         </div>
@@ -361,12 +362,33 @@ function TaskScopeControl(props: {
   readonly checked: boolean;
   readonly pending: boolean;
   readonly onCheckedChange: (include: boolean) => void;
+  /** Reads the siblings again, for the ones that could not be checked. */
+  readonly onRetry: () => void;
 }): ReactNode {
   const checkboxId = useId();
+  const unchecked =
+    props.scope.kind === "resolved" ? props.scope.uncheckedChatCount : 0;
+  // Siblings that could not be read are neither switched nor counted, so the
+  // banner says how many there are - a matched set presented as the whole
+  // task would move some chats and silently leave the rest behind.
+  const uncheckedNotice =
+    unchecked === 0 ? null : (
+      <span className="min-w-0 text-muted-foreground">
+        Couldn&apos;t check {unchecked} other chat{unchecked === 1 ? "" : "s"}.{" "}
+        <Button
+          type="button"
+          variant="link"
+          size="inline"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
+      </span>
+    );
   if (props.scope.kind === "resolved" && props.scope.otherChatCount === 0) {
     return (
       <p className="min-w-0 text-muted-foreground sm:col-start-2 sm:justify-self-end">
-        No other chats in this task use this profile.
+        {uncheckedNotice ?? "No other chats in this task use this profile."}
       </p>
     );
   }
@@ -391,6 +413,7 @@ function TaskScopeControl(props: {
           tone="muted"
         />
       ) : null}
+      {uncheckedNotice}
     </div>
   );
 }

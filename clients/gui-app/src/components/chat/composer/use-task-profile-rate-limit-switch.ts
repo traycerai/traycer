@@ -27,17 +27,28 @@ interface AffectedTaskChat {
  * - `unresolved`: candidates exist and nothing has been read yet.
  * - `resolving`: the reads are in flight.
  * - `resolved`: `otherChatCount` siblings pin the same harness, profile and
- *   model, and `switchOtherTaskChats` moves exactly those.
+ *   model, and `switchOtherTaskChats` moves exactly those. `uncheckedChatCount`
+ *   siblings could not be read (the read failed, or could not run), so whether
+ *   they match is unknown - the switch leaves them alone, and the banner has to
+ *   say so rather than present the matched set as the whole task.
  */
 export type TaskChatScope =
   | { readonly kind: "none" }
   | { readonly kind: "unresolved" }
   | { readonly kind: "resolving" }
-  | { readonly kind: "resolved"; readonly otherChatCount: number };
+  | {
+      readonly kind: "resolved";
+      readonly otherChatCount: number;
+      readonly uncheckedChatCount: number;
+    };
 
 export interface TaskProfileRateLimitSwitch {
   readonly scope: TaskChatScope;
-  /** Starts the sibling reads for the current warning episode. */
+  /**
+   * Reads every candidate sibling afresh for the current warning episode.
+   * Called on each tick of task scope and on a retry - every call is a new
+   * check, never an answer cached by an earlier one.
+   */
   readonly resolveScope: () => void;
   /**
    * Switches every OTHER affected chat to `nextProfileId` via the narrow
@@ -164,13 +175,16 @@ export function useTaskProfileRateLimitSwitch(input: {
     });
   }, [chatId, chatRecords, enabled, epicId, tabHostId]);
 
-  const [requestedEpisodeKey, setRequestedEpisodeKey] = useState<string | null>(
-    null,
-  );
+  // The latest explicit check: which warning episode it was made in, and a
+  // counter that makes each check its own set of reads.
+  const [check, setCheck] = useState<{
+    readonly episodeKey: string | null;
+    readonly id: number;
+  }>({ episodeKey: null, id: 0 });
   const requested =
-    enabled && episodeKey !== null && requestedEpisodeKey === episodeKey;
+    enabled && episodeKey !== null && check.episodeKey === episodeKey;
   const resolveScope = useCallback(() => {
-    setRequestedEpisodeKey(episodeKey);
+    setCheck((previous) => ({ episodeKey, id: previous.id + 1 }));
   }, [episodeKey]);
 
   const batch = useChatRunSettingsBatch({
@@ -178,6 +192,7 @@ export function useTaskProfileRateLimitSwitch(input: {
     epicId: epicId ?? "",
     chatIds: candidateChatIds,
     enabled: requested && epicId !== null && selectedModelSlug !== null,
+    checkId: check.id,
   });
 
   const affected = useMemo<ReadonlyArray<AffectedTaskChat>>(() => {
@@ -185,7 +200,9 @@ export function useTaskProfileRateLimitSwitch(input: {
       return NO_AFFECTED;
     }
     return candidateChatIds.flatMap((candidateChatId, index) => {
-      const settings = batch.settings[index] ?? null;
+      const read = batch.reads.at(index);
+      const settings =
+        read !== undefined && read.kind === "answered" ? read.settings : null;
       if (
         settings === null ||
         !taskChatInheritsProfileSwitch(settings, {
@@ -202,19 +219,32 @@ export function useTaskProfileRateLimitSwitch(input: {
     requested,
     epicId,
     candidateChatIds,
-    batch.settings,
+    batch.reads,
     harnessId,
     profileId,
     selectedModelSlug,
   ]);
 
   const otherChatCount = affected.length;
+  const uncheckedChatCount = useMemo(
+    () =>
+      batch.reads.filter(
+        (read) => read.kind === "failed" || read.kind === "unavailable",
+      ).length,
+    [batch.reads],
+  );
   const scope = useMemo<TaskChatScope>(() => {
     if (candidateChatIds.length === 0) return SCOPE_NONE;
     if (!requested) return SCOPE_UNRESOLVED;
     if (batch.resolving) return SCOPE_RESOLVING;
-    return { kind: "resolved", otherChatCount };
-  }, [batch.resolving, candidateChatIds.length, otherChatCount, requested]);
+    return { kind: "resolved", otherChatCount, uncheckedChatCount };
+  }, [
+    batch.resolving,
+    candidateChatIds.length,
+    otherChatCount,
+    requested,
+    uncheckedChatCount,
+  ]);
 
   const updateChatProfile = useEpicUpdateChatProfile();
   const updateChatProfileMutate = updateChatProfile.mutate;

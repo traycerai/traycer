@@ -127,8 +127,11 @@ function usageEntry(
 
 const SCOPE_NONE: TaskChatScope = { kind: "none" };
 
-function resolvedScope(otherChatCount: number): TaskChatScope {
-  return { kind: "resolved", otherChatCount };
+function resolvedScope(
+  otherChatCount: number,
+  uncheckedChatCount: number,
+): TaskChatScope {
+  return { kind: "resolved", otherChatCount, uncheckedChatCount };
 }
 
 interface BannerInput {
@@ -267,7 +270,7 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const onSwitchProfileForTask = vi.fn();
     renderBanner({
-      taskScope: resolvedScope(2),
+      taskScope: resolvedScope(2, 0),
       onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
@@ -317,7 +320,7 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const onSwitchProfileForTask = vi.fn();
     renderBanner({
-      taskScope: resolvedScope(1),
+      taskScope: resolvedScope(1, 0),
       onResolveTaskScope: () => undefined,
       destinations: [destination(ALTERNATIVE, true), destination(SECOND, true)],
       profiles: [CURRENT, ALTERNATIVE, SECOND],
@@ -337,7 +340,7 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const onSwitchProfileForTask = vi.fn();
     renderBanner({
-      taskScope: resolvedScope(2),
+      taskScope: resolvedScope(2, 0),
       onResolveTaskScope: () => undefined,
       destinations: [destination(UNKNOWN, true)],
       profiles: [CURRENT, UNKNOWN],
@@ -631,7 +634,7 @@ describe("rate-limit banner task scope, read on demand", () => {
     expect(handlers.onSwitchProfile).not.toHaveBeenCalled();
     expect(handlers.onSwitchProfileForTask).not.toHaveBeenCalled();
 
-    view.rerender(bannerElement(baseInput(resolvedScope(2), handlers)));
+    view.rerender(bannerElement(baseInput(resolvedScope(2, 0), handlers)));
 
     expect(
       screen.getByText("Also switch 2 other chats in this task"),
@@ -675,7 +678,7 @@ describe("rate-limit banner task scope, read on demand", () => {
     };
     const view = renderBanner(baseInput({ kind: "unresolved" }, handlers));
     fireEvent.click(screen.getByRole("checkbox"));
-    view.rerender(bannerElement(baseInput(resolvedScope(0), handlers)));
+    view.rerender(bannerElement(baseInput(resolvedScope(0, 0), handlers)));
 
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(
@@ -687,6 +690,61 @@ describe("rate-limit banner task scope, read on demand", () => {
     expect(handlers.onSwitchProfile).toHaveBeenCalledWith(
       ALTERNATIVE.profileId,
     );
+  });
+});
+
+describe("rate-limit banner task scope with siblings it could not check", () => {
+  afterEach(cleanup);
+
+  function input(
+    taskScope: TaskChatScope,
+    onResolveTaskScope: () => void,
+  ): BannerInput {
+    return {
+      taskScope,
+      onResolveTaskScope,
+      destinations: undefined,
+      primaryTarget: undefined,
+      profiles: undefined,
+      onSwitchProfile: () => undefined,
+      onSwitchProfileForTask: () => undefined,
+    };
+  }
+
+  it("says how many it could not check beside the ones it will switch, and Retry reads them again", () => {
+    const onResolveTaskScope = vi.fn();
+    const view = renderBanner(
+      input({ kind: "unresolved" }, onResolveTaskScope),
+    );
+    fireEvent.click(screen.getByRole("checkbox"));
+    view.rerender(
+      bannerElement(input(resolvedScope(2, 1), onResolveTaskScope)),
+    );
+
+    expect(
+      screen.getByText("Also switch 2 other chats in this task"),
+    ).toBeDefined();
+    expect(screen.getByText(/Couldn.t check 1 other chat\./)).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onResolveTaskScope).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not claim no other chat uses the profile when some could not be checked", () => {
+    const onResolveTaskScope = vi.fn();
+    const view = renderBanner(
+      input({ kind: "unresolved" }, onResolveTaskScope),
+    );
+    fireEvent.click(screen.getByRole("checkbox"));
+    view.rerender(
+      bannerElement(input(resolvedScope(0, 3), onResolveTaskScope)),
+    );
+
+    expect(
+      screen.queryByText("No other chats in this task use this profile."),
+    ).toBeNull();
+    expect(screen.getByText(/Couldn.t check 3 other chats\./)).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 });
 
