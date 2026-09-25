@@ -77,6 +77,13 @@ export interface UseHistoryQueryResult {
   readonly isCountPending: boolean;
   error: Error | null;
   hostId: string | null;
+  /**
+   * The identity these rows were scoped to - `resolveCloudTasksUserId`'s
+   * WIDENED answer, which admits an `unverified` session's local plane. Cache
+   * identity for a follow-up read of the same rows (the phone's in-progress
+   * backfill), never an authorization to spend the cloud capability.
+   */
+  readonly currentUserId: string | null;
   refetch: () => Promise<unknown>;
   fetchNextPage: () => void;
   hasNextPage: boolean;
@@ -448,6 +455,7 @@ export function useHistoryQuery(
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    currentUserId,
     refetch,
     fetchNextPage,
     // Pagination follows the plain cloud query; id-fetched local matches are
