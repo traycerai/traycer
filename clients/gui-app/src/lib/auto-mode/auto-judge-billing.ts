@@ -455,3 +455,47 @@ export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
       return "No judge available on this machine · asks you instead";
   }
 }
+
+/**
+ * Why the composer's Auto row is disabled for the turn running now, or `null`
+ * when it is not.
+ *
+ * A flip into Auto mid-turn takes effect at once when Traycer's judge reviews
+ * (the host binds it at its own approval seam), so the row stays live and the
+ * `AUTO_MID_TURN_NOTICE` says so. It cannot when the run's own provider
+ * reviews: that classifier decides inside a session whose mode was fixed when
+ * the turn was spawned, and the host refuses the flip
+ * (`AUTO_MODE_PROVIDER_JUDGE_NEEDS_NEW_TURN`) rather than quietly run
+ * Traycer's judge on a provider the user switched it off for. The row is
+ * disabled with this sentence instead, so the refusal is something the user
+ * reads before choosing, never a toast after.
+ *
+ * Only a flip INTO Auto is locked. A turn already in Auto keeps its judge,
+ * whichever it is.
+ *
+ * A `null` billing - the reads that say which judge reviews have not settled
+ * - locks the row too, with the sentence below rather than the notice. The
+ * host is the gate that cannot be bypassed; this row is the explanation, and
+ * an explanation that says "switches now" for a flip the host is about to
+ * refuse is the toast-after-the-fact this lock exists to prevent. The window
+ * is short (the catalog reads the row already waits on), and a person who
+ * meets it sees why the row is waiting rather than a promise it cannot keep.
+ */
+export function autoModeMidTurnLock(input: {
+  readonly turnActive: boolean;
+  /** Whether the mode on display is already `auto`. */
+  readonly currentModeIsAuto: boolean;
+  readonly judgeBilling: AutoJudgeBilling | null;
+}): string | null {
+  if (!input.turnActive || input.currentModeIsAuto) return null;
+  if (input.judgeBilling === null) return AUTO_MID_TURN_UNRESOLVED_LOCK;
+  if (input.judgeBilling.kind !== "provider-native") return null;
+  return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.`;
+}
+
+/**
+ * The Auto row's sentence while a turn runs and which judge would review it
+ * is still being read. Exported for the picker tests, which pin the copy.
+ */
+export const AUTO_MID_TURN_UNRESOLVED_LOCK =
+  "Still checking which judge reviews this conversation. Auto can be switched on once that's known, or with your next turn.";

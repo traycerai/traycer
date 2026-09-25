@@ -1,10 +1,18 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import {
+  replaceEqualDeep,
+  useQueries,
+  useQueryClient,
+  type Query,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   GET_TASK_CONTEXTS_MAX_IDS,
   isFoundTaskContext,
   type GetTaskContextsResponse,
+  type TaskContextResolution,
+  type TaskContextUnknownReason,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -20,6 +28,10 @@ import {
   useLocalHomedOpenEpicIds,
 } from "@/lib/registries/epic-session-registry";
 import { epicPinReadingListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
+import {
+  epicPinReadingQueryKeyMatchesScope,
+  epicTaskContextsQueryKeyMatchesScope,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import {
   CURRENT_EPIC_VERSION,
   CURRENT_PHASE_VERSION,
@@ -118,18 +130,25 @@ export function useEpicTaskPinnedStates(
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const normalizedIds = useMemo(
-    () =>
-      [...new Set(epicIds)].sort((left, right) => left.localeCompare(right)),
-    [epicIds],
-  );
+  const chunks = useMemo(() => taskPinReadingChunks(epicIds), [epicIds]);
   const requests = useMemo(
     () =>
-      chunkTaskIds(normalizedIds).map((taskIds) => ({
+      chunks.map((taskIds) => ({
         method: "epic.getTaskContexts" as const,
         params: { taskIds: [...taskIds] },
       })),
-    [normalizedIds],
+    [chunks],
+  );
+  // `useQueries` hands `combine` the results in request order, so each
+  // result's requested ids are recoverable by index - which is what lets an id
+  // the settled batch did NOT answer be told apart from one still in flight.
+  const combine = useCallback(
+    (results: UseQueryResult<GetTaskContextsResponse, HostRpcError>[]) =>
+      combineTaskPinnedStateResults(
+        results,
+        requests.map((request) => request.params.taskIds),
+      ),
+    [requests],
   );
 
   const queried = useHostQueries<
@@ -142,10 +161,23 @@ export function useEpicTaskPinnedStates(
     cacheKeyIdentity: userId ?? undefined,
     preflight: cloudVerdictPreflight("epic.getTaskContexts"),
     options: {
-      enabled: cloudAuthorized && userId !== null && normalizedIds.length > 0,
+      enabled: cloudAuthorized && userId !== null && chunks.length > 0,
       staleTime: Infinity,
+      // A retry re-asks a WHOLE chunk (up to 50 ids) for the one row that was
+      // unanswered, so its response replaces rows that already had an answer.
+      // A TRANSIENT `unknown` for one of those must not demote it to "pin
+      // state unknown" - the earlier `found` is the better reading. Only a
+      // transient reason yields: `confirmed-absent` (the task is gone) and an
+      // `unknown` that is an access answer (`denied`,
+      // `not-found-or-not-permitted`) are real answers, and a new `found`
+      // wins outright.
+      structuralSharing: (previous: unknown, incoming: unknown) =>
+        replaceEqualDeep(
+          previous,
+          keepAnsweredOverTransientUnknown(previous, incoming),
+        ),
     },
-    combine: combineTaskPinnedStateResults,
+    combine,
   });
 
   const localRows = useLocalHomedOpenTaskRows(epicIds, userId);
@@ -182,9 +214,11 @@ export function useLocalHomedOpenTaskRows(
   // Keyed on MEMBERSHIP and never on missingness, which is the distinction that
   // keeps this terminating. An epic entering the population changes the key once
   // and costs one fetch; a row the host genuinely omits (it is not that host's,
-  // or it has no durable pin) is then still absent and nothing asks again,
-  // because the population has not changed. A policy of "refetch while some open
-  // epic has no reading" would read its own output and never stop.
+  // or it has no durable pin) is then still absent and nothing asks again on its
+  // own, because the population has not changed. A policy of "refetch while some
+  // open epic has no reading" would read its own output and never stop. The one
+  // re-ask is demand-driven: opening that tab's menu
+  // (`useRetryUnansweredTaskPinReading`), which is not an output of this query.
   const pinReadingPopulations = useMemo(() => {
     const byHost = new Map<string, Array<string>>();
     for (const [epicId, hostId] of localHomedByHost) {
@@ -337,9 +371,9 @@ export function combineLocalPinReadings(
  * answers `pinned` correctly whatever it is - pin is a cloud-only preference
  * and every host proxies it to the cloud - but it can only report local-home
  * for epics it OWNS (`getTaskContextsResponseSchema@1.3` overlays owned rows).
- * So a local-homed epic on another host is not resolved at all: no entry, and
- * the tab strip's Pin item stays disabled behind a spinner instead of saying
- * the epic is stored on the connected device.
+ * So a local-homed epic on another host is not resolved by the batch: it gets
+ * the batch's UNANSWERED entry at best, which carries no `home` - so without
+ * this overlay the menu could not tell it is local-homed at all.
  *
  * The session wins on `home` where the two are both present, deliberately. A
  * live session is the epic's own stream, and the store's own rule is that
@@ -358,8 +392,9 @@ export function combineLocalPinReadings(
  *
  * ONLY covers epics with a live session. An open tab whose session was never
  * mounted since reload, or was pruned past the five-live MRU cap, is absent
- * from `localHomedEpicIds` and keeps today's spinner - see
- * {@link useLocalHomedOpenEpicIds} for what closing that residual would take.
+ * from `localHomedEpicIds` and renders from the batch alone - "pin state
+ * unknown" once it settles without resolving the epic, not a spinner - see
+ * {@link useLocalHomedOpenEpicIds} for what telling it apart would take.
  */
 export function overlayLocalHomedPinnedStates(
   queried: ReadonlyMap<string, TaskPinnedState>,
@@ -399,16 +434,37 @@ export function overlayLocalHomedPinnedStates(
       //    machine. Absent when the session has no serving host, which the pin
       //    gate then refuses rather than sending to the window's host.
       hostId: localHomedHostIds.get(epicId) ?? null,
-      pinnedKnown: localReading !== undefined || resolved !== undefined,
+      // `resolved?.pinnedKnown`, not `resolved !== undefined`: the batch now
+      // also carries an UNANSWERED entry for an id it settled without
+      // resolving, and that entry's `pinned` is filler exactly like ours.
+      pinnedKnown: localReading !== undefined || resolved?.pinnedKnown === true,
     });
   }
   return overlaid;
 }
 
+/**
+ * The batch's readings, plus an UNANSWERED entry for every requested id whose
+ * batch has settled without resolving it.
+ *
+ * Absent and unanswered are different facts, and conflating them was the
+ * forever-spinner: the host leaves an id out of `found` for a cloud leg that
+ * hit the discovery deadline, a 5xx, a denied row or an indeterminate local
+ * lookup, and a whole chunk can error - and with `staleTime: Infinity` nothing
+ * asks again. An absent entry renders "still loading", so the menu spun on a
+ * question nobody was answering. Absent is now reserved for an id whose batch
+ * is actually in flight (or not yet enabled); a settled miss is reported as
+ * `pinnedKnown: false`, which the menu renders as an unavailable reading and
+ * {@link useRetryUnansweredTaskPinReading} re-asks when the menu opens.
+ */
 export function combineTaskPinnedStateResults(
   results: ReadonlyArray<
-    Pick<UseQueryResult<GetTaskContextsResponse, HostRpcError>, "data">
+    Pick<
+      UseQueryResult<GetTaskContextsResponse, HostRpcError>,
+      "data" | "status" | "isFetching"
+    >
   >,
+  requestedTaskIds: ReadonlyArray<ReadonlyArray<string>>,
 ): ReadonlyMap<string, TaskPinnedState> {
   if (results.length === 0) return EMPTY_TASK_PINNED_STATES;
   const pinnedStates = new Map<string, TaskPinnedState>();
@@ -443,7 +499,223 @@ export function combineTaskPinnedStateResults(
       });
     }
   }
+  results.forEach((result, index) => {
+    // In flight (first fetch or a retry): absent, so the menu keeps its
+    // spinner for a question that is being asked. Never enabled (no host, no
+    // verdict yet) is absent too - nothing has been asked, but nothing has
+    // failed either, and the gates that hold it resolve on their own; an
+    // unverified session is labelled by the menu before this is read.
+    if (result.isFetching || result.status === "pending") return;
+    for (const taskId of requestedTaskIds[index] ?? []) {
+      if (pinnedStates.has(taskId)) continue;
+      pinnedStates.set(taskId, {
+        // Filler - `pinnedKnown: false` is what says so, and no consumer may
+        // read "not pinned" out of it.
+        pinned: false,
+        home: undefined,
+        hostId: null,
+        pinnedKnown: false,
+      });
+    }
+  });
   return pinnedStates;
+}
+
+/** Whether a cached `epic.getTaskContexts` response resolved this epic. */
+function taskContextsResponseAnswers(
+  response: GetTaskContextsResponse | undefined,
+  epicId: string,
+): boolean {
+  if (response === undefined) return false;
+  return Object.values(response.tasks).some(
+    (resolution) =>
+      isFoundTaskContext(resolution) &&
+      resolution.task.epic?.light?.id === epicId,
+  );
+}
+
+/** Whether this `epic.getTaskContexts` key asks for exactly `chunk`'s ids. */
+function taskContextsQueryAsksForChunk(
+  queryKey: readonly unknown[],
+  chunk: ReadonlyArray<string>,
+): boolean {
+  const params = queryKey[3];
+  if (
+    params === null ||
+    typeof params !== "object" ||
+    !("taskIds" in params) ||
+    !Array.isArray(params.taskIds)
+  ) {
+    return false;
+  }
+  const taskIds: ReadonlyArray<unknown> = params.taskIds;
+  return (
+    taskIds.length === chunk.length &&
+    taskIds.every((taskId, index) => taskId === chunk[index])
+  );
+}
+
+/**
+ * Whether a cached per-host pin-reading page carries this epic's population,
+ * read off the key (`cloudQueryKeys.epicPinReading`: the sorted population sits
+ * just before the trailing marker). A host's population holds only the epics
+ * that host's live sessions own, so this alone selects the OWNING host's read.
+ */
+function pinReadingQueryAsksFor(
+  queryKey: readonly unknown[],
+  epicId: string,
+): boolean {
+  const population = queryKey[queryKey.length - 2];
+  return Array.isArray(population) && population.includes(epicId);
+}
+
+/**
+ * Re-asks for one tab's pin reading when the source that renders it settled
+ * without an answer - called when the tab's context menu opens, which is the
+ * moment the reading is needed.
+ *
+ * Two sources, because two authorities render the pin:
+ *
+ * - a CLOUD-homed row reads the window host's `epic.getTaskContexts` batch -
+ *   the tab strip's OWN chunk for this epic, named exactly through
+ *   {@link taskPinReadingChunks}, never another surface's title lookup that
+ *   happens to contain the id;
+ * - a LOCAL-homed row reads its owning host's pin-reading list page
+ *   (`overlayLocalHomedPinnedStates`), and the window's batch cannot stand in
+ *   for it - that host does not own the epic, so it cannot resolve it.
+ *
+ * Exactly one source is re-asked per row, and only a query that asks for this
+ * epic AND whose cached answer does not cover it - judged by the same readers
+ * the renderer uses, so a query that already answered is never re-asked.
+ *
+ * Demand-driven rather than a poll on purpose: an id a host keeps leaving
+ * unanswered (a denied row, a cloud that stays unreachable, a local row with
+ * no durable pin) would otherwise cost a round trip forever, and an open menu
+ * is a bounded number of asks. This is also what keeps the pin-reading key's
+ * membership-not-missingness rule terminating: that rule forbids refetching
+ * because a reading is MISSING, which would read its own output; a person
+ * opening a menu is not an output of the query. An in-flight fetch is joined
+ * rather than restarted (`cancelRefetch: false`), and a disabled one - no
+ * verdict, no host - is skipped by `refetchQueries`, which keeps each query's
+ * own gate the only one.
+ */
+export function useRetryUnansweredTaskPinReading(
+  epicIds: ReadonlyArray<string>,
+): (epicId: string) => void {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  // The same chunks `useEpicTaskPinnedStates` asks in, for the same ids.
+  const chunks = useMemo(() => taskPinReadingChunks(epicIds), [epicIds]);
+  return useCallback(
+    (epicId: string) => {
+      if (userId === null) return;
+      const scope = { hostId: null, userId };
+      // Which authority renders this row. A pin-reading population exists
+      // exactly for the local-homed epics a live session reports, which is the
+      // same set the overlay marks `home: "local"` - so its presence picks the
+      // owning host's read, and the window's batch is left alone: that host
+      // does not own the epic, and re-asking it would spend a cloud round trip
+      // on a question it cannot answer.
+      const asksForPinReading = (query: Query): boolean =>
+        epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) &&
+        pinReadingQueryAsksFor(query.queryKey, epicId);
+      const stripChunk = chunks.find((chunk) => chunk.includes(epicId));
+      const localHomed =
+        queryClient
+          .getQueryCache()
+          .findAll({ type: "active", predicate: asksForPinReading }).length > 0;
+      void queryClient.refetchQueries(
+        {
+          type: "active",
+          predicate: localHomed
+            ? (query) =>
+                asksForPinReading(query) &&
+                !combineLocalPinReadings([
+                  {
+                    data: queryClient.getQueryData<ListTasksResponse>(
+                      query.queryKey,
+                    ),
+                  },
+                ]).has(epicId)
+            : (query) =>
+                stripChunk !== undefined &&
+                epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
+                taskContextsQueryAsksForChunk(query.queryKey, stripChunk) &&
+                !taskContextsResponseAnswers(
+                  queryClient.getQueryData<GetTaskContextsResponse>(
+                    query.queryKey,
+                  ),
+                  epicId,
+                ),
+        },
+        { cancelRefetch: false },
+      );
+    },
+    [chunks, queryClient, userId],
+  );
+}
+
+/**
+ * The id chunks the tab strip's batch asks in, one per `epic.getTaskContexts`
+ * request. Shared by {@link useEpicTaskPinnedStates} and
+ * {@link useRetryUnansweredTaskPinReading} so the retry can name the strip's
+ * OWN queries exactly: other surfaces run `epic.getTaskContexts` title
+ * lookups over the same method and user, and a predicate that matched any
+ * query containing the id would re-spend their cloud batches too.
+ */
+export function taskPinReadingChunks(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyArray<ReadonlyArray<string>> {
+  return chunkTaskIds(
+    [...new Set(epicIds)].sort((left, right) => left.localeCompare(right)),
+  );
+}
+
+/**
+ * `unknown` reasons that are an ANSWER about access rather than a failure to
+ * answer: the account lost the task, or was never shown it. Keeping an earlier
+ * `found` over one of these would leave a live Pin control on a task the
+ * account can no longer write, so they replace it like `confirmed-absent`.
+ */
+const ACCESS_ANSWER_REASONS: ReadonlySet<TaskContextUnknownReason> =
+  new Set<TaskContextUnknownReason>(["denied", "not-found-or-not-permitted"]);
+
+/** See the `structuralSharing` note in {@link useEpicTaskPinnedStates}. */
+export function keepAnsweredOverTransientUnknown(
+  previous: unknown,
+  incoming: unknown,
+): unknown {
+  if (!isTaskContextsResponse(previous) || !isTaskContextsResponse(incoming)) {
+    return incoming;
+  }
+  let tasks: Record<string, TaskContextResolution> | null = null;
+  for (const [taskId, resolution] of Object.entries(incoming.tasks)) {
+    // Typed as possibly absent: a record index is, whatever the record's type
+    // says, and `isFoundTaskContext` takes the absence.
+    const earlier: TaskContextResolution | undefined = previous.tasks[taskId];
+    if (
+      resolution.status !== "unknown" ||
+      ACCESS_ANSWER_REASONS.has(resolution.reason) ||
+      !isFoundTaskContext(earlier)
+    ) {
+      continue;
+    }
+    tasks ??= { ...incoming.tasks };
+    tasks[taskId] = earlier;
+  }
+  return tasks === null ? incoming : { ...incoming, tasks };
+}
+
+function isTaskContextsResponse(
+  value: unknown,
+): value is GetTaskContextsResponse {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "tasks" in value &&
+    value.tasks !== null &&
+    typeof value.tasks === "object"
+  );
 }
 
 export function chunkTaskIds(

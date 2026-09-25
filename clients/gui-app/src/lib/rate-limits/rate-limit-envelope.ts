@@ -118,7 +118,8 @@ export interface ProviderRateLimitEnvelope {
 
 /**
  * Whether `response` carries a snapshot for a provider whose `providers.list`
- * profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
+ * profile rows report cached `rateLimitStatus` for managed profiles:
+ * claude-code, codex, grok, or antigravity.
  * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence
  * invalidation isn't spent on a provider that could never affect the
  * switch-prompt banner. Failed probes (`available: false` - timeout,
@@ -134,7 +135,8 @@ function isManagedProfileCapableRateLimitsResponse(
     provider.available &&
     (provider.provider === "codex" ||
       provider.provider === "claude-code" ||
-      provider.provider === "grok")
+      provider.provider === "grok" ||
+      provider.provider === "antigravity")
   );
 }
 

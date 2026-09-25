@@ -155,6 +155,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       pickerStore={createComposerPickerStore()}
       editorRef={{ current: null }}
       toolbarStore={toolbarStore}
+      expansion={null}
       hostId={hostId}
       composerMode={composerMode}
       chatEditorIsActive={composerMode === "chat"}

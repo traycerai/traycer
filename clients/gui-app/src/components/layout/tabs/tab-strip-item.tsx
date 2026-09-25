@@ -71,6 +71,7 @@ import {
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import { isPreservedOrphanEpic } from "@/components/layout/tabs/preserved-orphan-epic";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
@@ -117,6 +118,8 @@ interface TabItemProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** Re-asks for this epic's pin reading when the menu opens without one. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
 export interface HeaderTabDndConfig {
@@ -194,6 +197,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     taskPinnedState,
     isTaskPinPending,
     onSetTaskPinned,
+    onTaskPinMenuOpen,
   } = props;
   const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
   const appearance = tabAppearance(tab);
@@ -462,6 +466,27 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     },
     [displayName, onSetTaskPinned, tab],
   );
+  // Opening the menu is when the pin reading is needed, so a missing one is
+  // re-asked HERE: the batch is `staleTime: Infinity`, and a settled miss (a
+  // cloud leg past its deadline, an errored chunk) was otherwise never retried.
+  //
+  // Not for a row whose menu can never use the answer, because each re-ask can
+  // be a cloud batch: a preserved orphan's cloud row is gone, so its miss is
+  // permanent and the item says "task deleted" whatever comes back; and a
+  // local-homed row with no serving host has no owning host to ask, while the
+  // window's batch cannot resolve an epic it does not own. Both are read at
+  // the moment of opening rather than subscribed per tab.
+  const pinReadingKnown = taskPinnedState?.pinnedKnown === true;
+  const localHomedWithoutHost =
+    taskPinnedState?.home === "local" && taskPinnedState.hostId === null;
+  const handleContextMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open || tabEpicId === null || pinReadingKnown) return;
+      if (localHomedWithoutHost || isPreservedOrphanEpic(tabEpicId)) return;
+      onTaskPinMenuOpen(tabEpicId);
+    },
+    [localHomedWithoutHost, onTaskPinMenuOpen, pinReadingKnown, tabEpicId],
+  );
 
   const leaderBadge: LeaderBadge | null =
     modifier === null
@@ -477,7 +502,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           ),
         };
   const control = (
-    <ContextMenu>
+    <ContextMenu onOpenChange={handleContextMenuOpenChange}>
       <ContextMenuTrigger asChild>
         <div
           ref={combinedRef}

@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangleIcon,
+  ArrowLeftIcon,
   HistoryIcon,
   InfoIcon,
   Maximize2Icon,
@@ -52,6 +53,7 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useArtifactVersionHistoryAvailable } from "@/hooks/epic/use-artifact-version-history-available";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { isEditableRole } from "@/lib/epic-permissions";
 import {
@@ -61,6 +63,7 @@ import {
 import { epicMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 interface RestorePreflight {
   readonly imagesMissing: readonly string[];
@@ -388,6 +391,12 @@ function ArtifactVersionHistoryPanel(props: {
   const permissionRole = useEpicPermissionRole();
   const canRestore = supportsRestore && isEditableRole(permissionRole);
   const [maximized, setMaximized] = useState(false);
+  // A phone has no room beside the artifact, so the panel always covers the
+  // tile there and shows ONE pane at a time: the list, then the version a tap
+  // picked, with a back control. Desktop keeps both panes side by side.
+  const phone = useIsMobileViewport();
+  const [detailOpen, setDetailOpen] = useState(false);
+  const covering = phone || maximized;
   const panelWidthPx = useArtifactVersionHistoryPanelWidthPx();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] =
@@ -454,6 +463,11 @@ function ArtifactVersionHistoryPanel(props: {
     availableEntries.at(0) ??
     null;
   const comparison = comparisonFor(entries, selected);
+  // A refresh can drop the picked version with nothing to fall back to; the
+  // list is then the only pane with anything to show.
+  const detailShown = phone && detailOpen && selected !== null;
+  const showList = !detailShown;
+  const showDetail = !phone || detailShown;
   const selectedBlob = useHostQuery({
     client: props.client,
     method: "epic.artifactVersions.getBlob",
@@ -602,35 +616,42 @@ function ArtifactVersionHistoryPanel(props: {
         // body always keeps space. Maximized covers the tile instead.
         className={cn(
           "flex min-w-0 shrink-0 flex-col border-l border-border bg-background",
-          maximized
+          covering
             ? "absolute inset-0 z-20 w-full border-l-0"
             : "relative max-w-[70%]",
         )}
-        style={maximized ? undefined : { width: panelWidthPx }}
+        style={covering ? undefined : { width: panelWidthPx }}
       >
-        {maximized ? null : <ArtifactVersionHistoryPanelResizeHandle />}
-        <header className="flex min-w-0 shrink-0 items-center gap-2 border-b px-2 py-1.5">
+        {covering ? null : <ArtifactVersionHistoryPanelResizeHandle />}
+        <header
+          data-mobile-shell-touch-scope={phone ? "" : undefined}
+          className="flex min-w-0 shrink-0 items-center gap-2 border-b px-2 py-1.5"
+        >
           <h2 className="min-w-0 flex-1 truncate px-1 text-ui-sm font-medium">
             Version history
           </h2>
           <div className="flex shrink-0 items-center gap-0.5">
-            <TooltipWrapper
-              label={maximized ? "Restore panel size" : "Maximize panel"}
-              side="bottom"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="muted"
-                aria-label={maximized ? "Restore panel size" : "Maximize panel"}
-                data-testid="artifact-version-history-maximize"
-                onClick={() => setMaximized((current) => !current)}
+            {phone ? null : (
+              <TooltipWrapper
+                label={maximized ? "Restore panel size" : "Maximize panel"}
+                side="bottom"
+                sideOffset={undefined}
+                align={undefined}
               >
-                {maximized ? <Minimize2Icon /> : <Maximize2Icon />}
-              </Button>
-            </TooltipWrapper>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="muted"
+                  aria-label={
+                    maximized ? "Restore panel size" : "Maximize panel"
+                  }
+                  data-testid="artifact-version-history-maximize"
+                  onClick={() => setMaximized((current) => !current)}
+                >
+                  {maximized ? <Minimize2Icon /> : <Maximize2Icon />}
+                </Button>
+              </TooltipWrapper>
+            )}
             <TooltipWrapper
               label="Close history"
               side="bottom"
@@ -651,8 +672,22 @@ function ArtifactVersionHistoryPanel(props: {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(13rem,0.7fr)_minmax(0,1.3fr)] overflow-hidden">
-          <div className="min-h-0 overflow-y-auto border-r">
+        <div
+          className={cn(
+            "grid min-h-0 flex-1 overflow-hidden",
+            phone
+              ? "grid-cols-1"
+              : "grid-cols-[minmax(13rem,0.7fr)_minmax(0,1.3fr)]",
+          )}
+        >
+          <div
+            data-testid="artifact-version-history-list"
+            className={cn(
+              "min-h-0 overflow-y-auto",
+              !phone && "border-r",
+              !showList && "hidden",
+            )}
+          >
             {settings.data?.settings.enabled === false ? (
               <div className="m-3 rounded-lg border border-info/30 bg-info/10 p-3 text-ui-sm">
                 <p className="font-medium">
@@ -690,7 +725,10 @@ function ArtifactVersionHistoryPanel(props: {
               entries={availableEntries}
               selectedId={selected === null ? null : selected.observationId}
               outcome={outcome}
-              onSelect={setSelectedId}
+              onSelect={(observationId) => {
+                setSelectedId(observationId);
+                setDetailOpen(true);
+              }}
               onOpenChat={openProvenanceChat}
             />
             {nextCursor === null ? null : (
@@ -721,39 +759,42 @@ function ArtifactVersionHistoryPanel(props: {
               </p>
             ) : null}
           </div>
-          <VersionDiffView
-            artifactId={props.artifactId}
-            selected={selected}
-            comparisonKind={comparison?.kind ?? null}
-            comparisonObservationId={
-              comparison?.kind === "parent"
-                ? comparison.entry.observationId
-                : null
-            }
-            beforeMarkdown={
-              comparison?.kind === "parent"
-                ? (comparisonBlob.data?.markdown ?? null)
-                : null
-            }
-            afterMarkdown={selectedBlob.data?.markdown ?? null}
-            loading={selectedBlob.isLoading || comparisonBlob.isLoading}
-            failed={selectedBlob.isError || comparisonBlob.isError}
-            canRestore={canRestore}
-            outcome={
-              outcome !== null &&
-              selected !== null &&
-              outcome.observationId === selected.observationId
-                ? outcome.status
-                : null
-            }
-            onRetry={() => {
-              if (selectedBlob.isError) void selectedBlob.refetch();
-              if (comparisonBlob.isError) void comparisonBlob.refetch();
-            }}
-            onRestore={() => {
-              if (selected !== null) requestPreflight(selected, false);
-            }}
-          />
+          {showDetail ? (
+            <VersionDiffView
+              artifactId={props.artifactId}
+              selected={selected}
+              comparisonKind={comparison?.kind ?? null}
+              comparisonObservationId={
+                comparison?.kind === "parent"
+                  ? comparison.entry.observationId
+                  : null
+              }
+              beforeMarkdown={
+                comparison?.kind === "parent"
+                  ? (comparisonBlob.data?.markdown ?? null)
+                  : null
+              }
+              afterMarkdown={selectedBlob.data?.markdown ?? null}
+              loading={selectedBlob.isLoading || comparisonBlob.isLoading}
+              failed={selectedBlob.isError || comparisonBlob.isError}
+              canRestore={canRestore}
+              outcome={
+                outcome !== null &&
+                selected !== null &&
+                outcome.observationId === selected.observationId
+                  ? outcome.status
+                  : null
+              }
+              onRetry={() => {
+                if (selectedBlob.isError) void selectedBlob.refetch();
+                if (comparisonBlob.isError) void comparisonBlob.refetch();
+              }}
+              onRestore={() => {
+                if (selected !== null) requestPreflight(selected, false);
+              }}
+              onBack={phone ? () => setDetailOpen(false) : null}
+            />
+          ) : null}
         </div>
       </aside>
 
@@ -984,6 +1025,8 @@ function VersionDiffView(props: {
   readonly outcome: OutcomeNotice["status"] | null;
   readonly onRetry: () => void;
   readonly onRestore: () => void;
+  /** Returns to the version list; `null` where the list is already beside. */
+  readonly onBack: (() => void) | null;
 }): ReactNode {
   const unchanged =
     props.comparisonKind === "parent" &&
@@ -1025,14 +1068,32 @@ function VersionDiffView(props: {
           marked Body only.
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5">
-        <div className="min-w-0">
-          <p className="text-ui-sm font-medium">
-            {formatCapturedAt(props.selected.capturedAt)}
-          </p>
-          <p className="text-ui-xs text-muted-foreground">
-            {comparisonLabel(props.comparisonKind)}
-          </p>
+      <div
+        data-mobile-shell-touch-scope={props.onBack === null ? undefined : ""}
+        className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          {props.onBack === null ? null : (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label="Back to versions"
+              data-testid="artifact-version-history-back"
+              onClick={props.onBack}
+            >
+              <ArrowLeftIcon />
+              Back
+            </Button>
+          )}
+          <div className="min-w-0">
+            <p className="text-ui-sm font-medium">
+              {formatCapturedAt(props.selected.capturedAt)}
+            </p>
+            <p className="text-ui-xs text-muted-foreground">
+              {comparisonLabel(props.comparisonKind)}
+            </p>
+          </div>
         </div>
         <Button
           size="sm"
