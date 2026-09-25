@@ -232,6 +232,24 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       .filter((line): line is string => line !== null)
       .join("\n");
   }
+  if (rateLimits.provider === "antigravity") {
+    // One line per window, labelled by the group Google names ("Gemini Models
+    // 5h"). A group that carries no window still gets a line, so an
+    // informational group is not silently dropped.
+    return [
+      `plan: ${rateLimits.planName ?? "unknown"}`,
+      ...rateLimits.groups.flatMap((group) =>
+        group.windows.length === 0
+          ? [`${group.displayName}: no limits reported`]
+          : group.windows.map((window) =>
+              formatWindowLine(
+                `${group.displayName} ${window.windowKind ?? window.bucketId}`,
+                window,
+              ),
+            ),
+      ),
+    ].join("\n");
+  }
   return [
     `credit balance: ${formatNumber(rateLimits.creditBalance)}`,
     `pass: ${rateLimits.passState ?? "unknown"}`,

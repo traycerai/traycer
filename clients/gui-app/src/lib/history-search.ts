@@ -5,7 +5,10 @@ import type {
   HistorySortOption,
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
-import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
+import {
+  dedupSortWorkspaces,
+  DEFAULT_SORT,
+} from "@/components/home/data/home-page.data";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 const historyMatchModeSchema = z.enum(["any", "all"]);
@@ -97,6 +100,31 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
   sort: "recent",
   sortExplicit: false,
 };
+
+/**
+ * Is History showing anything other than the account's whole task feed, in its
+ * default order?
+ *
+ * The union of every narrowing the user can apply - the text query, the facet
+ * filters, and an explicitly chosen non-default sort. Callers that must not
+ * second-guess an explicit request read this: the empty state explains the
+ * narrowing, and the phone's in-progress lift stands down under it (see
+ * `withInProgressFirst`), because reordering - or backfilling - a feed the
+ * user has deliberately narrowed contradicts what they asked for.
+ */
+export function hasActiveHistoryFilters(search: HistorySearchState): boolean {
+  return (
+    (search.labelNames?.length ?? 0) > 0 ||
+    (search.groupIds?.length ?? 0) > 0 ||
+    !!search.includeUngrouped ||
+    search.repos.length > 0 ||
+    search.workspaces.length > 0 ||
+    search.chatHosts.length > 0 ||
+    search.ownershipScopes.length > 0 ||
+    (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
+    search.query.trim().length > 0
+  );
+}
 
 const persistedHistorySearchSchema = z.object({
   labelNames: z.array(z.string()).optional(),

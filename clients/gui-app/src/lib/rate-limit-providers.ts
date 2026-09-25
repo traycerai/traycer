@@ -22,7 +22,8 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  * the polling scheduler branches on:
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
- *   plain HTTP call (openrouter, kilocode, huggingface, opencode, cursor).
+ *   plain HTTP call (openrouter, kilocode, huggingface, opencode, cursor,
+ *   antigravity).
  *   Cheap, so their observers opt into the table-owned fixed cadence and fetch
  *   for themselves.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
@@ -75,14 +76,16 @@ export function rateLimitFetchLane(
   providerId: RateLimitProviderId,
 ): RateLimitFetchLane {
   switch (providerId) {
+    // Cursor takes two round trips (the API key mints a dashboard session
+    // before the usage read) and Antigravity three (a token exchange, then two
+    // Cloud Code POSTs), but both are still credential-and-fetch - no
+    // subprocess - so they keep the table-owned fixed cadence.
     case "openrouter":
     case "kilocode":
     case "huggingface":
     case "opencode":
     case "cursor":
-      // Two round trips (the API key mints a dashboard session before the
-      // usage read), but still credential-and-fetch - no subprocess - so it
-      // keeps the table-owned fixed cadence.
+    case "antigravity":
       return "httpFetch";
     case "codex":
     case "claude-code":

@@ -244,8 +244,9 @@ describe("supportedTabsFor", () => {
 
   describe("the usage tab's label", () => {
     // The tab holds managed profiles AND usage limits, but profiles exist for
-    // Claude Code, Codex, and Grok - so a fixed "Profiles & Limits" promised a
-    // section that is not there on the other providers.
+    // Claude Code, Codex, Grok, and Antigravity - so a fixed
+    // "Profiles & Limits" promised a section that is not there on the other
+    // providers.
     const LABELS = {
       general: "CLI & Args",
       permissions: "Permissions",
@@ -259,7 +260,12 @@ describe("supportedTabsFor", () => {
     } as const;
 
     it("promises profiles only where profiles exist", () => {
-      for (const providerId of ["claude-code", "codex", "grok"] as const) {
+      for (const providerId of [
+        "claude-code",
+        "codex",
+        "grok",
+        "antigravity",
+      ] as const) {
         expect(providerTabLabel("usage", LABELS, providerId)).toBe(
           "Profiles & Limits",
         );
@@ -271,7 +277,11 @@ describe("supportedTabsFor", () => {
       // Every provider id except the profile-backed ones, so a newly added
       // provider cannot regress to the profiles label without failing here.
       const everywhereElse = providerIdSchema.options.filter(
-        (id) => id !== "claude-code" && id !== "codex" && id !== "grok",
+        (id) =>
+          id !== "claude-code" &&
+          id !== "codex" &&
+          id !== "grok" &&
+          id !== "antigravity",
       );
       for (const providerId of everywhereElse) {
         expect(providerTabLabel("usage", LABELS, providerId)).toBe(
