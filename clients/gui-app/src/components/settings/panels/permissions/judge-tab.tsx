@@ -36,7 +36,6 @@ import {
   HarnessModelPicker,
   type HarnessModelPickerEmbedding,
 } from "@/components/home/pickers/harness-model-picker";
-import type { ProviderId } from "@/components/home/data/landing-options";
 import {
   profileAccentDotInput,
   profileDisplayLabel,
@@ -55,7 +54,6 @@ import {
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import {
-  judgeSwitchModel,
   judgeWarningCause,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -83,6 +81,7 @@ import {
   judgePickAccount,
   judgePickerDisabled,
   judgeSeedSelection,
+  judgeSelectionMarked,
   judgeStoreSelection,
   judgeTileOpensPicker,
   judgeTileState,
@@ -177,7 +176,15 @@ function useJudgePick(stored: AutoJudgeSelection | null): JudgePick {
       if (selection !== null && selection.model.length === 0) return;
       lastDraftId.current += 1;
       const id = lastDraftId.current;
-      setDraft({ id, selection });
+      // A switch to Automatic records the pick it clears - what the tiles
+      // present right now, which can be a pick still saving - so the second
+      // tile keeps it on show, dimmed, until the host's own `lastSelection`
+      // takes over.
+      setDraft((current) => ({
+        id,
+        selection,
+        clearing: selection === null ? presentedPick(current, stored) : null,
+      }));
       const settle = (): void => {
         setDraft((current) => (current?.id === id ? null : current));
       };
@@ -185,13 +192,21 @@ function useJudgePick(stored: AutoJudgeSelection | null): JudgePick {
       // only draft whose settlement may clear the tiles.
       mutateJudge({ selection }, { onSuccess: settle, onError: settle });
     },
-    [mutateJudge],
+    [mutateJudge, stored],
   );
   return {
     draft,
-    displayed: draft === null ? stored : draft.selection,
+    displayed: presentedPick(draft, stored),
     request,
   };
+}
+
+/** The selection the tiles present: the latest pick, else the stored one. */
+function presentedPick(
+  draft: JudgeDraft | null,
+  stored: AutoJudgeSelection | null,
+): AutoJudgeSelection | null {
+  return draft === null ? stored : draft.selection;
 }
 
 /**
@@ -218,6 +233,36 @@ function useShownPickModels(
 }
 
 /**
+ * Re-reads this machine's judge whenever the window gains focus, even while
+ * the cached answer is fresh, so an open tab follows a change made in another
+ * window or on another device. The window's own `focus` event, not TanStack's
+ * focus manager: that one follows `visibilitychange`, which never fires when
+ * focus moves between two visible windows.
+ *
+ * A plain refetch, never an invalidation: the verdict reader withholds an
+ * invalidated answer, and this one is only being re-asked - its line stays up
+ * until the new answer replaces it. A pick made on this card still wins until
+ * its save settles: the tiles present the draft over the record, and the save
+ * cancels any read in flight before it writes its echo.
+ *
+ * Scoped to this tab. The composer's readers keep re-reading on mount only.
+ */
+function useRefetchOnWindowFocus(refetch: () => Promise<unknown>): void {
+  const onFocus = useEffectEvent(() => {
+    void refetch();
+  });
+  useEffect(() => {
+    const listener = (): void => {
+      onFocus();
+    };
+    window.addEventListener("focus", listener);
+    return () => {
+      window.removeEventListener("focus", listener);
+    };
+  }, []);
+}
+
+/**
  * The Auto mode judge card: a lead line, the lines about what could not be
  * read, and the two tiles.
  */
@@ -229,14 +274,15 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
   // accounts.
   const query = useAutoJudgeQuery();
   const verdict = useAutoJudgeVerdict();
+  useRefetchOnWindowFocus(query.refetch);
   const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
     subscribed: true,
   });
   const harnesses = harnessesQuery.data?.harnesses;
-  const providers = useProvidersList({ enabled: true, subscribed: true }).data
-    ?.providers;
+  const providersQuery = useProvidersList({ enabled: true, subscribed: true });
+  const providers = providersQuery.data?.providers;
   const record = query.data;
   const pick = useJudgePick(record?.selection ?? null);
   const shownModels = useShownPickModels(
@@ -247,6 +293,9 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
     record,
     draft: pick.draft,
     canWrite,
+    catalogsAnswered:
+      (harnesses !== undefined || harnessesQuery.isError) &&
+      (providers !== undefined || providersQuery.isError),
     harnesses,
     providers,
     shownModels,
@@ -323,14 +372,21 @@ function JudgeTiles(props: JudgeTilesProps): ReactNode {
   const opensPicker = judgeTileOpensPicker(state);
   const inert = state.row === "loading" || state.readOnly;
 
+  // Every choice made on the card itself first ends a provider switch still
+  // waiting for its models: the latest click wins, and that switch must not
+  // land after it. Choosing Automatic ends one even when Automatic is already
+  // on - it is an explicit "Automatic".
   const chooseAutomatic = (): void => {
+    picker.toolbar.dropPending();
     if (pick.displayed !== null) pick.request(null);
   };
   // What choosing the second tile does in each row: nothing when it is
   // already chosen, bring the last pick back when it can run, and open the
-  // picker when there is none or it cannot.
+  // picker when there is none or it cannot. Opening the picker is not a
+  // choice, so a switch still waiting there survives it.
   const choosePick = (): void => {
     if (state.row === "last-runs" && state.shown !== null) {
+      picker.toolbar.dropPending();
       pick.request(state.shown);
     } else if (opensPicker) {
       picker.open();
@@ -631,6 +687,10 @@ interface JudgePicker {
 
 function useJudgePicker(props: JudgeTilesProps): JudgePicker {
   const { state, harnesses } = props;
+  // The picker reports its open state to nobody; its face reads it off the
+  // trigger's `aria-expanded` and hands it here.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const selectionMarked = judgeSelectionMarked(state);
   const toolbar = useJudgeToolbarStore({
     seedRow: state.row,
     seed: judgeSeedSelection({
@@ -638,13 +698,13 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
       effective: props.record?.effective,
       harnesses,
     }),
+    // Marked is exactly "the seed is the pick on show".
+    seedIsPick: selectionMarked,
+    pickerOpen,
     harnesses,
     onPick: props.pick.request,
   });
 
-  // The picker reports its open state to nobody; its face reads it off the
-  // trigger's `aria-expanded` and hands it here.
-  const [pickerOpen, setPickerOpen] = useState(false);
   const settleOnClose = useEffectEvent(() => {
     toolbar.settleOnClose();
   });
@@ -663,11 +723,7 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
     }),
   );
   const openRef = useRef<(() => void) | null>(null);
-  const providerSwitchModel = useCallback(
-    (harnessId: ProviderId) => judgeSwitchModel(harnesses, harnessId),
-    [harnesses],
-  );
-  const selectionMarked = state.row === "picked";
+  const { providerSwitchModel } = toolbar;
   const embedding = useMemo<HarnessModelPickerEmbedding>(
     () => ({
       trigger: <JudgeModelFace face={face} onExpandedChange={setPickerOpen} />,

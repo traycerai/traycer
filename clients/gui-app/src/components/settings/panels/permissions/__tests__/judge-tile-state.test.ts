@@ -47,6 +47,7 @@ function state(
     record,
     draft: null,
     canWrite: true,
+    catalogsAnswered: true,
     harnesses: HARNESSES,
     providers: [],
     shownModels: CLAUDE_MODELS,
@@ -69,7 +70,7 @@ describe("lastJudgePick", () => {
     expect(
       lastJudgePick(
         { selection: CLAUDE, lastSelection: CODEX },
-        { id: 1, selection: null },
+        { id: 1, selection: null, clearing: CLAUDE },
       ),
     ).toBe(CLAUDE);
   });
@@ -78,13 +79,13 @@ describe("lastJudgePick", () => {
     expect(
       lastJudgePick(
         { selection: null, lastSelection: CODEX },
-        { id: 1, selection: null },
+        { id: 1, selection: null, clearing: null },
       ),
     ).toBe(CODEX);
     expect(
       lastJudgePick(
         { selection: CLAUDE, lastSelection: CODEX },
-        { id: 1, selection: CODEX },
+        { id: 1, selection: CODEX, clearing: null },
       ),
     ).toBe(CODEX);
   });
@@ -116,11 +117,16 @@ describe("judgeTileState", () => {
   it("picked, with the latest draft's selection winning over the stored one", () => {
     expect(state({ selection: CLAUDE }, {}).row).toBe("picked");
     expect(
-      state({ selection: CLAUDE }, { draft: { id: 1, selection: CODEX } })
-        .shown,
+      state(
+        { selection: CLAUDE },
+        { draft: { id: 1, selection: CODEX, clearing: null } },
+      ).shown,
     ).toBe(CODEX);
     expect(
-      state({ selection: null }, { draft: { id: 1, selection: CODEX } }).row,
+      state(
+        { selection: null },
+        { draft: { id: 1, selection: CODEX, clearing: null } },
+      ).row,
     ).toBe("picked");
   });
 

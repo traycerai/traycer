@@ -3917,6 +3917,16 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     - The SELECTION comes from `useAutoJudgeQuery`, at Settings' 60 s
       `staleTime`. It seeds the tiles and is what a pick hands off to, so an
       aged or invalidated copy still shows what is stored.
+    - **The tab re-reads the machine whenever the window gains focus**, and
+      each time it opens, even while its copy is fresh, so an open tab
+      follows a judge changed in another window or on another device. It
+      listens for the window's own `focus` event: TanStack's focus manager
+      follows `visibilitychange`, which never fires when focus moves between
+      two visible windows. It is a plain refetch, never an invalidation, so
+      the verdict line stays up until the new answer replaces it. A pick made
+      on the card still wins until its save settles: the tiles present it over
+      the record, and the save cancels a read in flight before writing its
+      echo. Only this tab does it; the composer's readers re-read on mount.
     - The VERDICT (`effective`, `blocked`) comes from `useAutoJudgeVerdict`,
       the composer's own rule (`useAutoJudgeVerdictForClient`, which
       `use-auto-judge-billing.ts` reads too). A record the host has
@@ -3957,10 +3967,15 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         the face, so the picker draws no chip and no tooltip. A provider
         switch (rail click, ⌘-digit, an account on another provider) commits
         `judgeSwitchModel`: the row's `judgeDefaultModel` (only Claude Code
-        names one), else `""`, meaning that provider's catalog default once
-        it loads. `selectionMarked` is true only while a pick is on screen,
-        so nothing is checked before a first pick. Closing returns focus to
-        the face, never to a composer.
+        names one), else `""`, meaning that provider's first catalog model
+        once it loads, as in the composer. A click on the provider already
+        selected is not a switch: it keeps the model on show, as the
+        composer's same click restores that provider's remembered model, so
+        it saves nothing. `selectionMarked` is true only while a pick this
+        build can name is on screen (`judgeSelectionMarked`), so nothing is
+        checked before a first pick, and a stored harness this build does not
+        know - whose store holds the unpicked seed - checks no unrelated row.
+        Closing returns focus to the face, never to a composer.
       - `runTargetHostId` and `createProfileHostId` are both the gate's
         `hostId`. It is concrete whenever Settings is scoped to a machine, so
         the catalog reads and "Create new profile" (which mounts outside the
@@ -3979,20 +3994,30 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         model on that provider. It is fed the scoped host's harness list and
         the models of the STORE's own harness, read only while that harness
         is available. Its writer, installed through `setOnSettingsChange`,
-        is `useJudgePick`'s `request`, and it never sends `model: ""`.
-      - The seed key is `[row, seed selection, nonce]`, where the row is the
-        tile state below. A close bumps the nonce to throw away what the
-        store holds, since re-applying an unchanged key is a no-op.
-    - **Tile states** (`judgeTileState`). `displayed` is the latest pick,
-      else the record's selection. `last` is the pick being cleared while the
-      latest pick is a switch to Automatic (so the cleared pick shows dimmed
-      at once, instead of the cached `lastSelection` from before the save),
-      else the record's `lastSelection`, where absent and `null` both mean
+        is `useJudgePick`'s `request`, and it never sends `model: ""`. It
+        also sends nothing that names the pick already on show, so a
+        re-commit of the same selection is a no-op, as in the composer.
+      - The seed key is `[row, seed selection]`, where the row is the tile
+        state below. A re-seed from what is saved while the seed itself has
+        not changed (dropping a switch, settling a close) applies a key of its
+        own, since re-applying an unchanged key is a no-op.
+    - **Tile states** (`judgeTileState`). The card is Loading until the
+      machine has answered: the record, the harness list and the providers
+      list, each with data or an error. Before then a last pick that cannot
+      run would read as runnable, and a click would save it. `displayed` is
+      the latest pick, else the record's selection. `last` is the pick being
+      cleared while the latest pick is a switch to Automatic, as that switch
+      recorded it when it was chosen - the pick on screen then, which may
+      itself still be saving - so the cleared pick shows dimmed at once,
+      instead of the cached `lastSelection` from before the save. Otherwise
+      it is the record's `lastSelection`, where absent and `null` both mean
       none. `last` can run when `judgeWarningCause` over it, with
-      `blocked: null`, finds nothing. That check cannot see the host's own
-      `unsupported-harness` verdict, which the host computes only for the
-      stored selection, so such a last pick is saved on click and the echo's
-      amber line corrects it in one round trip.
+      `blocked: null`, finds nothing. Two findings that check cannot make
+      before a save, and the save's echo corrects both in one round trip with
+      its amber line: the host's own `unsupported-harness` verdict, which the
+      host computes only for the stored selection; and a model the machine
+      no longer offers, known only once that provider's models load, which
+      the card does not wait on before it can be clicked.
       - A host that cannot store a selection (`autoJudge.set` unsupported,
         said in one line) shows its row's face at full opacity, inert, with
         the picker disabled.
@@ -4020,7 +4045,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 
       | Row              | When                        | Selected            | Face                                | Clicking "A model you pick" |
       | ---------------- | --------------------------- | ------------------- | ----------------------------------- | --------------------------- |
-      | Loading          | no record yet               | neither; both inert | none                                | nothing                     |
+      | Loading          | the machine hasn't answered | neither; both inert | none                                | nothing                     |
       | Picked           | `displayed` set             | ◎                   | the pick                            | nothing                     |
       | Last pick runs   | Automatic, `last` runs      | ✦                   | `last`, dimmed, inert               | restores `last`             |
       | Last pick broken | Automatic, `last` can't run | ✦                   | `last` + why ("Signed out"), dimmed | opens the picker            |
@@ -4042,7 +4067,17 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - "{Provider} offers no models on this machine. Pick another provider."
         when they load empty, and "Couldn't load {Provider}'s models. Reopen
         Settings to try again, or pick another provider." when they fail.
-        Closing re-seeds from what is saved, and the line goes with it.
+      - A switch that can no longer save - its models came back empty or
+        failed, or its provider stopped being available - is settled
+        whenever the picker is closed: at the close, or later, when a switch
+        left loading behind a closed picker stops loading. It re-seeds from
+        what is saved, and the line goes with it, so the tile describes the
+        machine's judge again and the next open starts from it.
+      - Choosing a tile ends the switch first: a click on Automatic (even
+        one already on), or bringing the last pick back, whether by click or
+        by arrow. The latest click wins, so the switch cannot land after it.
+        Opening the picker from the second tile is not a choice, and a
+        switch waiting there survives it.
       - While the switch waits, a re-derived seed (a harness list or verdict
         settling on a cold host) does not replace it: it is a pick made on
         this card that has not settled.

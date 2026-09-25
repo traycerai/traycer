@@ -5,6 +5,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -30,6 +31,7 @@ import {
   type ComposerToolbarStore,
   type ComposerToolbarValues,
 } from "@/stores/composer/composer-toolbar-store";
+import { judgeSwitchModel } from "@/components/settings/panels/auto-judge-selection";
 import type { JudgeTileRow } from "@/components/settings/panels/permissions/judge-tile-state";
 
 const EMPTY_JUDGE_MODELS: ReadonlyArray<ModelOption> = [];
@@ -39,6 +41,14 @@ const EMPTY_JUDGE_MODELS: ReadonlyArray<ModelOption> = [];
  * on their way, they answered with none, or the read failed.
  */
 export type JudgePendingModels = "loading" | "empty" | "failed";
+
+/**
+ * What the store harness's models read says, for a switch it holds: the
+ * three the tile reports, a catalog that listed models (the switch saves on
+ * the next catalog push), or a provider that is not available (no read is
+ * coming).
+ */
+type JudgePendingModelsRead = JudgePendingModels | "listed" | "unavailable";
 
 /** A provider switch that is waiting for its models, and has not saved. */
 export interface JudgePendingSwitch {
@@ -52,12 +62,20 @@ export interface JudgeToolbarStore {
   readonly pendingSwitch: JudgePendingSwitch | null;
   /**
    * What closing the picker does to the store. A switch still waiting for its
-   * models survives, and saves the moment they land. A switch whose models
-   * came back empty or failed is dropped by re-seeding from what is saved, and
-   * so is anything else in the store that differs from the seed, so the next
-   * open starts from the machine's judge.
+   * models survives, and saves the moment they land; one that can no longer
+   * save is settled whenever the picker is closed (below). Anything else in
+   * the store that differs from the seed is dropped by re-seeding from what
+   * is saved, so the next open starts from the machine's judge.
    */
   readonly settleOnClose: () => void;
+  /**
+   * Ends a pending provider switch by re-seeding from what is saved. Every
+   * choice made on the card itself calls it first: the latest click wins, so
+   * a switch still waiting for its models must not land after it.
+   */
+  readonly dropPending: () => void;
+  /** The embedding's `providerSwitchModel`. */
+  readonly providerSwitchModel: (harnessId: ProviderId) => string;
 }
 
 /**
@@ -75,21 +93,28 @@ export interface JudgeToolbarStore {
  * provider or a delisted model included (the status line explains it), and a
  * provider switch is not a composer's `HarnessChanged`.
  *
- * The seed key is `[row, seed, nonce]`. The row is part of it so the store
- * re-seeds when the card changes rows over the same selection; the nonce is
- * how a close throws away an abandoned switch, since re-applying an unchanged
- * key is a no-op by design.
+ * The seed key is `[row, seed]`. The row is part of it so the store re-seeds
+ * when the card changes rows over the same selection. A re-seed from what is
+ * saved when the seed itself has not changed - dropping a switch, or settling
+ * the picker on close - applies a key of its own, since re-applying an
+ * unchanged key is a no-op by design.
  */
 export function useJudgeToolbarStore(input: {
   readonly seedRow: JudgeTileRow;
   readonly seed: HarnessModelSelection;
+  /**
+   * The seed is the pick on show, so a write naming it again would change
+   * nothing: the picker's same-provider click and a click on the checked row
+   * write nothing, as in the composer.
+   */
+  readonly seedIsPick: boolean;
+  readonly pickerOpen: boolean;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly onPick: (selection: AutoJudgeSelection) => void;
 }): JudgeToolbarStore {
-  const { seedRow, harnesses, onPick } = input;
+  const { seedRow, seedIsPick, pickerOpen, harnesses, onPick } = input;
   const seed = useStableSeed(input.seed);
-  const [nonce, setNonce] = useState(0);
-  const seedKey = JSON.stringify([seedRow, seed, nonce]);
+  const seedKey = JSON.stringify([seedRow, seed]);
   const [store] = useState(() =>
     createComposerToolbarStore({
       purpose: "setting",
@@ -109,13 +134,19 @@ export function useJudgeToolbarStore(input: {
   const writeJudge = useCallback(
     (settings: ChatRunSettings) => {
       if (settings.model.length === 0) return;
+      const selection: HarnessModelSelection = {
+        harnessId: settings.harnessId,
+        modelSlug: settings.model,
+        profileId: settings.profileId,
+      };
+      if (seedIsPick && sameSelection(selection, seed)) return;
       onPick({
         harnessId: settings.harnessId,
         model: settings.model,
         profileId: settings.profileId,
       });
     },
-    [onPick],
+    [onPick, seed, seedIsPick],
   );
   useEffect(() => {
     store.getState().setOnSettingsChange(writeJudge);
@@ -125,14 +156,23 @@ export function useJudgeToolbarStore(input: {
   // switch that is waiting for its models is a pick made on this card that
   // has not settled, and it wins over a re-derived seed - a harness list or a
   // verdict settling on a cold host must not throw it away. It ends by
-  // emitting (a new pick, so a new key) or by a close bumping the nonce.
-  const appliedNonce = useRef(nonce);
+  // emitting (a new pick, so a new seed) or by `reseed`.
   useLayoutEffect(() => {
     const state = store.getState();
-    if (state.pendingSettingsEmit && appliedNonce.current === nonce) return;
-    appliedNonce.current = nonce;
+    if (state.pendingSettingsEmit) return;
     state.applySeed(seedKey, judgeToolbarValues(seed));
-  }, [store, seedKey, seed, nonce]);
+  }, [store, seedKey, seed]);
+
+  const reseedCount = useRef(0);
+  const reseed = (): void => {
+    reseedCount.current += 1;
+    store
+      .getState()
+      .applySeed(
+        JSON.stringify([seedRow, seed, reseedCount.current]),
+        judgeToolbarValues(seed),
+      );
+  };
 
   // The models of the STORE's harness, not the saved one's: a provider switch
   // commits `""` for every provider but Claude Code, and only this catalog
@@ -160,25 +200,59 @@ export function useJudgeToolbarStore(input: {
   }, [store, harnesses, harnessId, models, modelsLoaded]);
 
   const pending = useStore(store, (state) => state.pendingSettingsEmit);
-  const pendingModels = pendingModelsState(available, modelsQuery);
+  const read = pendingModelsRead(available, modelsQuery);
   const pendingSwitch =
-    pending && pendingModels !== null
-      ? { harnessId, models: pendingModels }
+    pending && (read === "loading" || read === "empty" || read === "failed")
+      ? { harnessId, models: read }
       : null;
+
+  // A switch that can no longer save - its models answered with none, the
+  // read failed, or its provider stopped being available - is settled as soon
+  // as the picker is closed, whenever that happens: at the close, or later,
+  // when a switch left loading behind a closed picker stops loading. Held, it
+  // would keep an amber line under whatever the machine's judge now is, and
+  // keep every re-derived seed out.
+  const abandoned =
+    pending &&
+    (read === "empty" || read === "failed" || read === "unavailable");
+  const settleAbandoned = useEffectEvent(() => {
+    reseed();
+  });
+  useEffect(() => {
+    if (!pickerOpen && abandoned) settleAbandoned();
+  }, [pickerOpen, abandoned]);
 
   const settleOnClose = (): void => {
     const state = store.getState();
-    if (state.pendingSettingsEmit) {
-      if (pendingModels === "loading") return;
-      setNonce((current) => current + 1);
-      return;
-    }
-    if (!sameSelection(state.values.selection, seed)) {
-      setNonce((current) => current + 1);
-    }
+    if (state.pendingSettingsEmit) return;
+    if (!sameSelection(state.values.selection, seed)) reseed();
   };
 
-  return { store, pendingSwitch, settleOnClose };
+  const dropPending = (): void => {
+    if (store.getState().pendingSettingsEmit) reseed();
+  };
+
+  // A click on the provider already selected keeps its model, as in the
+  // composer, where the same click restores that provider's remembered model.
+  // Only a real switch lands on the provider's recommended judge model.
+  const providerSwitchModel = useCallback(
+    (next: ProviderId): string => {
+      const current = store.getState().values.selection;
+      if (current.harnessId === next && current.modelSlug.length > 0) {
+        return current.modelSlug;
+      }
+      return judgeSwitchModel(harnesses, next);
+    },
+    [store, harnesses],
+  );
+
+  return {
+    store,
+    pendingSwitch,
+    settleOnClose,
+    dropPending,
+    providerSwitchModel,
+  };
 }
 
 /**
@@ -197,18 +271,14 @@ function judgeToolbarValues(
   };
 }
 
-/**
- * Where the store harness's models stand for a pending switch. `null` when
- * none of the three applies: the catalog listed models (the switch has
- * already saved), or the provider is not available, so no read is coming.
- */
-function pendingModelsState(
+/** What the store harness's models read says, for a pending switch. */
+function pendingModelsRead(
   available: boolean,
   query: UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>,
-): JudgePendingModels | null {
+): JudgePendingModelsRead {
   const models = query.data?.models;
-  if (models !== undefined) return models.length === 0 ? "empty" : null;
-  if (!available) return null;
+  if (models !== undefined) return models.length === 0 ? "empty" : "listed";
+  if (!available) return "unavailable";
   return query.isError ? "failed" : "loading";
 }
 

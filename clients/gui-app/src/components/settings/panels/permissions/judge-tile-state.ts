@@ -45,12 +45,19 @@ import {
 export interface JudgeDraft {
   readonly id: number;
   readonly selection: AutoJudgeSelection | null;
+  /**
+   * For a switch to Automatic, the pick it clears: what the tiles presented
+   * when Automatic was chosen, which may itself be a pick still saving. `null`
+   * for a pick, and for a switch made while nothing was picked.
+   */
+  readonly clearing: AutoJudgeSelection | null;
 }
 
 /**
  * The rows of the tile-state table.
  *
- * - `loading`: the record has not answered. Both tiles are inert, no face.
+ * - `loading`: the record, the harness list or the providers list has not
+ *   answered. Both tiles are inert, no face.
  * - `picked`: a model is chosen (stored, or the latest pick on screen).
  * - `last-runs`: Automatic, and the last pick can run here. The second tile
  *   shows it dimmed and inert; choosing the tile brings it back.
@@ -83,19 +90,22 @@ export interface JudgeTileState {
 /**
  * The last pick the second tile keeps on show while Automatic is on.
  *
- * While the latest pick is a switch TO Automatic, the record's own selection
- * is the pick being cleared: the host moves it into `lastSelection`, but the
- * cached `lastSelection` is the one from before the save until the echo lands,
- * and showing it would flash the previous last pick (or "Choose a model") for
- * the whole round trip. Otherwise the record's `lastSelection`, where absent (a
- * host older than `autoJudge.get@1.2`) and `null` both mean none.
+ * While the latest pick is a switch TO Automatic, it is the pick that switch
+ * clears, as the draft recorded it: the host moves it into `lastSelection`,
+ * but the cached `lastSelection` is the one from before the save until the
+ * echo lands, and showing it would flash the previous last pick (or "Choose a
+ * model") for the whole round trip. The draft carries it rather than reading
+ * `record.selection`, because that can still be the selection from before a
+ * pick whose write has not landed yet - pick, then Automatic at once.
+ * Otherwise the record's `lastSelection`, where absent (a host older than
+ * `autoJudge.get@1.2`) and `null` both mean none.
  */
 export function lastJudgePick(
   record: AutoJudgeGetResponse,
   draft: JudgeDraft | null,
 ): AutoJudgeSelection | null {
-  if (draft !== null && draft.selection === null && record.selection !== null) {
-    return record.selection;
+  if (draft !== null && draft.selection === null && draft.clearing !== null) {
+    return draft.clearing;
   }
   return record.lastSelection ?? null;
 }
@@ -125,18 +135,26 @@ export function shownJudgePick(
 /**
  * Which row of the tile-state table the card is in.
  *
+ * The card is `loading` until the machine has answered: the record, and the
+ * harness and providers lists `runnable(last)` is judged from - each with data
+ * or an error. Before they answer, a last pick that cannot run would read as
+ * runnable, and a click would save it.
+ *
  * `runnable(last)` is {@link judgeWarningCause} over the last pick with
  * `blocked: null`: it sees provider state, the harness roster, the model
- * offered and the account offered. It cannot see the host's own
- * `unsupported-harness` verdict, which the host computes only for the STORED
- * selection, so a last pick on a harness this host has no judge for reads as
- * runnable; choosing it saves it, and the echo's amber line corrects that in
- * one round trip.
+ * offered and the account offered. Two findings it cannot make before the
+ * save, and the save's echo corrects both in one round trip (the class of the
+ * critique's F12): the host's own `unsupported-harness` verdict, which the
+ * host computes only for the STORED selection; and a model the machine no
+ * longer offers, which is known only once that provider's models load - the
+ * card does not wait on a per-provider model read before it can be clicked.
  */
 export function judgeTileState(input: {
   readonly record: AutoJudgeGetResponse | undefined;
   readonly draft: JudgeDraft | null;
   readonly canWrite: boolean;
+  /** The harness and providers lists have both answered, with data or an error. */
+  readonly catalogsAnswered: boolean;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
   /** The shown pick's catalog (`shownJudgePick`), `undefined` until it answers. */
@@ -144,7 +162,7 @@ export function judgeTileState(input: {
 }): JudgeTileState {
   const { record, draft } = input;
   const readOnly = !input.canWrite;
-  if (record === undefined) {
+  if (record === undefined || !input.catalogsAnswered) {
     return { row: "loading", readOnly, shown: null, lastCause: null };
   }
   const displayed = displayedJudgePick(record, draft);
@@ -203,6 +221,19 @@ export function judgeFaceDimmed(state: JudgeTileState): boolean {
 export function judgeTileOpensPicker(state: JudgeTileState): boolean {
   if (state.readOnly) return false;
   return state.row === "last-broken" || state.row === "no-last";
+}
+
+/**
+ * The picker checks a row as the judge only for a pick it can name. A stored
+ * harness this build does not know seeds the store from the unpicked seed,
+ * and marking that would check an unrelated provider's model as the judge.
+ */
+export function judgeSelectionMarked(state: JudgeTileState): boolean {
+  return (
+    state.row === "picked" &&
+    state.shown !== null &&
+    judgeStoreSelection(state.shown) !== null
+  );
 }
 
 const TRAYCER_HARNESS_ID = providerIdToGuiHarnessId("traycer");
