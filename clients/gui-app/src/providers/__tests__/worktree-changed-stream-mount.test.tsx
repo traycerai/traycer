@@ -15,6 +15,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host";
 import type { WorktreeChangedScope } from "@traycer/protocol/host/worktree-changed-stream";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { WorktreeChangedCursorStore } from "@traycer-clients/shared/host-transport/worktree-changed-stream-client";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -377,6 +378,7 @@ interface OpenedWorktreeStream {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ) => void;
+  readonly cursor: WorktreeChangedCursorStore;
 }
 
 interface WorktreeMountStreamState {
@@ -410,6 +412,7 @@ vi.mock(
   () => ({
     WorktreeChangedStreamClient: class {
       constructor(options: {
+        readonly cursor: WorktreeChangedCursorStore;
         readonly callbacks: {
           readonly onChanged: (scope: WorktreeChangedScope) => void;
           readonly onConnectionStatus: (
@@ -421,6 +424,7 @@ vi.mock(
         worktreeMountStreamState.opened.push({
           emitChanged: options.callbacks.onChanged,
           emitStatus: options.callbacks.onConnectionStatus,
+          cursor: options.cursor,
         });
       }
       close(): void {
@@ -512,6 +516,52 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("hands the rebuilt client the cursor the closed one received, so its first subscribe can skip the catch-up", () => {
+    vi.useFakeTimers();
+    try {
+      const queryClient = createAppQueryClient();
+      renderWorktreeChangedStreamMount(queryClient);
+      const first = worktreeMountStreamState.opened[0];
+      expect(first.cursor.current).toBeNull();
+      // What the real client records on a received frame.
+      first.cursor.current = { epoch: "e1", generation: 7 };
+
+      emitWorktreeMountStatus(
+        "closed",
+        worktreeMountFatalClose("UNAUTHORIZED"),
+      );
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+
+      const rebuilt = worktreeMountStreamState.opened[1];
+      expect(rebuilt.cursor).toBe(first.cursor);
+      expect(rebuilt.cursor.current).toEqual({ epoch: "e1", generation: 7 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a different host with no cursor", () => {
+    const queryClient = createAppQueryClient();
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    worktreeMountStreamState.opened[0].cursor.current = {
+      epoch: "e1",
+      generation: 7,
+    };
+
+    worktreeMountStreamState.hostId = "host-B";
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+
+    const hostB = worktreeMountStreamState.opened.at(-1);
+    expect(worktreeMountStreamState.opened).toHaveLength(2);
+    expect(hostB?.cursor.current).toBeNull();
   });
 
   it("does not reopen after a non-reopenable close (CLIENT_CLOSED)", () => {

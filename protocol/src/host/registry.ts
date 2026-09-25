@@ -848,7 +848,10 @@ import {
   worktreeDeleteByPathStreamV12,
   worktreeDeleteByPathStreamV13,
 } from "@traycer/protocol/host/worktree-delete-stream";
-import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
+import {
+  worktreeChangedV10,
+  worktreeChangedV11,
+} from "@traycer/protocol/host/worktree-changed-stream";
 import {
   providersChangedV10,
   providersChangedV11,
@@ -12066,10 +12069,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "worktree.changed": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the resume cursor: the host skips the reconnect catch-up
+      // frame when the client's last cursor is still current.
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeChangedV10,
+        },
+        1: {
+          contract: worktreeChangedV11,
         },
       },
     },

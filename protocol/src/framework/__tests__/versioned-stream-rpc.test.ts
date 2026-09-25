@@ -133,6 +133,8 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // assert the registry against itself.
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(17);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
+    expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       3,
