@@ -124,7 +124,10 @@ import {
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
-import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
+import {
+  getRetentionProfile,
+  subscribeRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 import { useCallback, useSyncExternalStore } from "react";
 import type { RuntimeTimer } from "@traycer-clients/shared/replica-runtime";
 
@@ -541,6 +544,20 @@ subscribeDocumentVisibility(() => {
 // cover one of its chats' hosts, has nothing that would ever tell it the plane
 // recovered. The plane failing closed is deliberate; staying deferred after it
 // reopens is not.
+// A profile switch re-times every window already counting. The window is read
+// fresh at each check, but an ARMED timer was scheduled for the old profile's
+// length, so without this a window armed under the desktop profile - by a tab
+// restored while gui-app's modules evaluate, before the mobile entry selects its
+// profile - would not be looked at again for five minutes. Re-armed for the
+// remainder from the same baseline, never a fresh window.
+subscribeRetentionProfile(() => {
+  for (const [epicId, entry] of Array.from(entries)) {
+    if (entry.timer === null) continue;
+    entry.timer.cancel();
+    entry.timer = null;
+    parkWindowElapsed(epicId, entry);
+  }
+});
 subscribeAgentActivity(() => {
   retryDeferredEpicParks();
 });

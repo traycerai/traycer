@@ -85,6 +85,7 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
 });
 
 let activeProfile: RetentionProfile = DESKTOP_RETENTION_PROFILE;
+const profileListeners = new Set<() => void>();
 
 /**
  * Selects the profile for this shell. Called by the Capacitor entry's
@@ -92,7 +93,23 @@ let activeProfile: RetentionProfile = DESKTOP_RETENTION_PROFILE;
  * run the desktop profile. Tests may set and reset it.
  */
 export function setRetentionProfile(profile: RetentionProfile): void {
+  if (profile === activeProfile) return;
   activeProfile = profile;
+  for (const listener of Array.from(profileListeners)) listener();
+}
+
+/**
+ * Watch profile switches. For the one consumer that holds a value derived from
+ * the profile rather than reading it lazily: a park window already armed when
+ * the profile changes (the mobile entry selects its profile at bootstrap, AFTER
+ * gui-app's modules have evaluated and may have armed windows for restored
+ * tabs) has to be re-timed against the new window.
+ */
+export function subscribeRetentionProfile(listener: () => void): () => void {
+  profileListeners.add(listener);
+  return () => {
+    profileListeners.delete(listener);
+  };
 }
 
 export function getRetentionProfile(): RetentionProfile {

@@ -1036,6 +1036,31 @@ describe("epic-parking - the window comes from the retention profile", () => {
     }
   });
 
+  it("re-times a window armed under the desktop profile when the mobile one is selected", () => {
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    const EPIC = "epic-park-profile-switch";
+    const TAB = "tab-park-profile-switch";
+    const th = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC, () => th.handle);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-profile-switch", false);
+      vi.advanceTimersByTime(10_000);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The mobile entry selects its profile after the window was armed.
+      setRetentionProfile(MOBILE_RETENTION_PROFILE);
+      vi.advanceTimersByTime(MOBILE_PARK_HIDDEN_EPIC_AFTER_MS - 10_000 - 1);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      vi.advanceTimersByTime(1);
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
   it("keeps the desktop window on the desktop profile", () => {
     setRetentionProfile(DESKTOP_RETENTION_PROFILE);
     const EPIC = "epic-park-desktop-window";
