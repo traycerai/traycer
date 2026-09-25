@@ -727,6 +727,9 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.traycerMaintenanceInstallationInfo,
           RunnerHostInvoke.traycerMaintenanceInstallVersion,
           RunnerHostInvoke.traycerHostRestartIfIdle,
+          // The lifecycle card's idle-gated SERVICE restart (host-lifecycle-
+          // modes T08), registered by the same call.
+          RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
           RunnerHostInvoke.traycerDoctorRepairQueued,
           RunnerHostInvoke.traycerDoctorRepairIfIdle,
           // Platform IPC channels installed by `registerPlatformIpc(bridge)`,

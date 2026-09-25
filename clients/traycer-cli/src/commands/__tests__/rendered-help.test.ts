@@ -409,6 +409,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  // Public on purpose: the doctor, `host lifecycle set` and the service
+  // platforms all name it as the repair a person runs
+  // (SERVICE_REFRESH_COMMAND).
+  {
+    path: "host service refresh",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
   {
     path: "host service uninstall",
     options: [
@@ -1281,6 +1293,10 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host update --expect-sequence",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
+        // Host lifecycle modes: the desktop's automatic quit-time stop in
+        // Linked and Stop-if-idle modes. A person stops a host with plain
+        // `host stop`.
+        "traycer host stop --if-idle",
         "traycer host apply --expected-stage-fingerprint",
         "traycer host apply --no-service",
         // Implicit-apply hold check (version-hold design): the desktop's
