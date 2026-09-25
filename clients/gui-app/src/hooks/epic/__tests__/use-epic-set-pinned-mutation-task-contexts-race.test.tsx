@@ -44,6 +44,15 @@ interface SetPinnedRequest {
  */
 const failNextRequest = { value: false };
 
+/**
+ * Holds the NEXT `epic.setPinned` RPC open until the test releases it, for
+ * the `onSuccess`-cancel proof below - it needs a refetch to start WHILE the
+ * write's own RPC is still in flight, which only a controllable RPC promise
+ * makes possible.
+ */
+const holdNextRequest = { value: false };
+const heldRequest: { release: (() => void) | null } = { release: null };
+
 const mockClient = {
   getActiveHostId: () => HOST_ID,
   getRequestContextUserId: () => USER_ID,
@@ -53,6 +62,12 @@ const mockClient = {
       return Promise.reject(new Error("epic.setPinned rejected"));
     }
     const { pinned } = params as SetPinnedRequest;
+    if (holdNextRequest.value) {
+      holdNextRequest.value = false;
+      return new Promise<{ pinned: boolean }>((resolve) => {
+        heldRequest.release = () => resolve({ pinned });
+      });
+    }
     return Promise.resolve({ pinned });
   },
 };
@@ -133,6 +148,8 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   afterEach(() => {
     useAuthStore.getState().setSignedOut();
     failNextRequest.value = false;
+    holdNextRequest.value = false;
+    heldRequest.release = null;
   });
 
   it("a stale in-flight getTaskContexts refetch requested before the write cannot land after it settles", async () => {
@@ -473,6 +490,188 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
     stale.resolve?.(foundResponse("epic-b", true));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
+    expect(statuses).not.toContain("error");
+
+    stop();
+  });
+
+  /**
+   * Follow-up fix: `cancelInFlightTaskContextsReads` now cancels with
+   * `revert: true` (was `false`). A cold review ran this against query-core
+   * 5.101.4 and found that cancelling a query that HOLDS DATA with
+   * `revert: false` does not quietly keep that data - it dispatches the
+   * cancellation as a query ERROR (`status: "error"`, a `CancelledError`,
+   * `isInvalidated: true`), and nothing here refetches afterwards, so the
+   * error sticks. History's `useEpicGetTaskContexts` treats that as a real
+   * error. This exercises `onMutate`'s own cancel (the in-flight refetch is
+   * already running when the write dispatches, so `onMutate` is the one that
+   * reaches it - see the next test for `onSuccess`'s own case).
+   */
+  it("onMutate's cancel of an in-flight refetch never errors or invalidates the query, and the data lands on the committed bit", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+      "epic-b",
+    ]);
+    let fetchCount = 0;
+    const stale: {
+      resolve: ((value: GetTaskContextsResponse) => void) | null;
+    } = { resolve: null };
+    const observer = new QueryObserver<GetTaskContextsResponse>(queryClient, {
+      queryKey: taskContextsKey,
+      queryFn: () => {
+        fetchCount += 1;
+        // The first fetch settles normally, giving the query DATA - the
+        // shape `cancelInFlightTaskContextsReads` targets (unlike the
+        // data-less-first-fetch case the two tests above cover). The second
+        // is the menu-open retry, held open until the write below cancels it.
+        if (fetchCount === 1) {
+          return Promise.resolve(foundResponse("epic-b", true));
+        }
+        return new Promise<GetTaskContextsResponse>((resolve) => {
+          stale.resolve = resolve;
+        });
+      },
+    });
+    const statuses: string[] = [];
+    const stop = observer.subscribe(() => {
+      statuses.push(observer.getCurrentResult().status);
+    });
+    await waitFor(() => {
+      expect(observer.getCurrentResult().data).toBeDefined();
+    });
+    expect(fetchCount).toBe(1);
+
+    // The menu-open retry: a background refetch of the SAME query, holding
+    // its earlier DATA while in flight - still running when the write below
+    // dispatches, so `onMutate`'s cancel is the one that reaches it.
+    void observer.refetch();
+    await waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(true);
+    });
+    expect(fetchCount).toBe(2);
+
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    await result.current.mutateAsync({
+      epicId: "epic-b",
+      pinned: false,
+      isLocalHome: false,
+      hostId: null,
+    });
+
+    expect(statuses).not.toContain("error");
+    expect(
+      queryClient.getQueryCache().find({ queryKey: taskContextsKey })?.state
+        .isInvalidated,
+    ).toBe(false);
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey)?.tasks
+        .row,
+    ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
+
+    stop();
+  });
+
+  /**
+   * `onSuccess`'s OWN cancel, isolated from `onMutate`'s: the refetch here
+   * starts DURING the write's RPC - after `onMutate` already ran and found
+   * nothing to cancel - so only `onSuccess`'s call reaches it. Without that
+   * call this refetch's stale answer would land after the committed patch,
+   * exactly the race `onMutate`'s cancel cannot cover because the refetch
+   * did not exist yet when `onMutate` ran.
+   */
+  it("onSuccess's cancel reaches a refetch that starts DURING the RPC, and the stale answer it holds cannot land after commit", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+      "epic-b",
+    ]);
+    let fetchCount = 0;
+    const stale: {
+      resolve: ((value: GetTaskContextsResponse) => void) | null;
+    } = { resolve: null };
+    const observer = new QueryObserver<GetTaskContextsResponse>(queryClient, {
+      queryKey: taskContextsKey,
+      queryFn: () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return Promise.resolve(foundResponse("epic-b", true));
+        }
+        // The retry that starts mid-RPC: held open until the test resolves
+        // it, well after the write has committed.
+        return new Promise<GetTaskContextsResponse>((resolve) => {
+          stale.resolve = resolve;
+        });
+      },
+    });
+    const statuses: string[] = [];
+    const stop = observer.subscribe(() => {
+      statuses.push(observer.getCurrentResult().status);
+    });
+    await waitFor(() => {
+      expect(observer.getCurrentResult().data).toBeDefined();
+    });
+    expect(fetchCount).toBe(1);
+
+    // No refetch in flight yet - `onMutate`'s cancel below finds nothing.
+    holdNextRequest.value = true;
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+    const mutation = result.current.mutateAsync({
+      epicId: "epic-b",
+      pinned: false,
+      isLocalHome: false,
+      hostId: null,
+    });
+
+    // `onMutate` has run (it is awaited before dispatch) and the RPC is now
+    // held - this is the window where the retry starts, strictly AFTER
+    // `onMutate`'s own cancel already ran and found nothing to cancel.
+    await waitFor(() => {
+      expect(heldRequest.release).not.toBeNull();
+    });
+    void observer.refetch();
+    await waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(true);
+    });
+    expect(fetchCount).toBe(2);
+
+    // Release the RPC: `onSuccess` runs next, and its own cancel is the only
+    // one that can still reach the refetch above.
+    heldRequest.release?.();
+    await mutation;
+
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey)?.tasks
+        .row,
+    ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
+
+    // The stale refetch finally lands, after the write has already
+    // committed. Without `onSuccess`'s own cancel this overwrites the cache
+    // back to the pre-write `true`.
+    stale.resolve?.(foundResponse("epic-b", true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey)?.tasks
+        .row,
+    ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
     expect(statuses).not.toContain("error");
 
     stop();
