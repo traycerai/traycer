@@ -1603,6 +1603,317 @@ describe("JudgeTab", () => {
     });
   });
 
+  describe("review round 2", () => {
+    const CODEX_OLD: AutoJudgeSelection = {
+      harnessId: "codex",
+      model: "gpt-old",
+      profileId: null,
+    };
+    const CODEX_GPT_MINI: AutoJudgeSelection = {
+      harnessId: "codex",
+      model: "gpt-mini",
+      profileId: null,
+    };
+
+    /** Re-renders the tab after the test moved the mocked record or catalog. */
+    function nudge(): void {
+      act(() => {
+        setModels("claude", {
+          kind: "ready",
+          models: [
+            model("claude", "sonnet", "Claude Sonnet"),
+            model("claude", "opus", "Claude Opus"),
+          ],
+        });
+      });
+    }
+
+    async function closePicker(user: UserEvent): Promise<void> {
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(pickerPanel()).toBeNull());
+    }
+
+    async function switchToCodexAndClose(user: UserEvent): Promise<void> {
+      await user.click(face());
+      await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+      await closePicker(user);
+    }
+
+    async function flushTicks(): Promise<void> {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    }
+
+    describe("N1: re-clicking a provider keeps its model only while the catalog lists it", () => {
+      it("P5: last-broken on a delisted Codex model, re-clicking Codex saves the recommended model, never the delisted one", async () => {
+        judgeRecord.current = { selection: null, lastSelection: CODEX_OLD };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText(/Always the model you choose/));
+        await screen.findByRole("dialog", { name: "Select model" });
+        await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+
+        expect(writes()).not.toContainEqual(CODEX_OLD);
+        expect(writes()).toEqual([CODEX_GPT_MINI]);
+      });
+
+      it("P5b: picked on a delisted Codex model, re-clicking Codex writes the recommended model exactly once", async () => {
+        judgeRecord.current = { selection: CODEX_OLD };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+        await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+
+        expect(writes()).toEqual([CODEX_GPT_MINI]);
+      });
+
+      it("P2: re-clicking a listed provider stays a no-op", async () => {
+        const OPUS: AutoJudgeSelection = {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+        };
+        judgeRecord.current = { selection: OPUS };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(face());
+        await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+
+        expect(writes()).toEqual([]);
+        expect(face().textContent).toContain("Claude Opus");
+      });
+    });
+
+    describe("N2: the checked Automatic radio's own click ends a pending switch", () => {
+      beforeEach(() => {
+        setModels("codex", { kind: "pending" });
+      });
+
+      it("P6: a click on the already-checked Automatic radio circle ends a switch still waiting for its models", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        // Another window moves the judge to Automatic while Codex still
+        // waits for its models.
+        judgeRecord.current = {
+          selection: null,
+          lastSelection: CLAUDE_STORED,
+        };
+        nudge();
+        expect(isChecked(automaticRadio())).toBe(true);
+
+        await user.click(automaticRadio());
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([]);
+      });
+
+      it("Space on the focused, already-checked Automatic radio ends the switch the same way", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        judgeRecord.current = {
+          selection: null,
+          lastSelection: CLAUDE_STORED,
+        };
+        nudge();
+        expect(isChecked(automaticRadio())).toBe(true);
+
+        act(() => {
+          automaticRadio().focus();
+        });
+        await user.keyboard(" ");
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([]);
+      });
+    });
+
+    describe("N3: the already-selected pick tile does not end a pending switch", () => {
+      beforeEach(() => {
+        setModels("codex", { kind: "pending" });
+      });
+
+      it("P7: pins existing behaviour - a click on the already-selected pick tile body does not end a switch, which still lands once its models arrive", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        await user.click(screen.getByText(/Always the model you choose/));
+        expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([CODEX_GPT_MINI]);
+      });
+    });
+
+    describe("N4: a switch dropped for having no models, or failing, leaves its sentence behind", () => {
+      beforeEach(() => {
+        setModels("codex", { kind: "pending" });
+      });
+
+      function droppedLine(): HTMLElement | null {
+        return screen.queryByTestId("auto-judge-switch-dropped");
+      }
+
+      async function switchToCodexThenAfterClose(
+        user: UserEvent,
+        outcome: "empty" | "error",
+      ): Promise<void> {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        await switchToCodexAndClose(user);
+
+        act(() => {
+          setModels(
+            "codex",
+            outcome === "empty"
+              ? { kind: "ready", models: [] }
+              : { kind: "error" },
+          );
+        });
+        await flushTicks();
+      }
+
+      it("failed: the second tile keeps the failed sentence, the store is no longer pending, and the picked status still shows", async () => {
+        const user = userEvent.setup();
+        await switchToCodexThenAfterClose(user, "error");
+
+        expect(droppedLine()?.textContent).toBe(judgeModelsFailedLine("Codex"));
+        expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
+        expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+          "Billed to your Claude Code account",
+        );
+
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+        expect(writes()).toEqual([]);
+      });
+
+      it("empty: the second tile keeps the no-models sentence, the store is no longer pending, and the picked status still shows", async () => {
+        const user = userEvent.setup();
+        await switchToCodexThenAfterClose(user, "empty");
+
+        expect(droppedLine()?.textContent).toBe(judgeNoModelsLine("Codex"));
+        expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
+        expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+          "Billed to your Claude Code account",
+        );
+
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+        expect(writes()).toEqual([]);
+      });
+
+      it("clears on the next open, and stays gone after closing again", async () => {
+        const user = userEvent.setup();
+        await switchToCodexThenAfterClose(user, "error");
+        expect(droppedLine()).not.toBeNull();
+
+        await user.click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+        expect(droppedLine()).toBeNull();
+
+        await closePicker(user);
+        expect(droppedLine()).toBeNull();
+      });
+
+      it("clears on a tile choice: choosing Automatic drops the line", async () => {
+        const user = userEvent.setup();
+        await switchToCodexThenAfterClose(user, "error");
+        expect(droppedLine()).not.toBeNull();
+
+        await user.click(screen.getByTestId("auto-judge-tile-automatic"));
+        expect(droppedLine()).toBeNull();
+      });
+
+      it("stays behind when the models fail while the picker is open, after it closes", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(face());
+        await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+        expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+
+        act(() => {
+          setModels("codex", { kind: "error" });
+        });
+        expect(droppedLine()).toBeNull();
+
+        await closePicker(user);
+        await flushTicks();
+
+        expect(droppedLine()?.textContent).toBe(judgeModelsFailedLine("Codex"));
+      });
+
+      it("a provider that stops being available while pending leaves no dropped-switch line", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        judgeCatalog.harnesses = [
+          harness({
+            id: "claude",
+            label: "Claude Code",
+            nativeAutoJudge: true,
+          }),
+          harness({
+            id: "codex",
+            label: "Codex",
+            judgeDefaultModel: null,
+            available: false,
+          }),
+        ];
+        nudge();
+        await flushTicks();
+
+        expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
+        expect(droppedLine()).toBeNull();
+      });
+    });
+  });
+
   describe("a host without Auto mode", () => {
     it("shows the one unsupported line, and no controls", () => {
       support.get = false;
