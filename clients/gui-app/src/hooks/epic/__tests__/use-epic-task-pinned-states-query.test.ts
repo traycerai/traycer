@@ -434,6 +434,64 @@ describe("keepAnsweredOverTransientUnknown", () => {
 
     expect(keepAnsweredOverTransientUnknown(previous, incoming)).toBe(incoming);
   });
+
+  // Follow-up fix: an `unknown` is not uniformly transient. `denied` and
+  // `not-found-or-not-permitted` are ACCESS answers - the account lost the
+  // task, or was never shown it - and keeping the earlier `found` over one of
+  // these would leave a live Pin control on a task the account can no longer
+  // write. `transport`/`server`/`auth`/`unexpected-response`/`legacy` stay
+  // transient and still keep the earlier `found`, which the first test in
+  // this describe already covers for `transport`; the third case here just
+  // pins that down alongside the two new ones for contrast.
+  it("takes the new `unknown(denied)` over an earlier `found` - an access answer, not a transient miss", () => {
+    const previous = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "unknown", reason: "denied" } },
+      undefined,
+    );
+
+    const merged = keepAnsweredOverTransientUnknown(previous, incoming);
+
+    expect(merged).toEqual(incoming);
+  });
+
+  it("takes the new `unknown(not-found-or-not-permitted)` over an earlier `found` - an access answer, not a transient miss", () => {
+    const previous = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "unknown", reason: "not-found-or-not-permitted" } },
+      undefined,
+    );
+
+    const merged = keepAnsweredOverTransientUnknown(previous, incoming);
+
+    expect(merged).toEqual(incoming);
+  });
+
+  it("keeps the earlier `found` when the incoming `unknown` reason is `transport`", () => {
+    const previous = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "unknown", reason: "transport" } },
+      undefined,
+    );
+
+    const merged = keepAnsweredOverTransientUnknown(previous, incoming);
+
+    expect(merged).toEqual(
+      taskContexts(
+        { row: { status: "found", task: listTaskLight("epic-a", true) } },
+        undefined,
+      ),
+    );
+  });
 });
 
 describe("overlayLocalHomedPinnedStates", () => {
