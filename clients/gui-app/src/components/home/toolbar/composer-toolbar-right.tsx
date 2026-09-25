@@ -79,6 +79,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         runTargetHostId={runTargetHostId}
         terminalLoginSurface={terminalLoginSurface}
         profileAdmission={null}
+        embedding={null}
       />
       {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
       {dictation === null && dictationPreparing !== null ? (

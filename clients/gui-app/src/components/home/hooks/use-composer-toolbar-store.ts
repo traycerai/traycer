@@ -176,6 +176,8 @@ export function useComposerToolbarStore(
   );
   const [store] = useState(() =>
     createComposerToolbarStore({
+      // Every surface this hook serves configures a turn about to launch.
+      purpose: "run",
       seedKey,
       values: seededValues,
       // The recording wrapper is installed via the effect below - never the raw

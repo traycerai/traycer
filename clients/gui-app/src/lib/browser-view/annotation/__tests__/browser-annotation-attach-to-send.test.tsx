@@ -95,6 +95,7 @@ function mountSubmit(args: {
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
 }) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "browser-annotation-attach-to-send",
     values: {
       permission: "supervised",

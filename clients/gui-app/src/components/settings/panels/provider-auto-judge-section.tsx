@@ -8,8 +8,8 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 /**
  * The body of a provider's Permissions tab: who reviews this provider's
- * commands in Auto mode, through the same `ProviderJudgeSwitch` the Permissions
- * page's Judge tab lists, followed by one link to that tab.
+ * commands in Auto mode, through `ProviderJudgeSwitch`, whose only home this
+ * is, followed by one link to the Permissions page's Judge tab.
  *
  * The switch is the only per-provider fact here. Which model Traycer's judge
  * runs on and the rules it follows are one machine's and one account's, not a

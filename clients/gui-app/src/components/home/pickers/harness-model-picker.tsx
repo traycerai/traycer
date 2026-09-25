@@ -8,6 +8,7 @@ import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-tri
 import {
   findUpgradeServiceTierForModel,
   findReasoningOptionsForModel,
+  type HarnessModelSelection,
   type HarnessOption,
   type ModelOption,
   type ProviderId,
@@ -44,11 +45,14 @@ import {
   useCallback,
   useEffect,
   useId,
+  useImperativeHandle,
   memo,
   useMemo,
   useRef,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
@@ -137,6 +141,39 @@ const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
   ReadonlyArray<ProviderProfile>
 > = new Map();
 
+/**
+ * What a surface that is not a composer supplies to host this picker - a
+ * Settings control that edits a stored selection instead of configuring a
+ * turn. Every composer surface passes `null` and gets none of it.
+ *
+ * Beyond its fields, a non-null embedding also means the picker draws no
+ * tooltip around the face (the face is the surface's), and that closing the
+ * panel leaves focus to Radix, which returns it to the face: the composer's
+ * close hand-off (`focusActiveComposer()`) falls back to any registered
+ * composer, which from inside Settings would pull a chat tab to the front.
+ *
+ * Pass a stable object: the picker is memoized and its commit callbacks
+ * depend on these fields.
+ */
+export interface HarnessModelPickerEmbedding {
+  /** The chip's face. It is the `PopoverTrigger`'s child, so it forwards ref
+   *  and props. */
+  readonly trigger: ReactElement;
+  /**
+   * The model a provider switch commits: a rail click, ⌘-digit, or an account
+   * picked on a provider that is not the current one. `""` means that
+   * provider's catalog default once it loads. Replaces the composer's
+   * remembered-model lookup (`commitSelection`'s `null` lever), so a switch
+   * never lands on the model last used in a chat.
+   */
+  readonly providerSwitchModel: (harnessId: ProviderId) => string;
+  /** Whether the list checks the store's selection as the chosen row. */
+  readonly selectionMarked: boolean;
+  /** The picker fills this with a function that opens it, the same path a
+   *  trigger click takes, and clears it on unmount. */
+  readonly openRef: RefObject<(() => void) | null>;
+}
+
 interface HarnessModelPickerProps {
   /** Per-composer toolbar store; the picker subscribes to the selection /
    *  reasoning / service-tier slices and dispatches through its actions. */
@@ -147,11 +184,11 @@ interface HarnessModelPickerProps {
    */
   withServiceTier: boolean;
   /**
-   * Render the thinking-effort footer. Every composer surface shows it; the
-   * Settings Auto-mode judge picker hides it, because an effort chosen there
-   * would have nowhere to go - the judge selection the host persists is
-   * `(harness, model, profile)` and its request carries no reasoning effort, so
-   * the control would take a choice and silently drop it.
+   * Render the thinking-effort footer. Every composer surface shows it. A
+   * surface whose choice has no effort to carry hides it - a Settings judge
+   * pick, for one, persists `(harness, model, profile)` and its request carries
+   * no reasoning effort, so the control would take a choice and silently drop
+   * it.
    */
   withReasoning: boolean;
   /**
@@ -213,22 +250,14 @@ interface HarnessModelPickerProps {
    * disabled with its rejection reason as a tooltip.
    */
   profileAdmission: ReadonlyMap<string | null, ProfileRowAdmission> | null;
+  /**
+   * `null` on every composer surface, which then behaves exactly as it always
+   * has. Non-null only for a surface that hosts the picker without being a
+   * composer; see `HarnessModelPickerEmbedding`.
+   */
+  embedding: HarnessModelPickerEmbedding | null;
 }
 
-/**
- * The effort footer's config, or `null` for a surface with no effort axis.
- *
- * `null` under `withReasoning: false` rather than a disabled config: every
- * consumer already treats null as "this surface has no effort axis" - the
- * footer disappears, the trigger and tooltip drop their effort label, and the
- * ⌥-digit leader scope stands down - which is exactly the Settings judge
- * picker's contract. A disabled-but-present config would still print an effort
- * on the trigger.
- *
- * Lifted to module scope rather than inlined in the `useMemo`: this branch was
- * the seventeenth in `HarnessModelPickerImpl`, one past the complexity ceiling,
- * and a decision this self-contained reads better named anyway.
- */
 /**
  * Whether ⌥+digit has anything to set: a surface with an effort axis whose
  * selected model actually exposes levels. A surface with no axis at all
@@ -240,6 +269,20 @@ function reasoningFooterActionable(
   return footer !== null && footer.options.length > 0 && !footer.disabled;
 }
 
+/**
+ * The effort footer's config, or `null` for a surface with no effort axis.
+ *
+ * `null` under `withReasoning: false` rather than a disabled config: every
+ * consumer already treats null as "this surface has no effort axis" - the
+ * footer disappears, the trigger and tooltip drop their effort label, and the
+ * ⌥-digit leader scope stands down - which is exactly what a surface with no
+ * effort to carry needs. A disabled-but-present config would still print an
+ * effort on the trigger.
+ *
+ * Lifted to module scope rather than inlined in the `useMemo`: this branch was
+ * the seventeenth in `HarnessModelPickerImpl`, one past the complexity ceiling,
+ * and a decision this self-contained reads better named anyway.
+ */
 function buildReasoningFooter(input: {
   readonly withReasoning: boolean;
   readonly value: ReasoningLevel;
@@ -269,6 +312,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     runTargetHostId,
     terminalLoginSurface,
     profileAdmission,
+    embedding,
   } = props;
   const activityEnabled = useSurfaceActivity();
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
@@ -322,6 +366,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.profileId,
     disabled,
   );
+  useEmbeddingOpenHandle(embedding, handleOpenChange);
   const reasoningFooter = useMemo<ReasoningFooterConfig | null>(
     () =>
       buildReasoningFooter({
@@ -826,8 +871,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     [visibleRows],
   );
   const selectedRowId = useMemo(
-    () => selectedModelRowId(selection, rows),
-    [rows, selection],
+    () => markedModelRowId(embedding, selection, rows),
+    [embedding, rows, selection],
   );
   const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
     visibleRows,
@@ -873,19 +918,26 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         providerId === selection.harnessId ? selection.profileId : null,
       );
       // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
-      // remembered model/effort/tier). A degraded / unavailable entry just
-      // browses the rail - the panel shows its reauth / setup CTA, no commit.
+      // remembered model/effort/tier, or landing on an embedding's own
+      // model). A degraded / unavailable entry just browses the rail - the
+      // panel shows its reauth / setup CTA, no commit.
       const entry = railEntries.find(
         (candidate) => candidate.harness.id === providerId,
       );
       if (entry !== undefined && entry.harness.available && !entry.degraded) {
-        commitSelection(store, providerId, null, resolvedProfileId);
+        commitSelection(
+          store,
+          providerId,
+          providerSwitchSlug(embedding, providerId),
+          resolvedProfileId,
+        );
       }
       setActiveRailEntry(providerId, resolvedProfileId);
     },
     [
       activeProfileId,
       activeProviderId,
+      embedding,
       lockedHarnessId,
       profilesByHarnessId,
       railEntries,
@@ -906,15 +958,21 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // or when this globally retained create-profile callback resolves after
       // another control changed the selection. In that case preserve the old
       // provider-switch behavior and restore the target provider's remembered
-      // settings instead of pairing its profile with the current provider.
+      // settings (an embedding's own model instead) rather than pairing its
+      // profile with the current provider.
       if (store.getState().selection.harnessId === providerId) {
         commitProfileSelection(store, profileId);
       } else {
-        commitSelection(store, providerId, null, profileId);
+        commitSelection(
+          store,
+          providerId,
+          providerSwitchSlug(embedding, providerId),
+          profileId,
+        );
       }
       setActiveRailEntry(providerId, profileId);
     },
-    [lockedHarnessId, setActiveRailEntry, store],
+    [embedding, lockedHarnessId, setActiveRailEntry, store],
   );
 
   const handleKeyDown = useCallback(
@@ -1035,31 +1093,35 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     />
   );
 
+  const composerFace = (
+    <TooltipWrapper
+      label={tooltipLabel}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <HarnessModelTrigger
+        {...paneActivationDeferProps}
+        selection={selection}
+        label={presentation.label}
+        reasoningLabel={presentation.reasoningLabel}
+        reasoningStep={presentation.reasoningStep}
+        reasoningIndicator={reasoningIndicator}
+        serviceTierLabel={presentation.activeServiceTierLabel}
+        serviceTierActive={presentation.serviceTierActive}
+        profileLabel={presentation.profileLabel}
+        profileAccentDot={presentation.profileAccentDot}
+        isLoading={presentation.isLoading}
+        disabled={disabled}
+        labelDisplay={props.labelDisplay}
+      />
+    </TooltipWrapper>
+  );
+
   return (
     <Popover open={visibleOpen} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        <TooltipWrapper
-          label={tooltipLabel}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <HarnessModelTrigger
-            {...paneActivationDeferProps}
-            selection={selection}
-            label={presentation.label}
-            reasoningLabel={presentation.reasoningLabel}
-            reasoningStep={presentation.reasoningStep}
-            reasoningIndicator={reasoningIndicator}
-            serviceTierLabel={presentation.activeServiceTierLabel}
-            serviceTierActive={presentation.serviceTierActive}
-            profileLabel={presentation.profileLabel}
-            profileAccentDot={presentation.profileAccentDot}
-            isLoading={presentation.isLoading}
-            disabled={disabled}
-            labelDisplay={props.labelDisplay}
-          />
-        </TooltipWrapper>
+        {pickerFace(embedding, composerFace)}
       </PopoverTrigger>
       <HarnessModelPickerPanel
         trimmedQuery={trimmedQuery}
@@ -1113,8 +1175,63 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
         profileAdmission={profileAdmission}
+        closeFocusesComposer={embedding === null}
       />
     </Popover>
+  );
+}
+
+/**
+ * The popover's trigger: the composer's chip in its summary tooltip, or an
+ * embedding's own face with no tooltip around it.
+ */
+function pickerFace(
+  embedding: HarnessModelPickerEmbedding | null,
+  composerFace: ReactElement,
+): ReactElement {
+  return embedding === null ? composerFace : embedding.trigger;
+}
+
+/**
+ * The model a provider switch commits. `null` is `commitSelection`'s
+ * provider-switch lever - the provider's remembered model from composer memory
+ * - which only a composer wants; an embedding names its own.
+ */
+function providerSwitchSlug(
+  embedding: HarnessModelPickerEmbedding | null,
+  providerId: ProviderId,
+): string | null {
+  return embedding === null ? null : embedding.providerSwitchModel(providerId);
+}
+
+/**
+ * The row the list checks as chosen. `""` is `selectedModelRowId`'s own "no
+ * row" answer, which an embedding asks for until it has a selection to mark.
+ */
+function markedModelRowId(
+  embedding: HarnessModelPickerEmbedding | null,
+  selection: HarnessModelSelection,
+  rows: ReadonlyArray<HarnessModelRow>,
+): string {
+  if (embedding !== null && !embedding.selectionMarked) return "";
+  return selectedModelRowId(selection, rows);
+}
+
+/**
+ * Fills an embedding's `openRef` with the same open a trigger click performs,
+ * and clears it on unmount (React's imperative-handle contract). A composer
+ * has no ref to fill.
+ */
+function useEmbeddingOpenHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  handleOpenChange: (next: boolean) => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.openRef,
+    () => () => {
+      handleOpenChange(true);
+    },
+    [handleOpenChange],
   );
 }
 

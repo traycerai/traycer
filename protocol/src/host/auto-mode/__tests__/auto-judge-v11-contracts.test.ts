@@ -10,17 +10,23 @@ import {
   autoJudgeEffectiveSchema,
   autoJudgeGetResponseSchema,
   autoJudgeGetResponseSchemaV10,
+  autoJudgeGetResponseSchemaV11,
   autoJudgeGetUpgradeV10ToV11,
+  autoJudgeGetUpgradeV11ToV12,
   autoJudgeGetV10,
   autoJudgeGetV11,
+  autoJudgeGetV12,
   autoJudgeListRecentRequestSchema,
   autoJudgeListRecentV10,
   autoJudgeRecentEntrySchema,
   autoJudgeSetResponseSchema,
   autoJudgeSetResponseSchemaV10,
+  autoJudgeSetResponseSchemaV11,
   autoJudgeSetUpgradeV10ToV11,
+  autoJudgeSetUpgradeV11ToV12,
   autoJudgeSetV10,
   autoJudgeSetV11,
+  autoJudgeSetV12,
   clampAutoJudgeRecentLimit,
   projectAutoJudgeGetResponseToV10,
   projectAutoJudgeSetResponseToV10,
@@ -290,18 +296,20 @@ describe("autoJudge 1.1 schemas", () => {
 
   it("binds the canonical head names by identity", () => {
     expect(autoJudgeGetV10.responseSchema).toBe(autoJudgeGetResponseSchemaV10);
-    expect(autoJudgeGetV11.responseSchema).toBe(autoJudgeGetResponseSchema);
+    expect(autoJudgeGetV11.responseSchema).toBe(autoJudgeGetResponseSchemaV11);
+    expect(autoJudgeGetV12.responseSchema).toBe(autoJudgeGetResponseSchema);
     expect(autoJudgeSetV10.responseSchema).toBe(autoJudgeSetResponseSchemaV10);
-    expect(autoJudgeSetV11.responseSchema).toBe(autoJudgeSetResponseSchema);
+    expect(autoJudgeSetV11.responseSchema).toBe(autoJudgeSetResponseSchemaV11);
+    expect(autoJudgeSetV12.responseSchema).toBe(autoJudgeSetResponseSchema);
   });
 });
 
 describe("autoJudge.get/set registry entries", () => {
-  it("head at 1.1, with 1.0 still installed and the 1.1 growth projection-gated", () => {
+  it("head at 1.2, with 1.0 and 1.1 still installed and the 1.1 growth projection-gated", () => {
     for (const method of ["autoJudge.get", "autoJudge.set"] as const) {
       const entry = hostRpcRegistry[method];
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(entry[1].latestMinor).toBe(1);
+      expect(entry[1].latestMinor).toBe(2);
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
     }
 
@@ -311,10 +319,29 @@ describe("autoJudge.get/set registry entries", () => {
     expect(hostRpcRegistry["autoJudge.get"][1].versions[1].contract).toBe(
       autoJudgeGetV11,
     );
+    expect(hostRpcRegistry["autoJudge.get"][1].versions[2].contract).toBe(
+      autoJudgeGetV12,
+    );
     expect(
       hostRpcRegistry["autoJudge.get"][1].versions[1]
         .responseGrowthProjectionGated,
     ).toBe(true);
+    // `lastSelection` is a new key, which a 1.1 caller's re-parse strips, so
+    // 1.2 carries no growth annotation at all.
+    expect(
+      Object.hasOwn(
+        hostRpcRegistry["autoJudge.get"][1].versions[2],
+        "responseGrowthProjectionGated",
+      ),
+    ).toBe(false);
+    expect(
+      hostRpcRegistry["autoJudge.get"][1].versions[1]
+        .upgradeFromPreviousVersion,
+    ).toBe(autoJudgeGetUpgradeV10ToV11);
+    expect(
+      hostRpcRegistry["autoJudge.get"][1].versions[2]
+        .upgradeFromPreviousVersion,
+    ).toBe(autoJudgeGetUpgradeV11ToV12);
 
     expect(hostRpcRegistry["autoJudge.set"][1].versions[0].contract).toBe(
       autoJudgeSetV10,
@@ -322,10 +349,27 @@ describe("autoJudge.get/set registry entries", () => {
     expect(hostRpcRegistry["autoJudge.set"][1].versions[1].contract).toBe(
       autoJudgeSetV11,
     );
+    expect(hostRpcRegistry["autoJudge.set"][1].versions[2].contract).toBe(
+      autoJudgeSetV12,
+    );
     expect(
       hostRpcRegistry["autoJudge.set"][1].versions[1]
         .responseGrowthProjectionGated,
     ).toBe(true);
+    expect(
+      Object.hasOwn(
+        hostRpcRegistry["autoJudge.set"][1].versions[2],
+        "responseGrowthProjectionGated",
+      ),
+    ).toBe(false);
+    expect(
+      hostRpcRegistry["autoJudge.set"][1].versions[1]
+        .upgradeFromPreviousVersion,
+    ).toBe(autoJudgeSetUpgradeV10ToV11);
+    expect(
+      hostRpcRegistry["autoJudge.set"][1].versions[2]
+        .upgradeFromPreviousVersion,
+    ).toBe(autoJudgeSetUpgradeV11ToV12);
   });
 
   it("validates the registry as constructed", () => {
