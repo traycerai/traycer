@@ -16,9 +16,14 @@ import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import type { ResolvedThemeContextValue } from "@/providers/use-resolved-theme";
 import {
   __resetDiffWorkerPoolForTests,
+  acquireDiffWorkerPool,
   getDiffWorkerPool,
-  requestDiffWorkerPool,
 } from "@/lib/diff/diff-worker-pool-demand";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 interface RenderOptionsArg {
   readonly theme: "pierre-light" | "pierre-dark";
@@ -88,6 +93,7 @@ describe("DiffWorkerPoolProvider", () => {
   afterEach(() => {
     cleanup();
     __resetDiffWorkerPoolForTests();
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
   });
 
   it("renders children", () => {
@@ -119,7 +125,7 @@ describe("DiffWorkerPoolProvider", () => {
     expect(getDiffWorkerPool()).toBeUndefined();
   });
 
-  it("creates the pool on requestDiffWorkerPool() and the consumer then sees it via context", () => {
+  it("creates the pool on acquireDiffWorkerPool() and the consumer then sees it via context", () => {
     const manager = fakeWorkerPoolManager();
     workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
 
@@ -134,7 +140,7 @@ describe("DiffWorkerPoolProvider", () => {
     expect(screen.getByTestId("pool-state").textContent).toBe("none");
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
 
     expect(screen.getByTestId("pool-state").textContent).toBe("present");
@@ -167,7 +173,7 @@ describe("DiffWorkerPoolProvider", () => {
     expect(manager.setRenderOptions).not.toHaveBeenCalled();
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
 
     expect(manager.setRenderOptions).toHaveBeenCalledWith({
@@ -189,7 +195,7 @@ describe("DiffWorkerPoolProvider", () => {
     );
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
 
     expect(manager.setRenderOptions).toHaveBeenCalledWith({
@@ -198,11 +204,36 @@ describe("DiffWorkerPoolProvider", () => {
     });
   });
 
-  it("honors a request made before the provider mounts", () => {
+  it("sizes the pool at one worker under the mobile profile", () => {
+    // An iPhone reports 6 hardware threads, so the core-count arm alone would
+    // hand the phone the desktop's cap. The profile is what holds it to one
+    // highlighter isolate.
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
     const manager = fakeWorkerPoolManager();
     workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
 
-    requestDiffWorkerPool();
+    render(
+      <ResolvedThemeContext.Provider value={lightTheme()}>
+        <DiffWorkerPoolProvider>
+          <PoolConsumerProbe />
+        </DiffWorkerPoolProvider>
+      </ResolvedThemeContext.Provider>,
+    );
+
+    act(() => {
+      acquireDiffWorkerPool();
+    });
+
+    const [options] =
+      workerPoolMocks.getOrCreateWorkerPoolSingleton.mock.calls[0];
+    expect(options.poolOptions.poolSize).toBe(1);
+  });
+
+  it("honors a lease taken before the provider mounts", () => {
+    const manager = fakeWorkerPoolManager();
+    workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
+
+    acquireDiffWorkerPool();
     expect(getDiffWorkerPool()).toBeUndefined();
 
     render(
@@ -233,7 +264,7 @@ describe("DiffWorkerPoolProvider", () => {
     );
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
     expect(getDiffWorkerPool()).toBe(manager);
 

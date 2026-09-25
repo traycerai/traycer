@@ -52,6 +52,21 @@ describe("RetentionProfile", () => {
     expect(MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals).toBeLessThan(
       DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals,
     );
+    expect(MOBILE_RETENTION_PROFILE.maxDiffHighlightWorkers).toBeLessThan(
+      DESKTOP_RETENTION_PROFILE.maxDiffHighlightWorkers,
+    );
+  });
+
+  it("gives the phone a single highlighter isolate and an idle window desktop does not have", () => {
+    // One, not "fewer": a phone-layout shell shows a single diff at a time, so
+    // the parallelism extra isolates buy has nothing to spend itself on, and
+    // each one costs an Oniguruma WASM engine plus every grammar it loads.
+    expect(MOBILE_RETENTION_PROFILE.maxDiffHighlightWorkers).toBe(1);
+    // Desktop keeps its pool for the shell's lifetime - rebuilding costs a
+    // WASM engine and a grammar re-resolve per isolate, and a desktop renderer
+    // has the headroom to hold them for someone reading diffs all day.
+    expect(DESKTOP_RETENTION_PROFILE.diffWorkerPoolIdleMs).toBeNull();
+    expect(MOBILE_RETENTION_PROFILE.diffWorkerPoolIdleMs).toBe(45_000);
   });
 
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {

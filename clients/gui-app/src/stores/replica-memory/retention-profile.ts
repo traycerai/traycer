@@ -1,8 +1,8 @@
 import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
 
 /**
- * The four count caps that decide how much of the app stays RESIDENT while
- * the user is elsewhere, chosen once per shell.
+ * The count caps that decide how much of the app stays RESIDENT while the
+ * user is elsewhere, chosen once per shell.
  *
  * All four used to be bare module constants with no platform branch, so the
  * phone ran the desktop numbers: five hidden-but-mounted top-level surfaces
@@ -32,6 +32,33 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /**
+   * Upper bound on the `@pierre/diffs` highlighter pool
+   * (`DiffWorkerPoolProvider`). A cap, not the size: the provider still takes
+   * the smaller of this and what the machine's core count justifies.
+   *
+   * A count like the four above, and the only one whose unit is a WORKER
+   * ISOLATE rather than a JS object graph - an 834 KB bundle, an Oniguruma
+   * WASM engine, both themes and every grammar that isolate has been asked
+   * for, none of which a main-thread heap snapshot can see. The phone runs
+   * ONE: a single visible diff is the only thing a phone-layout shell can
+   * show, so the parallelism the desktop buys with two more isolates has
+   * nothing to spend itself on there.
+   */
+  readonly maxDiffHighlightWorkers: number;
+  /**
+   * How long the diff highlighter pool may sit with NO mounted diff surface
+   * before it is terminated, or `null` to keep it for the shell's lifetime.
+   *
+   * The one TIME cap among the counts, and per-profile where
+   * {@link PARK_HIDDEN_EPIC_AFTER_MS} is not, because this is not a statement
+   * about attention: the pool is created on the first diff and, on desktop,
+   * deliberately kept afterwards - rebuilding it costs a WASM engine and a
+   * grammar re-resolve per isolate, and a desktop renderer has the headroom to
+   * hold them for a user who is plainly reading diffs all day. On the phone it
+   * does not, and a pool nothing is rendering through is pure resident cost.
+   */
+  readonly diffWorkerPoolIdleMs: number | null;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -40,6 +67,8 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  maxDiffHighlightWorkers: 3,
+  diffWorkerPoolIdleMs: null,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -48,6 +77,8 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  maxDiffHighlightWorkers: 1,
+  diffWorkerPoolIdleMs: 45_000,
 });
 
 /**

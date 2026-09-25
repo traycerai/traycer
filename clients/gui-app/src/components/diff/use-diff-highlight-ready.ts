@@ -6,21 +6,29 @@ import type {
 } from "@pierre/diffs";
 import { useWorkerPool } from "@pierre/diffs/react";
 import {
+  acquireDiffWorkerPool,
   getDiffWorkerPoolAvailability,
-  requestDiffWorkerPool,
   subscribeDiffWorkerPool,
   type DiffWorkerPoolAvailability,
 } from "@/lib/diff/diff-worker-pool-demand";
 
 /**
- * Asks for the worker pool and reports where that request stands.
+ * Holds a lease on the worker pool for as long as this surface is mounted, and
+ * reports where that lease stands.
  *
  * Every Diffs surface passes through one of the gates below before it mounts a
  * `@pierre/diffs` component, which makes them the one place a surface can say
  * "I am about to need a highlighter" early enough for the pool to be created
- * lazily (see `lib/diff/diff-worker-pool-demand.ts`). The request is made from
+ * lazily (see `lib/diff/diff-worker-pool-demand.ts`). The lease is taken from
  * an effect rather than during render so that a render which is thrown away
  * never builds a pool.
+ *
+ * It is a LEASE rather than a one-way request because the store now needs the
+ * falling edge too: releasing the last one is what tells it that nothing is
+ * rendering a diff any more, which is the only moment its isolates can safely
+ * be reclaimed (mobile profiles do; see that module). The cleanup therefore
+ * has to run for every path that unmounts this surface, which is exactly what
+ * returning it from the effect gets.
  *
  * The gates stay closed until the pool is in CONTEXT (`useWorkerPool()`), not
  * merely in the store: a `@pierre/diffs` component mounted with no pool in
@@ -37,7 +45,8 @@ function useDiffWorkerPoolAvailability(
   // that mounts pool-less highlights on the main thread for life. An empty
   // diff list is the only case with genuinely nothing to send a worker.
   useEffect(() => {
-    if (hasWork) requestDiffWorkerPool();
+    if (!hasWork) return;
+    return acquireDiffWorkerPool();
   }, [hasWork]);
   return useSyncExternalStore(
     subscribeDiffWorkerPool,
