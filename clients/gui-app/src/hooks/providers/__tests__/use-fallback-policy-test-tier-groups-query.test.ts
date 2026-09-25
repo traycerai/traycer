@@ -7,7 +7,8 @@ import type {
 import {
   useFallbackPolicyTestTierGroupsQuery,
   type FallbackPolicyTestTierGroupsRequest,
-} from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
+} from "@/hooks/providers/use-fallback-policy-test-tier-groups-query";
+import type { FallbackPolicyPatternLines } from "@/hooks/providers/use-fallback-policy-pattern-lines";
 
 /**
  * The Test a model panel's request shape (ticket 05, clause 2): the FULL
@@ -46,9 +47,25 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
 }));
 
+/** The negotiated lines; `blankPreviewRows` is `previewTierGroups` at 1.1 or later. */
+const patternLines = vi.hoisted(
+  (): { -readonly [K in keyof FallbackPolicyPatternLines]: boolean } => ({
+    patterns: true,
+    blankPreviewRows: true,
+  }),
+);
+
+vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
+  useFallbackPolicyPatternLines: (): FallbackPolicyPatternLines => ({
+    ...patternLines,
+  }),
+}));
+
 afterEach(() => {
   queryMocks.params = [];
   queryMocks.enabled = [];
+  patternLines.patterns = true;
+  patternLines.blankPreviewRows = true;
   vi.clearAllMocks();
 });
 
@@ -110,5 +127,16 @@ describe("useFallbackPolicyTestTierGroupsQuery - request shape", () => {
       groups: [],
       defaultTierGroupId: null,
     });
+  });
+
+  it("is disabled below the negotiated line that lets a blocked walk travel, even with a request present (Q3)", () => {
+    patternLines.blankPreviewRows = false;
+    const request: FallbackPolicyTestTierGroupsRequest = {
+      groups: GROUPS,
+      defaultTierGroupId: "flagship",
+      blocked: BLOCKED,
+    };
+    renderHook(() => useFallbackPolicyTestTierGroupsQuery(request));
+    expect(queryMocks.enabled).toEqual([false]);
   });
 });

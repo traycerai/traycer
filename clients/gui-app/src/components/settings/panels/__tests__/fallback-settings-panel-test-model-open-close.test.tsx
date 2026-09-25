@@ -74,9 +74,9 @@ vi.mock(
   }),
 );
 
-// The editor's OWN preview and the Test panel's dry-run query share this
-// module; both exports are mocked inert since neither answer is this suite's
-// subject (open, close and focus return only).
+// The editor's OWN preview and the Test panel's dry-run query, each in its own
+// module, are mocked inert since neither answer is this suite's subject (open,
+// close and focus return only).
 vi.mock(
   "@/hooks/providers/use-fallback-policy-preview-tier-groups-query",
   () => ({
@@ -84,14 +84,16 @@ vi.mock(
       data: undefined,
       isFetching: false,
     }),
-    useFallbackPolicyTestTierGroupsQuery: () => ({
-      data: undefined,
-      isFetching: false,
-      isError: false,
-      refetch: () => {},
-    }),
   }),
 );
+vi.mock("@/hooks/providers/use-fallback-policy-test-tier-groups-query", () => ({
+  useFallbackPolicyTestTierGroupsQuery: () => ({
+    data: undefined,
+    isFetching: false,
+    isError: false,
+    refetch: () => {},
+  }),
+}));
 
 vi.mock(
   "@/components/settings/panels/fallback/fallback-catalog-options",

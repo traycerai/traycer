@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  failedModelRoutingIdentity,
   findTierConflicts,
   findTierGroupForFailedTuple,
   modelMatchesPattern,
@@ -158,6 +159,33 @@ describe("modelMatchesPattern", () => {
           id(`${"a".repeat(100)}b`, "x"),
         ),
       ).toBe(true);
+    });
+  });
+});
+
+// Old behaviour that fails these: dropping `.toLowerCase()` on either side of
+// the catalog lookup makes a differently-cased slug fail to match, so
+// "DEFAULT" against a catalog storing "default" would fall through to the
+// id-only label instead of finding the entry.
+describe("failedModelRoutingIdentity", () => {
+  it("matches the catalog label case-insensitively, keeping the slug as passed", () => {
+    const identity = failedModelRoutingIdentity("DEFAULT", [
+      id("default", "Default (Opus 5.5)"),
+    ]);
+    expect(identity).toEqual({ slug: "DEFAULT", label: "Default (Opus 5.5)" });
+  });
+
+  it("a null catalog gives the model itself as the label", () => {
+    expect(failedModelRoutingIdentity("gpt-6-sol", null)).toEqual({
+      slug: "gpt-6-sol",
+      label: "gpt-6-sol",
+    });
+  });
+
+  it("an unlisted model gives the model itself as the label", () => {
+    expect(failedModelRoutingIdentity("unknown-model", CODEX_CATALOG)).toEqual({
+      slug: "unknown-model",
+      label: "unknown-model",
     });
   });
 });

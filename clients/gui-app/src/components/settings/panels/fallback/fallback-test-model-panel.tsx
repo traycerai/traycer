@@ -15,6 +15,7 @@ import type {
   TierCandidatePreview,
   TierConflict,
   TierGroup,
+  TierModelIdentity,
   TierPreviewBlockedTuple,
 } from "@traycer/protocol/host/fallback-policy";
 import {
@@ -35,7 +36,10 @@ import {
   useGuiHarnessesQuery,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import { useFallbackPolicyTestTierGroupsQuery } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
+import {
+  useFallbackPolicyTestTierGroupsQuery,
+  type FallbackPolicyTestTierGroupsRequest,
+} from "@/hooks/providers/use-fallback-policy-test-tier-groups-query";
 import {
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
@@ -67,6 +71,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
+import type { FallbackCommittedTiers } from "@/components/settings/panels/fallback/fallback-policy-draft";
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
 import {
@@ -79,24 +84,31 @@ import {
 import { FallbackPatternGlyph } from "@/components/settings/panels/fallback/fallback-pattern-glyph";
 import { registerSettingsEscapeConsumer } from "@/components/settings/settings-escape-consumers";
 import {
+  DEPENDS_ON_THE_ERROR,
+  ROUTE_AUTOMATICALLY_OFF_LEAD,
   TEST_FAILURE_KINDS,
   TEST_FAILURE_KIND_LABELS,
+  TEST_FAILURE_PLURALS,
   TEST_STEP_LABELS,
   blockedModelLabel,
   testNextSteps,
-  testPreviewForTier,
   testRouting,
-  testRows,
+  testTierStepRuns,
+  testVerdictModel,
+  testVerdictSentence,
   testableTierNames,
+  type TestBlockedModel,
   type TestFailureKind,
   type TestMatchLine,
   type TestNextSteps,
   type TestRouting,
   type TestRow,
   type TestRowAnswer,
+  type TestRowsAnswer,
   type TestSkip,
   type TestSkipTone,
   type TestTierClaim,
+  type TestVerdictModel,
 } from "@/components/settings/panels/fallback/fallback-test-model";
 
 /**
@@ -140,6 +152,12 @@ export interface FallbackTestModelPanelProps {
   readonly id: string;
   /** The DRAFT policy: its tiers as edited, blank rows included, its default tier and its steps. */
   readonly policy: FallbackPolicy;
+  /**
+   * The draft's tiers and default tier as last COMMITTED - what the dry run is
+   * asked about, so a rename typed into a tier name sends no walk until the
+   * field commits on blur (the reducer's `committedTiers`).
+   */
+  readonly committedTiers: FallbackCommittedTiers;
   readonly catalog: FallbackCatalogOptions;
   /** The editor's own `findTierConflicts` over the draft. */
   readonly conflicts: readonly TierConflict[];
@@ -208,8 +226,8 @@ const NO_ACCOUNTS: readonly TestAccountOption[] = [];
  *
  * Keyboard: Escape anywhere in the panel closes it (unless a picker's own
  * list took the key first), as does ✕; the parent returns focus to the
- * button. The verdict region is `aria-live="polite"`, mounted with the panel
- * so a changed answer is announced.
+ * button. A visually hidden polite status, mounted with the panel, announces
+ * the verdict as one sentence; the visible verdict is not a live region.
  */
 export function FallbackTestModelPanel(
   props: FallbackTestModelPanelProps,
@@ -217,6 +235,7 @@ export function FallbackTestModelPanel(
   const {
     id,
     policy,
+    committedTiers,
     catalog,
     conflicts,
     labelFor,
@@ -258,36 +277,59 @@ export function FallbackTestModelPanel(
   }, [onClose]);
   const tuple = useBlockedTuple(policy.tierGroups, picks);
   const groups = policy.tierGroups;
-
-  const routing =
-    tuple.blocked === null
-      ? null
-      : testRouting({
-          groups,
-          defaultTierGroupId: policy.defaultTierGroupId,
-          harnessId: tuple.blocked.harnessId,
-          model: tuple.blocked.model,
-          catalog: tuple.models,
-          conflicts,
-        });
+  const committedGroups = committedTiers.tierGroups;
+  const blocked = blockedModelView(tuple);
+  // The header routes on the live draft, so a rename reads through at once;
+  // the walk is asked about the tiers as last committed (review C1).
+  const routing = routeTuple(
+    tuple,
+    groups,
+    policy.defaultTierGroupId,
+    conflicts,
+  );
+  const committedRouting = routeTuple(
+    tuple,
+    committedGroups,
+    committedTiers.defaultTierGroupId,
+    conflicts,
+  );
   const nextSteps = testNextSteps(policy, picks.kind);
-  const walks =
-    routing !== null &&
-    routing.kind !== "no-tier" &&
-    nextSteps.kind === "after-tier";
-  const namesTestable = testableTierNames(groups);
-  // Asked only when there is a tier to walk: a model that routes nowhere, or a
-  // failure whose steps skip the tier, is answered by the client alone, and a
-  // walk for it would come back empty.
-  const request =
-    simulates && walks && namesTestable && tuple.blocked !== null
-      ? {
-          groups,
-          defaultTierGroupId: policy.defaultTierGroupId,
-          blocked: tuple.blocked,
-        }
-      : null;
+  const namesTestable = testableTierNames(committedGroups);
+  const request = dryRunRequest({
+    simulates,
+    tuple,
+    committedRouting,
+    nextSteps,
+    namesTestable,
+    committedTiers,
+  });
   const query = useFallbackPolicyTestTierGroupsQuery(request);
+  const verdict = testVerdictModel({
+    incomplete: incompleteTupleText(tuple),
+    tuple:
+      blocked === null || routing === null || committedRouting === null
+        ? null
+        : { blocked, routing, committedRouting },
+    nextSteps,
+    failure: picks.kind,
+    groups,
+    committedGroups,
+    simulated: simulates,
+    namesTestable,
+    walk: {
+      // `request` stands for "a walk was asked for": without one there is
+      // nothing pending and nothing to have failed.
+      asked: request !== null,
+      candidates: query.data?.candidates ?? null,
+      failed: request !== null && query.isError,
+    },
+    unsimulated: unsimulatedPreview,
+    catalog,
+    labelFor,
+  });
+  // The host arms nothing with the master switch off; the dry run is still
+  // shown, under a lead that says so (review P1).
+  const masterOff = !policy.enabled;
 
   return (
     <section
@@ -319,42 +361,103 @@ export function FallbackTestModelPanel(
           setPicks((previous) => update(previous));
         }}
       />
-      {/* Mounted with the panel and never swapped out: only its CONTENT
-          changes, which is what a polite live region needs to announce a new
-          verdict (see `PreviewFooterStatus` in the editor). */}
-      <div
+      {/* The verdict as ONE sentence, and the only live region here: the
+          visible verdict below is a tree of rows and pills, and announcing it
+          would read a run of fragments on every change (review A1). Mounted
+          with the panel and never swapped out - only its text changes, which
+          is what a polite region needs to announce a new answer. */}
+      <p
+        role="status"
         aria-live="polite"
-        aria-busy={query.isFetching}
+        className="sr-only"
+        data-testid="fallback-test-model-status"
+      >
+        {testVerdictSentence(verdict, masterOff)}
+      </p>
+      <div
         className="flex min-w-0 flex-col gap-2.5 border-l-2 border-primary/60 pl-3.5"
         data-testid="fallback-test-model-verdict"
       >
+        {masterOff && verdict.kind !== "incomplete" ? (
+          <p
+            className="text-ui-sm text-muted-foreground"
+            data-testid="fallback-test-model-master-off"
+          >
+            {ROUTE_AUTOMATICALLY_OFF_LEAD}
+          </p>
+        ) : null}
         <TestVerdict
-          tuple={tuple}
-          routing={routing}
-          nextSteps={nextSteps}
-          kind={picks.kind}
-          rows={{
-            groups,
-            catalog,
-            labelFor,
-            simulates,
-            namesTestable,
-            simulated: query.data?.candidates ?? null,
-            unsimulated: unsimulatedPreview,
-            // `request` stands for "a walk was asked for": without one there
-            // is nothing pending and nothing to have failed.
-            pending:
-              request !== null && query.data === undefined && !query.isError,
-            failed: request !== null && query.isError,
-            onRetry: () => {
-              void query.refetch();
-            },
-            onGoToRow,
+          verdict={verdict}
+          onRetryModels={
+            tuple.modelsFailed && tuple.models === null
+              ? tuple.retryModels
+              : null
+          }
+          onRetry={() => {
+            void query.refetch();
           }}
+          onGoToRow={onGoToRow}
         />
       </div>
     </section>
   );
+}
+
+/** The blocked model as the verdict names it, once the tuple is complete. */
+function blockedModelView(tuple: BlockedTupleState): TestBlockedModel | null {
+  if (tuple.blocked === null) return null;
+  return {
+    harnessId: tuple.blocked.harnessId,
+    label: blockedModelLabel(tuple.blocked.model, tuple.models),
+  };
+}
+
+/** Where the tuple routes over `tiers`, or `null` until the tuple is complete. */
+function routeTuple(
+  tuple: BlockedTupleState,
+  tiers: readonly TierGroup[],
+  defaultTierGroupId: string | null,
+  conflicts: readonly TierConflict[],
+): TestRouting | null {
+  if (tuple.blocked === null) return null;
+  return testRouting({
+    groups: tiers,
+    defaultTierGroupId,
+    harnessId: tuple.blocked.harnessId,
+    model: tuple.blocked.model,
+    catalog: tuple.models,
+    conflicts,
+  });
+}
+
+/**
+ * The dry run to ask for, or `null` for none. Asked only when there is a tier
+ * to walk: a model that routes nowhere, or a failure whose steps skip the
+ * tier, is answered by the client alone, and a walk for it would come back
+ * empty. Tiers with a blank or shared name cannot be attributed, so they are
+ * not sent either.
+ */
+function dryRunRequest(input: {
+  readonly simulates: boolean;
+  readonly tuple: BlockedTupleState;
+  readonly committedRouting: TestRouting | null;
+  readonly nextSteps: TestNextSteps;
+  readonly namesTestable: boolean;
+  readonly committedTiers: FallbackCommittedTiers;
+}): FallbackPolicyTestTierGroupsRequest | null {
+  const { tuple, committedRouting, committedTiers } = input;
+  if (!input.simulates || !input.namesTestable || tuple.blocked === null) {
+    return null;
+  }
+  if (committedRouting === null || committedRouting.kind === "no-tier") {
+    return null;
+  }
+  if (!testTierStepRuns(input.nextSteps)) return null;
+  return {
+    groups: committedTiers.tierGroups,
+    defaultTierGroupId: committedTiers.defaultTierGroupId,
+    blocked: tuple.blocked,
+  };
 }
 
 /** One harness the Provider picker offers, with what the other pickers need from it. */
@@ -374,11 +477,11 @@ interface BlockedTupleState {
   readonly harnesses: readonly TestHarnessOption[] | null;
   readonly harnessId: GuiHarnessId | null;
   /** The blocked harness's catalog, `null` while it has not answered. */
-  readonly models:
-    | readonly { readonly slug: string; readonly label: string }[]
-    | null;
+  readonly models: readonly TierModelIdentity[] | null;
   /** The catalog read failed, so `models` is not merely still loading. */
   readonly modelsFailed: boolean;
+  /** Asks the catalog again, after a failed read. */
+  readonly retryModels: () => void;
   readonly model: string | null;
   readonly accounts: readonly TestAccountOption[];
   readonly profileId: string | null;
@@ -448,6 +551,7 @@ function useBlockedTuple(
     harnessId,
     models: catalog.models,
     modelsFailed: catalog.failed,
+    retryModels: catalog.retry,
     model,
     accounts: account.accounts,
     profileId: account.profileId,
@@ -487,8 +591,9 @@ function useTestHarnessOptions(): readonly TestHarnessOption[] | null {
  * may be one no row names.
  */
 function useTestModelCatalog(harnessId: GuiHarnessId | null): {
-  readonly models: BlockedTupleState["models"];
+  readonly models: readonly TierModelIdentity[] | null;
   readonly failed: boolean;
+  readonly retry: () => void;
 } {
   const client = useHostClient();
   const modelQueries = useGuiHarnessModelsWarmup(client, harnessId, {
@@ -496,11 +601,20 @@ function useTestModelCatalog(harnessId: GuiHarnessId | null): {
     subscribed: true,
   });
   const modelQuery = modelQueries.at(0);
-  if (modelQuery === undefined) return { models: null, failed: false };
+  if (modelQuery === undefined) {
+    return { models: null, failed: false, retry: noCatalogToRetry };
+  }
   return {
     models: modelQuery.data === undefined ? null : modelQuery.data.models,
     failed: modelQuery.isError,
+    retry: () => {
+      void modelQuery.refetch();
+    },
   };
+}
+
+function noCatalogToRetry(): void {
+  // No provider is picked yet, so there is no catalog read to ask again.
 }
 
 /**
@@ -508,8 +622,8 @@ function useTestModelCatalog(harnessId: GuiHarnessId | null): {
  * enabled accounts, named as the chat cards name them; the value is the pick
  * while it is still listed, else the provider's last-used account checked
  * against its live accounts (`resolveSeededProfileId`, the fork dialog's
- * rule). A harness with no provider CLI (Traycer) has no accounts and runs on
- * `null`.
+ * rule), else the first account listed. A harness with no provider CLI
+ * (Traycer) has no accounts and runs on `null`.
  */
 function useTestAccount(
   hostId: string | null,
@@ -557,14 +671,23 @@ function useTestAccount(
   ) {
     return { accounts, profileId: picked.profileId };
   }
-  return {
-    accounts,
-    profileId: resolveSeededProfileId(
-      lastProfiles[harnessId] ?? null,
-      profiles,
-      providersData !== undefined,
-    ),
-  };
+  const seeded = resolveSeededProfileId(
+    lastProfiles[harnessId] ?? null,
+    profiles,
+    providersData !== undefined,
+  );
+  // A seed the picker does not offer is not a default: with nothing
+  // remembered the seed is `null`, the Terminal account, and a provider whose
+  // Terminal account is disabled lists no such option (review D1). The first
+  // listed account is then the default, as it is what the picker shows first.
+  const first = accounts.at(0);
+  if (
+    first === undefined ||
+    accounts.some((account) => account.profileId === seeded)
+  ) {
+    return { accounts, profileId: seeded };
+  }
+  return { accounts, profileId: first.profileId };
 }
 
 /**
@@ -707,13 +830,7 @@ function TestPickers(props: {
             aria-label="Model"
             data-testid="fallback-test-model-model"
           >
-            <SelectValue
-              placeholder={
-                tuple.harnessId !== null && tuple.models === null
-                  ? "Loading models…"
-                  : "No models to choose from"
-              }
-            />
+            <SelectValue placeholder={modelPlaceholder(tuple)} />
           </SelectTrigger>
           <SelectContent>
             {(tuple.models ?? []).map((model) => (
@@ -822,6 +939,14 @@ function TestPickers(props: {
   );
 }
 
+/** The Model picker's empty state: still loading, failed, or nothing listed. */
+function modelPlaceholder(tuple: BlockedTupleState): string {
+  if (tuple.harnessId === null || tuple.models !== null) {
+    return "No models to choose from";
+  }
+  return tuple.modelsFailed ? "Couldn't load models" : "Loading models…";
+}
+
 /** Why there is no tuple to test yet - the catalogs still loading, or nothing to pick. */
 function incompleteTupleText(tuple: BlockedTupleState): string {
   if (tuple.harnesses === null) return "Loading providers…";
@@ -837,105 +962,119 @@ function incompleteTupleText(tuple: BlockedTupleState): string {
 }
 
 /**
- * The answer, or why there is none yet. The states that name no tier - a tuple
- * still loading, steps that never reach the equivalent-model step, a model
- * that routes nowhere - are one line each; a routed model gets the full
+ * The answer, or why there is none yet, drawn from the verdict model the
+ * panel's status sentence is built from. The states that name no tier - a
+ * tuple still loading, steps that never reach the equivalent-model step, a
+ * model that routes nowhere - are one line each; a routed model gets the full
  * verdict ({@link RoutedVerdict}).
  */
 function TestVerdict(props: {
-  readonly tuple: BlockedTupleState;
-  readonly routing: TestRouting | null;
-  readonly nextSteps: TestNextSteps;
-  readonly kind: TestFailureKind;
-  readonly rows: RoutedRowsInput;
+  readonly verdict: TestVerdictModel;
+  /** "Try again" for a failed catalog read, or `null` when there is none. */
+  readonly onRetryModels: (() => void) | null;
+  readonly onRetry: () => void;
+  readonly onGoToRow: (tierIndex: number, candidateIndex: number) => void;
 }): ReactNode {
-  const { tuple, routing, nextSteps, kind, rows } = props;
-  if (tuple.blocked === null || routing === null) {
-    return (
-      <p
-        className="text-ui-sm text-muted-foreground"
-        data-testid="fallback-test-model-incomplete"
-      >
-        {incompleteTupleText(tuple)}
-      </p>
-    );
+  const { verdict } = props;
+  switch (verdict.kind) {
+    case "incomplete":
+      return (
+        <p
+          className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground"
+          data-testid="fallback-test-model-incomplete"
+        >
+          {verdict.text}
+          {props.onRetryModels === null ? null : (
+            <Button
+              size="inline-xs"
+              type="button"
+              variant="link"
+              onClick={props.onRetryModels}
+              data-testid="fallback-test-model-models-retry"
+            >
+              Try again
+            </Button>
+          )}
+        </p>
+      );
+    case "fallback-off":
+      return (
+        <p className="text-ui-sm" data-testid="fallback-test-model-steps-off">
+          Your steps are turned off for {TEST_FAILURE_PLURALS[verdict.failure]},
+          so Traycer doesn&apos;t try another model.
+        </p>
+      );
+    case "tier-off":
+      return <TierOffLine failure={verdict.failure} steps={verdict.steps} />;
+    case "no-tier":
+      return <NoTierFooter verdict={verdict} />;
+    case "routed":
+      return (
+        <RoutedVerdict
+          verdict={verdict}
+          onRetry={props.onRetry}
+          onGoToRow={props.onGoToRow}
+        />
+      );
   }
-  const blocked = {
-    harnessId: tuple.blocked.harnessId,
-    label: blockedModelLabel(tuple.blocked.model, tuple.models),
-  };
-  const failure = kind === "rate_limit" ? "rate limits" : "this kind of error";
-  if (nextSteps.kind === "fallback-off") {
-    return (
-      <p className="text-ui-sm" data-testid="fallback-test-model-steps-off">
-        Your steps are turned off for {failure}, so Traycer doesn&apos;t try
-        another model.
-      </p>
-    );
-  }
-  if (nextSteps.kind === "tier-off") {
-    return (
-      <p className="text-ui-sm" data-testid="fallback-test-model-steps-off">
-        The equivalent-model step is off for {failure}, so Traycer goes straight
-        to <StepChain steps={nextSteps.steps} />.
-      </p>
-    );
-  }
-  if (routing.kind === "no-tier") {
-    return (
-      <p
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm"
-        data-testid="fallback-test-model-footer-no-tier"
-      >
-        <span className="text-muted-foreground">
-          {routing.defaultTierGroupId === null
-            ? "Not in any tier, default set to None:"
-            : "Not in any tier, and the default tier doesn't exist:"}
-        </span>
-        <BlockedModel blocked={blocked} />
-        <span className="text-muted-foreground">
-          <span aria-hidden>→ </span>no equivalent-model step; goes straight to{" "}
-          <b className="font-medium text-foreground">
-            {TEST_STEP_LABELS[nextSteps.steps[0]]}
-          </b>
-        </span>
-      </p>
-    );
-  }
+}
+
+type RoutedTestVerdict = Extract<TestVerdictModel, { readonly kind: "routed" }>;
+
+/** The equivalent-model step never runs for this failure, so no tier is named. */
+function TierOffLine(props: {
+  readonly failure: TestFailureKind;
+  readonly steps: readonly FallbackRungKind[] | null;
+}): ReactNode {
+  const { failure, steps } = props;
   return (
-    <RoutedVerdict
-      routing={routing}
-      steps={nextSteps.steps}
-      blocked={blocked}
-      rows={rows}
-    />
+    <p className="text-ui-sm" data-testid="fallback-test-model-steps-off">
+      {steps === null ? (
+        <>
+          The equivalent-model step doesn&apos;t run for these errors, and what
+          Traycer does instead {DEPENDS_ON_THE_ERROR}.
+        </>
+      ) : (
+        <>
+          The equivalent-model step is off for {TEST_FAILURE_PLURALS[failure]},
+          so Traycer goes straight to <StepChain steps={steps} />.
+        </>
+      )}
+    </p>
   );
 }
 
-/** A routing that names a tier - the two kinds the full verdict draws. */
-type RoutedTestRouting = Exclude<TestRouting, { readonly kind: "no-tier" }>;
-
-/** The blocked model as the verdict names it. */
-interface BlockedModelView {
-  readonly harnessId: GuiHarnessId;
-  readonly label: string;
-}
-
-/** What the full verdict needs to draw the routed tier's rows. */
-interface RoutedRowsInput {
-  readonly groups: readonly TierGroup[];
-  readonly catalog: FallbackCatalogOptions;
-  readonly labelFor: FallbackSettingsProfileLabel;
-  readonly simulates: boolean;
-  readonly namesTestable: boolean;
-  /** The host's walk for the blocked tuple, or `null` until it answers. */
-  readonly simulated: readonly TierCandidatePreview[] | null;
-  /** The editor's non-blocked preview, for the older-host fallback. */
-  readonly unsimulated: readonly TierCandidatePreview[] | null;
-  readonly pending: boolean;
-  readonly failed: boolean;
-  readonly onRetry: () => void;
-  readonly onGoToRow: (tierIndex: number, candidateIndex: number) => void;
+/** "Not in any tier, default set to None: <model> → no equivalent-model step; …". */
+function NoTierFooter(props: {
+  readonly verdict: Extract<TestVerdictModel, { readonly kind: "no-tier" }>;
+}): ReactNode {
+  const { verdict } = props;
+  return (
+    <p
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm"
+      data-testid="fallback-test-model-footer-no-tier"
+    >
+      <span className="text-muted-foreground">
+        {verdict.defaultTierGroupId === null
+          ? "Not in any tier, default set to None:"
+          : "Not in any tier, and the default tier doesn't exist:"}
+      </span>
+      <BlockedModel blocked={verdict.blocked} />
+      <span className="text-muted-foreground">
+        <span aria-hidden>→ </span>no equivalent-model step;{" "}
+        {verdict.next === null ? (
+          <>what happens next {DEPENDS_ON_THE_ERROR}</>
+        ) : (
+          <>
+            goes straight to{" "}
+            <b className="font-medium text-foreground">
+              {TEST_STEP_LABELS[verdict.next]}
+            </b>
+          </>
+        )}
+      </span>
+    </p>
+  );
 }
 
 /**
@@ -945,31 +1084,15 @@ interface RoutedRowsInput {
  * tier that went to the default, and a model in two.
  */
 function RoutedVerdict(props: {
-  readonly routing: RoutedTestRouting;
-  readonly steps: readonly FallbackRungKind[];
-  readonly blocked: BlockedModelView;
-  readonly rows: RoutedRowsInput;
+  readonly verdict: RoutedTestVerdict;
+  readonly onRetry: () => void;
+  readonly onGoToRow: (tierIndex: number, candidateIndex: number) => void;
 }): ReactNode {
-  const { routing, steps, blocked, rows } = props;
-  const { groups, simulates } = rows;
-  const tierIndex = routing.tier.tierIndex;
-  const tierName = tierDisplayName(routing.tier.tierId, tierIndex);
-  const preview = testPreviewForTier(
-    simulates ? rows.simulated : rows.unsimulated,
-    groups,
-    tierIndex,
-  );
-  const testRowsList = testRows({
-    tier: groups[tierIndex],
-    preview,
-    simulated: simulates,
-    catalog: rows.catalog,
-    labelFor: rows.labelFor,
-  });
+  const { verdict } = props;
   return (
     <>
-      <VerdictHeader routing={routing} tierName={tierName} blocked={blocked} />
-      {simulates ? null : (
+      <VerdictHeader verdict={verdict} />
+      {verdict.simulated ? null : (
         <p
           className="text-ui-xs text-muted-foreground"
           data-testid="fallback-test-model-unsimulated"
@@ -977,40 +1100,99 @@ function RoutedVerdict(props: {
           This host can&apos;t simulate the walk; showing what your tiers say.
         </p>
       )}
-      {simulates && !rows.namesTestable ? (
+      {verdict.simulated && !verdict.namesTestable ? (
         <p className="text-ui-xs text-muted-foreground">
           Give every tier its own name to see what each row would try.
         </p>
       ) : null}
-      <TestRowsView
-        rows={testRowsList}
-        pending={rows.pending}
-        failed={rows.failed}
-        onRetry={rows.onRetry}
+      <RoutedAnswerView
+        answer={verdict.answer}
+        blocked={verdict.blocked}
+        onRetry={props.onRetry}
       />
-      <p
-        className="text-ui-xs text-muted-foreground"
-        data-testid="fallback-test-model-then"
-      >
-        If none of these work: <StepChain steps={steps} /> (your fallback steps)
-      </p>
-      <VerdictFooter
-        routing={routing}
-        tierName={tierName}
-        blocked={blocked}
-        onGoToRow={rows.onGoToRow}
-      />
+      <ThenLine verdict={verdict} />
+      <VerdictFooter verdict={verdict} onGoToRow={props.onGoToRow} />
     </>
+  );
+}
+
+/**
+ * The routed tier's rows - or, when the host walked a DIFFERENT tier than the
+ * one named above (its own catalog read gave the model another name), one
+ * line saying so in place of rows that would otherwise all read empty
+ * (review C2).
+ */
+function RoutedAnswerView(props: {
+  readonly answer: TestRowsAnswer;
+  readonly blocked: TestBlockedModel;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const { answer, blocked } = props;
+  if (answer.kind === "rows") {
+    return (
+      <TestRowsView
+        rows={answer.rows}
+        status={answer.status}
+        onRetry={props.onRetry}
+      />
+    );
+  }
+  return (
+    <p
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-xs text-muted-foreground"
+      data-testid="fallback-test-model-routed-elsewhere"
+    >
+      {answer.walkedTierName === null ? (
+        <span>
+          On this host, Traycer would route this model to no tier right now - it
+          reads {harnessLabel(blocked.harnessId)}&apos;s model names
+          differently.
+        </span>
+      ) : (
+        <>
+          <span>On this host, Traycer would use the</span>
+          <TierPill name={answer.walkedTierName} />
+          <span>
+            tier right now - it reads {harnessLabel(blocked.harnessId)}&apos;s
+            model names differently.
+          </span>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** "If none of these work: <steps> (your fallback steps)". */
+function ThenLine(props: { readonly verdict: RoutedTestVerdict }): ReactNode {
+  const { verdict } = props;
+  return (
+    <p
+      className="text-ui-xs text-muted-foreground"
+      data-testid="fallback-test-model-then"
+    >
+      If none of these work:{" "}
+      {verdict.then === null ? (
+        DEPENDS_ON_THE_ERROR
+      ) : (
+        <>
+          <StepChain steps={verdict.then} /> (your fallback steps
+          {/* "Another error" is answered only when every failure it stands
+              for agrees, so it says so (review P2). */}
+          {verdict.failure === "other"
+            ? ", the same for every other error"
+            : ""}
+          )
+        </>
+      )}
+    </p>
   );
 }
 
 /** "Traycer uses the <tier> tier · <model> is in it through <pattern> (row n)". */
 function VerdictHeader(props: {
-  readonly routing: RoutedTestRouting;
-  readonly tierName: string;
-  readonly blocked: BlockedModelView;
+  readonly verdict: RoutedTestVerdict;
 }): ReactNode {
-  const { routing, tierName, blocked } = props;
+  const { routing, tierName, blocked } = props.verdict;
   return (
     <p
       className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm"
@@ -1021,9 +1203,18 @@ function VerdictHeader(props: {
       <span>tier</span>
       {routing.kind === "own-tier" ? (
         <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
-          <span>· {blocked.label} is in it through</span>
-          <RowValue value={routing.rowValue} harnessId={blocked.harnessId} />
-          <span>(row {routing.candidateIndex + 1})</span>
+          <span>
+            · {blocked.label} is in it{routing.row === null ? "" : " through"}
+          </span>
+          {routing.row === null ? null : (
+            <>
+              <RowValue
+                value={routing.row.value}
+                harnessId={blocked.harnessId}
+              />
+              <span>(row {routing.row.candidateIndex + 1})</span>
+            </>
+          )}
         </span>
       ) : null}
     </p>
@@ -1035,12 +1226,10 @@ function VerdictHeader(props: {
  * for a model two tiers claim; nothing for a model in exactly one tier.
  */
 function VerdictFooter(props: {
-  readonly routing: RoutedTestRouting;
-  readonly tierName: string;
-  readonly blocked: BlockedModelView;
+  readonly verdict: RoutedTestVerdict;
   readonly onGoToRow: (tierIndex: number, candidateIndex: number) => void;
 }): ReactNode {
-  const { routing, tierName, blocked, onGoToRow } = props;
+  const { routing, tierName, blocked } = props.verdict;
   if (routing.kind === "default-tier") {
     return (
       <p
@@ -1062,18 +1251,17 @@ function VerdictFooter(props: {
     <ConflictFooter
       claims={routing.conflict}
       blocked={blocked}
-      onGoToRow={onGoToRow}
+      onGoToRow={props.onGoToRow}
     />
   );
 }
 
 function TestRowsView(props: {
   readonly rows: readonly TestRow[];
-  readonly pending: boolean;
-  readonly failed: boolean;
+  readonly status: "ready" | "pending" | "failed";
   readonly onRetry: () => void;
 }): ReactNode {
-  const { rows, pending, failed, onRetry } = props;
+  const { rows, status, onRetry } = props;
   if (rows.length === 0) {
     return (
       <p className="text-ui-xs text-muted-foreground">
@@ -1083,7 +1271,7 @@ function TestRowsView(props: {
   }
   return (
     <div className="flex min-w-0 flex-col">
-      {pending ? (
+      {status === "pending" ? (
         <p className="flex items-center gap-2 pb-1 text-ui-xs text-muted-foreground">
           <AgentSpinningDots
             className={undefined}
@@ -1093,7 +1281,7 @@ function TestRowsView(props: {
           Checking what Traycer would try…
         </p>
       ) : null}
-      {failed ? (
+      {status === "failed" ? (
         <p
           className="flex flex-wrap items-center gap-2 pb-1 text-ui-xs text-muted-foreground"
           data-testid="fallback-test-model-failed"
@@ -1175,6 +1363,12 @@ function TestRowAnswerView(props: {
   );
 }
 
+/**
+ * One match in try order: the model, then its pill. A wrapping row rather than
+ * a two-column grid, because the host's longest skip label is wider than a
+ * phone-width row: the pill drops under the model and wraps inside itself
+ * (`Badge wrap`) instead of pushing the settings pane sideways (review L1).
+ */
 function TestMatchLineView(props: {
   readonly line: TestMatchLine;
   readonly harnessId: string;
@@ -1182,13 +1376,13 @@ function TestMatchLineView(props: {
   const { line, harnessId } = props;
   return (
     <div
-      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 py-1 pl-7.5 text-ui-sm"
+      className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 py-1 pl-7.5 text-ui-sm"
       data-testid="fallback-test-model-match"
       data-status={line.status}
     >
       <span
         className={cn(
-          "flex min-w-0 items-center gap-1.5",
+          "flex min-w-0 flex-auto items-center gap-1.5",
           line.status === "switches" && "font-semibold",
           line.status === "skipped" && "text-muted-foreground",
         )}
@@ -1240,6 +1434,7 @@ function SkipPill(props: { readonly skip: TestSkip }): ReactNode {
   return (
     <Badge
       variant={SKIP_PILL_VARIANT[skip.tone]}
+      wrap
       className="rounded-full"
       data-testid="fallback-test-model-skip"
       data-tone={skip.tone}
@@ -1257,7 +1452,7 @@ function SkipPill(props: { readonly skip: TestSkip }): ReactNode {
  */
 function ConflictFooter(props: {
   readonly claims: readonly TestTierClaim[];
-  readonly blocked: BlockedModelView;
+  readonly blocked: TestBlockedModel;
   readonly onGoToRow: (tierIndex: number, candidateIndex: number) => void;
 }): ReactNode {
   const { claims, blocked, onGoToRow } = props;
@@ -1319,12 +1514,13 @@ function StepChain(props: {
 /** The tier name in the accent the editor's pattern glyph wears (`primary`). */
 function TierPill(props: { readonly name: string }): ReactNode {
   return (
-    <span
-      className="inline-flex h-5 items-center rounded-full bg-primary/15 px-2 text-ui-xs font-medium text-primary"
+    <Badge
+      variant="accent"
+      className="rounded-full"
       data-testid="fallback-test-model-tier"
     >
       {props.name}
-    </span>
+    </Badge>
   );
 }
 
@@ -1356,7 +1552,7 @@ function RowValue(props: {
 }
 
 function BlockedModel(props: {
-  readonly blocked: BlockedModelView;
+  readonly blocked: TestBlockedModel;
 }): ReactNode {
   const { blocked } = props;
   return (

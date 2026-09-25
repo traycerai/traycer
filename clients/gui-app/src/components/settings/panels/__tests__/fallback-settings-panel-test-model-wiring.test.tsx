@@ -11,7 +11,7 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
-import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
+import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-fallback-policy-test-tier-groups-query";
 
 /**
  * Ticket 05, clause 6: the REAL wiring in `fallback-settings-panel.tsx` -
@@ -21,9 +21,9 @@ import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-
  * rendered directly (that suite passes `simulates` straight in as a prop, so
  * it cannot see whether the panel's OWN wiring reads the right bit).
  *
- * Both `useFallbackPolicyPreviewTierGroupsQuery` (the editor's own preview)
- * and `useFallbackPolicyTestTierGroupsQuery` (the Test panel's dry run) live
- * in the same module and are mocked together here.
+ * `useFallbackPolicyPreviewTierGroupsQuery` (the editor's own preview) and
+ * `useFallbackPolicyTestTierGroupsQuery` (the Test panel's dry run) are each
+ * mocked at their own module, off one shared set of hoisted answers.
  */
 
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
@@ -128,7 +128,26 @@ const CODEX_MODELS: readonly GuiAgentModelOption[] = [
     supportedServiceTiers: [],
     metadata: {},
   },
+  // In no tier of `policy({})`, so it routes to whichever tier is the default.
+  {
+    harnessId: "codex",
+    slug: "gpt-5.5",
+    label: "GPT-5.5",
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  },
 ];
+
+/** The model the user last started a chat with - the Test panel's default. */
+const runMocks = vi.hoisted((): { lastRunModel: string } => ({
+  lastRunModel: "gpt-6-sol",
+}));
 
 const MODELS_BY_HARNESS: ReadonlyMap<
   GuiHarnessId,
@@ -218,7 +237,7 @@ vi.mock(
           globalLastRunSettingsByHostId: {
             "host-a": {
               harnessId: "codex",
-              model: "gpt-6-sol",
+              model: runMocks.lastRunModel,
               profileId: "profile-2",
               agentMode: "regular",
               permissionMode: "full_access",
@@ -304,23 +323,26 @@ vi.mock(
       data: previewGroupsMocks.previewData,
       isFetching: false,
     }),
-    // The Test panel's dry run.
-    useFallbackPolicyTestTierGroupsQuery: (
-      request: FallbackPolicyTestTierGroupsRequest | null,
-    ) => {
-      previewGroupsMocks.testQuerySpy(request);
-      return {
-        data:
-          previewGroupsMocks.testQueryData === null
-            ? undefined
-            : { candidates: previewGroupsMocks.testQueryData },
-        isFetching: false,
-        isError: false,
-        refetch: () => {},
-      };
-    },
   }),
 );
+
+vi.mock("@/hooks/providers/use-fallback-policy-test-tier-groups-query", () => ({
+  // The Test panel's dry run.
+  useFallbackPolicyTestTierGroupsQuery: (
+    request: FallbackPolicyTestTierGroupsRequest | null,
+  ) => {
+    previewGroupsMocks.testQuerySpy(request);
+    return {
+      data:
+        previewGroupsMocks.testQueryData === null
+          ? undefined
+          : { candidates: previewGroupsMocks.testQueryData },
+      isFetching: false,
+      isError: false,
+      refetch: () => {},
+    };
+  },
+}));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import {
@@ -414,6 +436,7 @@ beforeEach(() => {
   previewGroupsMocks.previewData = undefined;
   previewGroupsMocks.testQuerySpy = () => {};
   previewGroupsMocks.testQueryData = null;
+  runMocks.lastRunModel = "gpt-6-sol";
 });
 
 afterEach(() => {
@@ -465,5 +488,95 @@ describe("FallbackSettingsPanel - Test a model panel's simulates/unsimulatedPrev
     );
     expect(nonNull.length).toBeGreaterThan(0);
     expect(nonNull[nonNull.length - 1].defaultTierGroupId).toBe("flagship");
+  });
+});
+
+describe("FallbackSettingsPanel - typing a tier rename sends no request until blur (C1)", () => {
+  it("the dry run's committed tiers keep the old name while typing, and pick up the new one on blur", () => {
+    patternLines.blankPreviewRows = true;
+    const captured: Array<FallbackPolicyTestTierGroupsRequest | null> = [];
+    previewGroupsMocks.testQuerySpy = (request) => {
+      captured.push(request);
+    };
+    renderPanel();
+    openTestPanel();
+
+    const nonNullTierIds = (): readonly string[] =>
+      captured
+        .filter(
+          (request): request is FallbackPolicyTestTierGroupsRequest =>
+            request !== null,
+        )
+        .flatMap((request) => request.groups.map((group) => group.id));
+
+    const card = screen.getByTestId("fallback-tier-group-flagship");
+    const nameInput = within(card).getByLabelText("Tier name");
+
+    fireEvent.change(nameInput, { target: { value: "flagship renamed" } });
+    // The keystroke reached the draft (the header reads it live), but the
+    // dry run's committed tiers are untouched - a rename per keystroke would
+    // be a host walk per character.
+    expect(
+      within(screen.getByTestId("fallback-test-model-panel")).getByTestId(
+        "fallback-test-model-tier",
+      ).textContent,
+    ).toContain("flagship renamed");
+    expect(nonNullTierIds()).not.toContain("flagship renamed");
+
+    fireEvent.blur(nameInput);
+
+    expect(nonNullTierIds()).toContain("flagship renamed");
+  });
+});
+
+/** Radix's select: open with the keyboard, then commit the named option. */
+function chooseFromSelect(trigger: HTMLElement, name: string): void {
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const item = screen.getByRole("option", { name });
+  fireEvent.focus(item);
+  fireEvent.keyDown(item, { key: "Enter" });
+}
+
+describe("FallbackSettingsPanel - the Test panel reads the DRAFT, not the stored policy (T1)", () => {
+  it("a changed default tier and an added row reach the next dry run, and the header follows the new default", () => {
+    patternLines.blankPreviewRows = true;
+    // GPT-5.5 is in no tier, so the header names whichever tier is the default.
+    runMocks.lastRunModel = "gpt-5.5";
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    previewGroupsMocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel();
+    openTestPanel();
+    const headerTier = (): string | null =>
+      within(screen.getByTestId("fallback-test-model-header")).getByTestId(
+        "fallback-test-model-tier",
+      ).textContent;
+    expect(headerTier()).toBe("flagship");
+
+    // The row first: an opened Radix select leaves the page behind it
+    // `aria-hidden` in jsdom, which a role query after it would not see past.
+    fireEvent.click(
+      within(screen.getByTestId("fallback-tier-group-frontier")).getByRole(
+        "button",
+        { name: "Add model or pattern" },
+      ),
+    );
+    chooseFromSelect(
+      within(screen.getByTestId("fallback-tier-default-group")).getByRole(
+        "combobox",
+      ),
+      "standard",
+    );
+
+    // Neither edit has been saved: the set mutation is a bare `vi.fn()`, so
+    // the stored policy still says flagship and one frontier row. A panel fed
+    // the stored policy sends and shows exactly that.
+    expect(captured.length).toBeGreaterThan(0);
+    const last = captured[captured.length - 1];
+    expect(last.defaultTierGroupId).toBe("standard");
+    const frontier = last.groups.find((group) => group.id === "frontier");
+    expect(frontier?.candidates).toHaveLength(2);
+    expect(headerTier()).toBe("standard");
   });
 });

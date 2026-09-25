@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   FallbackPolicy,
@@ -18,7 +24,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { chatRunSettings } from "@/components/chat/fallback/__tests__/fallback-fixtures";
 import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
-import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
+import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-fallback-policy-test-tier-groups-query";
 import type { FallbackTestModelPanelProps } from "@/components/settings/panels/fallback/fallback-test-model-panel";
 
 /**
@@ -315,6 +321,14 @@ const mocks = vi.hoisted(
     lastRunHarness: GuiHarnessId;
     /** The user's default service tier, as `settings-store` holds it - `""` means none picked. */
     defaultServiceTier: string;
+    /** Each harness's last-used account, as `composer-harness-memory-store` holds it. */
+    lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
+    /** D2 - whether the tested provider's model catalog read failed. */
+    modelsWarmupError: boolean;
+    /** D2 - the retry the panel's "Try again" button calls; must return a Promise. */
+    modelsWarmupRetry: () => Promise<void>;
+    /** T4 - the Provider picker's options; overridable per test. */
+    harnesses: readonly HarnessFixture[];
   } => ({
     testQuerySpy: () => {},
     testQueryData: null,
@@ -323,6 +337,13 @@ const mocks = vi.hoisted(
     lastRunModel: "gpt-6-sol",
     lastRunHarness: "codex",
     defaultServiceTier: "",
+    lastProfileByHarness: { codex: "profile-2" },
+    modelsWarmupError: false,
+    modelsWarmupRetry: () => Promise.resolve(),
+    // Set for real by `resetMocks()`, called before every test - `HARNESSES`
+    // is declared after this hoisted factory runs and cannot be referenced
+    // here.
+    harnesses: [],
   }),
 );
 
@@ -337,15 +358,22 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({
-    data: { harnesses: HARNESSES },
+    data: { harnesses: mocks.harnesses },
   }),
   useGuiHarnessModelsWarmup: (
     _client: unknown,
     harnessId: GuiHarnessId | null,
   ) => {
     if (harnessId === null) return [];
+    if (mocks.modelsWarmupError) {
+      return [
+        { data: undefined, isError: true, refetch: mocks.modelsWarmupRetry },
+      ];
+    }
     const models = MODELS_BY_HARNESS.get(harnessId) ?? [];
-    return [{ data: { models }, isError: false }];
+    return [
+      { data: { models }, isError: false, refetch: () => Promise.resolve() },
+    ];
   },
 }));
 
@@ -361,9 +389,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
           ],
         },
         {
-          providerId: "claude",
+          // `providerCliIdForHarness("claude")` resolves to "claude-code",
+          // not the harness id - see `lib/provider-ordering.ts`.
+          providerId: "claude-code",
           profiles: [
             providerProfile({ profileId: "profile-2", label: "Personal 2" }),
+            // The same account id Codex lists, so a pick carried across a
+            // provider switch would still be on offer (T4).
+            providerProfile({ profileId: "profile-3", label: "Work" }),
           ],
         },
         {
@@ -416,15 +449,22 @@ vi.mock(
       await importOriginal<
         typeof import("@/stores/composer/composer-harness-memory-store")
       >();
-    const state = {
-      byHost: {},
-      legacy: { lastProfileByHarness: { codex: "profile-2" } },
-    };
     return {
       ...actual,
       useComposerHarnessMemoryStore: (
-        selector: (input: typeof state) => unknown,
-      ) => selector(state),
+        selector: (input: {
+          readonly byHost: Record<string, never>;
+          readonly legacy: {
+            readonly lastProfileByHarness: Partial<
+              Record<GuiHarnessId, string | null>
+            >;
+          };
+        }) => unknown,
+      ) =>
+        selector({
+          byHost: {},
+          legacy: { lastProfileByHarness: mocks.lastProfileByHarness },
+        }),
     };
   },
 );
@@ -442,25 +482,22 @@ vi.mock("@/stores/settings/settings-store", () => ({
     }),
 }));
 
-vi.mock(
-  "@/hooks/providers/use-fallback-policy-preview-tier-groups-query",
-  () => ({
-    useFallbackPolicyTestTierGroupsQuery: (
-      request: FallbackPolicyTestTierGroupsRequest | null,
-    ) => {
-      mocks.testQuerySpy(request);
-      return {
-        data:
-          mocks.testQueryData === null
-            ? undefined
-            : { candidates: mocks.testQueryData },
-        isFetching: mocks.testQueryFetching,
-        isError: mocks.testQueryError,
-        refetch: () => {},
-      };
-    },
-  }),
-);
+vi.mock("@/hooks/providers/use-fallback-policy-test-tier-groups-query", () => ({
+  useFallbackPolicyTestTierGroupsQuery: (
+    request: FallbackPolicyTestTierGroupsRequest | null,
+  ) => {
+    mocks.testQuerySpy(request);
+    return {
+      data:
+        mocks.testQueryData === null
+          ? undefined
+          : { candidates: mocks.testQueryData },
+      isFetching: mocks.testQueryFetching,
+      isError: mocks.testQueryError,
+      refetch: () => {},
+    };
+  },
+}));
 
 import { FallbackTestModelPanel } from "@/components/settings/panels/fallback/fallback-test-model-panel";
 
@@ -472,10 +509,16 @@ function resetMocks(): void {
   mocks.lastRunModel = "gpt-6-sol";
   mocks.lastRunHarness = "codex";
   mocks.defaultServiceTier = "";
+  mocks.lastProfileByHarness = { codex: "profile-2" };
+  mocks.modelsWarmupError = false;
+  mocks.modelsWarmupRetry = () => Promise.resolve();
+  mocks.harnesses = HARNESSES;
 }
 
 function panelElement(overrides: {
   readonly policy?: FallbackPolicy;
+  /** The tiers as last committed; the policy's own unless a test types ahead of them. */
+  readonly committedTiers?: FallbackTestModelPanelProps["committedTiers"];
   readonly simulates?: boolean;
   readonly unsimulatedPreview?: readonly TierCandidatePreview[] | null;
   readonly conflicts?: FallbackTestModelPanelProps["conflicts"];
@@ -486,6 +529,12 @@ function panelElement(overrides: {
     <FallbackTestModelPanel
       id="test-panel"
       policy={policy}
+      committedTiers={
+        overrides.committedTiers ?? {
+          tierGroups: policy.tierGroups,
+          defaultTierGroupId: policy.defaultTierGroupId,
+        }
+      }
       catalog={catalogFixture()}
       conflicts={overrides.conflicts ?? []}
       labelFor={(profileId) =>
@@ -501,6 +550,7 @@ function panelElement(overrides: {
 
 function renderPanel(overrides: {
   readonly policy?: FallbackPolicy;
+  readonly committedTiers?: FallbackTestModelPanelProps["committedTiers"];
   readonly simulates?: boolean;
   readonly unsimulatedPreview?: readonly TierCandidatePreview[] | null;
   readonly conflicts?: FallbackTestModelPanelProps["conflicts"];
@@ -583,6 +633,10 @@ describe("FallbackTestModelPanel - wireframe 4 rendering", () => {
     // row 1: opus, switches here
     within(rows[0]).getByText("switches here");
     within(rows[0]).getByText("Default (Opus 5.5)");
+    // T3 - the "switches here" pill carries the success variant.
+    expect(
+      within(rows[0]).getByText("switches here").getAttribute("data-variant"),
+    ).toBe("success");
 
     // row 2: gpt-6-sol skipped (blocked model), gpt-5.6-sol skipped (rate limited)
     const row2Skips = within(rows[1]).getAllByTestId(
@@ -592,6 +646,12 @@ describe("FallbackTestModelPanel - wireframe 4 rendering", () => {
     expect(row2Skips[1].textContent).toBe(
       "skipped · same account, no headroom after a rate limit",
     );
+    // T3 - the blocked-model skip (neutral tone) and the no-headroom skip
+    // (warning tone) render through the tone-to-variant map.
+    expect(row2Skips[0].dataset.tone).toBe("neutral");
+    expect(row2Skips[0].getAttribute("data-variant")).toBe("muted");
+    expect(row2Skips[1].dataset.tone).toBe("warning");
+    expect(row2Skips[1].getAttribute("data-variant")).toBe("warning");
 
     // row 3: grok - both named matches are "then" (the winner is already row
     // 1's), plus "2 more" for the two left over past the MATCHES_NAMED cap.
@@ -606,6 +666,25 @@ describe("FallbackTestModelPanel - wireframe 4 rendering", () => {
     const then = screen.getByTestId("fallback-test-model-then");
     expect(then.textContent).toContain("Wait for the limit to reset");
     expect(then.textContent).toContain("Notify you");
+
+    // L1 - a match line wraps rather than grids (jsdom has no layout, so this
+    // is class-pinned), and every skip pill wraps its text instead of
+    // truncating it.
+    const matchLines = screen.getAllByTestId("fallback-test-model-match");
+    for (const line of matchLines) {
+      expect(line.className).toContain("flex-wrap");
+      expect(line.className).not.toContain("grid");
+    }
+    const skipPills = screen.getAllByTestId("fallback-test-model-skip");
+    for (const pill of skipPills) {
+      expect(pill.dataset.wrap).toBe("");
+      expect(pill.className).toContain("whitespace-normal");
+    }
+
+    // Q2 - every tier pill is a Badge in the accent variant.
+    const tierPill = screen.getByTestId("fallback-test-model-tier");
+    expect(tierPill.dataset.slot).toBe("badge");
+    expect(tierPill.getAttribute("data-variant")).toBe("accent");
   });
 
   it('a bare "*" row renders as "Any {Provider} model", never a bare * code element', () => {
@@ -773,31 +852,38 @@ describe("FallbackTestModelPanel - verdict announced", () => {
     resetMocks();
   });
 
-  it("stays the SAME aria-live region across a changed answer - only its content changes", () => {
+  it("announces ONE sentence through the same polite status across a changed answer, and the visible verdict is not a live region (A1)", () => {
     resetMocks();
     mocks.testQueryData = [...wireframeFourCandidates()];
     const { rerender } = renderPanel({});
+    const status = screen.getByRole("status");
+    expect(status.dataset.testid).toBe("fallback-test-model-status");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.className).toContain("sr-only");
+    // The verdict header and the switch target, as one sentence.
+    expect(status.textContent).toBe(
+      "Traycer uses the flagship tier and switches to Default (Opus 5.5) on Personal 2.",
+    );
+    // Only one live region: the visible rows and pills are not announced.
     const verdict = screen.getByTestId("fallback-test-model-verdict");
-    expect(verdict.getAttribute("aria-live")).toBe("polite");
-    expect(verdict.textContent).toContain("flagship");
+    expect(verdict.getAttribute("aria-live")).toBeNull();
+    expect(verdict.querySelector("[aria-live]")).toBeNull();
 
     // A policy whose ladder skips the equivalent-model step entirely: the
-    // verdict switches from the flagship-tier answer to the steps-off line.
-    // Falsification: if the panel keyed the verdict region on the answer
-    // (remounting it per verdict rather than updating it in place), this
-    // `toBe` would fail even though the text still changed correctly - a
-    // remounted `aria-live` region does not reliably announce in every
-    // screen reader, which is the whole point of mounting it once.
+    // answer switches from the flagship-tier verdict to the steps-off line.
+    // Falsification: if the panel keyed the status on the answer (remounting
+    // it per verdict rather than updating it in place), this `toBe` would fail
+    // even though the text still changed - a remounted live region does not
+    // reliably announce in every screen reader.
     rerender(
       panelElement({
         policy: seededPolicy({ ladder: ["profile", "wait", "notify"] }),
       }),
     );
-    const verdictAfter = screen.getByTestId("fallback-test-model-verdict");
-    expect(verdictAfter).toBe(verdict);
-    expect(verdictAfter.textContent).not.toContain("flagship");
-    expect(verdictAfter.textContent).toContain(
-      "The equivalent-model step is off for rate limits",
+    const statusAfter = screen.getByRole("status");
+    expect(statusAfter).toBe(status);
+    expect(statusAfter.textContent).toBe(
+      "The equivalent-model step is off for rate limits, so Traycer goes straight to Try another account, then Wait for the limit to reset, then Notify you.",
     );
   });
 });
@@ -833,5 +919,376 @@ describe("FallbackTestModelPanel - steps-off copy", () => {
     expect(line.textContent).toContain("Traycer doesn't try");
     expect(captured.length).toBeGreaterThan(0);
     expect(captured.every((request) => request === null)).toBe(true);
+  });
+});
+
+/** A host row for `tierId`, one usable match - the shape a walk of ANOTHER tier returns. */
+function walkedRow(
+  tierId: string,
+  candidateIndex: number,
+  model: string,
+): TierCandidatePreview {
+  return {
+    groupId: tierId,
+    candidateIndex,
+    harnessId: "codex",
+    modelFamily: "*terra*",
+    reasoningEffort: null,
+    resolvedModel: model,
+    profileId: null,
+    skipReason: null,
+    skipLabel: null,
+    warnings: [],
+    matches: [{ model, profileId: null, skipReason: null, skipLabel: null }],
+  };
+}
+
+describe("FallbackTestModelPanel - the host walked a different tier (C2)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("names the tier the host walked instead of drawing the client's tier with blank rows", () => {
+    resetMocks();
+    // The client routes Codex GPT-6-Sol to flagship through `*sol*`; the host's
+    // answer carries only standard's rows (its own catalog read differed).
+    mocks.testQueryData = [walkedRow("standard", 1, "gpt-5.6-terra")];
+    renderPanel({});
+
+    const notice = screen.getByTestId("fallback-test-model-routed-elsewhere");
+    expect(notice.textContent).toContain("standard");
+    expect(screen.queryAllByTestId("fallback-test-model-row")).toHaveLength(0);
+  });
+
+  it("says the host routes it to no tier when the answer carries no rows at all", () => {
+    resetMocks();
+    mocks.testQueryData = [];
+    renderPanel({});
+
+    const notice = screen.getByTestId("fallback-test-model-routed-elsewhere");
+    expect(notice.textContent).toContain("no tier");
+    expect(screen.queryAllByTestId("fallback-test-model-row")).toHaveLength(0);
+  });
+});
+
+describe("FallbackTestModelPanel - account default with nothing remembered (D1)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("defaults to the first listed enabled account, never a Terminal account the provider does not offer", () => {
+    resetMocks();
+    // Codex lists two managed accounts and no ambient (Terminal) row, and this
+    // host has no last-used Codex account.
+    mocks.lastProfileByHarness = {};
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    mocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel({});
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[captured.length - 1].blocked.profileId).toBe("profile-2");
+    expect(
+      screen.getByTestId("fallback-test-model-account").textContent,
+    ).toContain("Personal 2");
+  });
+});
+
+/** Radix's select: open with the keyboard, the same helper `fallback-tier-group-card.test.tsx` uses. */
+function openSelect(trigger: HTMLElement): void {
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+}
+
+/** Commit the named option; Radix closes its own portal on this keydown. */
+function chooseOption(name: string): void {
+  const item = screen.getByRole("option", { name });
+  fireEvent.focus(item);
+  fireEvent.keyDown(item, { key: "Enter" });
+}
+
+describe("FallbackTestModelPanel - Claude default against the Claude catalog (T2)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("routes through *opus* row 1, with the label matched (not the slug)", () => {
+    resetMocks();
+    mocks.lastRunHarness = "claude";
+    mocks.lastRunModel = "default";
+    mocks.lastProfileByHarness = { claude: "profile-2" };
+    renderPanel({});
+
+    const header = screen.getByTestId("fallback-test-model-header");
+    expect(header.textContent).toContain("flagship");
+    expect(header.textContent).toContain("Default (Opus 5.5) is in it through");
+    expect(header.textContent).toContain("*opus*");
+    expect(header.textContent).toContain("(row 1)");
+  });
+});
+
+describe("FallbackTestModelPanel - master switch off lead (P1)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("shows the master-off lead line, and the status starts with it, when the policy is disabled", () => {
+    resetMocks();
+    const policy = seededPolicy({ enabled: false });
+    renderPanel({ policy });
+
+    const lead = screen.getByTestId("fallback-test-model-master-off");
+    expect(lead.textContent).toBe(
+      "Route automatically is off, so nothing switches on its own. With it on:",
+    );
+    const status = screen.getByRole("status");
+    // The lead, then the verdict itself, as one announced sentence.
+    expect(status.textContent.startsWith(`${lead.textContent} `)).toBe(true);
+  });
+
+  it("shows neither the lead line nor the status prefix when the policy is enabled", () => {
+    resetMocks();
+    const policy = seededPolicy({ enabled: true });
+    renderPanel({ policy });
+
+    expect(screen.queryByTestId("fallback-test-model-master-off")).toBeNull();
+    const status = screen.getByRole("status");
+    expect(status.textContent.startsWith("Route automatically is off")).toBe(
+      false,
+    );
+  });
+});
+
+describe("FallbackTestModelPanel - another error's next steps (P2)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it('a billing-only override disagrees with the rest: the then-line reads "depends on the error"', () => {
+    resetMocks();
+    mocks.testQueryData = [];
+    const policy = seededPolicy({
+      ladder: ["profile", "tier", "wait", "notify"],
+      reasonOverrides: { billing: ["profile", "notify"] },
+    });
+    renderPanel({ policy });
+    openSelect(screen.getByTestId("fallback-test-model-kind"));
+    chooseOption("another error");
+
+    const then = screen.getByTestId("fallback-test-model-then");
+    expect(then.textContent).toContain(
+      "If none of these work: depends on the error; see Overrides",
+    );
+  });
+
+  it("every other error agreeing shows the shared-steps line", () => {
+    resetMocks();
+    mocks.testQueryData = [];
+    renderPanel({});
+    openSelect(screen.getByTestId("fallback-test-model-kind"));
+    chooseOption("another error");
+
+    const then = screen.getByTestId("fallback-test-model-then");
+    expect(then.textContent).toContain(
+      "(your fallback steps, the same for every other error)",
+    );
+  });
+
+  it("a ladder with no tier step gives the steps-off line with depends-on-the-error, and sends no request", () => {
+    resetMocks();
+    const captured: Array<FallbackPolicyTestTierGroupsRequest | null> = [];
+    mocks.testQuerySpy = (request) => captured.push(request);
+    const policy = seededPolicy({ ladder: ["profile", "notify"] });
+    renderPanel({ policy });
+    openSelect(screen.getByTestId("fallback-test-model-kind"));
+    chooseOption("another error");
+
+    const line = screen.getByTestId("fallback-test-model-steps-off");
+    expect(line.textContent).toContain(
+      "The equivalent-model step doesn't run for these errors",
+    );
+    expect(line.textContent).toContain("depends on the error; see Overrides");
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured.every((request) => request === null)).toBe(true);
+  });
+});
+
+describe("FallbackTestModelPanel - a failed catalog read (D2)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it('shows "Couldn\'t load models" on the trigger and the incomplete line, and Try again calls refetch once', () => {
+    resetMocks();
+    mocks.modelsWarmupError = true;
+    const retrySpy = vi.fn(() => Promise.resolve());
+    mocks.modelsWarmupRetry = retrySpy;
+    renderPanel({});
+
+    expect(
+      screen.getByTestId("fallback-test-model-model").textContent,
+    ).toContain("Couldn't load models");
+    expect(
+      screen.getByTestId("fallback-test-model-incomplete").textContent,
+    ).toContain("Couldn't load this provider's models.");
+
+    fireEvent.click(screen.getByTestId("fallback-test-model-models-retry"));
+    expect(retrySpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FallbackTestModelPanel - Terminal account on a winning codex match (D3)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it('shows "Terminal account" for a winning match with profileId null on a codex row', () => {
+    resetMocks();
+    mocks.testQueryData = [
+      {
+        groupId: "flagship",
+        candidateIndex: 1,
+        harnessId: "codex",
+        modelFamily: "*sol*",
+        reasoningEffort: "high",
+        resolvedModel: "gpt-6-sol",
+        profileId: null,
+        skipReason: null,
+        skipLabel: null,
+        warnings: [],
+        matches: [
+          {
+            model: "gpt-6-sol",
+            profileId: null,
+            skipReason: null,
+            skipLabel: null,
+          },
+        ],
+      },
+    ];
+    renderPanel({});
+
+    const rows = screen.getAllByTestId("fallback-test-model-row");
+    // row index 1 is the Codex *sol* row (candidateIndex 1).
+    expect(rows[1].textContent).toContain("Terminal account");
+  });
+});
+
+describe("FallbackTestModelPanel - picker-driven scenarios (T4)", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("switching the provider to Claude re-seeds model and profile for the new provider", () => {
+    resetMocks();
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    mocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel({});
+
+    openSelect(screen.getByTestId("fallback-test-model-provider"));
+    chooseOption("Claude Code");
+
+    expect(captured.length).toBeGreaterThan(0);
+    const request = captured[captured.length - 1];
+    expect(request.blocked.harnessId).toBe("claude");
+    // CLAUDE_MODELS[0] is "default" - the reseeded provider's first model.
+    expect(request.blocked.model).toBe("default");
+    // No last-used Claude account is remembered, so the seed falls through to
+    // the first listed account - "profile-2" ("Personal 2").
+    expect(request.blocked.profileId).toBe("profile-2");
+  });
+
+  it('picking "another error" sends blocked.kind "other", and the then-line names no wait step', () => {
+    resetMocks();
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    mocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel({});
+
+    openSelect(screen.getByTestId("fallback-test-model-kind"));
+    chooseOption("another error");
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[captured.length - 1].blocked.kind).toBe("other");
+    const then = screen.getByTestId("fallback-test-model-then");
+    expect(then.textContent).not.toContain("Wait");
+  });
+
+  it("clamps the permission mode to what the picked harness supports", () => {
+    resetMocks();
+    mocks.harnesses = HARNESSES.map((harness) =>
+      harness.id === "grok"
+        ? {
+            ...harness,
+            supportedPermissionModes: [
+              "supervised",
+              "auto_accept_edits",
+              "auto",
+            ] as const,
+          }
+        : harness,
+    );
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    mocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel({});
+    openSelect(screen.getByTestId("fallback-test-model-provider"));
+    chooseOption("Grok");
+
+    expect(captured.length).toBeGreaterThan(0);
+    const request = captured[captured.length - 1];
+    expect(request.blocked.permissionMode).not.toBe("full_access");
+    expect(["supervised", "auto_accept_edits", "auto"]).toContain(
+      request.blocked.permissionMode,
+    );
+  });
+
+  it("switching the provider re-seeds the account from the new provider's own memory, not a pick carried from the old one", () => {
+    resetMocks();
+    mocks.lastProfileByHarness = { codex: "profile-2", claude: "profile-2" };
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    mocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel({});
+
+    // "Work" (profile-3) is listed by both providers, so only the switch's
+    // reset keeps it from riding over to Claude, whose remembered account is
+    // Personal 2.
+    openSelect(screen.getByTestId("fallback-test-model-account"));
+    chooseOption("Work");
+    expect(captured[captured.length - 1].blocked.profileId).toBe("profile-3");
+    openSelect(screen.getByTestId("fallback-test-model-provider"));
+    chooseOption("Claude Code");
+
+    const request = captured[captured.length - 1];
+    expect(request.blocked.harnessId).toBe("claude");
+    expect(request.blocked.profileId).toBe("profile-2");
+  });
+
+  it("switching the provider drops a picked permission mode back to the default, not carries it forward", () => {
+    resetMocks();
+    const captured: FallbackPolicyTestTierGroupsRequest[] = [];
+    mocks.testQuerySpy = (request) => {
+      if (request !== null) captured.push(request);
+    };
+    renderPanel({});
+
+    // Both Codex (the initial harness, via lastRun) and Claude support every
+    // mode here, so "Supervised" is valid for either - the only way to tell
+    // a reset from a stale carried-forward pick is to switch and check which
+    // one comes back.
+    openSelect(screen.getByTestId("fallback-test-model-permission"));
+    chooseOption("Supervised");
+    openSelect(screen.getByTestId("fallback-test-model-provider"));
+    chooseOption("Claude Code");
+
+    expect(captured.length).toBeGreaterThan(0);
+    const request = captured[captured.length - 1];
+    expect(request.blocked.permissionMode).toBe("full_access");
   });
 });

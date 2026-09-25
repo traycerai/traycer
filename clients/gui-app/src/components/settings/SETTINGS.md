@@ -4479,38 +4479,60 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     INLINE panel under it - not a dialog, so the tiers it tests stay on screen.
     It reads "If <provider> <model> is blocked by <a rate limit | another
     error> …", with the account (that provider's last-used, checked against its
-    live accounts; no control for a provider with none) and the permission mode
-    (the user's default, clamped to what the provider honours) beneath; agent
-    mode and fast mode are carried from the defaults, as the new-conversation
-    modal seeds them. It answers for the DRAFT, blank rows and an unsaved
+    live accounts, else the first account listed - never a disabled Terminal
+    account; no control for a provider with none) and the permission mode (the
+    user's default, clamped to what the provider honours) beneath; agent mode
+    and fast mode are carried from the defaults, as the new-conversation modal
+    seeds them. A model catalog that fails to load says so in the Model picker
+    and offers "Try again". It answers for the DRAFT, blank rows and an unsaved
     default tier included. The tier comes from the protocol's
     `routeTierGroupForFailedTuple` with the editor's cached catalog - the
     readable-catalog answer - as "Traycer uses the <tier> tier · <model> is in
-    it through <pattern> (row n)". Every row of that tier follows with each
-    match in try order, from `previewTierGroups`@1.1 called with `blocked` set
-    to the tuple and the draft's `defaultTierGroupId`, so the host runs the
-    live walk (same-as-failed, permission-mode fit, the sibling rule after a
-    rate limit): **switches here** (`success`), **then**, and **skipped · …** -
-    neutral for the blocked model itself and a blank row ("blank, skipped"),
-    amber `warning` for the world, red for a pattern that matches nothing. The
-    wireframe's own words where it names one ("the blocked model"), the host's
-    label otherwise. Below the rows, "If none of these work: …" is the draft's
-    steps after the equivalent-model step for that failure. Three footers
-    cover what the header alone would hide: a model in no tier goes to the
-    default tier; with the default set to None there is no equivalent-model
-    step and it goes straight to the next step; a model in two tiers is handled
-    by the first-listed, with a red **fix** that moves focus to that tier's row
-    (the conflict block's go-to-row). A failure whose steps leave out the
-    equivalent-model step (or turn them all off) says so in one line, naming
-    the step it goes straight to, instead of a tier that never runs. Escape
-    and ✕ close
-    the panel and return focus to the button; the verdict region is
-    `aria-live="polite"`. It is offered only on a `get`@1.1 host, since its
-    router reads rows as patterns. On a host whose `previewTierGroups` line is
-    below 1.1, read off the negotiated line and never off whether `matches` is
-    present, the walk cannot be asked for, so the panel shows the tier verdict
-    and each row's first match from the editor's own preview, with "This host
-    can't simulate the walk; showing what your tiers say."
+    it through <pattern> (row n)"; the "(row n)" lookup uses the router's own
+    identity (`failedModelRoutingIdentity`). Every row of that tier follows
+    with each match in try order, from `previewTierGroups`@1.1 called with
+    `blocked` set to the tuple, so the host runs the live walk (same-as-failed,
+    permission-mode fit, the sibling rule after a rate limit): **switches
+    here** (`success`), **then**, and **skipped · …** - neutral for the blocked
+    model itself and a blank row ("blank, skipped"), amber `warning` for the
+    world, red for a pattern that matches nothing. The wireframe's own words
+    where it names one ("the blocked model"), the host's label otherwise. At
+    phone width a pill drops under its model and wraps inside itself (`Badge
+wrap`). Each row names the account its first usable match runs on, the
+    Terminal account included. The walk is asked about the tiers as last
+    COMMITTED (the draft reducer's `committedTiers`), so a tier rename typed
+    into the name field sends nothing until it commits on blur, while the
+    header follows the live draft at once. When the walk comes back without
+    the routed tier's rows - the host read the model's name from its own
+    catalog and routed it elsewhere - one line says which tier the host would
+    use, never a named tier over empty rows. Below the rows, "If none of these
+    work: …" is the draft's steps after the equivalent-model step for that
+    failure. "Another error" stands for every failure other than a rate limit
+    that can reach the equivalent-model step (auth, billing, model
+    unavailable, provider unavailable), each on its own effective ladder (its
+    override, else the main order, narrowed to the steps that failure can
+    take): when they agree the line says so, and when they differ it says
+    "depends on the error; see Overrides". Three footers cover what the header
+    alone would hide: a model in no tier goes to the default tier; with the
+    default set to None there is no equivalent-model step and it goes straight
+    to the next step; a model in two tiers is handled by the first-listed, with
+    a red **fix** that moves focus to that tier's row (the conflict block's
+    go-to-row). A failure whose steps leave out the equivalent-model step (or
+    turn them all off) says so in one line, naming the step it goes straight
+    to, instead of a tier that never runs. With **Route automatically** off the
+    host arms nothing, so the verdict leads with "Route automatically is off,
+    so nothing switches on its own. With it on:" and still shows the dry run.
+    Escape and ✕ close the panel and return focus to the button. The verdict
+    is announced as ONE sentence through a visually hidden polite status
+    mounted with the panel (the tier, and where the chat switches to); the
+    visible rows and pills are not a live region. It is offered only on a
+    `get`@1.1 host, since its router reads rows as patterns, and the dry run is
+    asked only on a host whose negotiated `previewTierGroups` line is 1.1 or
+    later - gated in the hook itself, and read off the line, never off whether
+    `matches` is present. Below it the walk cannot be asked for, so the panel
+    shows the tier verdict and each row's first match from the editor's own
+    preview, with "This host can't simulate the walk; showing what your tiers
+    say."
     Row ORDER inside a tier is load-bearing (the rung walks it and takes the
     first usable target) so rows carry ▲▼. TIER order is not a routing
     control: a model belongs to one tier, and when a draft breaks that rule the

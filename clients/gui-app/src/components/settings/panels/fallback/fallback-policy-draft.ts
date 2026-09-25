@@ -107,6 +107,19 @@ export interface FallbackPolicyDraftState {
    */
   readonly keyedTierGroups: readonly KeyedGroup[];
   /**
+   * The draft's tiers and default tier as last COMMITTED: they follow every
+   * change to the draft except a keystroke in a text field (`typed`), which is
+   * the one edit whose intermediate states are not values the user means.
+   *
+   * The Test a model panel asks its dry run about these, not about `draft`:
+   * a tier name commits on blur, and a walk per keystroke of a rename would be
+   * a host walk per character and a stream of verdicts into a live region.
+   * Kept here rather than in the panel because only the reducer sees every
+   * way the draft moves - a restore, a reset, a host rejection's revert and a
+   * read-back all replace it without a keystroke.
+   */
+  readonly committedTiers: FallbackCommittedTiers;
+  /**
    * Set by a local validation failure. Nothing was sent.
    *
    * Cleared by the next `edited` that validates, and by a reply that is ABOUT
@@ -750,7 +763,24 @@ export interface FallbackSaveFailedAction {
   readonly outcome: FallbackSaveFailureOutcome;
 }
 
+/** The two policy fields the Test a model panel's dry run is asked about. */
+export interface FallbackCommittedTiers {
+  readonly tierGroups: readonly TierGroup[];
+  readonly defaultTierGroupId: string | null;
+}
+
 export type FallbackPolicyDraftAction =
+  /**
+   * A keystroke in a text field: applied exactly as `edited` is, except that
+   * it leaves {@link FallbackPolicyDraftState.committedTiers} where it was -
+   * the field has not committed yet.
+   */
+  | {
+      readonly type: "typed";
+      readonly policy: FallbackPolicy;
+      readonly field: FallbackPolicyField;
+      readonly keyedTierGroups: readonly KeyedGroup[] | null;
+    }
   | {
       readonly type: "edited";
       readonly policy: FallbackPolicy;
@@ -1260,6 +1290,7 @@ export function createFallbackPolicyDraftState(
     // is as much a row as one the user adds, and the two are indistinguishable
     // from then on.
     keyedTierGroups: toKeyedGroups(policy.tierGroups),
+    committedTiers: committedTiersOf(policy),
     localError: null,
     hostError: null,
     activeField: null,
@@ -2102,7 +2133,49 @@ function applyReconciled(
   };
 }
 
+function committedTiersOf(policy: FallbackPolicy): FallbackCommittedTiers {
+  return {
+    tierGroups: policy.tierGroups,
+    defaultTierGroupId: policy.defaultTierGroupId,
+  };
+}
+
 export function fallbackPolicyDraftReducer(
+  state: FallbackPolicyDraftState,
+  action: FallbackPolicyDraftAction,
+): FallbackPolicyDraftState {
+  const next = reduceDraft(state, action);
+  return committedTiersMove(state, next, action)
+    ? { ...next, committedTiers: committedTiersOf(next.draft) }
+    : next;
+}
+
+/**
+ * Whether this action commits the draft's tiers.
+ *
+ *  - `typed`: never - the field has not committed.
+ *  - `edited`: always. It is a commit, and on a text field's blur it carries
+ *    the very tiers the keystrokes already put in the draft, so a comparison
+ *    with the draft would miss it.
+ *  - anything else: only when the action itself replaced the draft's tiers (a
+ *    revert, a read-back, a restore). Compared by VALUE: a reply to an earlier
+ *    save that lands mid-rename changes nothing the user typed, and must not
+ *    carry the half-typed name into the dry run.
+ */
+function committedTiersMove(
+  state: FallbackPolicyDraftState,
+  next: FallbackPolicyDraftState,
+  action: FallbackPolicyDraftAction,
+): boolean {
+  if (action.type === "typed") return false;
+  if (action.type === "edited") return true;
+  return (
+    !sameTierGroups(next.draft.tierGroups, state.draft.tierGroups) ||
+    next.draft.defaultTierGroupId !== state.draft.defaultTierGroupId
+  );
+}
+
+function reduceDraft(
   state: FallbackPolicyDraftState,
   action: FallbackPolicyDraftAction,
 ): FallbackPolicyDraftState {
@@ -2113,6 +2186,7 @@ export function fallbackPolicyDraftReducer(
   // - the in-flight count and the unreadable-row flag - are not edited here,
   // so the panel reads them straight off the query instead.
   switch (action.type) {
+    case "typed":
     case "edited":
       return applyEdited(state, action);
     case "reordered":

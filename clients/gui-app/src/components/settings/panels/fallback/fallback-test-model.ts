@@ -1,6 +1,8 @@
 import {
+  EXCLUDED_FALLBACK_REASONS,
   REASON_ELIGIBLE_RUNGS,
   TIER_PREVIEW_FAILURE_KINDS,
+  failedModelRoutingIdentity,
   findTierGroupForFailedTuple,
   modelMatchesPattern,
   routeTierGroupForFailedTuple,
@@ -15,12 +17,25 @@ import {
   type TierPreviewBlockedTuple,
   type TierRungSkipReason,
 } from "@traycer/protocol/host/fallback-policy";
-import type { HarnessId } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  type GuiHarnessId,
+  type HarnessId,
+} from "@traycer/protocol/host/agent/shared";
+import {
+  HOST_NOTIFICATION_STOPPED_REASONS,
+  type HostNotificationStoppedReason,
+} from "@traycer/protocol/host/notifications/payloads";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
+import { TERMINAL_ACCOUNT_LABEL } from "@/components/chat/fallback/fallback-identity";
 import {
   catalogModelForFamily,
   type FallbackCatalogOptions,
 } from "@/components/settings/panels/fallback/fallback-catalog-options";
-import { isModelPattern } from "@/components/settings/panels/fallback/fallback-model-patterns";
+import {
+  isModelPattern,
+  tierDisplayName,
+} from "@/components/settings/panels/fallback/fallback-model-patterns";
 import { effectiveLadderFor } from "@/components/settings/panels/fallback/fallback-overrides-model";
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
 
@@ -67,10 +82,10 @@ export interface TestTierClaim extends TestTierRef {
 /**
  * Which tier handles the blocked model, and why.
  *
- *  - `own-tier` - a row reaches it. `candidateIndex` is the first such row of
- *    that tier, which is what "(row n)" names. `conflict` lists every tier
- *    that claims the model, first-listed (the handler) first, when there are
- *    two or more - decision 4's "first-listed handles it".
+ *  - `own-tier` - a row reaches it. `row` is the first such row of that tier,
+ *    which is what "through <pattern> (row n)" names. `conflict` lists every
+ *    tier that claims the model, first-listed (the handler) first, when there
+ *    are two or more - decision 4's "first-listed handles it".
  *  - `default-tier` - no row reaches it and the draft names a default tier.
  *  - `no-tier` - no row reaches it and there is no default tier to go to.
  */
@@ -78,37 +93,34 @@ export type TestRouting =
   | {
       readonly kind: "own-tier";
       readonly tier: TestTierRef;
-      readonly candidateIndex: number;
-      readonly rowValue: string;
+      /**
+       * `null` only if the router and this lookup ever disagree about which
+       * row matched. They share the protocol's identity and pattern matcher,
+       * so that is not expected - but the header then drops "(row n)" rather
+       * than reading row -1 in render.
+       */
+      readonly row: TestRowRef | null;
       readonly conflict: readonly TestTierClaim[] | null;
     }
   | { readonly kind: "default-tier"; readonly tier: TestTierRef }
   | { readonly kind: "no-tier"; readonly defaultTierGroupId: string | null };
 
-/**
- * The blocked model as routing matches it - its ID, and the name the failed
- * harness's catalog gives that ID, or the ID again with no catalog. The same
- * identity the protocol's router builds, so "(row n)" names the row the
- * router matched.
- */
-function blockedIdentity(
-  model: string,
-  catalog: readonly TierModelIdentity[] | null,
-): TierModelIdentity {
-  return { slug: model, label: blockedModelLabel(model, catalog) };
+/** The row "(row n)" names, and its value as the Model cell shows it. */
+export interface TestRowRef {
+  readonly candidateIndex: number;
+  readonly value: string;
 }
 
-/** The blocked model's display name, or its ID when the catalog does not list it. */
+/**
+ * The blocked model's display name, or its ID when the catalog does not list
+ * it: the protocol's own routing identity, so the name the verdict prints is
+ * the name the router matched patterns against.
+ */
 export function blockedModelLabel(
   model: string,
   catalog: readonly TierModelIdentity[] | null,
 ): string {
-  const slug = model.toLowerCase();
-  const entry =
-    catalog === null
-      ? undefined
-      : catalog.find((candidate) => candidate.slug.toLowerCase() === slug);
-  return entry === undefined ? model : entry.label;
+  return failedModelRoutingIdentity(model, catalog).label;
 }
 
 export function testRouting(input: {
@@ -134,7 +146,8 @@ export function testRouting(input: {
   const tier = { tierIndex: groups.indexOf(routed), tierId: routed.id };
   const own = findTierGroupForFailedTuple(groups, harnessId, model, catalog);
   if (own === null) return { kind: "default-tier", tier };
-  const blocked = blockedIdentity(model, catalog);
+  // The router's own identity and predicate, so this finds the row it matched.
+  const blocked = failedModelRoutingIdentity(model, catalog);
   const candidateIndex = own.candidates.findIndex(
     (candidate) =>
       candidate.harnessId === harnessId &&
@@ -148,8 +161,13 @@ export function testRouting(input: {
   return {
     kind: "own-tier",
     tier,
-    candidateIndex,
-    rowValue: own.candidates[candidateIndex].modelFamily.trim(),
+    row:
+      candidateIndex === -1
+        ? null
+        : {
+            candidateIndex,
+            value: own.candidates[candidateIndex].modelFamily.trim(),
+          },
     conflict:
       conflict === undefined
         ? null
@@ -165,11 +183,15 @@ export function testRouting(input: {
  * What the draft's steps do around the equivalent-model step for this kind of
  * failure.
  *
- *  - `fallback-off` - the rate-limit override is `"off"`: nothing arms at all.
+ *  - `fallback-off` - the failure's override is `"off"`: nothing arms at all.
  *  - `tier-off` - the equivalent-model step does not run for this failure (not
  *    in its ladder, or after an early Notify); `steps` is what runs instead.
  *  - `after-tier` - it runs; `steps` is the draft's "If none of these work"
  *    tail.
+ *  - `depends` - "another error" stands for several failures, and their own
+ *    ladders do not give one answer; `tierRuns` is whether any of them reaches
+ *    the equivalent-model step, which is what decides whether the walk is
+ *    worth drawing at all.
  *
  * Every list ends at Notify: exhaustion always notifies (the ladder schema's
  * own rule), and a step stored after an early Notify never runs.
@@ -179,21 +201,23 @@ export type TestNextSteps =
   | {
       readonly kind: "tier-off" | "after-tier";
       readonly steps: readonly FallbackRungKind[];
-    };
+    }
+  | { readonly kind: "depends"; readonly tierRuns: boolean };
 
 /**
- * Whether `rung` can run for this kind of failure. A rate limit reads the
- * protocol's eligibility row; "another error" stands for every other failure,
- * none of which has a reset boundary to wait on - so it is every step but
- * `wait`.
+ * The failures "another error" stands for: every reason that arms a
+ * traversal, other than a rate limit, for which the equivalent-model step is
+ * eligible at all. A connection failure arms (its same-tuple retries) but can
+ * never switch models, so counting it would make every answer "depends" about
+ * a step it cannot take - and this panel is a test of that step.
  */
-function stepRunsFor(kind: TestFailureKind, rung: FallbackRungKind): boolean {
-  if (rung === "notify") return true;
-  if (kind === "rate_limit") {
-    return REASON_ELIGIBLE_RUNGS.rate_limit.includes(rung);
-  }
-  return rung !== "wait";
-}
+const OTHER_ERROR_REASONS: readonly HostNotificationStoppedReason[] =
+  HOST_NOTIFICATION_STOPPED_REASONS.filter(
+    (reason) =>
+      reason !== "rate_limit" &&
+      !EXCLUDED_FALLBACK_REASONS.has(reason) &&
+      REASON_ELIGIBLE_RUNGS[reason].includes("tier"),
+  );
 
 function endingAtNotify(
   steps: readonly FallbackRungKind[],
@@ -202,24 +226,60 @@ function endingAtNotify(
   return at === -1 ? [...steps, "notify"] : steps.slice(0, at + 1);
 }
 
-export function testNextSteps(
+/**
+ * One failure's answer, as the host resolves its ladder (`resolveFallbackLadder`):
+ * its override when the user set one, else the main order, narrowed to the
+ * steps that can change this failure's outcome, and Notify always.
+ */
+function stepsForReason(
   policy: FallbackPolicy,
-  kind: TestFailureKind,
-): TestNextSteps {
-  // A rate limit walks its override when the user set one; "another error"
-  // names no single failure, so it walks the main order.
-  const ladder =
-    kind === "rate_limit"
-      ? effectiveLadderFor(policy, "rate_limit")
-      : policy.ladder;
+  reason: HostNotificationStoppedReason,
+): Exclude<TestNextSteps, { readonly kind: "depends" }> {
+  const ladder = effectiveLadderFor(policy, reason);
   if (ladder === "off") return { kind: "fallback-off" };
+  const eligible = REASON_ELIGIBLE_RUNGS[reason];
   const reachable = endingAtNotify(
-    ladder.filter((rung) => stepRunsFor(kind, rung)),
+    ladder.filter((rung) => rung === "notify" || eligible.includes(rung)),
   );
   const tierAt = reachable.indexOf("tier");
   return tierAt === -1
     ? { kind: "tier-off", steps: reachable }
     : { kind: "after-tier", steps: reachable.slice(tierAt + 1) };
+}
+
+function sameNextSteps(a: TestNextSteps, b: TestNextSteps): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "fallback-off" || b.kind === "fallback-off") return true;
+  if (a.kind === "depends" || b.kind === "depends") return false;
+  return (
+    a.steps.length === b.steps.length &&
+    a.steps.every((step, at) => step === b.steps[at])
+  );
+}
+
+export function testNextSteps(
+  policy: FallbackPolicy,
+  kind: TestFailureKind,
+): TestNextSteps {
+  if (kind === "rate_limit") return stepsForReason(policy, "rate_limit");
+  // "Another error" names no single failure, so it is answered only when every
+  // failure it stands for gives the same answer.
+  const answers = OTHER_ERROR_REASONS.map((reason) =>
+    stepsForReason(policy, reason),
+  );
+  const [first] = answers;
+  if (answers.every((answer) => sameNextSteps(answer, first))) return first;
+  return {
+    kind: "depends",
+    tierRuns: answers.some((answer) => answer.kind === "after-tier"),
+  };
+}
+
+/** Whether the equivalent-model step runs for at least one failure the test stands for. */
+export function testTierStepRuns(steps: TestNextSteps): boolean {
+  return (
+    steps.kind === "after-tier" || (steps.kind === "depends" && steps.tierRuns)
+  );
 }
 
 /**
@@ -333,24 +393,70 @@ export interface TestRow {
 const MATCHES_NAMED = 2;
 
 /**
- * The host's rows for one tier, or `null` when they cannot be attributed to
- * it. Rows carry `groupId`, the tier's editable NAME, so a name another tier
- * shares - the transient state a rename passes through - would pair one tier's
- * row with another's answer; the editor withholds in that case too
- * (`previewForGroup`).
+ * The account a row's first usable match runs on, by name: the account's own
+ * label, the Terminal account's for `null` on a provider that has accounts,
+ * and nothing for `null` on one that has none (Traycer), where there is no
+ * account to name.
  */
-export function testPreviewForTier(
-  candidates: readonly TierCandidatePreview[] | null,
-  groups: readonly TierGroup[],
-  tierIndex: number,
-): readonly TierCandidatePreview[] | null {
-  if (candidates === null) return null;
-  const tierId = groups[tierIndex].id;
+export function testAccountLabel(
+  harnessId: HarnessId,
+  profileId: string | null,
+  labelFor: FallbackSettingsProfileLabel,
+): string | null {
+  if (profileId !== null) return labelFor(profileId);
+  const gui = guiHarnessIdSchema.safeParse(harnessId);
+  if (!gui.success || providerCliIdForHarness(gui.data) === null) return null;
+  return TERMINAL_ACCOUNT_LABEL;
+}
+
+/**
+ * What an answer says about one tier.
+ *
+ *  - `none` - nothing to draw from: no answer yet, or one that cannot be
+ *    attributed (a tier name another tier shares - the transient state a
+ *    rename passes through - would pair one tier's row with another's answer;
+ *    the editor withholds in that case too, `previewForGroup`).
+ *  - `rows` - the tier's own rows.
+ *  - `elsewhere` - a WALK (the blocked dry run, which answers only the tier
+ *    the host routed to) came back without this tier's rows: the host routed
+ *    the model to `walkedTierId`, or to no tier at all. The two routings share
+ *    the protocol's router and the groups sent, so what differs is the
+ *    catalog each read the model's name from.
+ */
+export type TestTierPreview =
+  | { readonly kind: "none" }
+  | { readonly kind: "rows"; readonly rows: readonly TierCandidatePreview[] }
+  | { readonly kind: "elsewhere"; readonly walkedTierId: string | null };
+
+/**
+ * `groups` are the tiers the answer was asked about, and ids compare TRIMMED:
+ * the host trims a tier's name on the way in (`tierGroupSchema`), so its rows
+ * name "flagship" for a tier sent as "flagship ".
+ */
+export function testPreviewForTier(input: {
+  readonly candidates: readonly TierCandidatePreview[] | null;
+  readonly groups: readonly TierGroup[];
+  readonly tierIndex: number;
+  /** A walk for one blocked tuple, rather than the editor's all-tier preview. */
+  readonly walked: boolean;
+}): TestTierPreview {
+  const { candidates, groups, tierIndex, walked } = input;
+  if (candidates === null) return { kind: "none" };
+  const tier = groups[tierIndex];
+  const tierId = tier.id.trim();
   const shared = groups.some(
-    (group, at) => at !== tierIndex && group.id === tierId,
+    (group, at) => at !== tierIndex && group.id.trim() === tierId,
   );
-  if (shared) return null;
-  return candidates.filter((row) => row.groupId === tierId);
+  if (shared) return { kind: "none" };
+  const rows = candidates.filter((row) => row.groupId.trim() === tierId);
+  if (rows.length > 0 || !walked || tier.candidates.length === 0) {
+    return { kind: "rows", rows };
+  }
+  const walkedRow = candidates.at(0);
+  return {
+    kind: "elsewhere",
+    walkedTierId: walkedRow === undefined ? null : walkedRow.groupId,
+  };
 }
 
 /**
@@ -456,9 +562,9 @@ export function testRows(input: {
     rows.push({
       ...base,
       account:
-        tried === undefined || tried.profileId === null
+        tried === undefined
           ? null
-          : labelFor(tried.profileId),
+          : testAccountLabel(candidate.harnessId, tried.profileId, labelFor),
       answer: {
         kind: "matches",
         lines: lines.slice(0, named),
@@ -470,17 +576,336 @@ export function testRows(input: {
 }
 
 /**
- * Whether the draft's tiers can be sent as a dry run: every tier named, and no
- * two with one name. A blank name fails the request schema, and a shared one
- * makes the answer unattributable (`testPreviewForTier`); both are states a
- * rename passes through, and asking in them would spend a walk on a request
- * that cannot be used.
+ * Whether the tiers can be sent as a dry run: every tier named, and no two
+ * with one name once trimmed - the host trims names, so "flagship" and
+ * "flagship " are one tier to it. A blank name fails the request schema, and a
+ * shared one makes the answer unattributable (`testPreviewForTier`); asking in
+ * either state would spend a walk on a request that cannot be used.
  */
 export function testableTierNames(groups: readonly TierGroup[]): boolean {
   const seen = new Set<string>();
   for (const group of groups) {
-    if (group.id.trim() === "" || seen.has(group.id)) return false;
-    seen.add(group.id);
+    const name = group.id.trim();
+    if (name === "" || seen.has(name)) return false;
+    seen.add(name);
   }
   return true;
+}
+
+/** The failure kinds as the steps lines name them. */
+export const TEST_FAILURE_PLURALS: Readonly<Record<TestFailureKind, string>> = {
+  rate_limit: "rate limits",
+  // Said only when every failure "another error" stands for agrees, so it can
+  // claim all of them (a disagreement says "depends on the error" instead).
+  other: "every other error",
+};
+
+/**
+ * The lead the verdict carries while the master switch is off. The host arms
+ * nothing then (`resolveFallbackLadder` returns no steps), so a bare "switches
+ * here" would be false - but this page is where the user configures what it
+ * WILL do, so the dry run is still shown, under this sentence.
+ */
+export const ROUTE_AUTOMATICALLY_OFF_LEAD =
+  "Route automatically is off, so nothing switches on its own. With it on:";
+
+/** Where the "If none of these work" words for a disagreement point. */
+export const DEPENDS_ON_THE_ERROR = "depends on the error; see Overrides";
+
+/** A routing that names a tier - the two kinds the full verdict draws. */
+export type RoutedTestRouting = Exclude<
+  TestRouting,
+  { readonly kind: "no-tier" }
+>;
+
+/**
+ * The routed tier's rows as the verdict draws them, or the one line that
+ * replaces them when the host walked a different tier - a named tier over rows
+ * with nothing under them would read as "this tier has nothing to try".
+ */
+export type TestRowsAnswer =
+  | {
+      readonly kind: "rows";
+      readonly rows: readonly TestRow[];
+      readonly status: "ready" | "pending" | "failed";
+    }
+  | { readonly kind: "elsewhere"; readonly walkedTierName: string | null };
+
+/** The blocked model as the verdict names it. */
+export interface TestBlockedModel {
+  readonly harnessId: GuiHarnessId;
+  readonly label: string;
+}
+
+/** Everything the verdict draws and the announcement says, in one shape. */
+export type TestVerdictModel =
+  | { readonly kind: "incomplete"; readonly text: string }
+  | { readonly kind: "fallback-off"; readonly failure: TestFailureKind }
+  | {
+      readonly kind: "tier-off";
+      readonly failure: TestFailureKind;
+      /** What runs instead, or `null` when that depends on the error. */
+      readonly steps: readonly FallbackRungKind[] | null;
+    }
+  | {
+      readonly kind: "no-tier";
+      readonly blocked: TestBlockedModel;
+      readonly defaultTierGroupId: string | null;
+      /** The step it goes straight to, or `null` when that depends on the error. */
+      readonly next: FallbackRungKind | null;
+    }
+  | {
+      readonly kind: "routed";
+      readonly routing: RoutedTestRouting;
+      readonly tierName: string;
+      readonly blocked: TestBlockedModel;
+      readonly simulated: boolean;
+      readonly namesTestable: boolean;
+      readonly answer: TestRowsAnswer;
+      /** The steps after the tier, or `null` when they depend on the error. */
+      readonly then: readonly FallbackRungKind[] | null;
+      readonly failure: TestFailureKind;
+    };
+
+/**
+ * The verdict, from the tuple's routing and the answers in hand.
+ *
+ * Two tier lists, on purpose (review C1). `groups` is the live draft: the
+ * header routes on it and the rows are its rows, so a rename reads through at
+ * once. `committedGroups` is what the walk was ASKED about - the tiers as last
+ * committed, since a tier name commits on blur and a walk per keystroke would
+ * stream answers into the live region. The two differ only by an uncommitted
+ * name, so the routed tier sits at one index in both; when a transient name
+ * collision routes them to different tiers, the rows wait for the commit
+ * rather than borrow another tier's answer.
+ */
+export interface TestVerdictInput {
+  /** Why there is no tuple yet, drawn when `tuple` is `null`. */
+  readonly incomplete: string;
+  /**
+   * The complete tuple's blocked model and where it routes - over the live
+   * draft (`routing`) and over the tiers the walk was asked about
+   * (`committedRouting`) - or `null` until a provider and a model are known.
+   */
+  readonly tuple: {
+    readonly blocked: TestBlockedModel;
+    readonly routing: TestRouting;
+    readonly committedRouting: TestRouting;
+  } | null;
+  readonly nextSteps: TestNextSteps;
+  readonly failure: TestFailureKind;
+  readonly groups: readonly TierGroup[];
+  readonly committedGroups: readonly TierGroup[];
+  readonly simulated: boolean;
+  readonly namesTestable: boolean;
+  readonly walk: {
+    /** A walk was asked for; without one nothing is pending or failed. */
+    readonly asked: boolean;
+    readonly candidates: readonly TierCandidatePreview[] | null;
+    readonly failed: boolean;
+  };
+  /** The editor's own non-blocked preview, for a host that cannot walk. */
+  readonly unsimulated: readonly TierCandidatePreview[] | null;
+  readonly catalog: FallbackCatalogOptions;
+  readonly labelFor: FallbackSettingsProfileLabel;
+}
+
+export function testVerdictModel(input: TestVerdictInput): TestVerdictModel {
+  const { tuple, nextSteps, failure } = input;
+  if (tuple === null) return { kind: "incomplete", text: input.incomplete };
+  const { routing, blocked } = tuple;
+  if (nextSteps.kind === "fallback-off")
+    return { kind: "fallback-off", failure };
+  if (nextSteps.kind === "tier-off") {
+    return { kind: "tier-off", failure, steps: nextSteps.steps };
+  }
+  if (nextSteps.kind === "depends" && !nextSteps.tierRuns) {
+    return { kind: "tier-off", failure, steps: null };
+  }
+  const then = nextSteps.kind === "after-tier" ? nextSteps.steps : null;
+  if (routing.kind === "no-tier") {
+    return {
+      kind: "no-tier",
+      blocked,
+      defaultTierGroupId: routing.defaultTierGroupId,
+      next: then === null ? null : then[0],
+    };
+  }
+  return {
+    kind: "routed",
+    routing,
+    tierName: tierDisplayName(routing.tier.tierId, routing.tier.tierIndex),
+    blocked,
+    simulated: input.simulated,
+    namesTestable: input.namesTestable,
+    answer: routedAnswer(input, tuple.committedRouting, routing.tier.tierIndex),
+    then,
+    failure,
+  };
+}
+
+function routedAnswer(
+  input: TestVerdictInput,
+  committed: TestRouting,
+  tierIndex: number,
+): TestRowsAnswer {
+  const { groups, catalog, labelFor, walk } = input;
+  const tier = groups[tierIndex];
+  if (!input.simulated) {
+    const preview = testPreviewForTier({
+      candidates: input.unsimulated,
+      groups,
+      tierIndex,
+      walked: false,
+    });
+    return {
+      kind: "rows",
+      rows: testRows({
+        tier,
+        preview: preview.kind === "rows" ? preview.rows : null,
+        simulated: false,
+        catalog,
+        labelFor,
+      }),
+      status: "ready",
+    };
+  }
+  const attributable =
+    committed.kind !== "no-tier" && committed.tier.tierIndex === tierIndex;
+  const preview = attributable
+    ? testPreviewForTier({
+        candidates: walk.candidates,
+        groups: input.committedGroups,
+        tierIndex,
+        walked: true,
+      })
+    : ({ kind: "none" } satisfies TestTierPreview);
+  if (preview.kind === "elsewhere" && !walk.failed) {
+    return { kind: "elsewhere", walkedTierName: preview.walkedTierId };
+  }
+  return {
+    kind: "rows",
+    rows: testRows({
+      tier,
+      preview: preview.kind === "rows" ? preview.rows : null,
+      simulated: true,
+      catalog,
+      labelFor,
+    }),
+    status: walkStatus(walk, attributable),
+  };
+}
+
+/**
+ * A failed walk is failed; an asked one is pending until it answers, and also
+ * while the answer in hand belongs to a different tier than the header names
+ * (a transient name collision mid-rename) - the commit will ask again.
+ */
+function walkStatus(
+  walk: TestVerdictInput["walk"],
+  attributable: boolean,
+): "ready" | "pending" | "failed" {
+  if (walk.failed) return "failed";
+  if (walk.asked && (walk.candidates === null || !attributable)) {
+    return "pending";
+  }
+  return "ready";
+}
+
+/** Steps as one phrase: "Try another account, then Notify you". */
+export function testStepsPhrase(steps: readonly FallbackRungKind[]): string {
+  return steps.map((step) => TEST_STEP_LABELS[step]).join(", then ");
+}
+
+/**
+ * The verdict as ONE sentence, for the panel's polite status (review A1).
+ *
+ * The visible verdict is a tree of rows, pills and footers; announcing it
+ * would read a run of fragments ("then", "then", "2 more") on every change.
+ * This says what a person asked - which tier, and where the chat goes - in
+ * the words the visible verdict uses.
+ */
+export function testVerdictSentence(
+  model: TestVerdictModel,
+  masterOff: boolean,
+): string {
+  const body = verdictBody(model);
+  return masterOff && model.kind !== "incomplete"
+    ? `${ROUTE_AUTOMATICALLY_OFF_LEAD} ${body}`
+    : body;
+}
+
+function verdictBody(model: TestVerdictModel): string {
+  switch (model.kind) {
+    case "incomplete":
+      return model.text;
+    case "fallback-off":
+      return `Your steps are turned off for ${TEST_FAILURE_PLURALS[model.failure]}, so Traycer doesn't try another model.`;
+    case "tier-off":
+      return model.steps === null
+        ? `The equivalent-model step doesn't run for these errors, and what Traycer does instead ${DEPENDS_ON_THE_ERROR}.`
+        : `The equivalent-model step is off for ${TEST_FAILURE_PLURALS[model.failure]}, so Traycer goes straight to ${testStepsPhrase(model.steps)}.`;
+    case "no-tier":
+      return `${model.blocked.label} is not in any tier, so there is no equivalent-model step; ${
+        model.next === null
+          ? `what happens next ${DEPENDS_ON_THE_ERROR}`
+          : `it goes straight to ${TEST_STEP_LABELS[model.next]}`
+      }.`;
+    case "routed":
+      return routedSentence(model);
+  }
+}
+
+function routedSentence(
+  model: Extract<TestVerdictModel, { readonly kind: "routed" }>,
+): string {
+  const start =
+    model.routing.kind === "default-tier"
+      ? `Traycer uses your default tier, ${model.tierName}`
+      : `Traycer uses the ${model.tierName} tier`;
+  const conflict =
+    model.routing.kind === "own-tier" && model.routing.conflict !== null
+      ? ` It is in two tiers; ${tierDisplayName(model.routing.conflict[0].tierId, model.routing.conflict[0].tierIndex)} handles it until you fix the conflict.`
+      : "";
+  return `${routedAnswerSentence(model, start)}${conflict}`;
+}
+
+function routedAnswerSentence(
+  model: Extract<TestVerdictModel, { readonly kind: "routed" }>,
+  start: string,
+): string {
+  const { answer } = model;
+  if (answer.kind === "elsewhere") {
+    return answer.walkedTierName === null
+      ? `${start} here, but this host would route it to no tier right now.`
+      : `${start} here, but this host would use the ${answer.walkedTierName} tier right now.`;
+  }
+  if (answer.status === "pending")
+    return `${start}. Checking what it would try.`;
+  if (answer.status === "failed") return `${start}. Couldn't run the test.`;
+  if (!model.simulated) return `${start}. This host can't simulate the walk.`;
+  if (!model.namesTestable) {
+    return `${start}. Give every tier its own name to see what each row would try.`;
+  }
+  const winner = switchTarget(answer.rows);
+  if (winner !== null) {
+    return winner.account === null
+      ? `${start} and switches to ${winner.label}.`
+      : `${start} and switches to ${winner.label} on ${winner.account}.`;
+  }
+  return model.then === null
+    ? `${start}, but nothing in it would switch now; what happens next ${DEPENDS_ON_THE_ERROR}.`
+    : `${start}, but nothing in it would switch now. Next: ${testStepsPhrase(model.then)}.`;
+}
+
+/** The match the chat would switch to, and the account its row runs on. */
+function switchTarget(
+  rows: readonly TestRow[],
+): { readonly label: string; readonly account: string | null } | null {
+  for (const row of rows) {
+    if (row.answer.kind !== "matches") continue;
+    const line = row.answer.lines.find((entry) => entry.status === "switches");
+    if (line !== undefined) return { label: line.label, account: row.account };
+  }
+  return null;
 }

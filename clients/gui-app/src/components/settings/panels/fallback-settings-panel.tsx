@@ -535,8 +535,10 @@ function FallbackPolicyEditor(props: {
       <FallbackTestModelPanel
         id={testPanelId}
         // The DRAFT, as the editor shows it - blank rows, an unsaved default
-        // tier and all - never the stored policy.
+        // tier and all - never the stored policy. Routing and the header read
+        // it live; the dry run is asked about the tiers as last committed.
         policy={state.draft}
+        committedTiers={state.committedTiers}
         catalog={catalog}
         conflicts={conflicts}
         labelFor={profileLabelFor}
@@ -573,7 +575,9 @@ function FallbackPolicyEditor(props: {
     ): void => {
       setOverrideReset(null);
       setOverrideSavePolicy(null);
-      dispatch({ type: "edited", policy: next, field, keyedTierGroups });
+      // `typed`, not `edited`: the draft moves but nothing has committed, so
+      // the Test panel's dry run stays on the tiers as last committed.
+      dispatch({ type: "typed", policy: next, field, keyedTierGroups });
     },
     [],
   );

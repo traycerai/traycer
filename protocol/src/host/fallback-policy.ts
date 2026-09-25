@@ -190,8 +190,15 @@ function piecesMatchWhole(pieces: readonly string[], subject: string): boolean {
  * The failed model as routing matches it: its ID, plus the display name the
  * failed harness's `catalog` gives that ID. With no catalog, or no entry for
  * the ID, the "name" is the ID again, which makes the match ID-only.
+ *
+ * Exported because a surface that explains a routing answer has to name the
+ * row the router matched - the settings Test panel's "is in it through
+ * <pattern> (row n)" - and it can only find that row with the SAME identity
+ * {@link findTierGroupForFailedTuple} matched against. A copy of this rule
+ * that drifted (a trim, another field) would pick a group here and find no row
+ * in it there.
  */
-function blockedModelIdentity(
+export function failedModelRoutingIdentity(
   model: string,
   catalog: readonly TierModelIdentity[] | null,
 ): TierModelIdentity {
@@ -247,7 +254,7 @@ export function findTierGroupForFailedTuple(
   model: string,
   catalog: readonly TierModelIdentity[] | null,
 ): TierGroup | null {
-  const blocked = blockedModelIdentity(model, catalog);
+  const blocked = failedModelRoutingIdentity(model, catalog);
   return (
     groups.find((group) =>
       group.candidates.some(
@@ -351,7 +358,7 @@ export function tierGroupsNameDestinationFor(input: {
 }): boolean {
   const group = routeTierGroupForFailedTuple(input);
   if (group === null) return false;
-  const blocked = blockedModelIdentity(input.model, input.catalog);
+  const blocked = failedModelRoutingIdentity(input.model, input.catalog);
   return group.candidates.some(
     (candidate) =>
       !(

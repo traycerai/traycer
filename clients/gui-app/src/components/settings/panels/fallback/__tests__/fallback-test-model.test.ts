@@ -12,11 +12,15 @@ import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
 import type { HarnessId } from "@traycer/protocol/host/agent/shared";
 import {
   blockedModelLabel,
+  testAccountLabel,
   testNextSteps,
   testPreviewForTier,
   testRouting,
   testRows,
+  testTierStepRuns,
+  testVerdictSentence,
   testableTierNames,
+  type TestVerdictModel,
 } from "@/components/settings/panels/fallback/fallback-test-model";
 import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
@@ -109,8 +113,7 @@ describe("testRouting", () => {
     if (routing.kind !== "own-tier") throw new Error("unreachable");
     expect(routing.tier.tierIndex).toBe(1);
     expect(routing.tier.tierId).toBe("flagship");
-    expect(routing.candidateIndex).toBe(1);
-    expect(routing.rowValue).toBe("*sol*");
+    expect(routing.row).toEqual({ candidateIndex: 1, value: "*sol*" });
     expect(routing.conflict).toBeNull();
   });
 
@@ -182,6 +185,41 @@ describe("testRouting", () => {
       tierId: "standard",
     });
   });
+
+  // T2 - Claude `default` against the Claude catalog: `*opus*` reaches it
+  // through the LABEL ("Default (Opus 5.5)"), not the slug.
+  it("Claude default routes to own-tier flagship through *opus*, row 0", () => {
+    const groups = [FRONTIER_TIER, FLAGSHIP_TIER, STANDARD_TIER];
+    const routing = testRouting({
+      groups,
+      defaultTierGroupId: "flagship",
+      harnessId: "claude",
+      model: "default",
+      catalog: CLAUDE_CATALOG,
+      conflicts: [],
+    });
+    expect(routing.kind).toBe("own-tier");
+    if (routing.kind !== "own-tier") throw new Error("unreachable");
+    expect(routing.tier.tierId).toBe("flagship");
+    expect(routing.row).toEqual({ candidateIndex: 0, value: "*opus*" });
+  });
+
+  // T2 - with `catalog: null` the router cannot read the label, so `default`
+  // matches no row by slug and falls to the default tier.
+  it("Claude default with catalog null routes to default-tier flagship", () => {
+    const groups = [FRONTIER_TIER, FLAGSHIP_TIER, STANDARD_TIER];
+    const routing = testRouting({
+      groups,
+      defaultTierGroupId: "flagship",
+      harnessId: "claude",
+      model: "default",
+      catalog: null,
+      conflicts: [],
+    });
+    expect(routing.kind).toBe("default-tier");
+    if (routing.kind !== "default-tier") throw new Error("unreachable");
+    expect(routing.tier.tierId).toBe("flagship");
+  });
 });
 
 function policyWith(overrides: Partial<FallbackPolicy>): FallbackPolicy {
@@ -210,25 +248,21 @@ describe("testNextSteps", () => {
     });
   });
 
-  // `stepRunsFor` - "another error" drops `wait`, which has no reset
-  // boundary to wait on for a non-rate-limit failure.
+  // `REASON_ELIGIBLE_RUNGS` - "another error" drops `wait`, which has no
+  // reset boundary to wait on for a non-rate-limit failure.
   it('wait is dropped for "other"', () => {
     const policy = policyWith({
       ladder: ["profile", "tier", "wait", "notify"],
     });
     const result = testNextSteps(policy, "other");
-    expect(result.kind).not.toBe("fallback-off");
-    if (result.kind === "fallback-off") throw new Error("unreachable");
-    expect(result.steps).not.toContain("wait");
+    expect(result).toEqual({ kind: "after-tier", steps: ["notify"] });
   });
 
   // `endingAtNotify` - a ladder with no `notify` gets one appended.
   it("Notify is appended when the ladder has none", () => {
     const policy = policyWith({ ladder: ["profile"] });
-    const result = testNextSteps(policy, "other");
-    expect(result.kind).toBe("tier-off");
-    if (result.kind === "fallback-off") throw new Error("unreachable");
-    expect(result.steps).toEqual(["profile", "notify"]);
+    const result = testNextSteps(policy, "rate_limit");
+    expect(result).toEqual({ kind: "tier-off", steps: ["profile", "notify"] });
   });
 
   // `endingAtNotify` - truncation. `tier` is LISTED after an early `notify`
@@ -248,6 +282,39 @@ describe("testNextSteps", () => {
       kind: "tier-off",
       steps: ["profile", "wait", "notify"],
     });
+  });
+
+  // P2 - "another error" is answered only when every failure it stands for
+  // (provider_unavailable, billing, model_unavailable, auth) agrees.
+  //
+  // Falsification: replace `OTHER_ERROR_REASONS.map(...)` with
+  // `OTHER_ERROR_REASONS.slice(0, 1).map(...)` in `testNextSteps` (answering
+  // only the first reason) - the billing-override case below would then read
+  // its lone answer (`tier-off`) instead of noticing the disagreement.
+  it("a billing-only override disagrees with the rest, giving depends with tierRuns true", () => {
+    const policy = policyWith({
+      ladder: ["profile", "tier", "wait", "notify"],
+      reasonOverrides: { billing: ["profile", "notify"] },
+    });
+    const result = testNextSteps(policy, "other");
+    expect(result).toEqual({ kind: "depends", tierRuns: true });
+  });
+
+  it("a ladder with no tier step at all disagrees across reasons but never reaches the tier step, giving depends with tierRuns false", () => {
+    const policy = policyWith({ ladder: ["profile", "notify"] });
+    const result = testNextSteps(policy, "other");
+    expect(result).toEqual({ kind: "depends", tierRuns: false });
+  });
+
+  it("testTierStepRuns is true only for depends with tierRuns", () => {
+    expect(testTierStepRuns({ kind: "depends", tierRuns: true })).toBe(true);
+    expect(testTierStepRuns({ kind: "depends", tierRuns: false })).toBe(false);
+    expect(testTierStepRuns({ kind: "after-tier", steps: ["notify"] })).toBe(
+      true,
+    );
+    expect(testTierStepRuns({ kind: "tier-off", steps: ["notify"] })).toBe(
+      false,
+    );
   });
 });
 
@@ -599,7 +666,9 @@ describe("testPreviewForTier", () => {
         matches: [],
       }),
     ];
-    expect(testPreviewForTier(candidates, groups, 0)).toBeNull();
+    expect(
+      testPreviewForTier({ candidates, groups, tierIndex: 0, walked: true }),
+    ).toEqual({ kind: "none" });
   });
 
   it("passes through the tier's own rows when the name is unique", () => {
@@ -621,13 +690,153 @@ describe("testPreviewForTier", () => {
       modelFamily: "*terra*",
       matches: [],
     });
-    const result = testPreviewForTier([flagshipRow, standardRow], groups, 0);
-    expect(result).toEqual([flagshipRow]);
+    const result = testPreviewForTier({
+      candidates: [flagshipRow, standardRow],
+      groups,
+      tierIndex: 0,
+      walked: false,
+    });
+    expect(result).toEqual({ kind: "rows", rows: [flagshipRow] });
   });
 
-  it("passes null candidates through as null", () => {
+  it("gives none for no answer yet", () => {
     const groups: readonly TierGroup[] = [group("flagship", [])];
-    expect(testPreviewForTier(null, groups, 0)).toBeNull();
+    expect(
+      testPreviewForTier({
+        candidates: null,
+        groups,
+        tierIndex: 0,
+        walked: true,
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  // C2 - a WALK for a non-empty tier that came back with only another tier's
+  // rows: the answer is "elsewhere", naming the tier the host actually walked.
+  //
+  // Falsification: remove the `!walked` guard from `testPreviewForTier` (so
+  // the function always returns "rows" once `rows.length > 0 || tier.
+  // candidates.length === 0`) - this would then read `{kind: "rows", rows:
+  // []}` instead of naming "standard".
+  it("a walk answered with only another tier's rows gives elsewhere naming that tier", () => {
+    const groups: readonly TierGroup[] = [
+      group("flagship", [candidate("codex", "*sol*", "high")]),
+      group("standard", [candidate("codex", "*terra*", "medium")]),
+    ];
+    const standardRow = previewRow({
+      groupId: "standard",
+      candidateIndex: 0,
+      harnessId: "codex",
+      modelFamily: "*terra*",
+      matches: [],
+    });
+    expect(
+      testPreviewForTier({
+        candidates: [standardRow],
+        groups,
+        tierIndex: 0,
+        walked: true,
+      }),
+    ).toEqual({ kind: "elsewhere", walkedTierId: "standard" });
+  });
+
+  it("a walk answered with no rows at all gives elsewhere with walkedTierId null", () => {
+    const groups: readonly TierGroup[] = [
+      group("flagship", [candidate("codex", "*sol*", "high")]),
+    ];
+    expect(
+      testPreviewForTier({
+        candidates: [],
+        groups,
+        tierIndex: 0,
+        walked: true,
+      }),
+    ).toEqual({ kind: "elsewhere", walkedTierId: null });
+  });
+
+  // `walked: false` (the editor's own preview) always returns rows, even when
+  // empty - nothing was simulated, so there is no "elsewhere" to claim.
+  it("walked: false gives rows even when the tier's own rows are empty", () => {
+    const groups: readonly TierGroup[] = [
+      group("flagship", [candidate("codex", "*sol*", "high")]),
+    ];
+    expect(
+      testPreviewForTier({
+        candidates: [],
+        groups,
+        tierIndex: 0,
+        walked: false,
+      }),
+    ).toEqual({ kind: "rows", rows: [] });
+  });
+
+  // An empty tier (no rows to switch to) always answers "rows", walked or not.
+  it("an empty tier gives rows rather than elsewhere, even when walked", () => {
+    const groups: readonly TierGroup[] = [group("flagship", [])];
+    expect(
+      testPreviewForTier({
+        candidates: [],
+        groups,
+        tierIndex: 0,
+        walked: true,
+      }),
+    ).toEqual({ kind: "rows", rows: [] });
+  });
+
+  // Ids compare TRIMMED: a walk's rows name a group "flagship" (the host
+  // trims a tier's name on the way in), and still match a tier stored with
+  // trailing whitespace on this side.
+  //
+  // Falsification: drop `.trim()` from `tier.id.trim()` in `testPreviewForTier`
+  // - the untrimmed comparison would then never match and this would read
+  // `[]` instead of the row.
+  it("a group name with trailing whitespace still matches rows named without it", () => {
+    const groups: readonly TierGroup[] = [
+      group("flagship ", [candidate("codex", "*sol*", "high")]),
+    ];
+    const row = previewRow({
+      groupId: "flagship",
+      candidateIndex: 0,
+      harnessId: "codex",
+      modelFamily: "*sol*",
+      matches: [],
+    });
+    expect(
+      testPreviewForTier({
+        candidates: [row],
+        groups,
+        tierIndex: 0,
+        walked: true,
+      }),
+    ).toEqual({ kind: "rows", rows: [row] });
+  });
+
+  // The other side of the same rule: a row's own `groupId` can carry
+  // whitespace too (a mid-rename answer racing a commit), and still matches a
+  // tier stored without it.
+  //
+  // Falsification: drop `.trim()` from the row filter's `row.groupId.trim()`
+  // in `testPreviewForTier` - the untrimmed comparison would then never match
+  // and this would read `[]` instead of the row.
+  it("a row's groupId with trailing whitespace still matches a tier named without it", () => {
+    const groups: readonly TierGroup[] = [
+      group("flagship", [candidate("codex", "*sol*", "high")]),
+    ];
+    const row = previewRow({
+      groupId: "flagship ",
+      candidateIndex: 0,
+      harnessId: "codex",
+      modelFamily: "*sol*",
+      matches: [],
+    });
+    expect(
+      testPreviewForTier({
+        candidates: [row],
+        groups,
+        tierIndex: 0,
+        walked: true,
+      }),
+    ).toEqual({ kind: "rows", rows: [row] });
   });
 });
 
@@ -647,6 +856,17 @@ describe("testableTierNames", () => {
       testableTierNames([group("flagship", []), group("standard", [])]),
     ).toBe(true);
   });
+
+  // C1 - names compare TRIMMED, the same rule the host applies on the way in
+  // (`tierGroupSchema`'s trim): "flagship" and "flagship " are one name.
+  //
+  // Falsification: drop `.trim()` in `testableTierNames` - the two names would
+  // then compare unequal and this would read `true`.
+  it("rejects two names that differ only by trailing whitespace", () => {
+    expect(
+      testableTierNames([group("flagship", []), group("flagship ", [])]),
+    ).toBe(false);
+  });
 });
 
 describe("blockedModelLabel", () => {
@@ -662,5 +882,94 @@ describe("blockedModelLabel", () => {
     expect(blockedModelLabel("unknown-model", CODEX_CATALOG)).toBe(
       "unknown-model",
     );
+  });
+});
+
+describe("testAccountLabel", () => {
+  const labelFor: FallbackSettingsProfileLabel = (profileId) =>
+    `Account ${profileId}`;
+
+  it("codex with no profile picked names the Terminal account", () => {
+    expect(testAccountLabel("codex", null, labelFor)).toBe("Terminal account");
+  });
+
+  // `traycer` has no provider-CLI login concept at all
+  // (`providerCliIdForHarness`), so there is no account to name.
+  it("traycer with no profile picked names nothing", () => {
+    expect(testAccountLabel("traycer", null, labelFor)).toBeNull();
+  });
+
+  it("a picked profile is named through labelFor", () => {
+    expect(testAccountLabel("codex", "p1", labelFor)).toBe(labelFor("p1"));
+  });
+});
+
+describe("testRows - account label for a winning match with no profile (D3)", () => {
+  const codexModels = [
+    model("codex", "gpt-6-sol", "GPT-6-Sol"),
+    model("codex", "gpt-5.6-sol", "GPT-5.6-Sol"),
+  ];
+
+  // Falsification: return `null` instead of `TERMINAL_ACCOUNT_LABEL` in
+  // `testAccountLabel`'s codex-with-no-provider-CLI branch check (i.e. treat
+  // `profileId: null` on codex the same as on `traycer`) - `account` would
+  // then read `null` instead of "Terminal account".
+  it("a winning match with profileId null on a codex row shows the Terminal account", () => {
+    const tier: TierGroup = group("flagship", [
+      candidate("codex", "*sol*", "high"),
+    ]);
+    const preview: readonly TierCandidatePreview[] = [
+      previewRow({
+        groupId: "flagship",
+        candidateIndex: 0,
+        harnessId: "codex",
+        modelFamily: "*sol*",
+        matches: [match("gpt-6-sol", null, null, null)],
+      }),
+    ];
+    const rows = testRows({
+      tier,
+      preview,
+      simulated: true,
+      catalog: catalogFixture(new Map([["codex", codexModels]])),
+      labelFor: LABEL_FOR,
+    });
+    expect(rows[0].account).toBe("Terminal account");
+  });
+});
+
+describe("testVerdictSentence (P1)", () => {
+  function fallbackOffModel(): TestVerdictModel {
+    return { kind: "fallback-off", failure: "rate_limit" };
+  }
+
+  // Falsification: change `masterOff && model.kind !== "incomplete"` to
+  // `false` in `testVerdictSentence` - the lead would then never be
+  // prepended and this would read the bare body instead.
+  it("prepends the lead when the master switch is off and the model is not incomplete", () => {
+    const sentence = testVerdictSentence(fallbackOffModel(), true);
+    expect(sentence.startsWith("Route automatically is off, so nothing")).toBe(
+      true,
+    );
+    // A real space, not merely a shared prefix: the lead and the body are two
+    // sentences joined by one.
+    expect(
+      sentence.startsWith(
+        `${"Route automatically is off, so nothing switches on its own. With it on:"} `,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not prepend the lead when the master switch is on", () => {
+    const sentence = testVerdictSentence(fallbackOffModel(), false);
+    expect(sentence.startsWith("Route automatically is off")).toBe(false);
+  });
+
+  it("an incomplete model never gets the lead, even with the master switch off", () => {
+    const incomplete: TestVerdictModel = {
+      kind: "incomplete",
+      text: "Loading providers…",
+    };
+    expect(testVerdictSentence(incomplete, true)).toBe("Loading providers…");
   });
 });
