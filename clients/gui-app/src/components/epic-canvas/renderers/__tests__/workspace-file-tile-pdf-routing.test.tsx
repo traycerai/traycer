@@ -42,6 +42,7 @@ const state = vi.hoisted((): PdfRoutingTestState => ({
     url: "blob:pdf",
     meta: null,
     reason: null,
+    missing: false,
     totalBytes: null,
     servedFromCache: false,
   },
@@ -314,6 +315,7 @@ describe("workspace file tile PDF routing", () => {
       url: "blob:pdf",
       meta: null,
       reason: null,
+      missing: false,
       totalBytes: null,
       servedFromCache: false,
     };
@@ -365,6 +367,7 @@ describe("workspace file tile PDF routing", () => {
         meta: null,
         reason:
           status === "fallback" ? "This PDF is too large to preview." : null,
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
       };
@@ -401,6 +404,7 @@ describe("workspace file tile PDF routing", () => {
       url: null,
       meta: null,
       reason: "This PDF is too large to preview.",
+      missing: false,
       totalBytes: null,
       servedFromCache: false,
     };
@@ -414,6 +418,39 @@ describe("workspace file tile PDF routing", () => {
     // path bar so Open Externally stays reachable.
     expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
   });
+
+  it.each(["docs/report.pdf", "docs/report.docx"])(
+    "shows a not-found state without Open Externally when %s is gone from disk",
+    (filePath) => {
+      // A local host, so the missing file is the only thing keeping the
+      // action off screen.
+      state.hostEntry = hostEntry("local");
+      state.asset = {
+        status: "fallback",
+        url: null,
+        meta: null,
+        reason: "This file could not be found.",
+        missing: true,
+        totalBytes: null,
+        servedFromCache: false,
+      };
+
+      renderTile(nodeFor(filePath));
+
+      expect(
+        screen.getByRole("heading", { name: "File not found" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("It may have been moved, renamed or deleted."),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Open Externally" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open externally" }),
+      ).toBeNull();
+    },
+  );
 
   it("swaps to the shared placeholder when the viewer reports itself unavailable", () => {
     state.viewerUnavailable = true;
@@ -502,6 +539,7 @@ describe("workspace file tile PDF routing", () => {
           status === "fallback"
             ? "This Word document is too large to preview."
             : null,
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
       };
@@ -525,6 +563,7 @@ describe("workspace file tile PDF routing", () => {
       url: null,
       meta: null,
       reason: "This Word document is too large to preview.",
+      missing: false,
       totalBytes: null,
       servedFromCache: false,
     };

@@ -71,6 +71,8 @@ export interface SplitTabItemProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
 /**
@@ -183,6 +185,7 @@ export const SplitTabItem = memo(function SplitTabItem(
             taskPinnedStates={props.taskPinnedStates}
             pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
             onSetTaskPinned={props.onSetTaskPinned}
+            onTaskPinMenuOpen={props.onTaskPinMenuOpen}
           />
         }
         right={
@@ -208,6 +211,7 @@ export const SplitTabItem = memo(function SplitTabItem(
             taskPinnedStates={props.taskPinnedStates}
             pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
             onSetTaskPinned={props.onSetTaskPinned}
+            onTaskPinMenuOpen={props.onTaskPinMenuOpen}
           />
         }
       />
@@ -285,6 +289,8 @@ interface SplitMemberProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
 function SplitMember(props: SplitMemberProps): ReactNode {
@@ -337,6 +343,7 @@ function SplitMember(props: SplitMemberProps): ReactNode {
         props.pendingSetPinnedEpicIds.has(props.member.tab.epicId)
       }
       onSetTaskPinned={props.onSetTaskPinned}
+      onTaskPinMenuOpen={props.onTaskPinMenuOpen}
     />
   );
 }

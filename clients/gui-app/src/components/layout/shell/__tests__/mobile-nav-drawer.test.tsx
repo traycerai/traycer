@@ -3,6 +3,7 @@ import "../../../../../__tests__/test-browser-apis";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -26,6 +27,12 @@ const testState: {
   indicators: SurfaceNotificationIndicators["epics"];
   /** The epic-id sets the drawer asked the notifications source about. */
   indicatorEpicIdCalls: ReadonlyArray<string>[];
+  /** Epics an agent is working on right now, per the agent-activity store. */
+  workingEpicIds: ReadonlySet<string>;
+  /** Rows `epic.getTaskContexts` can answer, keyed by epic id. */
+  backfillTasks: ReadonlyMap<string, ListTaskLight>;
+  /** The id lists the in-progress lift asked that batch about. */
+  backfillIdCalls: ReadonlyArray<string>[];
 } = {
   items: [],
   signOut: () => Promise.resolve(),
@@ -36,6 +43,9 @@ const testState: {
   activity: {},
   indicators: {},
   indicatorEpicIdCalls: [],
+  workingEpicIds: new Set<string>(),
+  backfillTasks: new Map<string, ListTaskLight>(),
+  backfillIdCalls: [],
 };
 
 const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
@@ -86,7 +96,34 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     fetchNextPage: () => undefined,
     hasNextPage: false,
     isFetchingNextPage: false,
+    currentUserId: "u1",
   }),
+}));
+
+// The two inputs the in-progress lift reads. Both are mocked at their own
+// boundary rather than mocking the lift hook itself, so the real
+// `useInProgressHistoryItems` / `withInProgressFirst` pair runs in these tests:
+// the store says WHICH epics are running, and the by-id batch answers the ones
+// no history page listed.
+vi.mock("@/stores/use-working-epic-ids", () => ({
+  useWorkingEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+}));
+
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (taskIds: ReadonlyArray<string>) => {
+    testState.backfillIdCalls.push([...taskIds]);
+    return {
+      tasksById: new Map(
+        taskIds.flatMap((taskId) => {
+          const task = testState.backfillTasks.get(taskId);
+          return task === undefined ? [] : [[taskId, task] as const];
+        }),
+      ),
+      localHomedTaskIds: new Set<string>(),
+      isFetching: false,
+      error: null,
+    };
+  },
 }));
 
 vi.mock("@/lib/analytics", () => ({
@@ -144,6 +181,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  patchHistorySearch,
+} from "@/lib/history-search";
 
 function historyItem(overrides: {
   readonly id: string;
@@ -168,6 +210,41 @@ function historyItem(overrides: {
     ownership: "mine",
     permissionRole: null,
     isPinned: false,
+  };
+}
+
+/**
+ * A row as `epic.getTaskContexts` hands it back - the shape the in-progress
+ * lift backfills a running epic from when no history page listed it.
+ */
+function backfillTask(overrides: {
+  readonly id: string;
+  readonly title: string;
+  readonly updatedAtMs: number;
+}): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: overrides.id,
+        title: overrides.title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: overrides.updatedAtMs,
+        createdBy: "u1",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned: false,
   };
 }
 
@@ -200,6 +277,10 @@ describe("MobileNavDrawer", () => {
     useFirstTaskGuideStore.getState().prepare();
     testState.indicators = {};
     testState.indicatorEpicIdCalls = [];
+    testState.workingEpicIds = new Set<string>();
+    testState.backfillTasks = new Map<string, ListTaskLight>();
+    testState.backfillIdCalls = [];
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
     testState.signOut = () => Promise.resolve();
     testState.openSettings = () => undefined;
     testState.isPending = false;
@@ -809,6 +890,102 @@ describe("MobileNavDrawer", () => {
 
       expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
       expect(useMobileNavStore.getState().open).toBe(false);
+    });
+  });
+
+  // The phone's replacement for Home's "In progress" group, which the mobile
+  // shell never mounts. The feed's order is pinned-first then `updatedAt`
+  // descending, and agent activity never touches `updatedAt` - so without this
+  // the one task the user is watching sits wherever it last happened to be.
+  describe("in-progress lift", () => {
+    it("puts a running task no history page listed at the top of the list", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "stale", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({
+          id: "b",
+          title: "older",
+          updatedAtMs: NOW_MS - 30 * DAY_MS,
+        }),
+      ];
+      // Deep in the feed, so far down that no loaded page carries it.
+      testState.workingEpicIds = new Set(["z"]);
+      testState.backfillTasks = new Map([
+        [
+          "z",
+          backfillTask({
+            id: "z",
+            title: "running",
+            updatedAtMs: NOW_MS - 90 * DAY_MS,
+          }),
+        ],
+      ]);
+      testState.activity = { z: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows.length).toBe(3);
+      expect(rows[0]?.textContent).toContain("running");
+      // Asked about exactly the running epic the page did not carry, and
+      // nothing else - the lift never re-fetches a row it already has.
+      expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
+    });
+
+    it("moves a listed running task to the top without duplicating it", async () => {
+      testState.items = [
+        historyItem({
+          id: "a",
+          title: "recent",
+          updatedAtMs: NOW_MS - HOUR_MS,
+        }),
+        historyItem({ id: "b", title: "middle", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({
+          id: "c",
+          title: "running",
+          updatedAtMs: NOW_MS - 30 * DAY_MS,
+        }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      testState.activity = { c: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows.length).toBe(3);
+      expect(rows[0]?.textContent).toContain("running");
+      expect(
+        rows.filter((row) => row.textContent.includes("running")).length,
+      ).toBe(1);
+      // Already on the page, so the by-id batch has nothing to ask for.
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
+
+    it("leaves the order alone while a search is active", async () => {
+      // A query's ranking IS the answer the user asked for; re-sorting it
+      // around what happens to be running would discard that answer.
+      testState.items = [
+        historyItem({
+          id: "a",
+          title: "best match",
+          updatedAtMs: NOW_MS - HOUR_MS,
+        }),
+        historyItem({
+          id: "c",
+          title: "running",
+          updatedAtMs: NOW_MS - 30 * DAY_MS,
+        }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      testState.activity = { c: "turn" };
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { query: "match" }),
+      });
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows.length).toBe(2);
+      expect(rows[0]?.textContent).toContain("best match");
+      expect(rows[1]?.textContent).toContain("running");
+      // Inert under a narrowing: no id list is built, so no batch is issued.
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
     });
   });
 

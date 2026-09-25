@@ -8,6 +8,19 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
 }));
 
+// The in-progress lift (`useInProgressHistoryItems`) backfills a running task
+// no listed page carries through `epic.getTaskContexts`, which needs a host
+// runtime this suite deliberately does not mount. Inert here: nothing is
+// running in these fixtures, so the lift has nothing to lift either way.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(),
+    localHomedTaskIds: new Set<string>(),
+    isFetching: false,
+    error: null,
+  }),
+}));
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
