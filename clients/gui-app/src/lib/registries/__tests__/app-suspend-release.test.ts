@@ -1,32 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { setMobileApp } from "@/lib/mobile-app";
-import { subscribeAppSuspendRelease } from "@/lib/registries/app-suspend-release";
+import {
+  releaseForAppSuspend,
+  subscribeAppSuspendRelease,
+} from "@/lib/registries/app-suspend-release";
 
-const calls = vi.hoisted(() => ({ order: [] as string[] }));
+const calls = vi.hoisted(() => ({
+  order: [] as string[],
+  /** Planes whose release throws, by the name each records in `order`. */
+  throwing: new Set<string>(),
+}));
+
+function record(plane: string, released: number): number {
+  calls.order.push(plane);
+  if (calls.throwing.has(plane)) throw new Error(`${plane} failed`);
+  return released;
+}
 
 vi.mock("@/lib/epics/epic-parking", () => ({
-  parkUnwatchedEpicsNow: () => {
-    calls.order.push("park-epics");
-    return 2;
-  },
+  parkUnwatchedEpicsNow: () => record("park-epics", 2),
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
-    sleepIdleWarmSessions: () => {
-      calls.order.push("sleep-chats");
-      return 3;
-    },
+    sleepIdleWarmSessions: () => record("sleep-chats", 3),
   }),
 }));
 
 vi.mock("@/lib/registries/terminal-session-registry", () => ({
   getTerminalSessionRegistry: () => ({
-    disposeLingeringPlainTerminals: () => {
-      calls.order.push("drop-terminals");
-      return 1;
-    },
+    disposeLingeringPlainTerminals: () => record("drop-terminals", 1),
   }),
 }));
 
@@ -45,6 +49,7 @@ function makeRunnerHost(): MockRunnerHost {
 describe("subscribeAppSuspendRelease", () => {
   beforeEach(() => {
     calls.order.length = 0;
+    calls.throwing.clear();
   });
 
   afterEach(() => {
@@ -83,5 +88,23 @@ describe("subscribeAppSuspendRelease", () => {
     const dispose = subscribeAppSuspendRelease(null);
     expect(calls.order).toEqual([]);
     dispose();
+  });
+
+  // The last chance before the OS suspends the runtime: one plane failing
+  // must not keep the others' memory resident for the whole background.
+  it("still runs the later planes when an earlier one throws", () => {
+    calls.throwing.add("park-epics");
+    calls.throwing.add("sleep-chats");
+
+    expect(releaseForAppSuspend()).toEqual({
+      parkedEpics: 0,
+      sleptChats: 0,
+      disposedTerminals: 1,
+    });
+    expect(calls.order).toEqual([
+      "park-epics",
+      "sleep-chats",
+      "drop-terminals",
+    ]);
   });
 });

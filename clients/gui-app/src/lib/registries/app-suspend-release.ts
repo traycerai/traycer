@@ -35,11 +35,29 @@ export interface AppSuspendRelease {
  * only sees what is left.
  */
 export function releaseForAppSuspend(): AppSuspendRelease {
-  const parkedEpics = parkUnwatchedEpicsNow();
-  const sleptChats = getChatSessionRegistry().sleepIdleWarmSessions();
-  const disposedTerminals =
-    getTerminalSessionRegistry().disposeLingeringPlainTerminals();
+  const parkedEpics = releasePlane("epics", parkUnwatchedEpicsNow);
+  const sleptChats = releasePlane("chats", () =>
+    getChatSessionRegistry().sleepIdleWarmSessions(),
+  );
+  const disposedTerminals = releasePlane("terminals", () =>
+    getTerminalSessionRegistry().disposeLingeringPlainTerminals(),
+  );
   return { parkedEpics, sleptChats, disposedTerminals };
+}
+
+/**
+ * One plane's release, isolated: a plane that throws is logged and counted as
+ * having released nothing, and the planes after it still run. This is the last
+ * chance before the OS suspends the runtime, so one failure must not keep the
+ * others' memory resident for the whole background.
+ */
+function releasePlane(plane: string, release: () => number): number {
+  try {
+    return release();
+  } catch (error) {
+    appLogger.error("[app-suspend] plane release failed", { plane }, error);
+    return 0;
+  }
 }
 
 /**
