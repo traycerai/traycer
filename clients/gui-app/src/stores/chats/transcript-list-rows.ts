@@ -8,6 +8,7 @@ import {
   spanEvents,
   spanMessages,
   staleSpansByFreshestServe,
+  type SkeletonOrdinals,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import {
@@ -614,6 +615,39 @@ const placeholderRowsBySkeleton = new WeakMap<
   Map<number, TranscriptListRow>
 >();
 
+/**
+ * The placeholder a skeleton ENTRY draws, by the entry object.
+ *
+ * The per-skeleton cache above holds only for as long as its array does, and
+ * every chunk and index change copies the array - so on a long chat each of
+ * them re-allocated a placeholder for every described row. The entry objects
+ * survive those copies, and a described placeholder is a pure function of its
+ * entry and ordinal, so keying on the entry keeps every untouched row's
+ * object across copies. A row whose entry was replaced (an index `updated`)
+ * or renumbered gets a new one. The per-skeleton cache is left to the holes,
+ * which have no entry to key on.
+ */
+const placeholderRowByEntry = new WeakMap<
+  RowSkeletonEntry,
+  TranscriptListRow
+>();
+
+function describedPlaceholderRow(
+  entry: RowSkeletonEntry,
+  ordinal: number,
+): TranscriptListRow {
+  const cached = placeholderRowByEntry.get(entry);
+  if (cached?.ordinal === ordinal) return cached;
+  const row: TranscriptListRow = {
+    kind: "placeholder",
+    key: entry.rowId,
+    ordinal,
+    entry,
+  };
+  placeholderRowByEntry.set(entry, row);
+  return row;
+}
+
 const MAX_INVALIDATED_PLACEHOLDER_SETS = 16;
 const invalidatedPlaceholdersByRowCount = new Map<
   number,
@@ -684,7 +718,7 @@ function invalidatedPlaceholderRows(
 function seatStaleRows(input: {
   readonly window: TranscriptWindow;
   readonly modelsById: ReadonlyMap<string, ChatMessageModel>;
-  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly skeletonOrdinals: SkeletonOrdinals;
   readonly modelByOrdinal: Map<number, ChatMessageModel>;
   readonly placedRowIds: Set<string>;
   readonly suppressedOrdinals: Set<number>;
@@ -782,7 +816,7 @@ function seatStaleRows(input: {
 function preSplitSkeletonTurnRows(input: {
   readonly rendered: readonly ChatMessageModel[];
   readonly isLiveBacked: (model: ChatMessageModel) => boolean;
-  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly skeletonOrdinals: SkeletonOrdinals;
   readonly suppressedOrdinals: Set<number>;
 }): ReadonlyMap<string, number> {
   const sliceRangeByTurnKey = new Map<
@@ -848,7 +882,7 @@ function seatLiveRecords(input: {
   readonly window: TranscriptWindow;
   readonly rendered: readonly ChatMessageModel[];
   readonly isLiveBacked: (model: ChatMessageModel) => boolean;
-  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly skeletonOrdinals: SkeletonOrdinals;
   readonly modelByOrdinal: Map<number, ChatMessageModel>;
   readonly placedRowIds: Set<string>;
   readonly suppressedOrdinals: ReadonlySet<number>;
@@ -1089,20 +1123,25 @@ export function transcriptListRows(input: {
       continue;
     }
     if (suppressedOrdinals.has(ordinal)) continue;
-    // Reused across deltas: see `placeholderRowsBySkeleton`. Nothing here reads
-    // the spans or the rendered models, so a body arriving elsewhere in the
-    // chat cannot change this row.
+    // Reused across deltas: see `placeholderRowsBySkeleton`, and across
+    // skeleton copies for a described row: see `placeholderRowByEntry`.
+    // Nothing here reads the spans or the rendered models, so a body arriving
+    // elsewhere in the chat cannot change this row.
+    const entry = window.skeleton[ordinal];
+    if (entry !== undefined) {
+      rows.push(describedPlaceholderRow(entry, ordinal));
+      continue;
+    }
     const cached = placeholders.get(ordinal);
     if (cached !== undefined) {
       rows.push(cached);
       continue;
     }
-    const entry = window.skeleton[ordinal] ?? null;
     const row: TranscriptListRow = {
       kind: "placeholder",
-      key: entry === null ? unplacedRowKey(ordinal) : entry.rowId,
+      key: unplacedRowKey(ordinal),
       ordinal,
-      entry,
+      entry: null,
     };
     placeholders.set(ordinal, row);
     rows.push(row);
@@ -1149,7 +1188,7 @@ function appendUnplacedRenderedRows(input: {
   readonly rendered: readonly ChatMessageModel[];
   readonly isLiveBacked: (model: ChatMessageModel) => boolean;
   readonly placedRowIds: ReadonlySet<string>;
-  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly skeletonOrdinals: SkeletonOrdinals;
   readonly heldPreSplitRows: ReadonlyMap<string, number>;
   readonly rows: TranscriptListRow[];
 }): void {

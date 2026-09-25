@@ -2990,6 +2990,11 @@ export function applySkeletonChunk(
   for (let index = 0; index < chunk.entries.length; index += 1) {
     skeleton[chunk.fromOrdinal + index] = chunk.entries[index];
   }
+  extendSkeletonOrdinals(
+    window.skeleton,
+    skeleton,
+    chunk.entries.map((entry, index) => [chunk.fromOrdinal + index, entry]),
+  );
   const complete = chunk.isFinal;
   // How far THIS stream has reached, contiguously from ordinal 0.
   //
@@ -3094,23 +3099,127 @@ function retireUnnamedStaleSpans(window: TranscriptWindow): TranscriptWindow {
  * exists to delete. Safe to populate from a render - the value is a pure
  * function of the array it is keyed on, so a discarded render can only ever
  * write the same answer.
+ *
+ * ## Carried across copies, not rebuilt per copy
+ *
+ * Every chunk and index change COPIES the skeleton, so an index keyed on the
+ * array alone went cold on each of them: an O(rowCount) rebuild per chunk
+ * while a long skeleton streamed, and per index echo while a turn wrote. The
+ * two hot copies ({@link applySkeletonChunk}, {@link applyIndexChange}) now
+ * extend the previous array's index instead - see
+ * {@link extendSkeletonOrdinals} for when that is allowed. Any other new
+ * array (a snapshot's boundary, a void) still builds its own on first ask.
  */
+export interface SkeletonOrdinals {
+  get(rowId: string): number | undefined;
+  has(rowId: string): boolean;
+}
+
+/**
+ * One rowId-to-ordinal map shared by a chain of skeleton copies.
+ *
+ * Along a chain an entry is only ever ADDED at an ordinal that was a hole, or
+ * rewritten in place under its own row id, and no row id appears twice. So
+ * an id every version holds is at the same ordinal in all of them, and the
+ * shared map is exact for EVERY version once each answer is checked against
+ * the array asked about: an id the map places at an ordinal that array does
+ * not hold it at is an id that array does not have. `latest` is the one copy
+ * the chain may still grow from.
+ */
+interface SkeletonOrdinalChain {
+  readonly ordinalByRowId: Map<string, number>;
+  latest: readonly (RowSkeletonEntry | undefined)[];
+}
+
+const skeletonOrdinalChains = new WeakMap<
+  readonly (RowSkeletonEntry | undefined)[],
+  SkeletonOrdinalChain
+>();
+
 const skeletonOrdinalCache = new WeakMap<
   readonly (RowSkeletonEntry | undefined)[],
-  ReadonlyMap<string, number>
+  SkeletonOrdinals
 >();
 
 export function skeletonOrdinalByRowId(
   skeleton: readonly (RowSkeletonEntry | undefined)[],
-): ReadonlyMap<string, number> {
+): SkeletonOrdinals {
   const cached = skeletonOrdinalCache.get(skeleton);
   if (cached !== undefined) return cached;
-  const ordinals = new Map<string, number>();
-  skeleton.forEach((entry, ordinal) => {
-    if (entry !== undefined) ordinals.set(entry.rowId, ordinal);
-  });
+  let chain = skeletonOrdinalChains.get(skeleton);
+  if (chain === undefined) {
+    const ordinals = new Map<string, number>();
+    let duplicated = false;
+    for (let ordinal = 0; ordinal < skeleton.length; ordinal += 1) {
+      const entry = skeleton[ordinal];
+      if (entry === undefined) continue;
+      if (ordinals.has(entry.rowId)) duplicated = true;
+      ordinals.set(entry.rowId, ordinal);
+    }
+    if (duplicated) {
+      // A row id named twice answers with its LAST ordinal, and a chain
+      // cannot keep that promise across copies - so this array keeps a plain
+      // map of its own and starts no chain.
+      skeletonOrdinalCache.set(skeleton, ordinals);
+      return ordinals;
+    }
+    chain = { ordinalByRowId: ordinals, latest: skeleton };
+    skeletonOrdinalChains.set(skeleton, chain);
+  }
+  const { ordinalByRowId } = chain;
+  const get = (rowId: string): number | undefined => {
+    const ordinal = ordinalByRowId.get(rowId);
+    return ordinal !== undefined && skeleton[ordinal]?.rowId === rowId
+      ? ordinal
+      : undefined;
+  };
+  const ordinals: SkeletonOrdinals = {
+    get,
+    has: (rowId) => get(rowId) !== undefined,
+  };
   skeletonOrdinalCache.set(skeleton, ordinals);
   return ordinals;
+}
+
+/**
+ * Carry `previous`'s ordinal index to `next`, a copy of it with `writes`
+ * applied, when the chain's rules hold - or leave `next` to build its own.
+ *
+ * Carried only from the chain's newest copy, and only when every write fills
+ * a hole or rewrites an entry under the same row id, and no written row id is
+ * already held at another ordinal. A write that displaces a different row, or
+ * names one twice, is exactly the change a shared map cannot represent for
+ * every version at once; those copies (a rebuild after a reindex) pay the
+ * full build instead, as every copy did before.
+ */
+function extendSkeletonOrdinals(
+  previous: readonly (RowSkeletonEntry | undefined)[],
+  next: readonly (RowSkeletonEntry | undefined)[],
+  writes: ReadonlyArray<readonly [number, RowSkeletonEntry]>,
+): void {
+  const chain = skeletonOrdinalChains.get(previous);
+  if (chain?.latest !== previous) return;
+  const writtenAt = new Map<string, number>();
+  for (const [ordinal, entry] of writes) {
+    const displaced = previous[ordinal];
+    if (displaced !== undefined && displaced.rowId !== entry.rowId) return;
+    const batchOrdinal = writtenAt.get(entry.rowId);
+    if (batchOrdinal !== undefined && batchOrdinal !== ordinal) return;
+    const heldAt = chain.ordinalByRowId.get(entry.rowId);
+    if (
+      heldAt !== undefined &&
+      heldAt !== ordinal &&
+      previous[heldAt]?.rowId === entry.rowId
+    ) {
+      return;
+    }
+    writtenAt.set(entry.rowId, ordinal);
+  }
+  for (const [rowId, ordinal] of writtenAt) {
+    chain.ordinalByRowId.set(rowId, ordinal);
+  }
+  chain.latest = next;
+  skeletonOrdinalChains.set(next, chain);
 }
 
 /**
@@ -4212,10 +4321,12 @@ export function applyIndexChange(
   // rows this delta delivers, and seating from it would shift every entry one
   // past its real ordinal.
   let appendCursor = appendBase;
+  const writes: (readonly [number, RowSkeletonEntry])[] = [];
   for (const change of input.changes) {
     if (change.type === "appended") {
       for (const entry of change.entries) {
         skeleton[appendCursor] = entry;
+        writes.push([appendCursor, entry]);
         appendCursor += 1;
       }
       continue;
@@ -4223,9 +4334,11 @@ export function applyIndexChange(
     if (change.type === "updated") {
       for (const { ordinal, entry } of change.entries) {
         skeleton[ordinal] = entry;
+        writes.push([ordinal, entry]);
       }
     }
   }
+  extendSkeletonOrdinals(window.skeleton, skeleton, writes);
   // How far the skeleton STREAM has contiguously reached once this frame is
   // folded in.
   //
