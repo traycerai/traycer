@@ -1677,6 +1677,20 @@ function withoutWithdrawnUserRow(
   );
 }
 
+/**
+ * Whether the rendered transcript carries a worktree setup card, in any state.
+ * While it does, an unstarted opening prompt drops its own "Setting up" status:
+ * the card, or the pre-turn "Working…" row once the card is no longer in flight
+ * (`setupGating` above), already shows that wait.
+ */
+export function transcriptShowsSetupCard(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) =>
+    row.segments.some((segment) => segment.kind === "setup-card"),
+  );
+}
+
 function projectActiveTurn(
   activeTurn: ChatActiveTurn | null,
   profileLabelsByTurnKey: ReadonlyMap<string, string>,

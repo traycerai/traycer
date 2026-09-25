@@ -182,6 +182,9 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicDeleteArtifact: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
   useTerminalRenameFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
