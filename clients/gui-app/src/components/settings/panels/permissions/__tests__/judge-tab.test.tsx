@@ -735,7 +735,7 @@ describe("JudgeTab", () => {
     it("shows 'Default (Low)' plus the model's advertised efforts on a 1.2 host", () => {
       render(<JudgeTab />);
 
-      fireEvent.click(screen.getByTestId("judge-effort-select"));
+      fireEvent.click(screen.getByRole("combobox", { name: "Effort" }));
 
       expect(
         screen.getByRole("option", { name: "Default (Low)" }),
@@ -758,11 +758,11 @@ describe("JudgeTab", () => {
       };
       render(<JudgeTab />);
 
-      expect(screen.getByTestId("judge-effort-select").textContent).toContain(
-        "Default (Low)",
-      );
+      expect(
+        screen.getByRole("combobox", { name: "Effort" }).textContent,
+      ).toContain("Default (Low)");
 
-      fireEvent.click(screen.getByTestId("judge-effort-select"));
+      fireEvent.click(screen.getByRole("combobox", { name: "Effort" }));
       fireEvent.click(screen.getByRole("option", { name: "Medium" }));
 
       expect(setJudgeMutate.mock.calls[0][0]).toEqual({
@@ -778,7 +778,7 @@ describe("JudgeTab", () => {
     it("calls autoJudge.set with the picked effort", () => {
       render(<JudgeTab />);
 
-      fireEvent.click(screen.getByTestId("judge-effort-select"));
+      fireEvent.click(screen.getByRole("combobox", { name: "Effort" }));
       fireEvent.click(screen.getByRole("option", { name: "Medium" }));
 
       expect(setJudgeMutate.mock.calls[0][0]).toEqual({
@@ -795,14 +795,14 @@ describe("JudgeTab", () => {
       support.setVersion = { major: 1, minor: 1 };
       render(<JudgeTab />);
 
-      expect(screen.queryByTestId("judge-effort-select")).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Effort" })).toBeNull();
     });
 
     it("is absent when the negotiated version is unknown", () => {
       support.setVersion = null;
       render(<JudgeTab />);
 
-      expect(screen.queryByTestId("judge-effort-select")).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Effort" })).toBeNull();
     });
 
     it("is absent when the chosen model advertises no efforts", () => {
@@ -816,7 +816,7 @@ describe("JudgeTab", () => {
       };
       render(<JudgeTab />);
 
-      expect(screen.queryByTestId("judge-effort-select")).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Effort" })).toBeNull();
     });
 
     it("resets the effort to null when the model changes and the new model drops it", () => {
