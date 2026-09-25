@@ -39,9 +39,10 @@ variant. A treatment that is genuinely one file's own goes in
 `restyleExemptions`, one entry per file, `allow` keyed by the contract it opens
 and the reason written above it.
 
-**Commits:** don't manually run `compile` / `build` / `lint` / `format` before
-committing — repo-root `pre-commit` already runs the affected checks (see root
-`AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
+**Commits:** nothing needs running by hand before a commit — repo-root
+`pre-commit` already runs the affected checks (see root `AGENTS.md`), and
+`lint:files` above is feedback while you work, not a gate. Tests are CI, not
+the hook. Re-run checks only when diagnosing
 failures. `react-doctor` stays manual (not hooked).
 
 ## Map

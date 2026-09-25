@@ -46,7 +46,7 @@ pre-commit hook runs the affected ones on every commit (below), and CI runs
 all of them on the PR. After pushing, watch the checks (`gh pr checks
 --watch`) and fix what they report.
 
-To check work before committing, narrow the check to what you touched:
+To check work while you write it, narrow the check to what you touched:
 
 - lint the changed files with `bun scripts/lint-changed-files.mjs origin/main`,
   or `bun run lint:files <paths>` inside a project;
@@ -54,14 +54,15 @@ To check work before committing, narrow the check to what you touched:
 - run one package's `compile` only to diagnose that package's failure. Never
   run `tsc` directly; `compile` is the type-check.
 
-**Commits:** do **not** manually run `compile` / `build` / `lint` / `format`
-before committing. `pre-commit` already runs the local checks: lint on the
-files your branch changed, format, and an incremental compile of the affected
-projects. It takes one machine-wide slot, so concurrent commits from other
-worktrees queue rather than stacking multi-GB type-checks. CI runs the
-whole-project lint and the `build` targets. Tests run in CI (`test.yml`), not
-in the hook; only re-run checks yourself when diagnosing a hook or CI failure.
-Commits need DCO (`git commit -s`).
+**Commits:** nothing needs running by hand before a commit, and a full
+`compile` / `build` / `lint` / `format` never does; the narrow checks above are
+feedback while you work, not a gate. `pre-commit` already runs the local
+checks: lint on the files your branch changed, format, and an incremental
+compile of the affected projects. It takes one machine-wide slot, so
+concurrent commits from other worktrees queue rather than stacking multi-GB
+type-checks. CI runs the whole-project lint and the `build` targets. Tests run
+in CI (`test.yml`), not in the hook; only re-run checks yourself when
+diagnosing a hook or CI failure. Commits need DCO (`git commit -s`).
 
 **nx runs without its daemon** (`useDaemonProcess: false` in `nx.json`). A
 daemon exits only after three hours without an nx command, so every worktree
