@@ -15,9 +15,10 @@ bun install
 bunx nx run @traycer/protocol:build   # a single package
 ```
 
-`bun run build` builds every package; CI does that on each PR, so don't run it
-locally unless you are changing packaging. The same goes for the other
-whole-repo checks (see [`AGENTS.md`](../AGENTS.md)).
+`bun run build` builds every package. CI builds the packages each PR affects,
+so don't run it locally unless you are changing packaging. The same goes for
+the other whole-repo checks; while you work, use the narrow checks in
+[`AGENTS.md`](../AGENTS.md).
 
 ## Pre-commit hooks
 

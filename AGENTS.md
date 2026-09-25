@@ -44,8 +44,9 @@ project's whole `lint` (`bun run --cwd clients/gui-app lint`), and
 needs about 9 GB and its type-check about 5 GB, and two agents running them at
 once have stalled a 24 GB Mac. The checks still run, just not by hand: the
 pre-commit hook lints, formats and compiles what each commit affects (below),
-and CI runs the lint, compile, build and tests on the PR. After pushing, watch
-the checks (`gh pr checks --watch`) and fix what they report.
+and CI lints, compiles and builds every project the PR affects and runs every
+project's tests. After pushing, watch the checks (`gh pr checks --watch`) and
+fix what they report.
 
 To check work while you write it, narrow the check to what you touched:
 
@@ -64,8 +65,9 @@ feedback while you work, not a gate. `pre-commit` already runs the local
 checks: lint on the files your branch changed, format, and an incremental
 compile of the affected projects. It takes one machine-wide slot, so
 concurrent commits from other worktrees queue rather than stacking multi-GB
-type-checks. CI runs the whole-project lint and the `build` targets. Tests run
-in CI (`test.yml`), not in the hook. Commits need DCO (`git commit -s`).
+type-checks. CI lints each affected project whole and runs the affected
+`build` targets. Tests run in CI (`test.yml`), not in the hook. Commits need
+DCO (`git commit -s`).
 
 **nx runs without its daemon** (`useDaemonProcess: false` in `nx.json`). A
 daemon exits only after three hours without an nx command, so every worktree
