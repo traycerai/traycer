@@ -635,7 +635,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   // The phone sheet (`ComposerShell`'s `expansion`). Sending drops back to the
   // compact card: an empty full-screen editor over a reply that just started
-  // is the wrong thing to be looking at.
+  // is the wrong thing to be looking at. Gated the way the send button is,
+  // so a submit the composer refuses outright leaves the draft where the
+  // user is looking at it.
   const [composerExpanded, setComposerExpanded] = useState(false);
   const composerExpansion = useMemo(
     () => ({
@@ -647,9 +649,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
       submitDraft(source);
-      setComposerExpanded(false);
+      if (canSubmit) setComposerExpanded(false);
     },
-    [submitDraft],
+    [canSubmit, submitDraft],
   );
   const handleSubmitFromButton = useCallback((): void => {
     handleSubmitDraft("enter");

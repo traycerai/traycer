@@ -122,6 +122,36 @@ describe("ComposerExpandHandle", () => {
     expect(handle.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("toggles on keyboard or assistive activation, which arrives as a detail-0 click", () => {
+    const onExpandedChange = vi.fn();
+    render(
+      <ComposerExpandHandle
+        expanded={false}
+        onExpandedChange={onExpandedChange}
+      />,
+    );
+
+    fireEvent.click(getHandle(), { detail: 0 });
+    expect(onExpandedChange).toHaveBeenCalledTimes(1);
+    expect(onExpandedChange).toHaveBeenCalledWith(true);
+  });
+
+  it("does not toggle twice on the click that trails a real press", () => {
+    const onExpandedChange = vi.fn();
+    render(
+      <ComposerExpandHandle
+        expanded={false}
+        onExpandedChange={onExpandedChange}
+      />,
+    );
+    const handle = getHandle();
+
+    fireEvent.pointerDown(handle, { clientY: 50, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientY: 50, pointerId: 1 });
+    fireEvent.click(handle, { detail: 1 });
+    expect(onExpandedChange).toHaveBeenCalledTimes(1);
+  });
+
   it("toggles the accessible state end to end through a tap", () => {
     render(<ControlledHandle initialExpanded={false} />);
 

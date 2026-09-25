@@ -188,6 +188,10 @@ describe("ComposerShell phone expansion", () => {
     expect(shell?.className).toContain("fixed");
     expect(classTokens(overlay)).toContain("hidden");
     expect(editorFrame?.className).toContain("overflow-y-auto");
+    // The dim is a sibling painted before the sheet, not part of it.
+    const backdrop = shell?.previousElementSibling;
+    expect(backdrop?.hasAttribute("data-composer-sheet-backdrop")).toBe(true);
+    expect(backdrop?.className).toContain("fixed");
   });
 
   it("keeps the shell in flow, collapsed, when not expanded on phone", () => {

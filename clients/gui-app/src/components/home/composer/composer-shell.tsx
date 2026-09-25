@@ -83,24 +83,36 @@ function ComposerAreaImpl({
   return (
     <div className="relative">
       <ComposerMenu pickerStore={pickerStore} />
+      {/* The dim behind the sheet. A sibling rather than the sheet's own
+          pseudo-element: a negative-z child paints above its parent's
+          background, and the entrance animation's transform would make the
+          sheet the pseudo-element's containing block for its duration. Same
+          layer as the sheet, earlier in the DOM, so the sheet paints over it. */}
+      {expanded ? (
+        <div
+          aria-hidden
+          data-composer-sheet-backdrop=""
+          className="fixed inset-0 z-40 bg-canvas/60"
+        />
+      ) : null}
       <div
         data-composer-shell=""
         data-composer-expanded={expanded ? "" : undefined}
         className={cn(
           "relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
-          // The sheet fills the SURFACE the card sits on, dimming what it
-          // left behind: `fixed`, so it does not depend on the stack of
-          // positioned wrappers between it and that surface, and both
-          // surfaces that mount it are layout roots - the canvas tile host
-          // transforms its tile, the landing surface is `contain-layout` -
-          // so "fixed" resolves against them, under the app header, rather
-          // than against the viewport. The bottom clears the home indicator
-          // only while the keyboard is down: with it up, the surface already
-          // ends at the keyboard (the shell's safe-height tokens subtract
-          // it), and the inset dwarfs the indicator's, so the max is 0. The
-          // frame takes the scroll so the toolbar stays put.
+          // The sheet fills the SURFACE the card sits on: `fixed`, so it does
+          // not depend on the stack of positioned wrappers between it and
+          // that surface, and both surfaces that mount it are layout roots -
+          // the canvas tile host transforms its tile, the landing surface is
+          // `contain-layout` - so "fixed" resolves against them, under the
+          // app header, rather than against the viewport. The bottom clears
+          // the home indicator only while the keyboard is down: with it up,
+          // the surface already ends at the keyboard (the shell's
+          // safe-height tokens subtract it), and the inset dwarfs the
+          // indicator's, so the max is 0. The frame takes the scroll so the
+          // toolbar stays put.
           expanded &&
-            "fixed inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)] z-40 flex flex-col bg-card shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-200 before:fixed before:inset-0 before:-z-10 before:bg-canvas/60 before:content-['']",
+            "fixed inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)] z-40 flex flex-col bg-card shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-200",
         )}
       >
         {overlay}

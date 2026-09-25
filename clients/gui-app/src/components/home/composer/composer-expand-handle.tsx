@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent } from "react";
+import { useRef, type MouseEvent, type PointerEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -54,6 +54,12 @@ export function ComposerExpandHandle({
   const onPointerCancel = (): void => {
     startY.current = null;
   };
+  // Enter, Space and a screen reader's activation arrive as a `click` with no
+  // pointer sequence in front of it; a real press has already toggled on
+  // pointer-up and its trailing click carries a positive `detail`.
+  const onClick = (event: MouseEvent<HTMLButtonElement>): void => {
+    if (event.detail === 0) onExpandedChange(!expanded);
+  };
 
   return (
     <button
@@ -71,6 +77,7 @@ export function ComposerExpandHandle({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onClick={onClick}
     >
       <span aria-hidden className="h-1 w-9 rounded-full bg-foreground/25" />
     </button>

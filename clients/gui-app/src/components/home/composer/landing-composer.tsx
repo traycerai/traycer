@@ -35,7 +35,7 @@ import { useProfileEligibilityGate } from "@/components/chat/composer/use-profil
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
-import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
+import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -714,7 +714,7 @@ export function LandingComposer(props: LandingComposerProps) {
       toolbarStore={toolbarStore}
       composerMode={composerMode}
       chatEditorIsActive={chatComposerActive}
-      editorClassName={COMPOSER_EDITOR_CLASSNAME}
+      editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
       initialContent={initialContent}
       initialSelection={initialSelection}
       canSubmit={canSubmit}
