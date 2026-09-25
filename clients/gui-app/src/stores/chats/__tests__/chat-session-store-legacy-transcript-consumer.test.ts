@@ -130,15 +130,15 @@ class FakeChatStreamRpcClient implements IStreamClient<HostStreamRpcRegistry> {
     return this.session;
   }
 
+  // The path `ChatStreamClient` opens through: it re-reads its
+  // skeleton-resume claim on every wire subscribe.
   subscribeWithParamsProvider<
     Method extends keyof HostStreamRpcRegistry & string,
   >(
     _method: Method,
     _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
-    throw new Error(
-      "FakeChatStreamRpcClient.subscribeWithParamsProvider is unused by ChatStreamClient",
-    );
+    return this.session;
   }
 
   getMethodSchemaVersion<Method extends keyof HostStreamRpcRegistry & string>(

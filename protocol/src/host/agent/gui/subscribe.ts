@@ -136,6 +136,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
 
@@ -168,6 +169,30 @@ export const chatSubscribeOpenRequestSchema = lazySchema(() =>
 );
 export type ChatSubscribeOpenRequest = z.infer<
   typeof chatSubscribeOpenRequestSchema
+>;
+
+/**
+ * The `1.18` open request: `1.17`'s, plus the skeleton the client already
+ * holds (see `skeleton-resume.ts`).
+ *
+ * `resume` is REQUIRED AND NULLABLE rather than optional, on the
+ * `epic.state.subscribe` precedent: "I hold nothing" and "I forgot to say what
+ * I hold" must not be the same request, because the second one silently costs
+ * a full skeleton and looks like a slow host rather than a client bug.
+ *
+ * Every earlier line keeps `chatSubscribeOpenRequestSchema`, so a client
+ * declaring an older minor to an older host has the claim stripped by that
+ * line's parse (`prepareStreamSubscribeRequest`), and a host reading a `<=1.17`
+ * open request finds no claim to honor. Neither side has to know the other
+ * resumes.
+ */
+export const chatSubscribeOpenRequestSchemaV118 = lazySchema(() =>
+  chatSubscribeOpenRequestSchema.extend({
+    resume: chatSkeletonResumeSchema.nullable(),
+  }),
+);
+export type ChatSubscribeOpenRequestV118 = z.infer<
+  typeof chatSubscribeOpenRequestSchemaV118
 >;
 
 // Frozen action set of the RELEASED `chat.subscribe@≤1.5` lines. `actionAck`
@@ -4932,6 +4957,28 @@ const chatSubscribeSkeletonChunkServerFrameSchema = lazySchema(() =>
   }),
 );
 
+/**
+ * The `1.18` skeleton chunk: `1.17`'s, plus `retainedRows` on the first chunk
+ * of a stream that answered a resume claim.
+ */
+const chatSubscribeSkeletonChunkServerFrameSchemaV118 = lazySchema(() =>
+  chatSubscribeSkeletonChunkServerFrameSchema.extend({
+    /**
+     * Present on the FIRST chunk of a skeleton stream that the host resumed
+     * from the open request's claim, and nowhere else: keep the first
+     * `retainedRows` entries the claim described, because they are current,
+     * and read this stream as starting there. Always a whole number of the
+     * claim's blocks, and always equal to this chunk's `fromOrdinal` - a
+     * stream that resumes sends nothing below it.
+     *
+     * Absent on every other chunk, including every chunk of a stream the host
+     * did not resume (no claim, a claim it could not compare, or a first block
+     * that already differed).
+     */
+    retainedRows: z.number().int().positive().optional(),
+  }),
+);
+
 const chatSubscribeIndexChangedServerFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("indexChanged"),
@@ -5098,10 +5145,27 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   ]),
 );
 
-export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+// `chat.subscribe@1.17`'s server frames: the live union with the pre-resume
+// skeleton chunk, which has no `retainedRows`.
+const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema,
     chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
+  ]),
+);
+
+export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchemaV118,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
@@ -5747,11 +5811,44 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * a peer whether the key can be present - and because the checkpoint gate
  * freezes every line but the newest, so adding the key to `1.13`–`1.16` in
  * place moved their captured surfaces.
+ *
+ * Frozen at the pre-resume skeleton chunk since `1.18` opened above it
+ * (`chatSubscribeServerFrameSchemaV117`). Its client frames are `1.18`'s,
+ * unchanged.
  */
 export const chatSubscribeV117 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 17 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV117,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The skeleton-resume line.
+ *
+ * `1.18` lets a client that re-subscribes to a chat it already holds say so,
+ * and lets the host skip the part of the skeleton the client already has. Two
+ * additions, which arrive together or not at all:
+ *
+ * - the open request's `resume` claim (`chatSubscribeOpenRequestSchemaV118`):
+ *   one digest per 256-row block of the skeleton the client holds, or `null`;
+ * - `retainedRows` on the first `skeletonChunk` of a stream the host resumed.
+ *
+ * NEGOTIATION, not tolerance, and in both directions it degrades to exactly
+ * the `1.17` behaviour. A client declaring `1.17` has its claim stripped by
+ * that line's open request, so the host streams everything; a `1.18` client on
+ * a `1.17` host is that same case. A `1.18` host serving a `1.17` client never
+ * has a claim, so it never sends `retainedRows`. The only thing either side
+ * loses against an older peer is the bytes this line saves.
+ *
+ * What the host compares, why the comparison is sound across connections, and
+ * how every disagreement fails safe are in `skeleton-resume.ts`.
+ */
+export const chatSubscribeV118 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 18 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV118,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

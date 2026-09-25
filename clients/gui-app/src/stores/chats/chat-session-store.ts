@@ -94,6 +94,7 @@ import {
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+import { createSkeletonResumeOfferHolder } from "@/stores/chats/skeleton-resume-offer";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
   chatHolderId,
@@ -7129,6 +7130,11 @@ export function createChatSessionStoreWithNotificationDependencies(
       return cancelRestoration;
     };
 
+    // What this chat offered the host on its latest subscribe, and the rewrite
+    // of the host's resumed answer back into a whole stream. See
+    // `skeleton-resume-offer.ts`.
+    const skeletonResumeOffers = createSkeletonResumeOfferHolder();
+
     const callbacks: ChatStreamCallbacks = {
       onSnapshot: (frame) => {
         // The adapter emits synchronously. Keeping the callback itself free of
@@ -7410,7 +7416,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         // Can DROP bodies, not just add entries: this is where a tail seated
         // with no ids to check against finally meets the rows it claimed.
-        const window = applySkeletonChunk(get().transcriptWindow, frame.chunk);
+        //
+        // A resumed stream's first chunk is applied as the whole-stream chunk
+        // it stands for, so everything below sees an ordinary stream.
+        const window = applySkeletonChunk(
+          get().transcriptWindow,
+          skeletonResumeOffers.resolveChunk(frame.chunk, frame.retainedRows),
+        );
         // The rebuild's guaranteed close: `skeletonComplete` is what
         // discharges the skeleton-completion entry the announcement opened.
         if (window.skeletonComplete) {
@@ -7621,6 +7633,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         requestPlannedHydration();
       },
+      readSkeletonResume: () =>
+        // The first subscribe is read from inside the store's own initializer,
+        // before `get()` has a state to return - and a chat that has not been
+        // built yet holds no skeleton to describe anyway.
+        skeletonResumeOffers.offer(
+          storeReady && !disposed ? get().transcriptWindow : null,
+        ),
       onAccumulatedChanges: (frame) => {
         // Same downgrade guard as `onSkeletonChunk`, and it is not symmetry
         // for its own sake: `onSnapshot` clears the summaries when it falls
@@ -9138,6 +9157,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         onIndexChanged: guarded(callbacks.onIndexChanged),
         onRange: guarded(callbacks.onRange),
         onAccumulatedChanges: guarded(callbacks.onAccumulatedChanges),
+        // A retired generation's socket must not record an offer the live
+        // connection's first chunk would then be read against.
+        readSkeletonResume: () =>
+          streamGuard.isCurrent(streamGeneration)
+            ? callbacks.readSkeletonResume()
+            : null,
         onActionAck: guarded(callbacks.onActionAck),
         onMessageAccepted: guarded(callbacks.onMessageAccepted),
         onQueueChanged: guarded(callbacks.onQueueChanged),

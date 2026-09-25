@@ -23,6 +23,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -104,6 +105,11 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // line from 1.13 up reached by reference; this gate caught it on 1.13, and
 // the hand-frozen `chatQueuedPromptItemSchemaPreSentFromHost` copy is what
 // puts 1.13–1.16 back on their captured values.
+//
+// 1.17 is captured ON TIME as well, from main's own bytes at OSS commit
+// 48be0c1f3, before skeleton resume (`retainedRows` on the `skeletonChunk`
+// frame) took 1.18 above it; `chatSubscribeServerFrameSchemaV117` is the
+// hand-frozen copy that holds it there.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -173,6 +179,10 @@ const SERVER_FRAME_DIGESTS = {
     "183b34c92b34eb6837d89bad85cabc8a1bc2223bee85d43ff27f372c47f1a760",
     "258a4753885b4195260a7a9b32e99d43fcc76543ff8eade2249f36a375c7bbae",
   ],
+  17: [
+    "dbf3a7e702b1e2a00cf02943c4d8284850e6a0e58403149e3243600aeb4bf7fc",
+    "3cb2021ec06347cfdac037380776254b5f0677fba1ac6b2af23d42658024be33",
+  ],
 } as const;
 
 const contracts = [
@@ -193,10 +203,11 @@ const contracts = [
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.16 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.17 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

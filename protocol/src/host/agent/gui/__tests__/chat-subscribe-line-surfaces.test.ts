@@ -56,10 +56,12 @@ const SHELL_HOST_MINOR = 11;
 const DRAFT_IMAGE_CAUSE_MINOR = 12;
 const AUTO_MINOR = 13;
 const PORT_FORWARD_MINOR = 14;
-// `1.15` (message delivery), `1.16` (approval tier) and `1.17` (sender host)
-// mint no boundary a needle below can pin, so only the ceiling names them.
+// `1.15` (message delivery), `1.16` (approval tier), `1.17` (sender host) and
+// `1.18` (skeleton resume) mint no boundary a needle below can pin, so only
+// the ceiling names them.
 const SENT_FROM_HOST_MINOR = 17;
-const LIVE_MINOR = SENT_FROM_HOST_MINOR;
+const SKELETON_RESUME_MINOR = 18;
+const LIVE_MINOR = SKELETON_RESUME_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -186,12 +188,12 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.17 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.18 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });

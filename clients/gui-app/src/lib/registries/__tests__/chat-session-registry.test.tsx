@@ -181,9 +181,9 @@ function fakeStreamSession(): IStreamSession {
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => fakeStreamSession(),
-    subscribeWithParamsProvider: () => {
-      throw new Error("not exercised by this test");
-    },
+    // The path a chat session opens through: `ChatStreamClient` re-reads its
+    // skeleton-resume claim on every wire subscribe.
+    subscribeWithParamsProvider: () => fakeStreamSession(),
     close: () => undefined,
     isClosed: () => false,
     notifyBearerRotated: () => undefined,

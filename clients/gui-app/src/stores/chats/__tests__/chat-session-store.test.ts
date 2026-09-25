@@ -48,6 +48,7 @@ import {
   WsStreamClient,
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import { resolveSubmitDeliveryPolicy } from "@/lib/chats/resolve-steer-submit";
 import {
   ACCEPTED_CHAT_ACTION_RETENTION_MS,
@@ -399,6 +400,18 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     _method: Method,
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    return this.session;
+  }
+
+  // `ChatStreamClient` opens through the params provider (it re-reads its
+  // skeleton-resume claim on every wire subscribe), so this is the path the
+  // chain under test actually takes.
+  override subscribeWithParamsProvider<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(
+    _method: Method,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     return this.session;
   }
