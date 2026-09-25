@@ -4,6 +4,8 @@ import {
   type ChatSkeletonResume,
   type SkeletonResumeOffer,
 } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import type { CachedSkeletonResume } from "@/stores/chats/skeleton-resume-cache";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 
 /**
@@ -44,8 +46,15 @@ export interface SkeletonResumeOfferHolder {
    * The claim for the subscribe about to be sent, or `null` to claim nothing.
    * Remembers what it offered, replacing any earlier offer: the answer comes
    * on the connection this subscribe opens, and on no other.
+   *
+   * The window is asked first. `cached` is asked only when the window has
+   * nothing to offer - a chat re-opened after its session was closed - and
+   * is the skeleton that session left behind (`skeleton-resume-cache.ts`).
    */
-  offer(window: TranscriptWindow | null): ChatSkeletonResume | null;
+  offer(
+    window: TranscriptWindow | null,
+    cached: () => CachedSkeletonResume | null,
+  ): ChatSkeletonResume | null;
   /**
    * The chunk to apply for one received from the host. Every chunk spends the
    * offer: only a stream's FIRST chunk can answer it.
@@ -56,8 +65,14 @@ export interface SkeletonResumeOfferHolder {
   ): ChatSkeletonChunk;
 }
 
+/** What was offered, with the described entries read only if a host resumes. */
+type PendingOffer = {
+  readonly claim: ChatSkeletonResume;
+  readonly readEntries: () => readonly RowSkeletonEntry[];
+};
+
 export function createSkeletonResumeOfferHolder(): SkeletonResumeOfferHolder {
-  let pending: SkeletonResumeOffer | null = null;
+  let pending: PendingOffer | null = null;
   // The last offer BUILT, by the skeleton it was built from. A window's
   // skeleton array is replaced whenever it changes, so identity is a sound
   // key, and a reconnect burst re-reads the offer without re-hashing a
@@ -86,17 +101,25 @@ export function createSkeletonResumeOfferHolder(): SkeletonResumeOfferHolder {
   };
 
   return {
-    offer: (window) => {
-      pending = window === null ? null : offerFor(window);
+    offer: (window, cached) => {
+      const fromWindow = window === null ? null : offerFor(window);
+      if (fromWindow !== null) {
+        pending = {
+          claim: fromWindow.claim,
+          readEntries: () => fromWindow.entries,
+        };
+      } else {
+        pending = cached();
+      }
       return pending?.claim ?? null;
     },
     resolveChunk: (chunk, retainedRows) => {
       const offer = pending;
       pending = null;
-      if (retainedRows === undefined) return chunk;
+      if (retainedRows === undefined || offer === null) return chunk;
+      const entries = offer.readEntries();
       if (
-        offer === null ||
-        retainedRows > offer.entries.length ||
+        retainedRows > entries.length ||
         retainedRows % offer.claim.blockSize !== 0 ||
         chunk.fromOrdinal !== retainedRows
       ) {
@@ -105,7 +128,7 @@ export function createSkeletonResumeOfferHolder(): SkeletonResumeOfferHolder {
       return {
         epoch: chunk.epoch,
         fromOrdinal: 0,
-        entries: [...offer.entries.slice(0, retainedRows), ...chunk.entries],
+        entries: [...entries.slice(0, retainedRows), ...chunk.entries],
         isFinal: chunk.isFinal,
       };
     },
