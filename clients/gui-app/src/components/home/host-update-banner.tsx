@@ -352,6 +352,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         message={forceDialogProps.message}
         isForcing={isPending}
         forceLabel={forceDialogProps.forceLabel}
+        forceDestructive
         onForce={handleForce}
         onDefer={() => {
           setBusy(null);

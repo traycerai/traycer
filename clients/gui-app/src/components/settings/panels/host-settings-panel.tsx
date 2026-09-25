@@ -15,6 +15,11 @@ import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
+import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
+import {
+  useHostOverviewTabSelection,
+  type HostOverviewSelectTab,
+} from "@/components/settings/panels/host-overview-tab-state";
 import {
   fixActionLabel,
   parseFreePortInput,
@@ -36,6 +41,8 @@ import {
 } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { cn } from "@/lib/utils";
 import type {
   HostDoctorIssue as BridgeDoctorIssue,
   HostInstalledRecord,
@@ -68,18 +75,33 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  */
 export function HostSettingsPanel() {
   const scope = useHostScope();
+  // The selected tab lives HERE, above the key below, and that split is the
+  // whole host-switch rule: every host has the same five tabs, so the page
+  // stays on the one the reader chose, while everything open for the previous
+  // host dies with the remount.
+  const { tab, selectTab, scopePending } = useHostOverviewTabSelection(scope);
   // Keyed by scoped host: every piece of page state below — an open restart
   // confirmation, a half-typed rename, a doctor sheet — belongs to ONE host.
   // Without this, a scope switch while a confirmation was open left the dialog
   // mounted and armed against the host the page had just moved away from.
   const scopeKey = scope.hostId ?? "unresolved";
-  return <HostSettingsPanelInner key={scopeKey} />;
+  // An open intent naming another machine moves the scope before paint; until
+  // it has, nothing mounts - and starts a read - against the machine the page
+  // is about to leave.
+  if (scopePending) return null;
+  return (
+    <HostSettingsPanelInner key={scopeKey} tab={tab} onSelectTab={selectTab} />
+  );
 }
 
-function HostSettingsPanelInner() {
+function HostSettingsPanelInner(props: {
+  readonly tab: HostOverviewTab;
+  readonly onSelectTab: HostOverviewSelectTab;
+}) {
   const scope = useHostScope();
   const runnerHost = useRunnerHost();
   const compact = useSettingsDensity() === "compact";
+  const isMobile = useIsMobileViewport();
   const management = runnerHost.hostManagement;
 
   // Re-provided so every hook beneath this resolves to the SELECTED host rather
@@ -167,8 +189,19 @@ function HostSettingsPanelInner() {
     localDoctorFixPendingCode: localDoctorFix.isPending
       ? localDoctorFix.variables.code
       : null,
+    tab: props.tab,
+    onSelectTab: props.onSelectTab,
   });
 
+  // The Providers scroll model, on desktop and only for the tabbed page:
+  // `fillHeight` bounds the page to the settings pane, the card below pins its
+  // header and tab bar, and only the active tab's body scrolls. The body card
+  // here is transparent - the host card inside it is the visible surface, and
+  // it is only as tall as its content, up to the pane. A phone has one scroll
+  // container already, the settings surface, so the page scrolls as one there,
+  // header included; the two page states without tabs scroll as they always
+  // have.
+  const pinned = !isMobile && !unresolved;
   const shell = (
     <SettingsPanelShell
       title="Overview"
@@ -176,7 +209,11 @@ function HostSettingsPanelInner() {
       // its Edit name control. Repeating it as the page title printed the same
       // string twice, two lines apart, and made the header look like a bug.
       description={description}
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      fillHeight={pinned}
+      bodyClassName={cn(
+        "overflow-visible rounded-none border-none bg-transparent",
+        pinned && "flex flex-col",
+      )}
     >
       {body}
     </SettingsPanelShell>
@@ -261,6 +298,8 @@ function renderOverviewBody(input: {
     onApplied: () => void,
   ) => void;
   readonly localDoctorFixPendingCode: string | null;
+  readonly tab: HostOverviewTab;
+  readonly onSelectTab: HostOverviewSelectTab;
 }): ReactNode {
   const { scope } = input;
   if (input.unresolved) {
@@ -288,6 +327,8 @@ function renderOverviewBody(input: {
       hasLocalBridge={input.hasLocalBridge}
       onLocalDoctorFix={input.onLocalDoctorFix}
       localDoctorFixPendingCode={input.localDoctorFixPendingCode}
+      tab={input.tab}
+      onSelectTab={input.onSelectTab}
     />
   );
 }

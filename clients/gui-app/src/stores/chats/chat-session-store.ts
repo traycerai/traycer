@@ -109,6 +109,7 @@ import type {
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
@@ -288,6 +289,11 @@ type ChatOwnerActionFrame = Exclude<
   ChatSubscribeClientFrame,
   { readonly kind: "ping" }
 >;
+
+/** See `readLocalHostIdSnapshot`: stamped beside `accountContext` at send time. */
+function sentFromHostIdSnapshot(): string | null {
+  return readLocalHostIdSnapshot();
+}
 type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
 
 /**
@@ -614,6 +620,18 @@ export interface PendingChatAction {
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
   readonly accountContext: AccountContext | null;
+  /**
+   * The `sentFromHostId` the frame went out with, frozen here for the same
+   * reason `accountContext` is: a hash-only retry re-dispatches the SAME
+   * logical send, and the ambient value can move under it. The local identity
+   * is not fixed for the app's lifetime - the host directory reseeds it from
+   * `null` once the local host enrolls, and adopts a re-enrolled id - so a
+   * send made before it resolved must retry naming no machine, not the one
+   * that turned up since; the host would otherwise place the retry's routed
+   * realm on a machine the user never sent from. `null` for actions that
+   * carry no message.
+   */
+  readonly sentFromHostId: string | null;
   /** See {@link PendingUserMessage.deliveryPolicy}. */
   readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
   /**
@@ -6791,6 +6809,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Frozen, not re-read: this is the same logical send, not a new user
         // action, and the ambient values have had a whole recovery to move.
         accountContext: recovery.accountContext,
+        // Frozen too, and for a reason that is easy to get backwards: the
+        // machine the app runs on does not change, but its ID can - the
+        // directory reseeds `null` -> id once the local host enrolls, and
+        // adopts a re-enrolled id - and a send made while it was unknown must
+        // not retry as if the user had sent from a machine they had not.
+        sentFromHostId: recovery.sentFromHostId,
         deliveryPolicy: recovery.deliveryPolicy,
         worktreeIntent: recovery.worktreeIntent,
         browserAnnotations: [...recovery.restore.browserAnnotations],
@@ -6812,6 +6836,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           sender: recovery.sender,
           settings: recovery.settings,
           accountContext: recovery.accountContext,
+          sentFromHostId: recovery.sentFromHostId,
           // The digests THIS dispatch still sends bare, off the re-inlined
           // document rather than `wireContent` or `restore.content`.
           //
@@ -9440,6 +9465,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           sender: input.sender,
           settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
+          sentFromHostId: sentFromHostIdSnapshot(),
           deliveryPolicy: input.deliveryPolicy,
           worktreeIntent,
           browserAnnotations,
@@ -9480,6 +9506,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             accountContext: frame.accountContext,
+            sentFromHostId: frame.sentFromHostId,
             sentContentHashes: null,
             restoreWorktreeIntent: worktreeIntent,
             displayWorktreeIntent: worktreeIntent,
@@ -9675,6 +9702,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // Account context is GLOBAL, not per-chat: read the live selection at
           // dispatch as a sibling of the per-chat `settings`.
           accountContext: useAccountContextStore.getState().accountContext,
+          sentFromHostId: sentFromHostIdSnapshot(),
           deliveryPolicy: "auto",
           // The handoff's intent rides the frame as well as `epic.create`. On
           // the deferred path this resend is a duplicate of the seeded message
@@ -9724,6 +9752,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // to bill personal - a drift statement lying about the very thing
             // it exists to warn about.
             accountContext: frame.accountContext,
+            sentFromHostId: frame.sentFromHostId,
             deliveryPolicy: frame.deliveryPolicy,
             hashOnlyRetry: false,
             wireContent: null,
@@ -9813,6 +9842,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           sender: input.sender,
           settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
+          sentFromHostId: sentFromHostIdSnapshot(),
           worktreeIntent,
           revertFileChanges: input.revertFileChanges,
           revertArtifacts: input.revertArtifacts,
@@ -9864,6 +9894,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             displayWorktreeIntent: worktreeIntent,
             messageConfirmedByHost: false,
             accountContext: null,
+            sentFromHostId: frame.sentFromHostId,
             deliveryPolicy: null,
             hashOnlyRetry: false,
             wireContent: null,
@@ -9944,6 +9975,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             displayWorktreeIntent: null,
             messageConfirmedByHost: false,
             accountContext: null,
+            sentFromHostId: null,
             deliveryPolicy: null,
             hashOnlyRetry: false,
             wireContent: null,
@@ -11393,6 +11425,7 @@ function basicPending(
     displayWorktreeIntent: null,
     messageConfirmedByHost: false,
     accountContext: null,
+    sentFromHostId: null,
     deliveryPolicy: null,
     hashOnlyRetry: false,
     wireContent: null,
@@ -11834,6 +11867,12 @@ interface HashOnlyRecoveryState {
   readonly worktreeIntent: PendingChatAction["restoreWorktreeIntent"];
   /** The account context this send was made under, frozen for the same reason. */
   readonly accountContext: AccountContext;
+  /**
+   * The machine this send named as its sender, frozen for the same reason
+   * again - see {@link PendingChatAction.sentFromHostId} for why the local
+   * identity is not a constant.
+   */
+  readonly sentFromHostId: string | null;
   /** The optimistic echo to re-register with the retry, or `null` for a queued send. */
   readonly pendingUserMessage: PendingUserMessage | null;
   /**
@@ -12028,6 +12067,7 @@ function hashOnlyRetryForRejection(
     deliveryPolicy: pending.deliveryPolicy ?? "auto",
     worktreeIntent: pending.restoreWorktreeIntent,
     accountContext,
+    sentFromHostId: pending.sentFromHostId,
     // All three filled in by the caller, which is the only place that can see
     // the live presentation this send currently has, and the staging key its
     // sweep evidence is recorded under.
@@ -12406,6 +12446,7 @@ function repaintOptimisticQueueRowForRetry(input: {
     // same logical send, and the live selection has had a whole recovery to
     // move.
     accountContext: input.recovery.accountContext,
+    sentFromHostId: input.recovery.sentFromHostId,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,
@@ -12435,6 +12476,7 @@ function optimisticQueuedItemForSend(
     sender: input.sender,
     settings: input.settings,
     accountContext: useAccountContextStore.getState().accountContext,
+    sentFromHostId: sentFromHostIdSnapshot(),
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

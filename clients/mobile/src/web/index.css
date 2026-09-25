@@ -2,40 +2,15 @@
  * Mobile renderer Tailwind entrypoint. The shared GUI is consumed as source,
  * so Tailwind must scan both workspaces or its responsive utility classes are
  * absent from the native bundle.
+ *
+ * This is the stylesheet of a BROWSER TAB running this entry (the launcher's
+ * `gui-app` dev stream), so the breakpoints keep their real values and width
+ * decides the layout, as in any other window. The installed app loads
+ * `index.native.css` instead, which imports this and then pushes every
+ * breakpoint out of reach; `main.tsx` picks between the two.
  */
 @import "../../../gui-app/src/index.css";
 @import "./mobile.css";
 
 @source "../../../gui-app/src";
 @source ".";
-
-/*
- * NO RESPONSIVE BREAKPOINTS IN THE INSTALLED APP.
- *
- * The app is a phone-layout product on every device it ships to, tablets
- * included, and `useIsMobileViewport()` says so unconditionally here (see
- * `gui-app/src/hooks/ui/use-mobile-viewport.ts`). This is the CSS half of that
- * decision, and it is not optional: JS mounts the phone shell at every width,
- * so on an iPad every `md:` and `lg:` utility would otherwise still turn on
- * and paint desktop controls over it.
- *
- * A sentinel width rather than `--breakpoint-*: initial`, deliberately.
- * Removing the tokens would drop the `max-*` variants too - and those are
- * phone styling across the shared GUI that must keep applying. Pushing the
- * bound out of reach instead keeps both halves right by construction: `md:`
- * compiles to a minimum-width query that never matches, `max-md:` to its
- * negation, which always does. Grep the built CSS for the number rather than
- * for a particular spelling - Tailwind writes range syntax and the minifier
- * downlevels it.
- *
- * `@theme` (not `inline`) after the import, so these win over the shared
- * stylesheet's own breakpoints, which stay at their real values for browser
- * and Electron windows where width does decide.
- */
-@theme {
-  --breakpoint-sm: 999999px;
-  --breakpoint-md: 999999px;
-  --breakpoint-lg: 999999px;
-  --breakpoint-xl: 999999px;
-  --breakpoint-2xl: 999999px;
-}

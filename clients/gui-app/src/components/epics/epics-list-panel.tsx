@@ -1,3 +1,4 @@
+import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import {
   memo,
   type ReactNode,
@@ -928,6 +929,9 @@ function useChatHostFilterGate(
 
 function hasActiveHistoryFilters(search: HistorySearchState): boolean {
   return (
+    (search.labelNames?.length ?? 0) > 0 ||
+    (search.groupIds?.length ?? 0) > 0 ||
+    !!search.includeUngrouped ||
     search.repos.length > 0 ||
     search.workspaces.length > 0 ||
     search.chatHosts.length > 0 ||
@@ -948,6 +952,9 @@ function hasActiveHistoryFilters(search: HistorySearchState): boolean {
  */
 function hasActiveHistoryTaskFilters(search: HistorySearchState): boolean {
   return (
+    (search.labelNames?.length ?? 0) > 0 ||
+    (search.groupIds?.length ?? 0) > 0 ||
+    !!search.includeUngrouped ||
     search.repos.length > 0 ||
     search.workspaces.length > 0 ||
     search.chatHosts.length > 0 ||
@@ -1836,7 +1843,17 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         rowSweep.canSweep ? <HistorySweepMenuItem sweep={rowSweep} /> : null
       }
       hasSweepControl={rowSweep.isVisible}
-      contextMenuItems={backgroundMenuItem}
+      contextMenuItems={
+        isPhase ? (
+          backgroundMenuItem
+        ) : (
+          <>
+            <HistoryTaskOrganizationMenu item={item} canEdit={canEditTitle} />
+            {backgroundMenuItem}
+          </>
+        )
+      }
+      organization={{ canEdit: canEditTitle }}
       openInNewWindowControl={newWindowMenuItem}
       onSetPinned={onSetPinned}
       isPinPending={isPinPending}

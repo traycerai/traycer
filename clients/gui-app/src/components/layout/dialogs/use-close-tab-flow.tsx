@@ -1,3 +1,4 @@
+import { useOrganization } from "@/hooks/organization/organization-context";
 import { batchHeaderTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -22,6 +23,7 @@ import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 
 export interface CloseTabFlow {
@@ -34,6 +36,7 @@ export interface CloseTabFlow {
 
 export function useCloseTabFlow(): CloseTabFlow {
   const navigate = useNavigate();
+  const organization = useOrganization();
   const closeTab = useTabCloseCommand();
   const picker = useNeighborTabPicker();
   const dialog = useUnsyncedCloseDialog();
@@ -62,11 +65,33 @@ export function useCloseTabFlow(): CloseTabFlow {
 
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
-      const finalize = () => finalizeCloseTab(tab);
+      const finalize = () => {
+        const canvas = useEpicCanvasStore.getState();
+        const hasAnotherTaskTab =
+          tab.kind === "epic" &&
+          canvas.openTabOrder.some(
+            (id) => id !== tab.id && canvas.tabsById[id]?.epicId === tab.epicId,
+          );
+        const grouped =
+          tab.kind === "epic" &&
+          !hasAnotherTaskTab &&
+          organization?.view?.groups.memberships.some(
+            (member) => member.taskId === tab.epicId,
+          );
+        if (grouped) {
+          void organization
+            ?.command({
+              kind: "groups",
+              operations: [{ operation: "removeTask", taskId: tab.epicId }],
+            })
+            .then(() => finalizeCloseTab(tab))
+            .catch(() => undefined);
+        } else finalizeCloseTab(tab);
+      };
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
     },
-    [dialog, finalizeCloseTab],
+    [dialog, finalizeCloseTab, organization],
   );
 
   const closeOtherTabs = useCallback(

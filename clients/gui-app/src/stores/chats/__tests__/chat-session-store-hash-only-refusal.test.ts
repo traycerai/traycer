@@ -111,6 +111,16 @@ const localImageMocks = vi.hoisted(() => ({
     | null,
 }));
 
+// F2 (4b): the local host id the store stamps as `sentFromHostId`, made
+// settable so a test can move it BETWEEN a send and its retry - which is what
+// the desktop's directory does when the local host enrolls after the app has
+// already been used (`null` -> id), or re-enrolls under a new id.
+const localHostIdMock = vi.hoisted(() => ({ value: null as string | null }));
+
+vi.mock("@/lib/host/local-host-id-snapshot", () => ({
+  readLocalHostIdSnapshot: (): string | null => localHostIdMock.value,
+}));
+
 vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
@@ -505,6 +515,7 @@ let harness: Harness | null = null;
 
 beforeEach(() => {
   installFreshIndexedDb();
+  localHostIdMock.value = null;
   localImageMocks.getImageBytes.mockReset();
   if (localImageMocks.realGetImageBytes !== null) {
     localImageMocks.getImageBytes.mockImplementation(
@@ -1060,6 +1071,44 @@ describe("chat session store - hash-only refusal (T5)", () => {
       type: "TEAM",
       teamId: "team-x",
     });
+  });
+
+  it("F2 (4b): the retry carries the ORIGINAL sentFromHostId, not the identity the directory resolved during recovery", async () => {
+    const hash = await seedConfirmedImage();
+    // Sent while this machine's host id was still unknown: the directory
+    // seeds the local identity from `null` once the local host enrolls, so
+    // a send made early in the app's life names no machine.
+    localHostIdMock.value = null;
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks(), []);
+    const { clientActionId } = sendHashOnlyMessage(harness, hash);
+    const originalFrame = harness.sent[0];
+    if (originalFrame.kind !== "send") throw new Error("expected a send frame");
+    expect(originalFrame.sentFromHostId).toBeNull();
+
+    rejectMissingAttachmentBytes(harness, clientActionId, "not-on-host");
+    // The local identity resolves WHILE the byte resolution is outstanding.
+    localHostIdMock.value = "host-local-late";
+
+    await vi.waitFor(() => {
+      expect(harness?.sent).toHaveLength(2);
+    });
+    const retryFrame = harness.sent[1];
+    if (retryFrame.kind !== "send") throw new Error("expected a send frame");
+    // Frozen on the pending action at send time and carried by the recovery
+    // record, exactly like the account context above: the retry is the same
+    // logical send, and a re-read here would let the host place a routed
+    // realm born on this turn by a machine the user never sent from.
+    expect(retryFrame.sentFromHostId).toBeNull();
+
+    // The mock is live, not a constant: a NEW send after the identity
+    // resolved names it, so the `null` above is the frozen value and not the
+    // reader's default.
+    sendHashOnlyMessage(harness, hash);
+    const laterFrame = harness.sent[2];
+    if (laterFrame.kind !== "send") throw new Error("expected a send frame");
+    expect(laterFrame.sentFromHostId).toBe("host-local-late");
   });
 
   // ─── F3: retry from the wire document ───────────────────────────────────

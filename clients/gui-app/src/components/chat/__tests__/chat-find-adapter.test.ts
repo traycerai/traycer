@@ -9,6 +9,10 @@ import {
 } from "@/components/chat/chat-find";
 import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
+  ChatFindIndexDemandSource,
+  FULLY_LOADED_TRANSCRIPT,
+} from "@/components/chat/chat-find-index";
+import {
   FIND_BLOCK_ATTR,
   FIND_HIT_ATTR,
   FIND_MIRROR_ATTR,
@@ -659,6 +663,7 @@ describe("chat find adapter", () => {
     setRows([
       {
         messageId: "row-1",
+        recordIds: ["row-1"],
         units: [
           { unitId: "earlier-unit", text: "needle one", owningChain: [] },
           { unitId: "target-unit", text: "needle two", owningChain: [] },
@@ -709,6 +714,7 @@ describe("chat find adapter", () => {
     setRows([
       {
         messageId: "row-1",
+        recordIds: ["row-1"],
         units: [
           { unitId: "earlier-unit", text: "needle one", owningChain: [] },
           { unitId: "target-unit", text: "needle two", owningChain: [] },
@@ -1070,6 +1076,7 @@ function testRowWithChain(
 ): ChatFindRow {
   return {
     messageId,
+    recordIds: [messageId],
     units: [
       {
         unitId,
@@ -1141,6 +1148,10 @@ function createChatFindTestAdapter(
     clearReveal: callbacks.clearReveal,
     getMountedMessageRoot: callbacks.getMountedMessageRoot,
     getMountedUnitRoot: callbacks.getMountedUnitRoot,
+    // Every row here is loaded: the index never has anything to add.
+    getPlacement: () => FULLY_LOADED_TRANSCRIPT,
+    indexDemand: new ChatFindIndexDemandSource(),
+    jumpToIndexHit: () => undefined,
   });
   return {
     adapter,

@@ -52,6 +52,13 @@ import type {
 
 export interface ChatFindRow {
   readonly messageId: string;
+  /**
+   * The persisted records this row renders - the row id for a user row; for
+   * an assistant slice every record its turn folds (`turnMessageIds`), or
+   * the one `persistentMessageId`. What an index hit names, so it is how a
+   * hydrated hit finds its rows.
+   */
+  readonly recordIds: ReadonlyArray<string>;
   readonly units: ReadonlyArray<ChatFindUnit>;
 }
 
@@ -106,6 +113,9 @@ export function buildChatFindRows(
     );
     return {
       messageId: message.id,
+      recordIds: message.turnMessageIds ?? [
+        message.persistentMessageId ?? message.id,
+      ],
       units,
     };
   });

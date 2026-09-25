@@ -159,6 +159,7 @@ describe("toChatTurnPhase", () => {
                 profileId: "work",
               },
               accountContext: { type: "PERSONAL" },
+              sentFromHostId: null,
               delivery: "next_turn",
               status: "paused",
               targetTurnId: null,

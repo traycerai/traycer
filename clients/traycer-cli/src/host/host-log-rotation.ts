@@ -2,53 +2,63 @@ import { randomUUID } from "node:crypto";
 import { rename, rm, stat } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
-import { hostLogBackupPath, hostLogPath } from "../store/paths";
+import {
+  hostLogBackupPath,
+  hostLogOldestBackupPath,
+  hostLogPath,
+} from "../store/paths";
 import { publishedHostProcessGone, readHostPidMetadata } from "./pid-metadata";
 
 /**
- * Single-generation rotation for `host.log`.
+ * Generation rotation for `host.log`: `host.log` -> `host.log.1` ->
+ * `host.log.2`, oldest deleted.
  *
  * `host.log` is append-only from every writer - the supervisor's bootstrap
  * markers, the host's stdio fd handed to `spawn`, and the host's own file
- * logger - so nothing ever truncates it. That leaves two problems, and this
+ * logger - so nothing here truncates it. That leaves two problems, and this
  * module is the one answer to both:
  *
- *   - **Unbounded growth.** Nothing caps the file. A long-lived host retrying a
- *     failing provider can grow it without limit (`harness-runtime.ts` says as
- *     much in its own comment).
+ *   - **Unbounded growth across restarts.** A host that dies before its own
+ *     rotator fires leaves whatever it grew; a start under the cap would keep
+ *     appending to it.
  *   - **Forensics destroyed on purge.** `traycer host uninstall --all` deletes
  *     the log outright, and `make dev-desktop` runs exactly that on every Ctrl-C
  *     teardown - so the session you actually want to investigate is routinely
  *     gone by the time you look.
  *
- * Rotating to a single `host.log.1` sibling addresses both without either
- * failure mode of the alternatives: it bounds the file (unlike pure appending)
- * and it preserves one previous generation (unlike deleting/truncating). One
- * generation is the whole design - this is a forensic trail across ONE restart,
- * not an archive.
+ * ## The set is the HOST'S set, and the rotation is a shift
+ *
+ * The host's own logger rotates the same file in-process
+ * (`traycer-host/src/bootstrap/host-logger.ts`: at 10 MB it shifts
+ * `host.log.1` onto `host.log.2` and `host.log` onto `host.log.1`, three files
+ * in all). This module's rotations run against the same directory, so they
+ * must move the same set the same way. An earlier version renamed `host.log`
+ * straight onto `host.log.1`: every start of an oversized dead-host log then
+ * destroyed the generation the host had just rotated out, and its `host.log.2`
+ * went stale beside a `.1` it did not precede. Now the shift is the same as
+ * the host's - `.1` moves onto `.2` (replacing it) and then `host.log` onto
+ * `.1` - so a restart costs one generation at the far end, never the newest,
+ * and a shift that cannot happen stops the rotation rather than paying with
+ * the newest (see `shiftGenerations`). Two retained generations is the whole
+ * design: a forensic trail across the previous sessions, not an archive.
  *
  * ## The cap is checked AT START, not continuously - and that is a real limit
  *
- * Be precise about what {@link MAX_HOST_LOG_BYTES} buys: it bounds the log
- * **across restarts**, not *within* a single host's lifetime. A host that runs
- * for weeks can still grow `host.log` past the cap, and nothing here stops it.
+ * Be precise about what {@link MAX_HOST_LOG_BYTES} buys here: it bounds the log
+ * **across restarts** at this module's threshold. Within a lifetime the host's
+ * own rotator bounds it, and the start path never rotates under a live host
+ * (the purge path runs after the host was stopped and is not pid-guarded).
  *
  * This is not laziness about the cost of a `stat` on the append path - it is a
  * correctness constraint. The supervisor hands the running host a long-lived
  * append **fd** for its stdout/stderr (`spawn(stdio:[ignore, fd, fd])`), while
  * the host's own logger writes to the same file BY PATH (`appendFileSync`). An
- * fd follows the inode across a `rename`; a path does not. So an in-process
- * rotation while the host is live would send the logger's lines to the new
+ * fd follows the inode across a `rename`; a path does not. So a rotation from
+ * this process while the host is live would send the logger's lines to the new
  * `host.log` while the very same process's stdout kept flowing into
  * `host.log.1` - one session torn across two files, which is strictly worse for
  * forensics than a large file. Rotating before that fd is ever opened has no
  * such hazard.
- *
- * Making the cap a true within-lifetime bound therefore requires the supervisor
- * to stop sharing one file between the child's stdio fd and the path-writers
- * (give the host's stdio its own sink, or have the host reopen stdio after it
- * rotates). That is a larger change than this module, and deliberately out of
- * its scope.
  *
  * Best-effort by contract: rotation is a diagnostics nicety and must never block
  * a host start or an uninstall, so every entry point swallows its errors.
@@ -100,19 +110,19 @@ async function isRegularFile(filePath: string): Promise<boolean> {
 }
 
 /**
- * Move `logPath` onto `backupPath`, keeping exactly one generation.
+ * Move `logPath` onto `backupPath`, replacing whatever was there.
  *
- * Ordering matters: the rename is attempted FIRST, so a rotation that cannot
+ * Ordering matters: the rename is attempted FIRST, so a move that cannot
  * happen never destroys the evidence it was supposed to preserve. On POSIX that
- * single call atomically replaces the destination, so the old backup is dropped
+ * single call atomically replaces the destination, so the old file is dropped
  * only once the new one is safely in place. Windows `rename` (`MoveFileExW`
- * with REPLACE_EXISTING) replaces an existing destination too, but not one
- * that any process holds open - a reader, or a logger still writing the old
- * backup - so that (and only that) case falls back to moving the previous
- * backup aside, which an open handle does not block, and retrying - by which
- * point we already know the destination exists and the source is intact. The
- * displaced backup is restored if the retry fails, so an unrelated
- * source/permission failure cannot destroy the previous generation.
+ * with REPLACE_EXISTING) replaces an existing destination too, but can refuse
+ * to (EPERM/EACCES/EEXIST: a handle held open on it, a read-only attribute),
+ * so that (and only that) case falls back to moving the previous file aside,
+ * which an open handle does not block, and retrying - by which point we
+ * already know the destination exists and the source is intact. The displaced
+ * file is restored if the retry fails, so an unrelated source/permission
+ * failure cannot destroy the previous generation.
  */
 async function rotate(
   logPath: string,
@@ -148,7 +158,7 @@ async function rotate(
   } catch {
     // If rollback itself is blocked, the prior evidence still survives at the
     // displaced path rather than being deleted. A successful rollback removes
-    // that exceptional extra file and restores the normal single generation.
+    // that exceptional extra file and puts the destination back as it was.
     await verifyMutationCapability();
     try {
       await rename(displacedBackupPath, backupPath);
@@ -160,6 +170,46 @@ async function rotate(
 
   await removeQuietly(displacedBackupPath, verifyMutationCapability);
   return "rotated";
+}
+
+/**
+ * The generation shift: `host.log.1` onto `host.log.2` (dropping the previous
+ * `.2`), then `host.log` onto `host.log.1` - the host's own rotator's order.
+ *
+ * A shift that cannot happen stops the rotation, as the host's rotator does.
+ * The alternative - moving `host.log` onto the `.1` that would not shift -
+ * would destroy the NEWEST retained generation to clear the live log, which
+ * inverts the one promise this module makes (the far end pays, never the
+ * newest). Leaving the live log in place costs size at a start and leaves a
+ * file behind at a purge, and both are reported as `skipped`. The first
+ * move's own rollback keeps the previous `.2` intact when it fails.
+ *
+ * The order has one exposure, shared with the host's rotator: if the shift
+ * succeeds and the second move then fails (the live log held open on
+ * Windows), the previous `.2` is already gone and the old `.1` sits at `.2`.
+ * That is the generation due for deletion; the next attempt finds no `.1`,
+ * shifts nothing and moves `host.log` onto `.1`, so at most one generation
+ * is lost, and it is the oldest. The result is still `skipped`: the live log
+ * did not rotate.
+ *
+ * A missing `.1` is not a failure - there is nothing to shift, and a stale
+ * `.2` beside it is left where it is rather than deleted for nothing.
+ */
+async function shiftGenerations(
+  logPath: string,
+  backupPath: string,
+  oldestBackupPath: string,
+  verifyMutationCapability: MutationVerifier,
+): Promise<"rotated" | "skipped"> {
+  if (await isRegularFile(backupPath)) {
+    const shifted = await rotate(
+      backupPath,
+      oldestBackupPath,
+      verifyMutationCapability,
+    );
+    if (shifted === "skipped") return "skipped";
+  }
+  return await rotate(logPath, backupPath, verifyMutationCapability);
 }
 
 /**
@@ -182,7 +232,7 @@ async function hostIsLive(environment: Environment): Promise<boolean> {
 }
 
 /**
- * Rotate `host.log` to `host.log.1` when it has grown past
+ * Shift `host.log` into the generations when it has grown past
  * {@link MAX_HOST_LOG_BYTES}. Called on the host-start path BEFORE the append fd
  * is opened, so growth is bounded across restarts and a start under the cap
  * keeps appending to the same file - two consecutive starts still land in one
@@ -198,20 +248,21 @@ export async function rotateHostLogIfOversized(
   const logPath = hostLogPath(environment);
   if ((await fileSize(logPath)) < MAX_HOST_LOG_BYTES) return "skipped";
   if (await hostIsLive(environment)) return "skipped";
-  return await rotate(
+  return await shiftGenerations(
     logPath,
     hostLogBackupPath(environment),
+    hostLogOldestBackupPath(environment),
     legacyMutationVerifier,
   );
 }
 
 /**
- * Rotate `host.log` to `host.log.1` unconditionally, for the runtime-purge path
- * (`host uninstall --all`). Purging must still clear the live log - an orphan
- * log left behind by an uninstall is its own surprise - but the session it
- * records is precisely the one worth keeping, and a dev teardown hits this path
- * many times a day. Rotating satisfies both: the runtime is purged, one
- * generation survives, and it cannot accumulate.
+ * Shift `host.log` into the generations unconditionally, for the runtime-purge
+ * path (`host uninstall --all`). Purging must still clear the live log - an
+ * orphan log left behind by an uninstall is its own surprise - but the session
+ * it records is precisely the one worth keeping, and a dev teardown hits this
+ * path many times a day. Rotating satisfies both: the runtime is purged, the
+ * two generations survive, and they cannot accumulate.
  *
  * Not pid-guarded, unlike the start path: uninstall runs after the host has been
  * stopped, and a purge that silently left the log behind because a stale pid
@@ -243,9 +294,10 @@ export async function rotateHostLogForPurgeWithVerifier(
     await removeQuietly(logPath, verifyMutationCapability);
     return "skipped";
   }
-  return await rotate(
+  return await shiftGenerations(
     logPath,
     hostLogBackupPath(environment),
+    hostLogOldestBackupPath(environment),
     verifyMutationCapability,
   );
 }

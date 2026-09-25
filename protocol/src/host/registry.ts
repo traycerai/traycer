@@ -1,4 +1,11 @@
 import {
+  organizationReadV10,
+  organizationRefreshV10,
+  organizationCommandV10,
+  organizationHistoryV10,
+  organizationSubscribeV10,
+} from "./organization/contracts";
+import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
@@ -278,6 +285,7 @@ import {
   chatSubscribeV114,
   chatSubscribeV115,
   chatSubscribeV116,
+  chatSubscribeV117,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -417,7 +425,6 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
   hostAgentCreateFromRemoteSenderV10,
-  hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -514,6 +521,8 @@ import {
   epicCreateUpgradeV11ToV12,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
+  epicDeleteChatV11,
+  epicDeleteChatUpgradeV10ToV11,
   epicDeleteCommentThreadV10,
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
@@ -634,7 +643,10 @@ import {
   epicStatusSubscribeV10,
   epicStatusSubscribeV11,
 } from "@traycer/protocol/host/epic/status-subscribe";
-import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
+import {
+  artifactSubscribeV10,
+  artifactSubscribeV11,
+} from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
   epicRetryMigrationV10,
@@ -4907,6 +4919,55 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 });
 
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
+  "organization.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: organizationReadV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "organization.refresh": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: organizationRefreshV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "organization.command": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: organizationCommandV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "organization.history": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: organizationHistoryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "browser.savedLoginSites": {
     // Settings > Browser's "Sites with saved logins" list (keychain refactor
     // ticket 10). Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL,
@@ -7564,11 +7625,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.deleteChat": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicDeleteChatV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicDeleteChatV11,
+          upgradeFromPreviousVersion: epicDeleteChatUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8798,19 +8863,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostResolveRepoPathsV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.directory.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostDirectoryListV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -11289,6 +11341,12 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
+  "organization.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: organizationSubscribeV10 } },
+    },
+  },
   "epic.subscribe": {
     1: {
       // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
@@ -11416,10 +11474,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `chat.subscribe`'s lifetime, not `epic.subscribe`'s.
   "artifact.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the server-only `bodySync` frame (a body served from the
+      // host's local copy before its cloud sync, and when that sync lands).
+      // @1.0 stays installed and FROZEN: the host gates the frame on the
+      // negotiated minor (`ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR`).
+      latestMinor: 1,
       versions: {
         0: {
           contract: artifactSubscribeV10,
+        },
+        1: {
+          contract: artifactSubscribeV11,
         },
       },
     },
@@ -12090,7 +12155,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 16,
+      latestMinor: 17,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12179,6 +12244,13 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // host withholds nothing.
         16: {
           contract: chatSubscribeV116,
+        },
+        // @1.17 adds `sentFromHostId` on `send` / `editUserMessage` and on the
+        // queued prompt item: the machine the message was sent from, which
+        // places a routed browser realm born on that turn. A defaulted key in
+        // a non-strict object at every minor, so the host withholds nothing.
+        17: {
+          contract: chatSubscribeV117,
         },
       },
     },

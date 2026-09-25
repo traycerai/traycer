@@ -1,4 +1,5 @@
 import type { Disposable } from "../../platform/uri-callback";
+import type { NotificationFeedOccurrence } from "../../notifications/feed-delivery";
 import type {
   CredentialsMigrationOutcome,
   DeviceFlowAuthorization,
@@ -172,6 +173,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly deliveryKey: string | null;
     readonly feedSource: NotificationFeedSource | null;
     readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
+    readonly feedOccurrences: ReadonlyArray<NotificationFeedOccurrence> | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
   readonly tokenStoreEntries: Map<string, StoredCredentials> = new Map();
@@ -823,6 +825,7 @@ export class MockRunnerHost implements IRunnerHost {
       deliveryKey: string | null,
       feedSource: NotificationFeedSource | null,
       foregroundAppLocal: NotificationForegroundAppLocal | null,
+      feedOccurrences: ReadonlyArray<NotificationFeedOccurrence> | null,
     ): Promise<NotificationShowOutcome> => {
       this.notificationsSent.push({
         title,
@@ -832,6 +835,7 @@ export class MockRunnerHost implements IRunnerHost {
         deliveryKey,
         feedSource,
         foregroundAppLocal,
+        feedOccurrences,
       });
       // Recording the request is not presenting it: this shell has no native
       // notification capability (see the class doc - notifications are a

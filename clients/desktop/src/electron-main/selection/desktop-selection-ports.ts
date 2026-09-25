@@ -41,8 +41,8 @@ import type {
  * The identity the persisted preference is scoped to, and the generation the
  * engine keys membership on.
  *
- * The generation increments ONLY when the signed-in USER changes - never on a
- * token rotation. That distinction is the whole safety property: the auth
+ * The generation increments ONLY when the local USER changes - never on a
+ * token rotation or cloud verification. That distinction matters: the auth
  * session emits a change on every credential refresh, and bumping the
  * generation there would wipe every scrap of evidence (sessions, streaks,
  * compat, tombstones) and force every window to re-attach on a routine token
@@ -62,9 +62,9 @@ export class DesktopAuthorityIdentitySource implements AuthorityIdentitySource {
 
   constructor(authSession: IpcDesktopAuthSession) {
     this.authSession = authSession;
-    this.identityKey = signedInUserId(authSession.get());
+    this.identityKey = localSessionUserId(authSession.get());
     this.onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot) => {
-      const nextKey = signedInUserId(snapshot);
+      const nextKey = localSessionUserId(snapshot);
       if (nextKey === this.identityKey) return;
       this.identityKey = nextKey;
       this.generation += 1;
@@ -100,9 +100,11 @@ export class DesktopAuthorityIdentitySource implements AuthorityIdentitySource {
   }
 }
 
-/** Only a fully signed-in session names an identity (`auth-ipc.ts` parity). */
-function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
-  return snapshot.status === "signed-in"
+/** Local identity survives absent cloud verification, including a cold restore. */
+function localSessionUserId(
+  snapshot: DesktopAuthSessionSnapshot,
+): string | null {
+  return snapshot.status === "signed-in" || snapshot.status === "unverified"
     ? (snapshot.profile?.userId ?? null)
     : null;
 }

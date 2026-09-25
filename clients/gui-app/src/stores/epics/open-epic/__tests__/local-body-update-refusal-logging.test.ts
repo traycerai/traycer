@@ -252,6 +252,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
         {
           artifactRooms: {
             stateByArtifactId: { [ARTIFACT_ID]: "ready" },
+            bodySyncingByArtifactId: {},
           },
           isDirty: false,
         },
@@ -337,6 +338,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
           {
             artifactRooms: {
               stateByArtifactId: { [ARTIFACT_ID]: "unavailable" },
+              bodySyncingByArtifactId: {},
             },
           },
           ++revision,
@@ -347,6 +349,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
           {
             artifactRooms: {
               stateByArtifactId: { [ARTIFACT_ID]: "ready" },
+              bodySyncingByArtifactId: {},
             },
           },
           ++revision,
@@ -478,7 +481,10 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       // pin.
       handle.projection.apply(
         {
-          artifactRooms: { stateByArtifactId: { [ARTIFACT_ID]: "ready" } },
+          artifactRooms: {
+            stateByArtifactId: { [ARTIFACT_ID]: "ready" },
+            bodySyncingByArtifactId: {},
+          },
           isDirty: false,
         },
         2,

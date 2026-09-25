@@ -47,23 +47,20 @@ function confirmTitle(action: ConfirmAction): string {
   return "Clear version history?";
 }
 
-function confirmDescription(
-  action: ConfirmAction,
-  reclaimableBytes: number,
-): string {
+function confirmDescription(action: ConfirmAction): string {
   if (action === "disable") {
     return "Edits made while history is off are never recoverable. On a Sync plan, this host's edits will produce no cloud history either. Existing saved versions remain available.";
   }
   if (action === "retention") {
     return "Observations beyond the new age, version-count, or per-artifact byte limits will be pruned immediately. This cannot be undone.";
   }
-  return `${formatBytes(reclaimableBytes)} is reclaimable and will be removed. Checkpoint-owned blobs remain because checkpoints still reference them.`;
+  return "Every saved version is removed from this host and, on a Sync plan, from the cloud. Undo for agent turns is unaffected. This cannot be undone.";
 }
 
 function confirmButtonLabel(action: ConfirmAction): string {
   if (action === "disable") return "Turn off";
   if (action === "retention") return "Prune and save";
-  return "Clear reclaimable history";
+  return "Clear history";
 }
 
 function formatBytes(value: number): string {
@@ -287,7 +284,7 @@ export function ArtifactVersionSettingsSection(props: {
           control={
             <Switch
               checked={settings.enabled}
-              disabled={pending}
+              disabled={!props.enabled || pending}
               aria-label="Capture artifact versions"
               onCheckedChange={(checked) => {
                 if (checked) setEnabled.mutate({ enabled: true });
@@ -310,6 +307,7 @@ export function ArtifactVersionSettingsSection(props: {
                   type="number"
                   min={1}
                   max={MAX_ARTIFACT_VERSION_RETENTION_DAYS}
+                  disabled={!props.enabled}
                   value={retentionDays ?? String(settings.retentionDays)}
                   onChange={(event) =>
                     updateRetentionDraft("retentionDays", event.target.value)
@@ -326,6 +324,7 @@ export function ArtifactVersionSettingsSection(props: {
                   type="number"
                   min={1}
                   max={MAX_ARTIFACT_VERSIONS_PER_ARTIFACT}
+                  disabled={!props.enabled}
                   value={maxVersions ?? String(settings.maxVersionsPerArtifact)}
                   onChange={(event) =>
                     updateRetentionDraft("maxVersions", event.target.value)
@@ -342,6 +341,7 @@ export function ArtifactVersionSettingsSection(props: {
                   type="number"
                   min={1}
                   max={MAX_ARTIFACT_VERSION_MEGABYTES_PER_ARTIFACT}
+                  disabled={!props.enabled}
                   value={
                     maxMegabytes ??
                     String(
@@ -357,7 +357,7 @@ export function ArtifactVersionSettingsSection(props: {
                 className="col-span-3 justify-self-end"
                 size="sm"
                 variant="outline"
-                disabled={!retentionChanged || pending}
+                disabled={!props.enabled || !retentionChanged || pending}
                 onClick={() => {
                   if (tightensRetention) {
                     setConfirm({
@@ -373,23 +373,12 @@ export function ArtifactVersionSettingsSection(props: {
           }
         />
         <SettingsRow
-          row={HOST_OVERVIEW.definitions.storage}
-          control={
-            <div className="text-right text-ui-sm">
-              <p>{formatBytes(snapshot.storage.referencedBytes)} referenced</p>
-              <p className="text-muted-foreground">
-                {formatBytes(snapshot.storage.reclaimableBytes)} reclaimable
-              </p>
-            </div>
-          }
-        />
-        <SettingsRow
           row={HOST_OVERVIEW.definitions.clearVersionHistory}
           control={
             <Button
               size="sm"
               variant="outline"
-              disabled={pending}
+              disabled={!props.enabled || pending}
               onClick={() =>
                 setConfirm({ hostId: props.hostId, action: "clear" })
               }
@@ -410,17 +399,14 @@ export function ArtifactVersionSettingsSection(props: {
       </SettingsGroup>
 
       <Dialog
-        open={confirmForHost !== null}
+        open={props.enabled ? confirmForHost !== null : false}
         onOpenChange={(open) => !open && setConfirm(null)}
       >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{confirmTitle(confirmForHost)}</DialogTitle>
             <DialogDescription>
-              {confirmDescription(
-                confirmForHost,
-                snapshot.storage.reclaimableBytes,
-              )}
+              {confirmDescription(confirmForHost)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

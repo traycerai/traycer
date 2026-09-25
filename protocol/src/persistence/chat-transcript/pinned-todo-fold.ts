@@ -7,6 +7,7 @@ import {
   createTaskTodoState,
   isTaskTodoToolName,
   type ParsedTaskTodo,
+  type TaskTodoState,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type {
@@ -130,7 +131,31 @@ export interface PinnedTodoFoldResult {
 }
 
 /**
- * Fold a whole transcript to its pinned todo and its task accumulator.
+ * The fold's running state between rows: everything {@link foldPinnedTodoRows}
+ * carries from one row to the next.
+ *
+ * Immutable to its holders. A step copies the task accumulator before it
+ * applies anything, so a caller can keep a state at a row and resume from it
+ * later - the host holds one through the rows that have settled and folds the
+ * live turn's rows on top of it, never re-walking the history below.
+ */
+export interface PinnedTodoFoldState {
+  readonly taskTodoState: TaskTodoState;
+  readonly latestTodo: PinnedTodoSnapshot | null;
+  readonly resetTaskItemsOnNextCreate: boolean;
+}
+
+/** The state before the first row. */
+export function startPinnedTodoFold(): PinnedTodoFoldState {
+  return {
+    taskTodoState: createTaskTodoState(),
+    latestTodo: null,
+    resetTaskItemsOnNextCreate: false,
+  };
+}
+
+/**
+ * Continue the fold over `rows`, the next rows in canonical order.
  *
  * Latest-todo selection, matching the renderer's:
  *  - semantic `todo` blocks pin as-is (newest non-empty wins),
@@ -138,14 +163,23 @@ export interface PinnedTodoFoldResult {
  *    shared protocol helpers,
  *  - a semantic todo outranks the task list within the same row,
  *  - the accumulated task items reset on the first `create` after a user row.
+ *
+ * `blocksById` must hold every block `rows` name; a block it lacks is skipped,
+ * exactly as the whole-transcript fold skips one.
  */
-export function foldPinnedTodo(
+export function foldPinnedTodoRows(
+  state: PinnedTodoFoldState,
   rows: readonly TranscriptRowDescriptor[],
   blocksById: ReadonlyMap<string, ContentBlock>,
-): PinnedTodoFoldResult {
-  let taskTodoState = createTaskTodoState();
-  let latestTodo: PinnedTodoSnapshot | null = null;
-  let resetTaskItemsOnNextCreate = false;
+): PinnedTodoFoldState {
+  // Copied, not shared: `applyParsedTaskTodoItems` mutates the accumulator,
+  // and `state` may be a caller's held checkpoint.
+  let taskTodoState: TaskTodoState = {
+    taskTodoItemsById: new Map(state.taskTodoState.taskTodoItemsById),
+    taskTodoToolItemIds: new Map(state.taskTodoState.taskTodoToolItemIds),
+  };
+  let latestTodo = state.latestTodo;
+  let resetTaskItemsOnNextCreate = state.resetTaskItemsOnNextCreate;
 
   for (const row of rows) {
     const { source } = row;
@@ -197,10 +231,30 @@ export function foldPinnedTodo(
     latestTodo = latestSemanticTodo ?? latestTaskTodo ?? latestTodo;
   }
 
+  return { taskTodoState, latestTodo, resetTaskItemsOnNextCreate };
+}
+
+/** What a fold that has reached `state` answers. */
+export function pinnedTodoFoldResult(
+  state: PinnedTodoFoldState,
+): PinnedTodoFoldResult {
   return {
-    todo: latestTodo,
+    todo: state.latestTodo,
     // Read from the accumulator rather than from `latestTodo`, which is a
     // different thing whenever a semantic todo won the selection.
-    taskItems: Array.from(taskTodoState.taskTodoItemsById.values()),
+    taskItems: Array.from(state.taskTodoState.taskTodoItemsById.values()),
   };
+}
+
+/**
+ * Fold a whole transcript to its pinned todo and its task accumulator: the
+ * steps above, from the start, over every row.
+ */
+export function foldPinnedTodo(
+  rows: readonly TranscriptRowDescriptor[],
+  blocksById: ReadonlyMap<string, ContentBlock>,
+): PinnedTodoFoldResult {
+  return pinnedTodoFoldResult(
+    foldPinnedTodoRows(startPinnedTodoFold(), rows, blocksById),
+  );
 }

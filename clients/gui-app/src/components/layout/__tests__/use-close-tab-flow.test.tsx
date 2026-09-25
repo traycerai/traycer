@@ -5,6 +5,7 @@ import {
   render,
   renderHook,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
@@ -18,6 +19,10 @@ import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import * as TabNav from "@/lib/tab-navigation";
 import type { HeaderTab } from "@/stores/tabs/types";
+import type {
+  OrganizationAction,
+  OrganizationView,
+} from "@traycer/protocol/host/organization/contracts";
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
@@ -33,6 +38,40 @@ const windowsBridgeState = vi.hoisted(() => ({
     readonly requestClose: typeof requestCloseWindowSpy;
   } | null,
 }));
+
+const organizationState = vi.hoisted(() => {
+  let view: OrganizationView = {
+    catalog: [],
+    groups: { version: "0", groups: [], memberships: [] },
+    appearances: [],
+    taskLabels: {},
+    ready: true,
+    authenticationRequired: false,
+    pending: [],
+    failures: [],
+  };
+  const command = vi.fn<(action: OrganizationAction) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
+  const context = {
+    supported: true,
+    userId: "user-1",
+    get view() {
+      return view;
+    },
+    register: () => () => undefined,
+    openDialog: () => undefined,
+    command,
+    refresh: () => Promise.resolve(),
+  };
+  return {
+    command,
+    context,
+    setView: (next: OrganizationView) => {
+      view = next;
+    },
+  };
+});
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateSpy,
@@ -72,6 +111,37 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
   getEpicSessionHandleHostId: () => null,
   getEpicSessionHostId: () => null,
 }));
+
+vi.mock("@/hooks/organization/organization-context", () => ({
+  useOrganization: () => organizationState.context,
+}));
+
+function organizationView(
+  memberships: OrganizationView["groups"]["memberships"],
+): OrganizationView {
+  return {
+    catalog: [],
+    groups: {
+      version: "0",
+      groups: [
+        { groupId: "group-a", name: "Group A", color: "#8ab4f8", position: 0 },
+      ],
+      memberships,
+    },
+    appearances: [],
+    taskLabels: {},
+    ready: true,
+    authenticationRequired: false,
+    pending: [],
+    failures: [],
+  };
+}
+
+function resetOrganization(): void {
+  organizationState.command.mockReset();
+  organizationState.command.mockImplementation(() => Promise.resolve());
+  organizationState.setView(organizationView([]));
+}
 
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -185,11 +255,13 @@ describe("useCloseTabFlow", () => {
     windowsBridgeState.bridge = null;
     mockUnsynced.epicIds.clear();
     resetStores();
+    resetOrganization();
   });
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
     resetStores();
+    resetOrganization();
   });
 
   it("closing the active tab focuses the picked neighbor via navigateToTabIntent", () => {
@@ -541,5 +613,155 @@ describe("useCloseTabFlow", () => {
       item.kind === "epic" ? [item.tab.tabId] : [],
     );
     expect(new Set(groupRecoveredIds)).toEqual(new Set([a, b]));
+  });
+
+  it("removes cloud membership before closing an individually closed task", async () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-cloud", "Cloud task");
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-cloud", groupId: "group-a", position: 0 },
+      ]),
+    );
+    let resolveCommand: (() => void) | undefined;
+    organizationState.command.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCommand = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(
+        epicHeaderTab("epic-cloud", tabId, "Cloud task"),
+      );
+    });
+
+    expect(organizationState.command).toHaveBeenCalledOnce();
+    expect(organizationState.command.mock.calls[0]?.[0]).toEqual({
+      kind: "groups",
+      operations: [{ operation: "removeTask", taskId: "epic-cloud" }],
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+
+    if (resolveCommand === undefined) {
+      throw new Error("Expected a pending organization command");
+    }
+    const resolve = resolveCommand;
+    await act(async () => {
+      resolve();
+      await Promise.resolve();
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+  });
+
+  it("keeps cloud membership when another tab for the same task remains open", async () => {
+    const firstTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-duplicate", "First view");
+    const secondTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-duplicate", "Second view");
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-duplicate", groupId: "group-a", position: 0 },
+      ]),
+    );
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(
+        epicHeaderTab("epic-duplicate", firstTabId, "First view"),
+      );
+    });
+
+    expect(organizationState.command).not.toHaveBeenCalled();
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([secondTabId]);
+
+    act(() => {
+      result.current.requestCloseTab(
+        epicHeaderTab("epic-duplicate", secondTabId, "Second view"),
+      );
+    });
+    await waitFor(() =>
+      expect(organizationState.command).toHaveBeenCalledOnce(),
+    );
+    expect(organizationState.command.mock.calls[0]?.[0]).toEqual({
+      kind: "groups",
+      operations: [{ operation: "removeTask", taskId: "epic-duplicate" }],
+    });
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+  });
+
+  it("leaves an individually closed task open when membership removal is rejected", async () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-rejected", "Rejected task");
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-rejected", groupId: "group-a", position: 0 },
+      ]),
+    );
+    organizationState.command.mockImplementation(() =>
+      Promise.reject(new Error("membership rejected")),
+    );
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(
+        epicHeaderTab("epic-rejected", tabId, "Rejected task"),
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+  });
+
+  it("keeps cloud membership unchanged for group and close-other-tabs actions", () => {
+    const { refC } = seedGroupedTabs();
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-a", groupId: "group-a", position: 0 },
+        { taskId: "epic-b", groupId: "group-a", position: 1 },
+      ]),
+    );
+    const firstHook = renderHook(() => useCloseTabFlow());
+    act(() => {
+      firstHook.result.current.closeGroup("group-a");
+    });
+
+    expect(organizationState.command).not.toHaveBeenCalled();
+    expect(organizationState.context.view.groups.memberships).toEqual([
+      { taskId: "epic-a", groupId: "group-a", position: 0 },
+      { taskId: "epic-b", groupId: "group-a", position: 1 },
+    ]);
+    expect(useTabsStore.getState().stripOrder).toEqual([refC]);
+
+    firstHook.unmount();
+    resetStores();
+    resetOrganization();
+    const next = seedGroupedTabs();
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-a", groupId: "group-a", position: 0 },
+        { taskId: "epic-b", groupId: "group-a", position: 1 },
+      ]),
+    );
+    const nextHook = renderHook(() => useCloseTabFlow());
+    act(() => {
+      nextHook.result.current.closeOtherTabs(
+        epicHeaderTab("epic-a", next.a, "Alpha"),
+      );
+    });
+
+    expect(organizationState.command).not.toHaveBeenCalled();
+    expect(organizationState.context.view.groups.memberships).toHaveLength(2);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([next.a]);
   });
 });

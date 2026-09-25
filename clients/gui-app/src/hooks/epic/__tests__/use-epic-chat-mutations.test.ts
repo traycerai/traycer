@@ -537,7 +537,7 @@ describe("useEpicDeleteChat", () => {
     };
 
     opts.onSuccess(
-      { deleted: true },
+      { deleted: true, publicationChatId: null },
       { epicId: "epic-1", chatId: "chat-1", hostId: "host-test" },
       // The host captured at mutate time - `epic.deleteChat` carries no host
       // on the wire, so the teardown is told which machine's session to close.
@@ -545,6 +545,7 @@ describe("useEpicDeleteChat", () => {
         hostId: "host-test",
         viewerHostId: "host-test",
         viewerUserId: null,
+        cloudDeletionToken: null,
       },
       mutationContext,
     );
@@ -585,12 +586,13 @@ describe("useEpicDeleteChat", () => {
     }
 
     opts.onSuccess(
-      { deleted: true },
+      { deleted: true, publicationChatId: null },
       { epicId: "epic-1", chatId: "chat-1", hostId: null },
       {
         hostId: null,
         viewerHostId: "host-test",
         viewerUserId: null,
+        cloudDeletionToken: null,
       },
       { client: new QueryClient(), meta: undefined },
     );

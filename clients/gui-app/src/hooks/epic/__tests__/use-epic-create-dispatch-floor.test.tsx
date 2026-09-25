@@ -8,7 +8,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
-  CreateEpicRequest,
+  CreateEpicRequestV12,
   CreateEpicResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -37,7 +37,7 @@ const USER_ID = "user-1";
 const PROFILE = { userId: USER_ID, userName: "A", email: "a@example.com" };
 const CONTEXT = { userId: USER_ID, username: USER_ID };
 
-const CREATE_VARIABLES: CreateEpicRequest = {
+const CREATE_VARIABLES: CreateEpicRequestV12 = {
   epic: {
     id: "epic-1",
     title: "Epic",

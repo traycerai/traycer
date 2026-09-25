@@ -182,6 +182,7 @@ function mixedCapDoc(): JsonContent {
 interface RecordedInitialMessage {
   readonly content: JsonContent;
   readonly attachmentsByHash?: boolean;
+  readonly sentFromHostId?: string | null;
 }
 
 interface RecordedCreateChatRequest {
@@ -216,6 +217,10 @@ const testState = vi.hoisted(() => ({
     | ((response: { readonly ok: boolean }) => void)[]
     | null,
   onSubmitted: vi.fn<() => void>(),
+  // The directory's LOCAL host id - the machine typing, deliberately
+  // distinct from `HOST_ID`/`PLACEMENT_TARGET` (the target host the chat is
+  // created on).
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -388,7 +393,16 @@ const stubHostClient = {
   getRequestContextUserId: () => null,
 };
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
-vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => stubHostClient,
+  // The create stamps `sentFromHostId` from the directory's local host at
+  // submit - see `testState.getLocalHostId` for the default and the
+  // sender-host-placement cases below for the assertions.
+  getHostBindingSnapshot: () => ({
+    hostClient: stubHostClient,
+    directory: { getLocalHostId: testState.getLocalHostId },
+  }),
+}));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
@@ -599,6 +613,8 @@ beforeEach(() => {
   testState.putBlobResponse = null;
   PLACEMENT_TARGET = makePlacementTarget(HOST_ID, "Byhash Host");
   testState.onSubmitted.mockClear();
+  testState.getLocalHostId.mockReset();
+  testState.getLocalHostId.mockReturnValue("host-local-typing");
   imageStoreMocks.getImageBytes.mockReset();
   imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
   resetDraftBlobTransportForTests();
@@ -665,6 +681,38 @@ describe("new-conversation modal: attachments-by-hash submit gate", () => {
     expect(message.attachmentsByHash ?? false).toBe(false);
     const atoms = collectImageAtoms(message.content);
     expect(atoms[0]?.b64content).not.toBeNull();
+  });
+
+  // `sentFromHostId` names the machine the user is TYPING on (the local
+  // host), never the target `hostId` the chat is created on (`HOST_ID`,
+  // "host-byhash"). The suite's default local id ("host-local-typing")
+  // already diverges from that target, so a reader quietly replaced by the
+  // target host would fail this alongside one replaced by a constant.
+  it("stamps the initial message's sentFromHostId with the local host id, not the target host", async () => {
+    imageStoreMocks.getImageBytes.mockResolvedValue(IMAGE_BYTES);
+    renderModal(byHashImageDoc("inline please"));
+
+    await submitAndSettle();
+
+    expect(testState.createRequests).toHaveLength(1);
+    const request = testState.createRequests[0];
+    expect(request.hostId).toBe(HOST_ID);
+    const message = sentInitialMessage(request);
+    expect(message.sentFromHostId).toBe("host-local-typing");
+  });
+
+  // The null path stays pinned: a shell with no local host sends no sender
+  // host, rather than falling back to the target host.
+  it("sends a null sentFromHostId when the directory has no local host", async () => {
+    testState.getLocalHostId.mockReturnValue(null);
+    imageStoreMocks.getImageBytes.mockResolvedValue(IMAGE_BYTES);
+    renderModal(byHashImageDoc("inline please"));
+
+    await submitAndSettle();
+
+    expect(testState.createRequests).toHaveLength(1);
+    const message = sentInitialMessage(testState.createRequests[0]);
+    expect(message.sentFromHostId ?? null).toBeNull();
   });
 
   // G-new-1: typing during the upload await is preserved - the create carries

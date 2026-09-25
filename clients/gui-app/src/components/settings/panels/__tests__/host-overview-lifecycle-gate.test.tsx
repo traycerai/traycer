@@ -87,6 +87,7 @@ import {
   buildOverviewHostFixture,
   buildOverviewManagement,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { LOCAL_LIVENESS_PROOF_MS } from "@/lib/host/fleet-update/fleet-update-view";
@@ -595,17 +596,40 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
 
     // THE FIX: the retained attempt demotes to "last known" the moment the
     // scope stops being usable, exactly as it does when the READ itself turns
-    // unhealthy in (c) — same predicate, different input.
+    // unhealthy in (c) — same predicate, different input. T2's Status tab
+    // withholds the update card entirely once the host can't be reached (the
+    // offline notice is the tab's ONLY unreachable wording then, and it
+    // carries the retained phase itself), so the retained "Last seen: …"
+    // sentence now lives there rather than on `host-overview-operation-card`.
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Last seen: Downloading update to v2.1.0");
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toContain(
+        "Can't reach host-a — last seen while downloading update to v2.1.0.",
+      );
     });
+    expect(screen.queryByTestId("host-overview-operation-phase")).toBeNull();
 
     // And the orthogonal rule holds too: an unusable scope withdraws the
     // controls rather than merely disabling them.
     expect(screen.queryByTestId("host-overview-edit-name")).toBeNull();
     expect(screen.queryByTestId("host-overview-menu")).toBeNull();
+
+    // THE DISCRIMINATING CHECK. The offline notice's clause alone does not
+    // prove demotion: `describeLastSeenUpdateClause` reads the live kind OR a
+    // retained `lastKnownKind` through the identical phrase table, so a
+    // non-demoted `downloading` view would print the exact same "while
+    // downloading update to v2.1.0" text here. The header pill's own table
+    // does NOT collapse the two — a live `downloading` draws "Downloading…",
+    // only a demoted (qualified/unknown) view draws the picker's retained
+    // word ("Last seen: updating", muted). The pill only shows off Status, so
+    // move there to read it.
+    await selectHostOverviewTab("ports");
+    await waitFor(() => {
+      const pill = screen.getByTestId("host-overview-update-pill");
+      expect(pill.textContent).toBe("Last seen: updating");
+      expect(pill.getAttribute("data-tone")).toBe("muted");
+    });
   });
 
   it("(c3) an open restart confirmation CLOSES when the scope turns unusable — the withdrawal of the Restart control, one commit late", async () => {
@@ -789,6 +813,24 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       scopeOverrides.current = {
         ...scopeFrom("host-a", fixture),
         status: "unreachable",
+        // T2's Status tab withholds the offline notice (and shows the update
+        // card instead) only while the health word already reads
+        // "Restarting…" - the same word this scope's own restart is
+        // narrating. Without this the default fixture health ("online") made
+        // the tab treat this restart as an ordinary disconnect and draw the
+        // offline notice over the operation card this pin is about.
+        host: hostScopeOptionFixture({
+          hostId: "host-a",
+          isLocalMachine: true,
+          connectable: true,
+          health: {
+            state: "restarting",
+            label: "Restarting…",
+            detail: "Expected restart — reconnecting.",
+            tone: "idle",
+            live: false,
+          },
+        }),
       };
       const livenessObservedAtMs = Date.now();
       const management = buildOverviewManagement({

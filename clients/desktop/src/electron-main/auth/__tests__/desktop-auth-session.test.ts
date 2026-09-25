@@ -237,4 +237,109 @@ describe("DesktopAuthSession.revokeVerification", () => {
     expect(session.get().verified).toBe(false);
     expect(changes).toBe(0);
   });
+
+  it("adopts a matching local session as unverified", () => {
+    const session = new DesktopAuthSession();
+    const localSnapshot = {
+      status: "unverified" as const,
+      token: BEARER_2,
+      profile: SIGNED_IN.profile,
+    };
+
+    expect(session.setLocal(localSnapshot, session.beginSet())).toBe(true);
+    expect(session.get()).toEqual({ ...localSnapshot, verified: false });
+  });
+
+  it("does not replace a same-user verified session with a local snapshot", () => {
+    const session = new DesktopAuthSession();
+    session.setVerified(SIGNED_IN, session.beginSet());
+    const localSnapshot = {
+      status: "unverified" as const,
+      token: BEARER_2,
+      profile: SIGNED_IN.profile,
+    };
+
+    expect(session.setLocal(localSnapshot, session.beginSet())).toBe(false);
+    expect(session.get()).toEqual({ ...SIGNED_IN, verified: true });
+  });
+
+  it("drops a local restore overtaken by a sign-out", () => {
+    const session = new DesktopAuthSession();
+    const restoreGeneration = session.beginSet();
+    session.set({ status: "signed-out", token: null, profile: null });
+
+    expect(
+      session.setLocal(
+        {
+          status: "unverified",
+          token: BEARER_2,
+          profile: SIGNED_IN.profile,
+        },
+        restoreGeneration,
+      ),
+    ).toBe(false);
+    expect(session.get()).toEqual({
+      status: "signed-out",
+      token: null,
+      profile: null,
+      verified: false,
+    });
+  });
+
+  it("allows an in-flight verification of the same pair to promote a local restore", () => {
+    const session = new DesktopAuthSession();
+    const verificationGeneration = session.beginSet();
+    const localSnapshot = {
+      status: "unverified" as const,
+      token: BEARER_2,
+      profile: SIGNED_IN.profile,
+    };
+
+    expect(session.setLocal(localSnapshot, session.beginSet())).toBe(true);
+    expect(
+      session.setVerified(
+        { ...SIGNED_IN, token: BEARER_2 },
+        verificationGeneration,
+      ),
+    ).toBe(true);
+    expect(session.get()).toEqual({
+      ...SIGNED_IN,
+      token: BEARER_2,
+      verified: true,
+    });
+  });
+
+  it("does not let verification undo a sign-out even after a local restore", () => {
+    const session = new DesktopAuthSession();
+    const verificationGeneration = session.beginSet();
+    session.set({ status: "signed-out", token: null, profile: null });
+    const localSnapshot = {
+      status: "unverified" as const,
+      token: BEARER_2,
+      profile: SIGNED_IN.profile,
+    };
+    expect(session.setLocal(localSnapshot, session.beginSet())).toBe(true);
+
+    expect(
+      session.setVerified(
+        { ...SIGNED_IN, token: BEARER_2 },
+        verificationGeneration,
+      ),
+    ).toBe(false);
+    expect(session.get()).toEqual({ ...localSnapshot, verified: false });
+  });
+
+  it("does not promote verification for a different pair than the local restore", () => {
+    const session = new DesktopAuthSession();
+    const verificationGeneration = session.beginSet();
+    const localSnapshot = {
+      status: "unverified" as const,
+      token: BEARER_2,
+      profile: SIGNED_IN.profile,
+    };
+    expect(session.setLocal(localSnapshot, session.beginSet())).toBe(true);
+
+    expect(session.setVerified(SIGNED_IN, verificationGeneration)).toBe(false);
+    expect(session.get()).toEqual({ ...localSnapshot, verified: false });
+  });
 });

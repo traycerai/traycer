@@ -1168,10 +1168,12 @@ function NotificationsSessionBody(
                 semanticId: row.entryId,
               })),
             );
-            displayCloudSnapshotArrivals(arrivals, {
+            void displayCloudSnapshotArrivals(arrivals, {
               showNotification,
               playChime: playNotificationChime,
               onToastClick: (row) => onToastClickRef.current(row),
+            }).catch(() => {
+              // The feed remains authoritative if presentation fails.
             });
           },
         );
@@ -1221,7 +1223,7 @@ function NotificationsSessionBody(
             windowId,
             now: () => Date.now(),
             displayChannelEmission: (entries) => {
-              displayHostChannelEmission(
+              void displayHostChannelEmission(
                 entries,
                 {
                   showNotification,
@@ -1229,7 +1231,9 @@ function NotificationsSessionBody(
                   onToastClick: (row) => onToastClickRef.current(row),
                 },
                 streamHostId,
-              );
+              ).catch(() => {
+                // The feed remains authoritative if presentation fails.
+              });
             },
             onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
             onPresenceChanged: (frame) =>

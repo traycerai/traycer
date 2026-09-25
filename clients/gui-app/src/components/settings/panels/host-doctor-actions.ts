@@ -207,7 +207,7 @@ export function doctorFixRoute(input: {
  * Whether an OPEN "Free port and restart?" confirmation has gone stale.
  *
  * The same window the restart confirm and the OS-service confirms already
- * close for (`host-overview-panel.tsx`, `host-overview-advanced.tsx`): opened
+ * close for (`host-overview-panel.tsx`, `host-overview-os-service-section.tsx`): opened
  * while idle, the dialog stays answerable while an install, a service change
  * or a restart arms the page-wide lifecycle gate underneath it. Gating the
  * issue card's BUTTON cannot reach a dialog that is already up.
