@@ -7,7 +7,7 @@
  * narrowed `node`. `renderTile` is the single dispatch point - there is
  * no per-kind branching outside this table.
  */
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
@@ -17,23 +17,25 @@ import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import { TileErrorBoundary } from "./tile-error-boundary";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
-import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
-import { ReviewTile } from "./review-tile";
-import { SpecTile } from "./spec-tile";
-import { StoryTile } from "./story-tile";
-import { TerminalTile } from "./terminal-tile";
-import { TuiAgentTile } from "./tui-agent-tile";
-import { TicketTile } from "./ticket-tile";
-import { WorkspaceFileTile } from "./workspace-file-tile";
-import { GitDiffTile } from "./git-diff-tile";
-import { SnapshotDiffTile } from "./snapshot-diff-tile";
-import { ManagedCommandOutputTile } from "./managed-command-output-tile";
-import { CommGraphTile } from "./comm-graph-tile";
-import { DeletedArtifactsTile } from "./deleted-artifacts-tile";
 import { PublishedChatTile } from "./published-chat-tile";
-import { PrDetailTile } from "./pr-detail-tile";
-import { PrDiffTile } from "./pr-diff-tile";
+import {
+  BrowserSessionTile,
+  CommGraphTile,
+  DeletedArtifactsTile,
+  GitDiffTile,
+  ManagedCommandOutputTile,
+  PrDetailTile,
+  PrDiffTile,
+  ReviewTile,
+  SnapshotDiffTile,
+  SpecTile,
+  StoryTile,
+  TerminalTile,
+  TicketTile,
+  TuiAgentTile,
+  WorkspaceFileTile,
+} from "./lazy-tile-renderers";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -208,6 +210,12 @@ function tileRenderer<K extends TileKindId>(
  * It is a no-op when the tile is on the canvas host, and coordinators are
  * refcounted, so N tiles on one host share one stream.
  *
+ * Most kind bodies are `lazy()` (see `lazy-tile-renderers.ts`). Their
+ * `Suspense` boundary sits inside the error boundary and every scope above,
+ * so a body's first load blanks only that body - the same blank-until-ready a
+ * hosted tile body shows - and a failed chunk load lands on the tile's own
+ * error boundary.
+ *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
  * mounted - a lazy one would not be live at click time, so the first link
  * click would still fall out to the OS browser. A tile on a host that is
@@ -235,7 +243,9 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
                 instanceId={args.node.instanceId}
                 resetKey={args.node.instanceId}
               >
-                {tileRenderer(args.node.type)(args)}
+                <Suspense fallback={null}>
+                  {tileRenderer(args.node.type)(args)}
+                </Suspense>
               </TileErrorBoundary>
             </TileMinimapScope>
           </TileFindScope>

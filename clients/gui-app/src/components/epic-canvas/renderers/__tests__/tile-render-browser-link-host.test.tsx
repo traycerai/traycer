@@ -6,7 +6,15 @@ import {
   type RenderResult,
   screen,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { ReactNode } from "react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
@@ -190,6 +198,12 @@ function tileNode(hostId: string): EpicCanvasTileRef {
 }
 
 describe("renderTile browser sessions host boundary", () => {
+  // The ticket body is a `lazy()` renderer: load its group once up front so
+  // each render resolves within a query timeout.
+  beforeAll(async () => {
+    await import("@/components/epic-canvas/renderers/deferred-tiles");
+  });
+
   beforeEach(() => {
     sessionsHarness.acquiredHostIds = [];
     sessionsHarness.openTabCalls = [];
@@ -208,7 +222,7 @@ describe("renderTile browser sessions host boundary", () => {
 
   afterEach(cleanup);
 
-  it("routes a remote-host tile's first link click to that tile's host", () => {
+  it("routes a remote-host tile's first link click to that tile's host", async () => {
     render(
       renderTile({
         node: tileNode(TILE_HOST_ID),
@@ -219,7 +233,7 @@ describe("renderTile browser sessions host boundary", () => {
       }),
     );
 
-    fireEvent.click(screen.getByTestId("tile-link"));
+    fireEvent.click(await screen.findByTestId("tile-link"));
 
     expect(sessionsHarness.acquiredHostIds).toEqual([TILE_HOST_ID]);
     expect(sessionsHarness.openTabCalls).toEqual([
@@ -227,7 +241,7 @@ describe("renderTile browser sessions host boundary", () => {
     ]);
   });
 
-  it("keeps a canvas-host tile on the ambient stream", () => {
+  it("keeps a canvas-host tile on the ambient stream", async () => {
     render(
       renderTile({
         node: tileNode(CANVAS_HOST_ID),
@@ -238,7 +252,7 @@ describe("renderTile browser sessions host boundary", () => {
       }),
     );
 
-    expect(screen.getByTestId("tile-link")).toBeTruthy();
+    expect(await screen.findByTestId("tile-link")).toBeTruthy();
 
     // No boundary is mounted for the canvas host: the ambient provider above
     // the canvas already owns that stream, and a second one would be a second

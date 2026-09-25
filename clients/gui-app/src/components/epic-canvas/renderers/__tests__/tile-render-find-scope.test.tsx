@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
@@ -161,6 +161,12 @@ function AdapterChild(props: { readonly adapter: TileFindAdapter }): ReactNode {
 }
 
 describe("renderTile tile find scope", () => {
+  // Most tile bodies are `lazy()` renderers: load their group once up front so
+  // each render resolves within a query timeout.
+  beforeAll(async () => {
+    await import("@/components/epic-canvas/renderers/deferred-tiles");
+  });
+
   afterEach(() => {
     cleanup();
     useTileFindStore.getState().resetForTests();
@@ -188,7 +194,7 @@ describe("renderTile tile find scope", () => {
       expect(scope.getAttribute("data-view-tab-id")).toBe("view-1");
       expect(scope.getAttribute("data-tile-id")).toBe("pane-1");
       expect(scope.getAttribute("data-epic-id")).toBe("epic-1");
-      expect(screen.getByTestId(`renderer-${node.type}`)).toBeTruthy();
+      expect(await screen.findByTestId(`renderer-${node.type}`)).toBeTruthy();
 
       await waitFor(() => {
         expect(useTileFindStore.getState().activeOwner).toMatchObject({
