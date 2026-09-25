@@ -1348,12 +1348,13 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV40 =
       // NO degrade maps here, unlike every bridge below: the frozen v4.0 union
       // keeps every available arm the live union carries at this cut (grok,
       // huggingface, opencode and cursor all shipped on 4.0), so an available
-      // snapshot reparses as-is. Only a post-v7.0 provider is unrepresentable,
-      // and it can only ever arrive on the `available: false` arm - neither
-      // Reasonix nor Antigravity exposes a queryable quota API, so both sit
-      // outside `rateLimitCapableProviderIdSchema`. This response carries one
-      // provider, so fail closed rather than mis-decode. The message names no
-      // provider so it stays honest as the enum grows.
+      // snapshot reparses as-is. Only a post-v7.0 provider is unrepresentable:
+      // Reasonix (on the `available: false` arm only - it exposes no queryable
+      // quota API) and Antigravity (either arm - its quota is read from
+      // Google's Cloud Code API and its arm is new on this line). Both ids fail
+      // the frozen v4.0 enum. This response carries one provider, so fail
+      // closed rather than mis-decode. The message names no provider so it
+      // stays honest as the enum grows.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV4.safeParse(response);
       if (!parsed.success) {

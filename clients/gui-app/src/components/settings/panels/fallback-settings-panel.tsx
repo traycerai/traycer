@@ -1550,7 +1550,7 @@ function FallbackSaveStatus(props: {
 /**
  * Why the "another profile" step may be inert, said on the step itself.
  *
- * Only three providers have managed profiles at all, and the step can only
+ * Only four providers have managed profiles at all, and the step can only
  * move a chat to an account that exists. A user with none has a step they can
  * turn on that will never once fire, which is the worst of the three states -
  * so it says so, and links to where the account is added.

@@ -401,9 +401,36 @@ function projectedLiveWindows(
           now,
         }),
       ].filter((window): window is ProfileUsageWindow => window !== null);
+    case "antigravity":
+      // Codex's shape: the first group (Gemini, in Google's order) is the base
+      // pair - the wire orders a group's windows shortest first, so its 5h
+      // window then its weekly one - and every other group's windows are
+      // extras named for their group, so the picker reads
+      // "Claude and GPT models · 5h" beside an unqualified "5h".
+      return rateLimits.groups
+        .flatMap((group, groupIndex) =>
+          group.windows.map((window, windowIndex) =>
+            windowProjection({
+              id: `bucket:${window.bucketId}`,
+              role: antigravityWindowRole(groupIndex, windowIndex),
+              name: groupIndex === 0 ? null : group.displayName,
+              window,
+              now,
+            }),
+          ),
+        )
+        .filter((window): window is ProfileUsageWindow => window !== null);
     case "kilocode":
       return [];
   }
+}
+
+function antigravityWindowRole(
+  groupIndex: number,
+  windowIndex: number,
+): ProfileUsageWindowRole {
+  if (groupIndex !== 0 || windowIndex > 1) return "extra";
+  return windowIndex === 0 ? "primary" : "secondary";
 }
 
 function mostConstrainedWindow(
@@ -451,11 +478,17 @@ function emptyDetailProjection(
   // renders as unavailable (`missing_windows`) purely because Cursor reported
   // nothing to meter. A cursor snapshot whose cycle merely rolled still falls
   // through to `expired`, exactly as grok's does.
+  //
+  // Antigravity joins them for a group that reports no buckets: upstream allows
+  // a purely informational group, and a snapshot of only those is a reachable
+  // account with nothing metered, not a failed read.
   if (
     (rateLimits.provider === "grok" && rateLimits.period === null) ||
     (rateLimits.provider === "cursor" &&
       rateLimits.cursorModels === null &&
-      rateLimits.otherModels === null)
+      rateLimits.otherModels === null) ||
+    (rateLimits.provider === "antigravity" &&
+      rateLimits.groups.every((group) => group.windows.length === 0))
   ) {
     return {
       kind: "not_checked",
