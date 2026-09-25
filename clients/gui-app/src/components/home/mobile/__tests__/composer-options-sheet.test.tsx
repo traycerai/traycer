@@ -7,7 +7,10 @@ import {
   AUTO_MID_TURN_NOTICE,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
-import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
+import {
+  AUTO_MID_TURN_UNRESOLVED_LOCK,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
 
 // The sheet portals to <body> and re-asserts the app theme there; the provider
 // itself is not under test.
@@ -167,8 +170,20 @@ describe("ComposerOptionsSheet", () => {
     expect(props.onPermissionChange).not.toHaveBeenCalled();
   });
 
+  // Settled billing: an unsettled (`null`) billing during a turn locks the
+  // Auto row instead - see the mid-turn lock block below.
+  const SETTLED_BILLING: AutoJudgeBilling = {
+    kind: "traycer",
+    modelLabel: "Sonnet 5",
+  };
+
   it("shows the same mid-turn notice string as the desktop picker for a mid-turn supervised user", () => {
-    renderSheet({ ...defaults(), turnActive: true, permission: "supervised" });
+    renderSheet({
+      ...defaults(),
+      turnActive: true,
+      permission: "supervised",
+      judgeBilling: SETTLED_BILLING,
+    });
     expect(
       screen.getByTestId("composer-options-permission-mid-turn-notice")
         .textContent,
@@ -176,7 +191,12 @@ describe("ComposerOptionsSheet", () => {
   });
 
   it("shows the mid-turn notice for a mid-turn full_access user too", () => {
-    renderSheet({ ...defaults(), turnActive: true, permission: "full_access" });
+    renderSheet({
+      ...defaults(),
+      turnActive: true,
+      permission: "full_access",
+      judgeBilling: SETTLED_BILLING,
+    });
     expect(
       screen.getByTestId("composer-options-permission-mid-turn-notice")
         .textContent,
@@ -290,5 +310,21 @@ describe("ComposerOptionsSheet - mid-turn lock", () => {
     );
 
     expect(props.onPermissionChange).not.toHaveBeenCalled();
+  });
+
+  it("disables the Auto row with the unresolved sentence, and no notice, while billing has not settled during a turn", () => {
+    renderSheet({
+      ...defaults(),
+      judgeBilling: null,
+      turnActive: true,
+      permission: "supervised",
+    });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(true);
+    expect(auto.textContent).toContain(AUTO_MID_TURN_UNRESOLVED_LOCK);
+    expect(
+      screen.queryByTestId("composer-options-permission-mid-turn-notice"),
+    ).toBeNull();
   });
 });

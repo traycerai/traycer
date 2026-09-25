@@ -471,8 +471,15 @@ export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
  * reads before choosing, never a toast after.
  *
  * Only a flip INTO Auto is locked. A turn already in Auto keeps its judge,
- * whichever it is, and a `null` billing (still loading) locks nothing: the
- * host is the gate that cannot be bypassed, this row is the explanation.
+ * whichever it is.
+ *
+ * A `null` billing - the reads that say which judge reviews have not settled
+ * - locks the row too, with the sentence below rather than the notice. The
+ * host is the gate that cannot be bypassed; this row is the explanation, and
+ * an explanation that says "switches now" for a flip the host is about to
+ * refuse is the toast-after-the-fact this lock exists to prevent. The window
+ * is short (the catalog reads the row already waits on), and a person who
+ * meets it sees why the row is waiting rather than a promise it cannot keep.
  */
 export function autoModeMidTurnLock(input: {
   readonly turnActive: boolean;
@@ -481,6 +488,14 @@ export function autoModeMidTurnLock(input: {
   readonly judgeBilling: AutoJudgeBilling | null;
 }): string | null {
   if (!input.turnActive || input.currentModeIsAuto) return null;
-  if (input.judgeBilling?.kind !== "provider-native") return null;
+  if (input.judgeBilling === null) return AUTO_MID_TURN_UNRESOLVED_LOCK;
+  if (input.judgeBilling.kind !== "provider-native") return null;
   return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.`;
 }
+
+/**
+ * The Auto row's sentence while a turn runs and which judge would review it
+ * is still being read. Exported for the picker tests, which pin the copy.
+ */
+export const AUTO_MID_TURN_UNRESOLVED_LOCK =
+  "Still checking which judge reviews this conversation. Auto can be switched on once that's known, or with your next turn.";

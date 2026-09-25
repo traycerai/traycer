@@ -1,7 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
-import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
+import {
+  AUTO_MID_TURN_UNRESOLVED_LOCK,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
 import type { PermissionMode } from "@/components/home/data/landing-options";
 
 afterEach(() => {
@@ -306,8 +309,20 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
 });
 
 describe("<PermissionsPicker /> - mid-turn notice", () => {
+  // Settled billing throughout: with a turn active, an unsettled (`null`)
+  // billing locks the Auto row instead of showing the notice - see the
+  // mid-turn lock block below.
+  const SETTLED_BILLING: AutoJudgeBilling = {
+    kind: "traycer",
+    modelLabel: "Sonnet 5",
+  };
+
   it("shows the notice when a turn is active and the current value is not auto", () => {
-    renderPicker({ turnActive: true, value: "full_access" });
+    renderPicker({
+      turnActive: true,
+      value: "full_access",
+      judgeBilling: SETTLED_BILLING,
+    });
     openMenu();
 
     expect(
@@ -316,7 +331,11 @@ describe("<PermissionsPicker /> - mid-turn notice", () => {
   });
 
   it("shows the notice when a turn is active and the current value is supervised", () => {
-    renderPicker({ turnActive: true, value: "supervised" });
+    renderPicker({
+      turnActive: true,
+      value: "supervised",
+      judgeBilling: SETTLED_BILLING,
+    });
     openMenu();
 
     expect(
@@ -432,6 +451,33 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
     ).toBe("Switches now. Anything already waiting still asks you.");
+  });
+
+  it("disables the Auto item with the unresolved sentence, and no notice, while billing has not settled during a turn", () => {
+    renderPicker({
+      judgeBilling: null,
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).toContain(AUTO_MID_TURN_UNRESOLVED_LOCK);
+    expect(
+      screen.queryByTestId("permission-option-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not lock Auto on unsettled billing when no turn is active", () => {
+    renderPicker({
+      judgeBilling: null,
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
   });
 });
 

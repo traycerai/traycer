@@ -16,6 +16,7 @@ import {
   autoJudgeMetaLine,
   autoJudgeTarget,
   autoModeMidTurnLock,
+  AUTO_MID_TURN_UNRESOLVED_LOCK,
   harnessHasNativeAutoJudge,
   providerRunsItsOwnJudge,
   type AutoJudgeBilling,
@@ -757,11 +758,31 @@ describe("autoModeMidTurnLock", () => {
     ).toBeNull();
   });
 
-  it("is null when judgeBilling is null (still loading)", () => {
+  it("locks with the unresolved sentence when a turn is active, the current mode isn't auto, and billing has not settled", () => {
     expect(
       autoModeMidTurnLock({
         turnActive: true,
         currentModeIsAuto: false,
+        judgeBilling: null,
+      }),
+    ).toBe(AUTO_MID_TURN_UNRESOLVED_LOCK);
+  });
+
+  it("is null for unsettled billing when no turn is active", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: false,
+        currentModeIsAuto: false,
+        judgeBilling: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for unsettled billing when the current mode is already auto", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: true,
         judgeBilling: null,
       }),
     ).toBeNull();
