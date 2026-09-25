@@ -7,8 +7,9 @@ import type {
   WorktreeListAllForHostResponseV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
-  createWorktreeEnrichmentBatcherForClient,
   perPathEnrichmentQueryOptions,
+  sharedWorktreeEnrichmentBatcherForClient,
+  WORKTREE_BACKGROUND_ENRICHMENT_STALE_MS,
 } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -75,7 +76,7 @@ export function useWorktreeEnrichmentForClient(
   const readiness = useReactiveHostReadiness(client);
   const batcher = useMemo(
     () =>
-      client === null ? null : createWorktreeEnrichmentBatcherForClient(client),
+      client === null ? null : sharedWorktreeEnrichmentBatcherForClient(client),
     [client],
   );
   // One observer per path: a repeated path would be a second observer of the
@@ -89,9 +90,11 @@ export function useWorktreeEnrichmentForClient(
         path,
         batcher,
         enabled: queriesEnabled,
-        // The app default: a remount after it re-probes, so a PR fact the
-        // host warmed in the background still reaches these surfaces.
-        staleTime: null,
+        // Longer than the app default: a navigation's remount no longer
+        // re-probes every row. A `worktree.changed` frame and Refresh still
+        // re-probe at once; a PR fact the host warmed in the background reaches
+        // these surfaces on the next remount after this.
+        staleTime: WORKTREE_BACKGROUND_ENRICHMENT_STALE_MS,
       }),
     ),
     combine: combineEnrichmentResults,

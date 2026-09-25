@@ -19,6 +19,26 @@ import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
  * size, so one sweep pass is exactly one wire call.
  */
 export const WORKTREE_ENRICH_BATCH_LIMIT = 8;
+
+/**
+ * Paths per RPC for the BACKGROUND surfaces (History, the Epic sweep row, owner
+ * cards) - {@link sharedWorktreeEnrichmentBatcherForClient}. Larger than the
+ * Settings chunk because those surfaces read a whole task page's worktrees at
+ * once and nothing there is sized to the sweep: at 8, History's ~80 owned paths
+ * were ~10 RPCs per mount. The host derives only rows that need it, so a bigger
+ * chunk moves the same work into fewer calls.
+ */
+export const WORKTREE_BACKGROUND_ENRICH_BATCH_LIMIT = 32;
+
+/**
+ * How long a background surface's enrichment row counts as fresh. A
+ * `worktree.changed` frame still re-probes a named row at once, and Refresh
+ * still forces; this only stops a plain remount (navigation, a list re-render)
+ * from re-probing every row older than the app's one-minute default. It is
+ * also how long a PR fact the host warmed in the background can take to reach
+ * these surfaces on a remount.
+ */
+export const WORKTREE_BACKGROUND_ENRICHMENT_STALE_MS = 5 * 60_000;
 // Both enrichment legs pin the same generous gcTime, well past TanStack's
 // 5-minute default: swept entries have no observers, so under the default they
 // would be garbage-collected while the panel sits open - each GC visibly
@@ -218,7 +238,7 @@ export interface WorktreeEnrichmentBatcher {
  * path made opening or refreshing an N-row fleet cost N dials. This layer
  * keeps the per-path cache entries exactly as they are - each `fetchPath`
  * resolves with a response shaped like the old single-path RPC - while the
- * wire carries up to {@link WORKTREE_ENRICH_BATCH_LIMIT} paths per call.
+ * wire carries up to `batchLimit` paths per call.
  *
  * Row fan-out is {@link rowsByRequestedPath}: exact `worktreePath` string
  * equality first, which is every listing-sourced path (the host answers under
@@ -239,6 +259,7 @@ export function createWorktreeEnrichmentBatcher(
   requestBatch: (
     paths: readonly string[],
   ) => Promise<WorktreeListAllForHostResponseV14>,
+  batchLimit: number,
 ): WorktreeEnrichmentBatcher {
   let pending: PendingEnrichmentPath[] = [];
   let windowTimer: number | null = null;
@@ -249,8 +270,8 @@ export function createWorktreeEnrichmentBatcher(
       windowTimer = null;
     }
     while (pending.length > 0) {
-      const chunk = pending.slice(0, WORKTREE_ENRICH_BATCH_LIMIT);
-      pending = pending.slice(WORKTREE_ENRICH_BATCH_LIMIT);
+      const chunk = pending.slice(0, batchLimit);
+      pending = pending.slice(batchLimit);
       void requestBatch(chunk.map((entry) => entry.path)).then(
         (response) => {
           const rowsByPath = rowsByRequestedPath(
@@ -275,7 +296,7 @@ export function createWorktreeEnrichmentBatcher(
     fetchPath: (path) =>
       new Promise((resolve, reject) => {
         pending.push({ path, resolve, reject });
-        if (pending.length >= WORKTREE_ENRICH_BATCH_LIMIT) {
+        if (pending.length >= batchLimit) {
           flush();
           return;
         }
@@ -307,16 +328,47 @@ export function createWorktreeEnrichmentBatcher(
  */
 export function createWorktreeEnrichmentBatcherForClient(
   client: HostClient<HostRpcRegistry>,
+  batchLimit: number,
 ): WorktreeEnrichmentBatcher {
-  return createWorktreeEnrichmentBatcher((paths) =>
-    withHostQueryErrorBoundary("worktree.listAllForHost", () =>
-      client.request("worktree.listAllForHost", {
-        includeActivity: true,
-        activityPaths: [...paths],
-        cursor: null,
-        limit: null,
-        forceRefresh: false,
-      }),
-    ),
+  return createWorktreeEnrichmentBatcher(
+    (paths) =>
+      withHostQueryErrorBoundary("worktree.listAllForHost", () =>
+        client.request("worktree.listAllForHost", {
+          includeActivity: true,
+          activityPaths: [...paths],
+          cursor: null,
+          limit: null,
+          forceRefresh: false,
+        }),
+      ),
+    batchLimit,
   );
+}
+
+const sharedBatchers = new WeakMap<
+  HostClient<HostRpcRegistry>,
+  WorktreeEnrichmentBatcher
+>();
+
+/**
+ * The ONE background batcher per host client, shared by every surface that
+ * reads enrichment through `useWorktreeEnrichmentForClient`.
+ *
+ * Per-surface batchers coalesced only their own paths, so a navigation that
+ * mounted History, an Epic's sweep row and an owner card at once - or a resume
+ * whose catch-up frame refetched all of them - sent each surface's paths as
+ * separate RPCs. One batcher per client puts every path enqueued in the same
+ * window into the same chunks.
+ */
+export function sharedWorktreeEnrichmentBatcherForClient(
+  client: HostClient<HostRpcRegistry>,
+): WorktreeEnrichmentBatcher {
+  const existing = sharedBatchers.get(client);
+  if (existing !== undefined) return existing;
+  const batcher = createWorktreeEnrichmentBatcherForClient(
+    client,
+    WORKTREE_BACKGROUND_ENRICH_BATCH_LIMIT,
+  );
+  sharedBatchers.set(client, batcher);
+  return batcher;
 }
