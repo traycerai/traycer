@@ -10,16 +10,23 @@ import type {
   AgentReasoningEffortOption,
   GuiAgentModelOption,
 } from "@traycer/protocol/host/index";
-import type {
-  TierCandidate,
-  TierCandidatePreview,
+import {
+  createDefaultFallbackPolicy,
+  findTierConflicts,
+  type TierCandidate,
+  type TierCandidatePreview,
+  type TierCandidatePreviewMatch,
+  type TierConflict,
+  type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   FallbackTierGroupCard,
   type FallbackTierGroupCardProps,
 } from "@/components/settings/panels/fallback/fallback-tier-group-card";
+import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 import {
   keyedGroup,
+  toKeyedGroups,
   type FallbackGroupsInverse,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
@@ -98,6 +105,8 @@ function model(
 function emptyCatalog(): FallbackCatalogOptions {
   return {
     modelsFor: () => [],
+    catalogFor: () => null,
+    catalogsByHarness: new Map(),
     effortsFor: () => [],
   };
 }
@@ -118,6 +127,8 @@ function catalogFixture(
 ): FallbackCatalogOptions {
   return {
     modelsFor: (harnessId) => byHarness.get(harnessId) ?? [],
+    catalogFor: (harnessId) => byHarness.get(harnessId) ?? null,
+    catalogsByHarness: byHarness,
     effortsFor: (harnessId, modelFamily) => {
       const models = byHarness.get(harnessId) ?? [];
       const picked = catalogModelForFamily(models, modelFamily);
@@ -142,29 +153,48 @@ function catalogFixture(
  */
 interface CardTestProps {
   readonly group: KeyedGroup;
+  readonly groupIndex: number;
+  readonly tierGroups: readonly TierGroup[];
   readonly isDefault: boolean;
   readonly preview: readonly TierCandidatePreview[] | null;
   readonly labelFor: FallbackSettingsProfileLabel;
   readonly catalog: FallbackCatalogOptions;
+  readonly patternsSupported: boolean;
+  readonly conflicts: readonly TierConflict[];
   readonly onChange: Mock<(next: KeyedGroup) => void>;
   readonly onCommit: Mock<(next: KeyedGroup) => void>;
   readonly onDelete: Mock<() => void>;
   readonly onUndo: Mock<(inverse: FallbackGroupsInverse) => void>;
   readonly defaultHarnessId: TierCandidate["harnessId"];
+  readonly onAnnounce: Mock<(text: string) => void>;
+  readonly onGoToRow: Mock<(tierIndex: number, candidateIndex: number) => void>;
 }
 
+/**
+ * `patternsSupported: false` by default, matching every existing pin here: a
+ * 1.0-host card renders the original `ModelSelect` cell, and these fixtures
+ * predate patterns entirely. Pin 4/7 tests below opt into `patternsSupported:
+ * true` explicitly where the pattern combobox and conflict block are what is
+ * under test.
+ */
 function baseCardProps(candidates: readonly TierCandidate[]): CardTestProps {
   return {
     group: keyedGroup({ id: "fast", candidates: [...candidates] }),
+    groupIndex: 0,
+    tierGroups: [],
     isDefault: false,
     preview: null,
     labelFor: LABEL_FOR,
     catalog: emptyCatalog(),
+    patternsSupported: false,
+    conflicts: [],
     onChange: vi.fn(),
     onCommit: vi.fn(),
     onDelete: vi.fn(),
     onUndo: vi.fn(),
     defaultHarnessId: "claude",
+    onAnnounce: vi.fn(),
+    onGoToRow: vi.fn(),
   };
 }
 
@@ -192,6 +222,44 @@ function preview(overrides: {
   };
 }
 
+/** One entry of a preview's `matches` array (Pin 3). */
+function matchEntry(
+  matchModel: string,
+  profileId: string | null,
+  skipReason: string | null,
+  skipLabel: string | null,
+): TierCandidatePreviewMatch {
+  return { model: matchModel, profileId, skipReason, skipLabel };
+}
+
+/**
+ * A preview carrying a REAL `matches` array, as a 1.1+ host actually sends -
+ * as opposed to `preview()` above, whose `matches: []` always exercises the
+ * `previewMatches` fallback onto `resolvedModel`. Pin 3 needs both: the
+ * fallback path (still reachable from a hand-built 1.0-shaped response) and
+ * this one (the host's own try order).
+ */
+function previewWithMatches(overrides: {
+  readonly candidateIndex: number;
+  readonly modelFamily: string;
+  readonly matches: readonly TierCandidatePreviewMatch[];
+  readonly warnings: readonly string[];
+}): TierCandidatePreview {
+  return {
+    groupId: "fast",
+    harnessId: "claude",
+    reasoningEffort: null,
+    candidateIndex: overrides.candidateIndex,
+    modelFamily: overrides.modelFamily,
+    resolvedModel: null,
+    profileId: null,
+    skipReason: null,
+    skipLabel: null,
+    matches: [...overrides.matches],
+    warnings: [...overrides.warnings],
+  };
+}
+
 /** Radix's select: open with the keyboard. */
 function openSelect(trigger: HTMLElement): void {
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
@@ -214,22 +282,18 @@ function isDisabled(element: HTMLElement): boolean {
 }
 
 describe("FallbackTierGroupCard - group container, default badge", () => {
-  it("a named group renders role=group with 'Model group <id>'", () => {
+  it("a named group renders role=group with 'Tier <id>'", () => {
     renderCard(baseCardProps([candidate("claude", "opus", null)]));
     // Falsification: drop `aria-label={groupContainerLabel(group.id)}` from
     // the card's outer `<div role="group">` - this query would then find
     // nothing.
-    expect(
-      screen.getByRole("group", { name: "Model group fast" }),
-    ).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Tier fast" })).not.toBeNull();
   });
 
-  it("a blank-name group renders role=group with 'Unnamed model group', not a position", () => {
+  it("a blank-name group renders role=group with 'Unnamed tier', not a position", () => {
     const props = baseCardProps([]);
     renderCard({ ...props, group: keyedGroup({ id: "", candidates: [] }) });
-    expect(
-      screen.getByRole("group", { name: "Unnamed model group" }),
-    ).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Unnamed tier" })).not.toBeNull();
   });
 
   it("renders the Default badge exactly when isDefault is true", () => {
@@ -271,21 +335,21 @@ describe("FallbackTierGroupCard - AX8: candidate rows disambiguate by position, 
     );
 
     // The GROUP is disambiguated by its own accessible name...
-    const fastGroup = screen.getByRole("group", { name: "Model group fast" });
+    const fastGroup = screen.getByRole("group", { name: "Tier fast" });
     // ...and the ROW within it, by position - "Model" alone is not unique
     // across four rows total (two in "fast"), so the row container is what
     // makes `within(row)` resolve to exactly one field.
     //
-    // Falsification: drop `aria-label={`Model ${index + 1}`}` from
+    // Falsification: drop `aria-label={`Row ${index + 1}`}` from
     // `CandidateRow`'s own container - `within(fastGroup).getByRole("group",
-    // {name: "Model 2"})` would then throw, since nothing distinguishes the
+    // {name: "Row 2"})` would then throw, since nothing distinguishes the
     // two rows from each other.
-    const secondRow = within(fastGroup).getByRole("group", { name: "Model 2" });
+    const secondRow = within(fastGroup).getByRole("group", { name: "Row 2" });
     expect(
       within(secondRow).getByRole("combobox", { name: "Model" }),
     ).not.toBeNull();
 
-    const firstRow = within(fastGroup).getByRole("group", { name: "Model 1" });
+    const firstRow = within(fastGroup).getByRole("group", { name: "Row 1" });
     expect(
       within(firstRow).getByRole("combobox", { name: "Model" }),
     ).not.toBeNull();
@@ -495,7 +559,12 @@ describe("FallbackTierGroupCard - Effort select", () => {
         modelFamily: string,
       ) => readonly AgentReasoningEffortOption[]
     > = vi.fn(() => offered);
-    const catalog: FallbackCatalogOptions = { modelsFor: () => [], effortsFor };
+    const catalog: FallbackCatalogOptions = {
+      modelsFor: () => [],
+      catalogFor: () => null,
+      catalogsByHarness: new Map(),
+      effortsFor,
+    };
     const props = baseCardProps([candidate("claude", "gpt-5", null)]);
     renderCard({ ...props, catalog });
     openSelect(screen.getByRole("combobox", { name: "Effort" }));
@@ -559,7 +628,7 @@ describe("FallbackTierGroupCard - Remove: accessible name and toast both name th
   it("names a blank row 'model' in both the button and the toast", () => {
     const props = baseCardProps([candidate("claude", "", null)]);
     renderCard(props);
-    fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove row" }));
     expect(toastSuccess).toHaveBeenCalledWith(
       "Removed the empty row",
       expect.anything(),
@@ -598,8 +667,8 @@ describe("FallbackTierGroupCard - Remove: accessible name and toast both name th
   });
 });
 
-describe("FallbackTierGroupCard - preview verdict line", () => {
-  it("resolvedModel null, family-unmatched: red/data-unmatched with skipLabel and warnings", () => {
+describe("FallbackTierGroupCard - row status line (rowStatusLine / RowStatus)", () => {
+  it("family-unmatched: red/data-unmatched, names the provider and the pattern, ignores skipLabel entirely", () => {
     const props = baseCardProps([candidate("claude", "gpt-9", null)]);
     renderCard({
       ...props,
@@ -620,10 +689,44 @@ describe("FallbackTierGroupCard - preview verdict line", () => {
     // `skipReason === "family-unmatched"` - an environmental skip (a
     // provider outage) would then look like the user's own authoring error.
     expect(line.getAttribute("data-unmatched")).toBe("true");
-    expect(line.textContent).toBe("No match - low balance");
+    // Falsification: this is `RowStatus`'s `kind === "unmatched"` branch
+    // (`fallback-tier-group-card.tsx`), which no longer prints the host's own
+    // `skipLabel` ("No match") - it prints a fixed sentence naming the
+    // PROVIDER and the stored PATTERN instead. Reverting to
+    // `${skipLabel} - warnings` would still pass a test asserting
+    // `data-unmatched`, which is why the exact text is pinned here too.
+    expect(line.textContent).toBe(
+      `No ${harnessLabel("claude")} model matches gpt-9. Traycer will skip this row. low balance`,
+    );
+    // canEdit is false (patternsSupported: false on a 1.0-host row), so no
+    // "Edit pattern" action renders beside the unmatched line.
+    expect(screen.queryByRole("button", { name: "Edit pattern" })).toBeNull();
   });
 
-  it("resolvedModel null, a non-unmatched reason: not colored red, falls back to 'not available' with no skipLabel", () => {
+  it("family-unmatched on a pattern row, a different provider: names THAT provider and pattern", () => {
+    const props = baseCardProps([candidate("codex", "*x*", null)]);
+    renderCard({
+      ...props,
+      preview: [
+        preview({
+          candidateIndex: 0,
+          modelFamily: "*x*",
+          resolvedModel: null,
+          profileId: null,
+          skipReason: "family-unmatched",
+          skipLabel: null,
+          warnings: [],
+        }),
+      ],
+    });
+    const line = screen.getByTestId("fallback-tier-candidate-preview");
+    expect(line.getAttribute("data-unmatched")).toBe("true");
+    expect(line.textContent).toBe(
+      `No ${harnessLabel("codex")} model matches *x*. Traycer will skip this row.`,
+    );
+  });
+
+  it("a non-unmatched skip reason: neutral 'Can't check right now: <reason>', never colored red", () => {
     const props = baseCardProps([candidate("claude", "gpt-9", null)]);
     renderCard({
       ...props,
@@ -641,10 +744,16 @@ describe("FallbackTierGroupCard - preview verdict line", () => {
     });
     const line = screen.getByTestId("fallback-tier-candidate-preview");
     expect(line.getAttribute("data-unmatched")).toBeNull();
-    expect(line.textContent).toBe("not available");
+    expect(line.textContent).toBe("Can't check right now: not available");
   });
 
-  it("resolvedModel differs from the stored family: 'matches <label> today on <account>' plus warnings", () => {
+  it("resolvedModel differs from the stored value, with matches:[] (a hand-built 1.0-shaped preview): falls back to resolvedModel and renders a 'Tries' line naming the catalog label and the account", () => {
+    // Pin: `previewMatches` in `fallback-model-patterns.ts` synthesises a
+    // one-entry match list from `resolvedModel` exactly when `matches` is
+    // empty - which every preview this suite's own `preview()` fixture builds
+    // is, since it never sets `matches` itself. So this row's status line is
+    // NOT reading `matches` off the wire at all; it is exercising the
+    // fallback path a still-live 1.0-shaped response takes.
     const models = new Map([
       [
         "claude" as const,
@@ -667,15 +776,23 @@ describe("FallbackTierGroupCard - preview verdict line", () => {
         }),
       ],
     });
+    const line = screen.getByTestId("fallback-tier-candidate-preview");
     // Falsification: skip the catalog lookup and print the raw resolved slug
-    // even when the catalog knows its label - "matches claude-sonnet-5
-    // today" would render instead of the human-readable name.
-    expect(
-      screen.getByTestId("fallback-tier-candidate-preview").textContent,
-    ).toBe("matches Claude Sonnet 5 today on acct-1 - rate limited earlier");
+    // even when the catalog knows its label - "claude-sonnet-5" would render
+    // in the try step instead of the human-readable name.
+    expect(line.textContent).toContain("Claude Sonnet 5");
+    // The account is named, never its id (D118) - a raw "acct-1" id string is
+    // exactly what `labelFor` is meant to translate; this fixture's `LABEL_FOR`
+    // is the identity function, so the id itself is what should appear.
+    expect(line.textContent).toContain("acct-1");
+    expect(line.textContent).toContain("rate limited earlier");
+    // Falsification: drop the `<span>Tries</span>` lead-in from the "tries"
+    // branch of `RowStatus` - a bare resolved-model sentence would then render
+    // with no "Tries" word at all.
+    expect(line.textContent).toMatch(/^Tries/);
   });
 
-  it("resolvedModel equals the stored value case-insensitively, with warnings: just the warnings, no 'matches' prefix", () => {
+  it("resolvedModel equals the stored value case-insensitively, with warnings: just the warnings, no 'Tries' line", () => {
     const props = baseCardProps([candidate("claude", "OPUS", null)]);
     renderCard({
       ...props,
@@ -691,9 +808,9 @@ describe("FallbackTierGroupCard - preview verdict line", () => {
         }),
       ],
     });
-    // Falsification: keep the "matches ... today" prefix even when the row
-    // already names this model - that reads as noise repeating what the
-    // Model cell already shows.
+    // Falsification: keep printing a "Tries" line even when the row already
+    // names this exact model - that reads as noise repeating what the Model
+    // cell already shows.
     expect(
       screen.getByTestId("fallback-tier-candidate-preview").textContent,
     ).toBe("rate limited earlier");
@@ -725,5 +842,298 @@ describe("FallbackTierGroupCard - preview verdict line", () => {
         .getByRole("combobox", { name: "Model" })
         .getAttribute("aria-describedby"),
     ).toBeNull();
+  });
+
+  it("Pin 3: two real matches[] entries render 'Tries A -> B' in try order, from the host's own matches array (not resolvedModel)", () => {
+    const models = new Map([
+      [
+        "claude" as const,
+        [
+          model("claude", "gpt-a", "GPT Alpha", []),
+          model("claude", "gpt-b", "GPT Beta", []),
+        ],
+      ],
+    ]);
+    const props = baseCardProps([candidate("claude", "*gpt*", null)]);
+    renderCard({
+      ...props,
+      catalog: catalogFixture(models),
+      preview: [
+        previewWithMatches({
+          candidateIndex: 0,
+          modelFamily: "*gpt*",
+          matches: [
+            matchEntry("gpt-a", null, null, null),
+            matchEntry("gpt-b", null, null, null),
+          ],
+          warnings: [],
+        }),
+      ],
+    });
+    const line = screen.getByTestId("fallback-tier-candidate-preview");
+    // Falsification: this line comes from `matches`, not from
+    // `resolvedModel`/`skipLabel` (the deleted `previewSentence`) - stub
+    // `preview.matches` back to `[]` on a preview that still carries a
+    // `resolvedModel` naming only ONE of these two models, and this assertion
+    // would see one step instead of two, in the wrong order or with the
+    // wrong labels.
+    expect(line.textContent).toMatch(/^Tries/);
+    const first = screen.getByText("GPT Alpha");
+    const second = screen.getByText("GPT Beta");
+    // Try order is DOM order: `matches` order is the try order, so the first
+    // match's label precedes the second's in the rendered line.
+    expect(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The arrow between them - `TryArrow`'s visible glyph.
+    expect(within(line).getByText("→")).not.toBeNull();
+    expect(first.className).not.toContain("line-through");
+    expect(second.className).not.toContain("line-through");
+  });
+
+  it("Pin 3: a match the walk would SKIP is struck through and carries an amber 'warning' pill with the host's own skipLabel", () => {
+    const models = new Map([
+      [
+        "claude" as const,
+        [
+          model("claude", "gpt-a", "GPT Alpha", []),
+          model("claude", "gpt-b", "GPT Beta", []),
+        ],
+      ],
+    ]);
+    const props = baseCardProps([candidate("claude", "*gpt*", null)]);
+    renderCard({
+      ...props,
+      catalog: catalogFixture(models),
+      preview: [
+        previewWithMatches({
+          candidateIndex: 0,
+          modelFamily: "*gpt*",
+          matches: [
+            matchEntry("gpt-a", null, "rate-limited", "Rate limited"),
+            matchEntry("gpt-b", null, null, null),
+          ],
+          warnings: [],
+        }),
+      ],
+    });
+    const skippedLabel = screen.getByText("GPT Alpha");
+    // Falsification: drop the `line-through` class from `TryStepView` when
+    // `step.skipLabel !== null` - the skipped model would then read
+    // identically to one the walk would actually try.
+    expect(skippedLabel.className).toContain("line-through");
+    // The pill carries the HOST's own `skipLabel` text, not a hardcoded word -
+    // `Badge variant="warning"` is the amber role token
+    // (`clients/gui-app/AGENTS.md` "Status colors").
+    const pill = screen.getByText("Rate limited");
+    expect(pill.getAttribute("data-slot")).toBe("badge");
+    // The model the walk WOULD still try is not struck through and carries no
+    // pill of its own - only the skipped one is marked.
+    const triedLabel = screen.getByText("GPT Beta");
+    expect(triedLabel.className).not.toContain("line-through");
+  });
+});
+
+describe("FallbackTierGroupCard - Pin 4: one-model-one-tier conflict block and 'Go to the <tier> row'", () => {
+  function overlappingTierGroups(): {
+    readonly groups: readonly TierGroup[];
+    readonly conflicts: readonly TierConflict[];
+    readonly catalog: FallbackCatalogOptions;
+  } {
+    // frontier's `*gpt*` and standard's exact `gpt-5.6-terra` both match
+    // "GPT-5.6-Terra" - the real overlap `findTierConflicts` is asked to
+    // settle, not a hand-built `TierConflict` object that could silently
+    // drift from what the protocol actually computes.
+    const groups: TierGroup[] = [
+      { id: "frontier", candidates: [candidate("codex", "*gpt*", null)] },
+      {
+        id: "standard",
+        candidates: [candidate("codex", "gpt-5.6-terra", null)],
+      },
+    ];
+    const codexModel = model("codex", "gpt-5.6-terra", "GPT-5.6-Terra", []);
+    const catalogsByHarness = new Map([["codex" as const, [codexModel]]]);
+    const conflicts = findTierConflicts(groups, catalogsByHarness);
+    return {
+      groups,
+      conflicts,
+      catalog: catalogFixture(catalogsByHarness),
+    };
+  }
+
+  function renderOverlappingEditor(): void {
+    const { groups, conflicts, catalog } = overlappingTierGroups();
+    const policy = {
+      ...createDefaultFallbackPolicy(),
+      tierGroups: [...groups],
+      defaultTierGroupId: "frontier",
+    };
+    render(
+      <FallbackTierGroupsEditor
+        policy={policy}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={LABEL_FOR}
+        catalog={catalog}
+        patternsSupported
+        conflicts={conflicts}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+  }
+
+  it("renders role=alert on BOTH rows, each naming the OTHER tier and 'frontier' as the handler because it's listed first", () => {
+    renderOverlappingEditor();
+    const alerts = screen.getAllByRole("alert");
+    // Falsification: gate `rowConflicts` on the row's OWN tier only
+    // (`rowConflictsFor` filtered to `groupIndex === 0`) - only frontier's row
+    // would carry a conflict block, and this length assertion would drop to 1.
+    expect(alerts).toHaveLength(2);
+    const frontierCard = screen.getByTestId("fallback-tier-group-frontier");
+    const standardCard = screen.getByTestId("fallback-tier-group-standard");
+    const frontierAlert = within(frontierCard).getByRole("alert");
+    const standardAlert = within(standardCard).getByRole("alert");
+    // Both name the model and the OTHER tier it also lives in.
+    expect(frontierAlert.textContent).toContain("GPT-5.6-Terra");
+    expect(frontierAlert.textContent).toContain("also in standard");
+    expect(standardAlert.textContent).toContain("also in frontier");
+    // Falsification: swap `conflict.tiers[0]` for `conflict.tiers.at(-1)` (or
+    // any other index) as `ConflictBlock`'s `handler` - both rows would then
+    // name "standard" as the handler instead of the FIRST-LISTED tier.
+    expect(frontierAlert.textContent).toContain(
+      "frontier handles GPT-5.6-Terra because it's listed first",
+    );
+    expect(standardAlert.textContent).toContain(
+      "frontier handles GPT-5.6-Terra because it's listed first",
+    );
+  });
+
+  it("'Go to the <tier> row' moves focus to the OTHER row's Model trigger, in both directions", () => {
+    renderOverlappingEditor();
+    const frontierCard = screen.getByTestId("fallback-tier-group-frontier");
+    const standardCard = screen.getByTestId("fallback-tier-group-standard");
+    const frontierTrigger = within(frontierCard).getByTestId(
+      "fallback-model-pattern-trigger",
+    );
+    const standardTrigger = within(standardCard).getByTestId(
+      "fallback-model-pattern-trigger",
+    );
+
+    // Falsification: in `fallback-tier-groups-editor.tsx`'s `goToRow`, focus
+    // the CONTAINER instead of querying
+    // `[data-fallback-candidate-model="<key>"]` inside it - this would put the
+    // keyboard somewhere in the standard tier without landing on its Model
+    // cell specifically.
+    fireEvent.click(
+      within(frontierCard).getByRole("button", {
+        name: "Go to the standard row",
+      }),
+    );
+    expect(document.activeElement).toBe(standardTrigger);
+
+    fireEvent.click(
+      within(standardCard).getByRole("button", {
+        name: "Go to the frontier row",
+      }),
+    );
+    expect(document.activeElement).toBe(frontierTrigger);
+  });
+
+  it("'Edit pattern' opens THAT row's combobox - the trigger becomes aria-expanded", () => {
+    renderOverlappingEditor();
+    const frontierCard = screen.getByTestId("fallback-tier-group-frontier");
+    const frontierTrigger = within(frontierCard).getByTestId(
+      "fallback-model-pattern-trigger",
+    );
+    expect(frontierTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(
+      within(frontierCard).getByRole("button", { name: "Edit pattern" }),
+    );
+    // Falsification: `editPattern` in `fallback-tier-group-card.tsx` clicks
+    // `rowRef.current?.querySelector([data-fallback-candidate-model])` - drop
+    // that call (or query the wrong row's ref) and the trigger never opens.
+    expect(frontierTrigger.getAttribute("aria-expanded")).toBe("true");
+  });
+});
+
+describe("FallbackTierGroupCard - Pin 7: stacked (narrow) row layout structure", () => {
+  it("the row carries BOTH the narrow stacked grid-template-areas and the @2xl table one, in their exact literal form", () => {
+    const props = baseCardProps([candidate("claude", "opus", null)]);
+    renderCard(props);
+    const row = screen.getByTestId("fallback-tier-candidate-row");
+    // Falsification: edit either `[grid-template-areas:...]` string in
+    // `CANDIDATE_ROW` (`fallback-tier-group-card.tsx`) - drop the `@2xl:`
+    // table variant, or reorder an area name - and this exact-class
+    // assertion goes red even though jsdom cannot measure a container width
+    // to prove the visual regression directly.
+    expect(row.className).toContain(
+      "[grid-template-areas:'rank_provider_effort'_'model_model_model'_'status_status_status'_'actions_actions_actions']",
+    );
+    expect(row.className).toContain(
+      "@2xl:[grid-template-areas:'rank_provider_model_effort_actions'_'._._status_status_status']",
+    );
+    expect(row.className).toContain(
+      "grid-cols-[auto_minmax(0,1fr)_minmax(0,0.6fr)]",
+    );
+    expect(row.className).toContain("@2xl:col-span-5");
+    expect(row.className).toContain("@2xl:grid-cols-subgrid");
+  });
+
+  it("the tier's outer grid stacks as a flex column narrow and becomes the 5-column subgrid host at @2xl", () => {
+    const props = baseCardProps([candidate("claude", "opus", null)]);
+    renderCard(props);
+    const row = screen.getByTestId("fallback-tier-candidate-row");
+    const grid = row.parentElement;
+    // Falsification: drop the `flex flex-col` half of `CANDIDATE_GRID`,
+    // leaving only the `@2xl:grid` table columns - the wrapper would then
+    // behave as a grid at every width, the narrow-layout regression Pin 7
+    // exists to catch.
+    expect(grid?.className).toContain("flex flex-col");
+    expect(grid?.className).toContain(
+      "@2xl:grid-cols-[auto_minmax(0,1fr)_minmax(0,2.1fr)_minmax(0,0.9fr)_auto]",
+    );
+  });
+
+  it("cell DOM order is rank, provider, model, effort, actions, status - what the named grid-areas rely on regardless of viewport", () => {
+    const props = baseCardProps([candidate("claude", "opus", null)]);
+    renderCard({
+      ...props,
+      preview: [
+        preview({
+          candidateIndex: 0,
+          modelFamily: "opus",
+          resolvedModel: null,
+          profileId: null,
+          skipReason: "family-unmatched",
+          skipLabel: null,
+          warnings: [],
+        }),
+      ],
+    });
+    const row = screen.getByTestId("fallback-tier-candidate-row");
+    const gridAreas = [...row.children].map((child) => {
+      const match = /\[grid-area:(\w+)\]/.exec(child.className);
+      return match === null ? null : match[1];
+    });
+    // Falsification: reorder the row's JSX children (e.g. move the status
+    // block above the actions cell) - CSS `grid-template-areas` places a
+    // NAMED area regardless of source order, so nothing about the rendered
+    // LAYOUT would catch a reorder; DOM order is what this pins instead.
+    expect(gridAreas).toEqual([
+      "rank",
+      "provider",
+      "model",
+      "effort",
+      "actions",
+      "status",
+    ]);
   });
 });

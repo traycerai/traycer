@@ -268,7 +268,7 @@ describe("validateFallbackPolicyDraft", () => {
     // the second group - both make the sentence point at the wrong control.
     expect(result).toEqual({
       kind: "invalid",
-      message: "Group 2 needs a name.",
+      message: "Tier 2 needs a name.",
     });
   });
 
@@ -293,7 +293,7 @@ describe("validateFallbackPolicyDraft", () => {
     // where the trim is what made them duplicates.
     expect(result).toEqual({
       kind: "invalid",
-      message: "Two model groups are both called “fast”.",
+      message: "Two tiers are both called “fast”.",
     });
   });
 
@@ -322,7 +322,7 @@ describe("validateFallbackPolicyDraft", () => {
     expect(result).toEqual({
       kind: "invalid",
       message:
-        "Model 2 in “fast” has a blank effort level - pick one, or leave it unset.",
+        "Row 2 in “fast” has a blank effort level - pick one, or leave it unset.",
     });
   });
 
@@ -345,7 +345,7 @@ describe("validateFallbackPolicyDraft", () => {
     // ["defaultTierGroupId"]`).
     expect(result).toEqual({
       kind: "invalid",
-      message: 'Choose an existing group under "For a model not in any group".',
+      message: 'Choose an existing tier under "For a model not in any tier".',
     });
   });
 });
@@ -1370,7 +1370,9 @@ describe("fallbackPolicyDraftReducer - composition-table cells (U / R / S togeth
     // The Model cell is now a catalog Select rather than a free-text family
     // field, so a blank row's copy points at "a model" rather than "a family
     // name" - see `draftIssueMessage`'s `fifth === "modelFamily"` arm.
-    expect(invalid.localError).toBe("Model 1 in “fast” needs a model.");
+    expect(invalid.localError).toBe(
+      "Row 1 in “fast” needs a model or pattern.",
+    );
 
     // A's reply is lost while C is on screen: the `unknown` branch.
     const aUnknown = failUnknown(invalid, a);

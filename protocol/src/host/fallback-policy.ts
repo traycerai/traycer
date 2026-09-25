@@ -850,13 +850,15 @@ export const providersFallbackPolicySetUpgradeV10ToV11 = defineUpgradePath<
 // ---------------------------------------------------------------------------
 
 /**
- * "Restore the default model groups" - the groups editor's empty state.
+ * "Restore the default tiers" - the tiers editor's empty state, and its footer
+ * behind a confirm.
  *
- * Empty request: the seed is DERIVED host-side from the live provider set, and
- * the client has no business proposing what the defaults are. It is not the
- * same operation as `.set` with a hand-built list, which is why it is a method
- * rather than a client-side convenience: only the host can build a seed that
- * matches what a first read would have produced for this user.
+ * Empty request: the seed is OWNED host-side - the three pattern tiers and the
+ * default tier a first read writes - and the client has no business proposing
+ * what the defaults are. It is not the same operation as `.set` with a
+ * hand-built list, which is why it is a method rather than a client-side
+ * convenience: only the host knows the seed a first read would have written,
+ * and a restore writes exactly that, default tier included.
  */
 export const providersFallbackPolicyRestoreTierGroupsRequestSchema = lazySchema(
   () => z.object({}),
@@ -1067,6 +1069,14 @@ export const providersFallbackPolicyPreviewTierGroupsRequestSchema = lazySchema(
   () =>
     z.object({
       groups: z.array(tierGroupDraftSchema),
+      /**
+       * The draft's default tier; absent means none, and only a `blocked`
+       * request routes. A blocked model that no row matches is walked in this
+       * tier, exactly as the live walk routes it through the policy's
+       * `defaultTierGroupId` - so the Test panel simulates the draft the user
+       * is looking at, default included, rather than the stored policy.
+       */
+      defaultTierGroupId: z.string().nullable().optional(),
       blocked: tierPreviewBlockedTupleSchema.optional(),
     }),
 );
@@ -1145,7 +1155,9 @@ export const providersFallbackPolicyPreviewTierGroupsV11 = defineRpcContract({
 });
 
 /**
- * A 1.0 request is a 1.1 request with no `blocked` tuple and no blank rows.
+ * A 1.0 request is a 1.1 request with no `blocked` tuple, no default tier and
+ * no blank rows. With no `blocked` tuple nothing is routed, so the absent
+ * default changes nothing about the answer.
  *
  * A 1.0 response gains `matches` built from the one model 1.0 reports: a
  * single entry for a row that resolved, carrying the row's own verdict, and

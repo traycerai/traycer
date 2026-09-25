@@ -550,12 +550,17 @@ describe("FallbackDestinationMenu", () => {
     // Falsification: collapse `fallbackDestinationOfModelTarget`'s ternary to
     // always use `model` and this must go red (nothing to render at all, since
     // `model` is `null`).
-    expect(screen.getByText("Codex · gpt")).toBeDefined();
+    //
+    // The accessible name excludes the pattern glyph's `aria-hidden` "*" but
+    // keeps its sr-only "pattern" text (`FallbackPatternGlyph`), so an
+    // unresolved row now reads "Codex · pattern gpt" rather than the old
+    // plain "Codex · gpt" string.
+    const row = screen.getByRole("button", { name: /Codex · pattern gpt/ });
     // Falsification: widen that ternary to
     // `modelLabelFor(target.harnessId, model ?? target.modelFamily)` - a
     // one-character-looking change that reads as a simplification - and this
-    // goes red on "Codex · GPT-5".
-    expect(screen.queryByText(/GPT-5/)).toBeNull();
+    // goes red on a row naming "GPT-5".
+    expect(row.textContent).not.toContain("GPT-5");
   });
 
   it("renders no meter when usedPercent is null", () => {
@@ -939,7 +944,11 @@ describe("FallbackDestinationMenu", () => {
       onPick,
       onOpenChange: () => undefined,
     });
-    const row = screen.getByRole("button", { name: /Claude Code · sonnet/ });
+    // The accessible name excludes the pattern glyph's `aria-hidden` "*" but
+    // keeps its sr-only "pattern" text.
+    const row = screen.getByRole("button", {
+      name: /Claude Code · pattern sonnet/,
+    });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("expected model row");
     }
@@ -2547,5 +2556,127 @@ describe("FallbackWaitingMenu", () => {
       ).toBeDefined();
       expect(screen.queryByText(/No other model is set up for/)).toBeNull();
     });
+  });
+});
+
+describe("FallbackDestinationMenu - Pin 12: a pattern row's own presentation", () => {
+  beforeEach(() => {
+    listHarness.calls = [];
+    listHarness.data = undefined;
+    listHarness.isPending = false;
+    listHarness.isFetching = false;
+    listHarness.isError = false;
+    actionHarness.mutate.mockReset();
+    actionHarness.openSettings.mockReset();
+    leaseHarness.hold.mockReset();
+    leaseHarness.release.mockReset();
+    leaseHarness.lease = null;
+    modelLabelOverride.value = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("an unresolved pattern row (model: null) renders the pattern glyph and the mono pattern text", () => {
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "*luna*",
+            model: null,
+            reasoningEffort: null,
+            severity: "ok",
+            usedPercent: null,
+            target: null,
+            selectable: false,
+            skip: fallbackSkip({
+              reason: "unresolved",
+              label: "No matching model on this provider",
+            }),
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+
+    // The badge, by testid (`FallbackPatternGlyph`), with its sr-only text
+    // alternative - the row is announced as a pattern, not a model name.
+    const glyph = screen.getByTestId("fallback-pattern-glyph");
+    expect(glyph.textContent).toContain("pattern");
+
+    // The pattern itself, in its own mono face (`ModelRowTitle`'s
+    // `font-mono` span) - "*luna*" as the user wrote it, never a resolved
+    // slug.
+    //
+    // Falsification: in `ModelRowTitle` (fallback-destination-menu.tsx),
+    // replace the `<FallbackPatternGlyph>` + mono-`<span>` branch with a
+    // plain `fallbackDestinationRowTitle(destination)` call regardless of
+    // `destination.modelIsFamily` - this row would then render as ordinary
+    // text with no glyph and no `data-testid="fallback-pattern-glyph"`
+    // anywhere on the page, and both assertions above go red.
+    expect(screen.getByText("*luna*")).toBeDefined();
+  });
+
+  it("two listTargets rows built from one pattern, each with its own resolved model, render as two SEPARATE rows - never deduped or merged", () => {
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "*luna*",
+            model: "gpt-6-luna",
+            reasoningEffort: null,
+            severity: "ok",
+            usedPercent: 10,
+            target: { ...TARGET_CODEX_TUPLE, model: "gpt-6-luna" },
+            selectable: true,
+            skip: null,
+          }),
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "*luna*",
+            model: "gpt-6-luna-mini",
+            reasoningEffort: null,
+            severity: "ok",
+            usedPercent: 10,
+            target: { ...TARGET_CODEX_TUPLE, model: "gpt-6-luna-mini" },
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+
+    // Falsification: any dedup/merge keyed on `modelFamily` (grouping both
+    // "*luna*" rows under one) in `FallbackDestinationMenu`'s model-row list
+    // would collapse this to a single row, and one of these two assertions
+    // would fail to find its row.
+    expect(screen.getByText("Codex · gpt-6-luna")).toBeDefined();
+    expect(screen.getByText("Codex · gpt-6-luna-mini")).toBeDefined();
+    // No pattern glyph on either - both RESOLVED to a concrete model.
+    expect(screen.queryByTestId("fallback-pattern-glyph")).toBeNull();
   });
 });

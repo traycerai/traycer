@@ -306,6 +306,42 @@ describe("previewTierGroups request schemas", () => {
     expect(request.data.blocked?.kind).toBe("other");
   });
 
+  it("`defaultTierGroupId` may be absent, null or a tier id, and a 1.0 request upgrades without one", () => {
+    const absent =
+      providersFallbackPolicyPreviewTierGroupsRequestSchema.safeParse(
+        groupsWith("*opus*"),
+      );
+    expect(absent.success).toBe(true);
+    if (!absent.success) return;
+    expect(absent.data.defaultTierGroupId).toBeUndefined();
+    const named =
+      providersFallbackPolicyPreviewTierGroupsRequestSchema.safeParse({
+        ...groupsWith("*opus*"),
+        defaultTierGroupId: "flagship",
+        blocked: BLOCKED,
+      });
+    expect(named.success).toBe(true);
+    if (!named.success) return;
+    expect(named.data.defaultTierGroupId).toBe("flagship");
+    expect(
+      providersFallbackPolicyPreviewTierGroupsRequestSchema.safeParse({
+        ...groupsWith("*opus*"),
+        defaultTierGroupId: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      providersFallbackPolicyPreviewTierGroupsRequestSchema.safeParse({
+        ...groupsWith("*opus*"),
+        defaultTierGroupId: 7,
+      }).success,
+    ).toBe(false);
+    expect(
+      providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11.upgradeRequest(
+        groupsWith("*opus*"),
+      ),
+    ).not.toHaveProperty("defaultTierGroupId");
+  });
+
   it("`blocked` with a bad kind is refused at its path", () => {
     const result =
       providersFallbackPolicyPreviewTierGroupsRequestSchema.safeParse({

@@ -123,6 +123,19 @@ vi.mock(
     }),
   }),
 );
+/**
+ * `catalogFor` is `null` by default - "no answer yet", the fails-closed
+ * direction `tierGroupsNameDestinationFor`'s own doc names. Pin 11 below
+ * populates it with a codex catalog to exercise the loaded-catalog arm.
+ */
+const catalogForFixture = vi.hoisted(
+  (): {
+    value: ReadonlyMap<string, ReadonlyArray<{ slug: string; label: string }>>;
+  } => ({
+    value: new Map(),
+  }),
+);
+
 vi.mock(
   "@/components/settings/panels/fallback/fallback-catalog-options",
   async (importOriginal) => {
@@ -134,6 +147,9 @@ vi.mock(
       ...actual,
       useFallbackCatalogOptions: () => ({
         modelsFor: () => [],
+        catalogFor: (harnessId: string) =>
+          catalogForFixture.value.get(harnessId) ?? null,
+        catalogsByHarness: catalogForFixture.value,
         effortsFor: () => [],
       }),
     };
@@ -230,12 +246,98 @@ beforeEach(() => {
   modelsByHarness.value = new Map([
     ["claude", [modelOption("claude", "claude-fable-5-1[1m]", "Claude Fable")]],
   ]);
+  catalogForFixture.value = new Map();
   useComposerRunSettingsStore.getState().resetForTests();
 });
 
 afterEach(() => {
   useComposerRunSettingsStore.getState().resetForTests();
   cleanup();
+});
+
+describe("TierStepHint - Pin 11: the catalog changes whether a same-harness pattern row counts as covering the failure", () => {
+  // `tierGroupsNameDestinationFor` (protocol/src/host/fallback-policy.ts)
+  // excludes a same-harness row only when it PROVABLY names nothing but the
+  // failed model - with a catalog, no OTHER entry matches the pattern; with
+  // `catalog: null`, only a no-`*` exact pick counts as provable. These two
+  // cases pin that `TierStepHint` now passes `catalog.catalogFor(harnessId)`
+  // (fallback-settings-panel.tsx) instead of the old hard-coded `null`.
+  const LAST_RUN_CODEX: ChatRunSettings = {
+    harnessId: "codex",
+    model: "gpt-6-astra",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  };
+
+  function draftWithAstraRow(): FallbackPolicy {
+    return {
+      ...createDefaultFallbackPolicy(),
+      enabled: true,
+      defaultTierGroupId: null,
+      tierGroups: [
+        {
+          id: "frontier",
+          candidates: [
+            {
+              harnessId: "codex",
+              modelFamily: "*astra*",
+              reasoningEffort: null,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  beforeEach(() => {
+    useComposerRunSettingsStore.setState({
+      globalLastRunSettingsByHostId: { [HOST_ID]: LAST_RUN_CODEX },
+      legacyGlobalLastRunSettings: LAST_RUN_CODEX,
+    });
+    modelsByHarness.value = new Map([
+      ["codex", [modelOption("codex", "gpt-6-astra", "GPT-6-Astra")]],
+    ]);
+  });
+
+  it("with the catalog loaded, a pattern that matches ONLY the failed model does not count as a destination - the hint shows", () => {
+    // "*astra*" matches "gpt-6-astra" and nothing else in this catalog, so
+    // `patternNamesOnlyBlockedModel` excludes the only candidate and
+    // `tierGroupsNameDestinationFor` returns false.
+    //
+    // Falsification: revert `catalog: catalog.catalogFor(lastRun.harnessId)`
+    // to the old `catalog: null` in `TierStepHint`
+    // (fallback-settings-panel.tsx). With `catalog: null`,
+    // `patternNamesOnlyBlockedModel` falls back to `!pattern.includes("*")`,
+    // which is false for "*astra*" - so the row would count as a destination
+    // and this hint would wrongly stay hidden.
+    catalogForFixture.value = new Map([
+      [
+        "codex",
+        [
+          { slug: "gpt-6-astra", label: "GPT-6-Astra" },
+          { slug: "gpt-6-sol", label: "GPT-6-Sol" },
+        ],
+      ],
+    ]);
+    queryDataHolder.value = respond(draftWithAstraRow());
+    renderPanel();
+    expect(
+      screen.getByText(/No other model is set up for Codex/),
+    ).toBeDefined();
+  });
+
+  it("with no catalog loaded (`null`), the same wildcard row counts as covering the failure - no hint", () => {
+    // `catalog: null` falls back to the syntactic rule: a pattern containing
+    // `*` is never provably exact, so it counts as a destination and the
+    // hint is withheld.
+    catalogForFixture.value = new Map();
+    queryDataHolder.value = respond(draftWithAstraRow());
+    renderPanel();
+    expect(screen.queryByText(/No other model is set up for Codex/)).toBeNull();
+  });
 });
 
 describe("TierStepHint - last-run tuples that this host does not own", () => {

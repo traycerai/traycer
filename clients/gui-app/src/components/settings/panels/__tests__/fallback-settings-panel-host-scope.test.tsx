@@ -179,6 +179,21 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
 }));
 
+/**
+ * Pin 6's own line: a 1.0-negotiated host, explicit rather than left to the
+ * real hook's "no manifest yet" default so the case says what it means.
+ */
+const patternLines = vi.hoisted(
+  (): { patterns: boolean; blankPreviewRows: boolean } => ({
+    patterns: false,
+    blankPreviewRows: false,
+  }),
+);
+
+vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
+  useFallbackPolicyPatternLines: () => patternLines,
+}));
+
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import {
   openFallbackTab,
@@ -219,7 +234,7 @@ function renderPanel() {
  * to drive this suite's "typed but not sent" states.
  */
 function groupNameInput(): HTMLInputElement {
-  return screen.getByLabelText<HTMLInputElement>("Group name");
+  return screen.getByLabelText<HTMLInputElement>("Tier name");
 }
 
 /** The Model cell's own displayed value - a pinned family name here, since
@@ -238,6 +253,8 @@ beforeEach(() => {
   scopeMocks.setMutateAsync.mockResolvedValue({
     policy: { ...createDefaultFallbackPolicy(), enabled: true },
   });
+  patternLines.patterns = false;
+  patternLines.blankPreviewRows = false;
 });
 
 afterEach(() => {
@@ -305,5 +322,61 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     // a value out from under someone mid-edit. Only the HOST changing does.
     expect(groupNameInput().value).toBe("frontier-typed");
     expect(scopeMocks.setMutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("FallbackSettingsPanel - Pin 6: a 1.0-negotiated host stays on the old fallback cell", () => {
+  it('renders the Select-only Model cell, draws no conflict block even over a conflicting stored policy, and offers "Add model"', () => {
+    // A genuine "one model, one tier" conflict - frontier's `*gpt*` and
+    // standard's exact `gpt-5.6-terra` both claim the same codex model - which
+    // on a 1.1 host would draw a conflict block. On this 1.0-negotiated host
+    // (`patternLines.patterns === false`) the panel computes `conflicts` as
+    // `NO_TIER_CONFLICTS` regardless (fallback-settings-panel.tsx's
+    // `useMemo` for `conflicts`), so nothing should render it.
+    scopeMocks.queryData = respond({
+      tierGroups: [
+        {
+          id: "frontier",
+          candidates: [
+            { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
+          ],
+        },
+        {
+          id: "standard",
+          candidates: [
+            {
+              harnessId: "codex",
+              modelFamily: "gpt-5.6-terra",
+              reasoningEffort: null,
+            },
+          ],
+        },
+      ],
+    });
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // Falsification: hard-code `patternsSupported={true}` (or drop the prop)
+    // in `FallbackPolicyEditor`'s render of `FallbackTierGroupsEditor`
+    // (fallback-settings-panel.tsx) - the Model cell would then render as the
+    // pattern combobox instead of the plain Select this asserts.
+    expect(
+      screen.getAllByRole("combobox", { name: "Model" }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("combobox", { name: "Model or pattern" }),
+    ).toBeNull();
+
+    // No conflict block, despite the stored policy above genuinely
+    // conflicting under the pattern rule.
+    expect(screen.queryByTestId("fallback-tier-conflict")).toBeNull();
+
+    // The 1.0 add-row affordance, not the pattern-aware wording.
+    expect(
+      screen.getAllByRole("button", { name: "Add model" }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: "Add model or pattern" }),
+    ).toBeNull();
   });
 });

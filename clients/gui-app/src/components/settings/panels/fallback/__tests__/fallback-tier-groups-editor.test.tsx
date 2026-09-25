@@ -4,6 +4,8 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
+  within,
 } from "@testing-library/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -14,6 +16,11 @@ import {
   type TierCandidatePreview,
   type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
+import type {
+  AgentReasoningEffortOption,
+  GuiAgentModelOption,
+} from "@traycer/protocol/host/index";
+import type { HarnessId } from "@traycer/protocol/host/agent/shared";
 import {
   applyGroupsInverse,
   toKeyedGroups,
@@ -21,7 +28,11 @@ import {
   type FallbackGroupsInverse,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
-import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
+import {
+  catalogModelForFamily,
+  type FallbackCatalogOptions,
+} from "@/components/settings/panels/fallback/fallback-catalog-options";
+import { fallbackTierConflicts } from "@/components/settings/panels/fallback/fallback-policy-draft";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 
 /** The shape of the second argument the removal toasts pass `toast.success`. */
@@ -76,6 +87,8 @@ function tierGroup(
 
 const NO_CATALOG: FallbackCatalogOptions = {
   modelsFor: () => [],
+  catalogFor: () => null,
+  catalogsByHarness: new Map(),
   effortsFor: () => [],
 };
 
@@ -135,6 +148,8 @@ function Harness(props: {
       // that rather than pretending a label was produced.
       labelFor={(profileId) => profileId}
       catalog={NO_CATALOG}
+      patternsSupported={false}
+      conflicts={[]}
       previewPending={previewPending}
       previewUnavailable={previewUnavailable}
       onRetryPreview={onRetryPreview}
@@ -181,6 +196,8 @@ function CommitCarryHarness(props: {
       preview={null}
       labelFor={(profileId) => profileId}
       catalog={NO_CATALOG}
+      patternsSupported={false}
+      conflicts={[]}
       previewPending={false}
       previewUnavailable={false}
       onRetryPreview={() => {}}
@@ -262,7 +279,7 @@ describe("FallbackTierGroupsEditor - F16 a group rename survives duplicate and e
       />,
     );
     const nameInputs = () =>
-      screen.getAllByLabelText<HTMLInputElement>("Group name");
+      screen.getAllByLabelText<HTMLInputElement>("Tier name");
     const input = nameInputs()[0];
     input.focus();
     expect(document.activeElement).toBe(input);
@@ -308,7 +325,7 @@ describe("FallbackTierGroupsEditor - F16 a group rename survives duplicate and e
     expect(
       document.querySelector('[data-testid="fallback-tier-group-fast"]'),
     ).not.toBeNull();
-    const input = screen.getByLabelText<HTMLInputElement>("Group name");
+    const input = screen.getByLabelText<HTMLInputElement>("Tier name");
     fireEvent.change(input, { target: { value: "fastest" } });
     fireEvent.blur(input);
     expect(
@@ -337,14 +354,14 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       />,
     );
     const deleteButtons = screen.getAllByRole("button", {
-      name: "Delete group",
+      name: "Delete tier",
     });
     const survivor = deleteButtons[1];
     fireEvent.click(deleteButtons[0]);
     // Falsification: pass `[]` instead of `groupDeleteSelectors(groups, index)`
     // into `focusAfterRemoval` at the `onDelete` call site
     // (`fallback-tier-groups-editor.tsx`) - focus would then fall through to
-    // "Add a group" (or `document.body`) instead of the surviving neighbour.
+    // "Add tier" (or `document.body`) instead of the surviving neighbour.
     expect(document.activeElement).toBe(survivor);
   });
 
@@ -360,7 +377,7 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       />,
     );
     const deleteButtons = screen.getAllByRole("button", {
-      name: "Delete group",
+      name: "Delete tier",
     });
     const nextSurvivor = deleteButtons[2];
     fireEvent.click(deleteButtons[1]);
@@ -379,14 +396,14 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       />,
     );
     const deleteButtons = screen.getAllByRole("button", {
-      name: "Delete group",
+      name: "Delete tier",
     });
     const previousSurvivor = deleteButtons[1];
     fireEvent.click(deleteButtons[2]);
     expect(document.activeElement).toBe(previousSurvivor);
   });
 
-  it("deleting the only remaining group focuses 'Add a group'", () => {
+  it("deleting the only remaining group focuses 'Add tier'", () => {
     const groups = [tierGroup("only", [])];
     render(
       <Harness
@@ -397,9 +414,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
         onRetryPreview={undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete tier" }));
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Add a group" }),
+      screen.getByRole("button", { name: "Add tier" }),
     );
   });
 });
@@ -463,7 +480,7 @@ describe("FallbackTierGroupsEditor - F24 removal focus, candidate removal", () =
     expect(document.activeElement).toBe(survivor);
   });
 
-  it("removing the only remaining candidate focuses 'Add a model'", () => {
+  it("removing the only remaining candidate focuses 'Add model'", () => {
     const groups = [tierGroup("g1", [candidate("alpha")])];
     render(
       <Harness
@@ -476,7 +493,7 @@ describe("FallbackTierGroupsEditor - F24 removal focus, candidate removal", () =
     );
     fireEvent.click(screen.getByRole("button", { name: "Remove alpha" }));
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Add a model" }),
+      screen.getByRole("button", { name: "Add model" }),
     );
   });
 });
@@ -498,11 +515,11 @@ describe("FallbackTierGroupsEditor - F18 undo restores exactly the deleted row, 
       />,
     );
     // Delete "g1" (index 0) first - its toast is `toast.success` call #1.
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     // Delete "g3" (now the last remaining, originally index 2) second.
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Delete group" })[
-        screen.getAllByRole("button", { name: "Delete group" }).length - 1
+      screen.getAllByRole("button", { name: "Delete tier" })[
+        screen.getAllByRole("button", { name: "Delete tier" }).length - 1
       ],
     );
     expect(screen.queryByTestId("fallback-tier-group-g1")).toBeNull();
@@ -653,6 +670,8 @@ describe("FallbackTierGroupsEditor - a duplicated group NAME withholds the previ
         preview={preview}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -719,7 +738,7 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
   /** Radix's select: open with the keyboard, then commit the named option. */
   function openDefaultGroupSelect(): void {
     fireEvent.keyDown(
-      screen.getByRole("combobox", { name: "For a model not in any group" }),
+      screen.getByRole("combobox", { name: "For a model not in any tier" }),
       { key: "ArrowDown" },
     );
   }
@@ -746,6 +765,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -779,6 +800,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -815,6 +838,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -857,6 +882,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -869,7 +896,7 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
       />,
     );
     const nameInput =
-      screen.getAllByLabelText<HTMLInputElement>("Group name")[0];
+      screen.getAllByLabelText<HTMLInputElement>("Tier name")[0];
     fireEvent.change(nameInput, { target: { value: "fastest" } });
     // Falsification: drop the carry branch from `replaceGroupAt` in
     // `fallback-tier-groups-editor.tsx` (the
@@ -896,7 +923,7 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
       />,
     );
     const nameInput =
-      screen.getAllByLabelText<HTMLInputElement>("Group name")[0];
+      screen.getAllByLabelText<HTMLInputElement>("Tier name")[0];
     fireEvent.change(nameInput, { target: { value: "fastest" } });
     fireEvent.blur(nameInput);
     // Falsification: drop the same carry branch from `replaceGroupAt` at the
@@ -924,6 +951,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -936,7 +965,7 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
       />,
     );
     // Delete "fast" (index 0), which IS the default.
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     // Falsification: drop the `wasDefault ? { ...policy, defaultTierGroupId:
     // null } : policy` branch from the `onDelete` handler - the committed
     // policy would keep `defaultTierGroupId: "fast"`, a name the deleted
@@ -974,6 +1003,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -986,7 +1017,7 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
       />,
     );
     // Delete "cheap" (index 1), which is NOT the default.
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[1]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[1]);
     const toastCall = toastSuccess.mock.calls[0];
     act(() => {
       toastCall[1].action.onClick();
@@ -999,7 +1030,7 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
     expect(inverse.kind === "group" ? inverse.wasDefault : null).toBe(false);
   });
 
-  it("'Add a group' emits the policy UNCHANGED apart from the appended group - defaultTierGroupId untouched", () => {
+  it("'Add tier' emits the policy UNCHANGED apart from the appended group - defaultTierGroupId untouched", () => {
     const groups: TierGroup[] = [tierGroup("fast", [])];
     const keyedGroups = toKeyedGroups(groups);
     const onCommit = commitSpy();
@@ -1014,6 +1045,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -1025,17 +1058,17 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         status={null}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Add a group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
     expect(onCommit).toHaveBeenCalledTimes(1);
     const [committedPolicy, committedGroups] = onCommit.mock.calls[0];
     // Falsification: rebuild the policy (rather than passing the untouched
-    // `policy` reference through `withTierGroups`) at the "Add a group"
+    // `policy` reference through `withTierGroups`) at the "Add tier"
     // click handler - `defaultTierGroupId` (or any other field) could then
     // drift on a purely additive edit that named nothing about it.
     expect(committedPolicy.defaultTierGroupId).toBe("fast");
     expect(committedGroups).toHaveLength(2);
     expect(committedGroups[0]).toBe(keyedGroups[0]);
-    expect(committedGroups[1].id).toBe("New group");
+    expect(committedGroups[1].id).toBe("New tier");
   });
 
   it("the default-group select does not render when groups is empty - the EmptyGroups branch", () => {
@@ -1046,6 +1079,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         preview={null}
         labelFor={(profileId) => profileId}
         catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -1101,6 +1136,8 @@ function RenameCarryHarness(props: {
       preview={null}
       labelFor={(profileId) => profileId}
       catalog={NO_CATALOG}
+      patternsSupported={false}
+      conflicts={[]}
       previewPending={false}
       previewUnavailable={false}
       onRetryPreview={() => {}}
@@ -1132,7 +1169,7 @@ describe("FallbackTierGroupsEditor - P2 a rename must not steal the default mark
       />,
     );
     const nameInputs = () =>
-      screen.getAllByLabelText<HTMLInputElement>("Group name");
+      screen.getAllByLabelText<HTMLInputElement>("Tier name");
 
     // Rename "cheap" (index 1, never the default) so its value passes
     // THROUGH "fast" - the default's own name - on the way to "faster". The
@@ -1164,5 +1201,528 @@ describe("FallbackTierGroupsEditor - P2 a rename must not steal the default mark
       "fast",
       "faster",
     ]);
+  });
+});
+
+/**
+ * A props-driven wrapper for Pin 8 - three tiers, "Restore the default
+ * tiers" now behind a confirm rather than the empty state's direct call.
+ * `restorePending` is driven by RERENDER, not internal state, for the same
+ * reason `fallback-danger-zone.test.tsx`'s `renderResetHarness` gives: writing
+ * an outer-variable setter during render is banned outright
+ * (`clients/gui-app/AGENTS.md`), and `restorePending` really is a controlled
+ * prop in production - the panel derives it from the mutation.
+ */
+function RestoreHarness(props: {
+  readonly restorePending: boolean;
+  readonly onRestoreDefaults: () => void;
+}): ReactNode {
+  const groups: TierGroup[] = [
+    tierGroup("frontier", []),
+    tierGroup("flagship", []),
+    tierGroup("standard", []),
+  ];
+  return (
+    <FallbackTierGroupsEditor
+      policy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
+      groups={toKeyedGroups(groups)}
+      preview={null}
+      labelFor={(profileId) => profileId}
+      catalog={NO_CATALOG}
+      patternsSupported={false}
+      conflicts={[]}
+      previewPending={false}
+      previewUnavailable={false}
+      onRetryPreview={() => {}}
+      onChange={() => {}}
+      onCommit={() => {}}
+      onUndo={() => {}}
+      onRestoreDefaults={props.onRestoreDefaults}
+      restorePending={props.restorePending}
+      status={null}
+    />
+  );
+}
+
+describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm flow", () => {
+  it("opens with the exact tier-count title and the 'sets the default tier to flagship' description, without calling onRestoreDefaults on open", () => {
+    const onRestoreDefaults = vi.fn();
+    render(
+      <RestoreHarness
+        restorePending={false}
+        onRestoreDefaults={onRestoreDefaults}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("fallback-tier-groups-restore"));
+    // Falsification: `RestoreDefaultTiers`'s dialog `title` template
+    // (`fallback-tier-groups-editor.tsx`) - change the count interpolation, or
+    // drop the singular/plural branch, and this exact string goes stale.
+    expect(
+      screen.getByText(
+        "Replace your 3 tiers with the default Frontier, Flagship and Standard tiers?",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("This also sets the default tier to flagship."),
+    ).not.toBeNull();
+    expect(onRestoreDefaults).not.toHaveBeenCalled();
+  });
+
+  it("Cancel leaves the tiers untouched, calls onRestoreDefaults zero times, and returns focus to the Restore button", async () => {
+    const onRestoreDefaults = vi.fn();
+    render(
+      <RestoreHarness
+        restorePending={false}
+        onRestoreDefaults={onRestoreDefaults}
+      />,
+    );
+    const restoreButton = screen.getByTestId("fallback-tier-groups-restore");
+    // `fireEvent.click` does not itself move focus the way a real pointer
+    // click does - `confirm-destructive-dialog.test.tsx` pins the same
+    // `.focus()`-before-click precondition for this dialog's opener capture.
+    restoreButton.focus();
+    fireEvent.click(restoreButton);
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    // Falsification: call `onRestoreDefaults` from `onOpenChange` instead of
+    // only from the dialog's `onConfirm` - Cancel would then also restore.
+    expect(onRestoreDefaults).not.toHaveBeenCalled();
+    expect(screen.getByTestId("fallback-tier-group-frontier")).not.toBeNull();
+    expect(screen.getByTestId("fallback-tier-group-flagship")).not.toBeNull();
+    expect(screen.getByTestId("fallback-tier-group-standard")).not.toBeNull();
+    // The shared `ConfirmDestructiveDialog`'s own opener-restore mechanism
+    // (`confirm-destructive-dialog.tsx`'s `openerRef`) runs its
+    // `onCloseAutoFocus` from a deferred `setTimeout(0)` - a Cancel or Escape
+    // returns the keyboard to whatever control opened it, but only once that
+    // macrotask has run.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(restoreButton);
+    });
+  });
+
+  it("Confirm calls onRestoreDefaults exactly once and, once the round trip settles, moves focus off the closed dialog", async () => {
+    const onRestoreDefaults = vi.fn();
+    const view = render(
+      <RestoreHarness
+        restorePending={false}
+        onRestoreDefaults={onRestoreDefaults}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("fallback-tier-groups-restore"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    // Falsification: gate the call behind a second confirmation, or fold it
+    // into `onOpenChange` where a programmatic close would also fire it.
+    expect(onRestoreDefaults).toHaveBeenCalledTimes(1);
+
+    // The parent starts the mutation in the SAME gesture that confirms - the
+    // sequence `fallback-danger-zone.test.tsx`'s R-OSS-2 cell exercises, and
+    // for the same reason: Radix's own `onCloseAutoFocus` runs against an
+    // opener that is already `disabled={isPending}` and silently no-ops,
+    // landing focus on `document.body`.
+    act(() => {
+      view.rerender(
+        <RestoreHarness restorePending onRestoreDefaults={onRestoreDefaults} />,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // Admission evidence: Radix really did leave the keyboard nowhere useful
+    // once the opener it tried to restore to was disabled.
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => {
+      view.rerender(
+        <RestoreHarness
+          restorePending={false}
+          onRestoreDefaults={onRestoreDefaults}
+        />,
+      );
+    });
+    // Falsification: delete the `useEffect` in `RestoreDefaultTiers` that
+    // watches `restorePending` falling - nothing would then move focus once
+    // the restore settles, and `document.activeElement` would stay stuck on
+    // `document.body`, the state Radix's own attempt left it in above.
+    await waitFor(() => {
+      const restoreButton = screen.getByRole("button", {
+        name: "Restore the default tiers",
+      });
+      expect(restoreButton.hasAttribute("disabled")).toBe(false);
+      expect(document.activeElement).not.toBe(document.body);
+    });
+  });
+
+  it("the empty state's OWN 'Restore the default tiers' button calls onRestoreDefaults DIRECTLY, with no dialog appearing", () => {
+    const onRestoreDefaults = vi.fn();
+    render(
+      <FallbackTierGroupsEditor
+        policy={createDefaultFallbackPolicy()}
+        groups={[]}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        patternsSupported={false}
+        conflicts={[]}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={onRestoreDefaults}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore the default tiers" }),
+    );
+    // Falsification: route the empty state's button through
+    // `RestoreDefaultTiers` (the confirming variant) instead of `EmptyGroups`
+    // calling `onRestoreDefaults` directly - a confirm dialog would then
+    // appear where there is nothing yet to lose.
+    expect(onRestoreDefaults).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+});
+
+/**
+ * The ticket's Done-when lines, end to end, against the real seeded policy
+ * (`fallback-tier-seed.ts`'s literals) and the real `fallbackTierConflicts` -
+ * not a hand-built `TierConflict`, so this cannot silently drift from what
+ * the protocol actually computes. Every test here fails on the pre-ticket
+ * editor: it has no combobox at all (the Model cell was a bare `Select`), no
+ * `role="status"` announcement span, and "group"/"family" copy instead of
+ * "tier"/"pattern".
+ */
+describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () => {
+  function effort(id: string, label: string): AgentReasoningEffortOption {
+    return { id, label, description: null };
+  }
+
+  function model(
+    harnessId: GuiAgentModelOption["harnessId"],
+    slug: string,
+    label: string,
+    supportedReasoningEfforts: readonly AgentReasoningEffortOption[],
+  ): GuiAgentModelOption {
+    return {
+      harnessId,
+      slug,
+      label,
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [...supportedReasoningEfforts],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      metadata: {},
+    };
+  }
+
+  const HIGH: readonly AgentReasoningEffortOption[] = [effort("high", "High")];
+  const MEDIUM: readonly AgentReasoningEffortOption[] = [
+    effort("medium", "Medium"),
+  ];
+
+  /** codex catalog per the coordinator's spec - gpt-6-luna/-mini both contain "luna". */
+  function codexCatalog(): readonly GuiAgentModelOption[] {
+    return [
+      model("codex", "gpt-6-astra", "GPT-6-Astra", HIGH),
+      model("codex", "gpt-6-sol", "GPT-6-Sol", HIGH),
+      model("codex", "gpt-6-luna", "GPT-6-Luna", HIGH),
+      model("codex", "gpt-6-luna-mini", "GPT-6-Luna Mini", HIGH),
+      model("codex", "gpt-5.6-terra", "GPT-5.6-Terra", MEDIUM),
+    ];
+  }
+
+  function claudeCatalog(): readonly GuiAgentModelOption[] {
+    return [
+      model("claude", "claude-fable-5-1", "Fable 5.1", HIGH),
+      model("claude", "opus", "Opus 5.5", HIGH),
+      model("claude", "sonnet", "Sonnet 5", []),
+    ];
+  }
+
+  function catalogsByHarness(): ReadonlyMap<
+    HarnessId,
+    readonly GuiAgentModelOption[]
+  > {
+    return new Map([
+      ["codex", codexCatalog()],
+      ["claude", claudeCatalog()],
+    ]);
+  }
+
+  function seededCatalog(): FallbackCatalogOptions {
+    const byHarness = catalogsByHarness();
+    return {
+      modelsFor: (harnessId) => byHarness.get(harnessId) ?? [],
+      catalogFor: (harnessId) => byHarness.get(harnessId) ?? null,
+      catalogsByHarness: byHarness,
+      effortsFor: (harnessId, modelFamily) => {
+        const models = byHarness.get(harnessId) ?? [];
+        const picked = catalogModelForFamily(models, modelFamily);
+        return picked === null ? [] : picked.supportedReasoningEfforts;
+      },
+    };
+  }
+
+  /**
+   * The seeded three tiers, exactly `fallback-tier-seed.ts`'s literals, with
+   * an optional extra blank row appended to `standard` - the "blank codex
+   * row" the picker pins below need, seeded directly rather than added
+   * through "Add model or pattern" (equivalent per the ticket's own wording,
+   * and it sidesteps switching the new row's Provider select away from the
+   * global `firstHarnessId` default).
+   */
+  function seededGroups(
+    extraStandardCandidate: TierCandidate | null,
+  ): TierGroup[] {
+    return [
+      {
+        id: "frontier",
+        candidates: [
+          {
+            harnessId: "claude",
+            modelFamily: "*fable*",
+            reasoningEffort: "high",
+          },
+          {
+            harnessId: "codex",
+            modelFamily: "*astra*",
+            reasoningEffort: "high",
+          },
+        ],
+      },
+      {
+        id: "flagship",
+        candidates: [
+          {
+            harnessId: "claude",
+            modelFamily: "*opus*",
+            reasoningEffort: "high",
+          },
+          { harnessId: "codex", modelFamily: "*sol*", reasoningEffort: "high" },
+          { harnessId: "grok", modelFamily: "*grok*", reasoningEffort: null },
+        ],
+      },
+      {
+        id: "standard",
+        candidates: [
+          {
+            harnessId: "claude",
+            modelFamily: "*sonnet*",
+            reasoningEffort: null,
+          },
+          {
+            harnessId: "codex",
+            modelFamily: "*terra*",
+            reasoningEffort: "medium",
+          },
+          ...(extraStandardCandidate === null ? [] : [extraStandardCandidate]),
+        ],
+      },
+    ];
+  }
+
+  /**
+   * Controlled by the editor's own `onChange`/`onCommit`, like `Harness`
+   * above, plus `conflicts` recomputed from the REAL `fallbackTierConflicts`
+   * on every state change - so a picker choice that changes what conflicts
+   * exist is reflected the same way the panel reflects it.
+   */
+  function SeededEditorHarness(props: {
+    readonly groups: readonly TierGroup[];
+    readonly onCommit: (
+      policy: FallbackPolicy,
+      groups: readonly KeyedGroup[],
+    ) => void;
+  }): ReactNode {
+    const [state, setState] = useState<{
+      readonly policy: FallbackPolicy;
+      readonly groups: readonly KeyedGroup[];
+    }>(() => ({
+      policy: {
+        ...createDefaultFallbackPolicy(),
+        tierGroups: [...props.groups],
+        defaultTierGroupId: "flagship",
+      },
+      groups: toKeyedGroups(props.groups),
+    }));
+    const conflicts = fallbackTierConflicts(
+      state.policy.tierGroups,
+      catalogsByHarness(),
+    );
+    return (
+      <FallbackTierGroupsEditor
+        policy={state.policy}
+        groups={state.groups}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={seededCatalog()}
+        patternsSupported
+        conflicts={conflicts}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={(next, groups) => {
+          setState({ policy: next, groups });
+        }}
+        onCommit={(next, groups) => {
+          setState({ policy: next, groups });
+          props.onCommit(next, groups);
+        }}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />
+    );
+  }
+
+  it("1. renders three tier cards in seed order, the Default pill on flagship only, and the default-tier select showing flagship", () => {
+    render(
+      <SeededEditorHarness groups={seededGroups(null)} onCommit={vi.fn()} />,
+    );
+    const cardTestIds = screen
+      .getAllByTestId(/^fallback-tier-group-(frontier|flagship|standard)$/)
+      .map((card) => card.getAttribute("data-testid"));
+    // Falsification: the pre-ticket editor renders "group"-copy cards with no
+    // such testids at all - this whole suite reddens on it. Kept precise
+    // (exact order, exactly these three) so a future seed reorder is also
+    // caught here, not only in the host-side seed test.
+    expect(cardTestIds).toEqual([
+      "fallback-tier-group-frontier",
+      "fallback-tier-group-flagship",
+      "fallback-tier-group-standard",
+    ]);
+    expect(
+      within(screen.getByTestId("fallback-tier-group-frontier")).queryByTestId(
+        "fallback-tier-group-default",
+      ),
+    ).toBeNull();
+    expect(
+      within(screen.getByTestId("fallback-tier-group-flagship")).queryByTestId(
+        "fallback-tier-group-default",
+      ),
+    ).not.toBeNull();
+    expect(
+      within(screen.getByTestId("fallback-tier-group-standard")).queryByTestId(
+        "fallback-tier-group-default",
+      ),
+    ).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "For a model not in any tier" })
+        .textContent,
+    ).toBe("flagship");
+  });
+
+  it('2. typing "luna" in a blank codex row of standard offers \'Any model containing "luna"\' (2 models) and commits *luna*', () => {
+    const onCommit =
+      vi.fn<(policy: FallbackPolicy, groups: readonly KeyedGroup[]) => void>();
+    render(
+      <SeededEditorHarness
+        groups={seededGroups({
+          harnessId: "codex",
+          modelFamily: "",
+          reasoningEffort: null,
+        })}
+        onCommit={onCommit}
+      />,
+    );
+    const standardCard = screen.getByTestId("fallback-tier-group-standard");
+    const triggers = within(standardCard).getAllByTestId(
+      "fallback-model-pattern-trigger",
+    );
+    // The blank row is the one just appended - the last of standard's three.
+    const blankTrigger = triggers[triggers.length - 1];
+    fireEvent.click(blankTrigger);
+    const input = screen.getByTestId(
+      "fallback-model-pattern-input",
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "luna" } });
+    const patternOption = screen.getByTestId("fallback-model-pattern-option");
+    // Falsification: `CONTAINS_MIN_LENGTH` raised past 4, or the codex
+    // fixture missing `gpt-6-luna-mini` - either would change this count away
+    // from "2 models".
+    expect(patternOption.textContent).toContain("Any model containing");
+    expect(patternOption.textContent).toContain("luna");
+    expect(patternOption.textContent).toContain("2 models");
+    // The pattern entry is already highlighted (no exact match for "luna"),
+    // so Enter alone commits it - the coordinator's own semantics, exercised
+    // here through the full editor rather than the bare combobox.
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const [committedPolicy] = onCommit.mock.calls[0];
+    const committedStandard = committedPolicy.tierGroups.find(
+      (group) => group.id === "standard",
+    );
+    expect(committedStandard).toBeDefined();
+    if (committedStandard === undefined) return;
+    // Asserted on the COMMITTED POLICY, not a callback prop of the combobox -
+    // the coordinator's own instruction, since the combobox's own `onChange`
+    // contract is already pinned in isolation elsewhere.
+    expect(
+      committedStandard.candidates[committedStandard.candidates.length - 1],
+    ).toEqual({
+      harnessId: "codex",
+      modelFamily: "*luna*",
+      reasoningEffort: null,
+    });
+  });
+
+  it('3. typing "gpt-6-*" in the same kind of row is refused: no commit, and the live region says why; a second Enter re-announces (new node)', () => {
+    const onCommit =
+      vi.fn<(policy: FallbackPolicy, groups: readonly KeyedGroup[]) => void>();
+    render(
+      <SeededEditorHarness
+        groups={seededGroups({
+          harnessId: "codex",
+          modelFamily: "",
+          reasoningEffort: null,
+        })}
+        onCommit={onCommit}
+      />,
+    );
+    const standardCard = screen.getByTestId("fallback-tier-group-standard");
+    const triggers = within(standardCard).getAllByTestId(
+      "fallback-model-pattern-trigger",
+    );
+    const blankTrigger = triggers[triggers.length - 1];
+    fireEvent.click(blankTrigger);
+    const input = screen.getByTestId(
+      "fallback-model-pattern-input",
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "gpt-6-*" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Falsification: no commit happens on a refused choice - `choose()`'s
+    // `entry.blockers.length > 0` guard, already pinned against the bare
+    // combobox in `fallback-model-pattern-combobox.test.tsx`.
+    expect(onCommit).not.toHaveBeenCalled();
+    const region = screen.getByTestId("fallback-tier-picker-announcement");
+    expect(region.closest('[role="status"]')).not.toBeNull();
+    // Falsification: this is the EDITOR's OWN wiring - `onAnnounce={announce}`
+    // at the `FallbackTierGroupCard` call site in
+    // `fallback-tier-groups-editor.tsx` - not the combobox's own `onAnnounce`
+    // prop the file above already pins in isolation. Passing a no-op there
+    // instead of `announce` leaves the picker's refusal correct and this
+    // region empty; verified by reversion (see the report back to the
+    // coordinator) and restored byte-identical.
+    expect(region.textContent).toContain(
+      "GPT-6-Astra is in frontier and GPT-6-Sol is in flagship",
+    );
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    const secondRegion = screen.getByTestId(
+      "fallback-tier-picker-announcement",
+    );
+    // Falsification: drop `key={announcement.count}` from the live region's
+    // span (`PreviewFooterStatus` in `fallback-tier-groups-editor.tsx`) -
+    // React would then patch the SAME node's text on a repeated refusal
+    // rather than mounting a new one, which is indistinguishable from "no
+    // change" to a screen reader.
+    expect(secondRegion).not.toBe(region);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });

@@ -1,10 +1,14 @@
 import {
   FALLBACK_RUNG_KINDS,
   fallbackPolicySchema,
+  findTierConflicts,
   type FallbackPolicy,
   type FallbackRungKind,
+  type TierConflict,
   type TierGroup,
+  type TierModelIdentity,
 } from "@traycer/protocol/host/fallback-policy";
+import type { HarnessId } from "@traycer/protocol/host/agent/shared";
 import {
   reconcileKeyedGroups,
   revertKeyedGroups,
@@ -1048,6 +1052,38 @@ export function moveFallbackRung(
   );
 }
 
+/**
+ * Every model more than one tier of the draft claims - "one model, one tier"
+ * as COMPUTED state, never as validation.
+ *
+ * Deliberately not part of {@link validateFallbackPolicyDraft} and never a
+ * `localError`. Validation is whole-policy: an invalid draft blocks every
+ * commit on the page, the master switch included, and there is no Save button
+ * here to route around it. A conflict is also not the user's mistake to be
+ * stopped at - a new release, a catalog this editor could not read, or a
+ * policy converted from family words can each produce one with nobody
+ * touching a tier - and routing already has an answer for it (the
+ * first-listed tier handles the model). So it is drawn on the rows involved
+ * and nothing is refused: other edits commit as usual, the host never refuses
+ * `.set` over one, and the Undo of a removal may put one back like any other
+ * edit.
+ *
+ * The one place a conflict IS refused is the picker, before it exists: a
+ * choice that would create one cannot be made (`otherTierClaims`).
+ *
+ * `catalogsByHarness` is the editor's app-wide, cache-only catalogs for the
+ * providers the draft names; a provider missing from it contributes nothing,
+ * because which models a pattern reaches is unknowable without the list.
+ * Blank rows match nothing and so never conflict; their own validation still
+ * speaks for them.
+ */
+export function fallbackTierConflicts(
+  groups: readonly TierGroup[],
+  catalogsByHarness: ReadonlyMap<HarnessId, readonly TierModelIdentity[]>,
+): readonly TierConflict[] {
+  return findTierConflicts(groups, catalogsByHarness);
+}
+
 export type FallbackPolicyValidation =
   | { readonly kind: "valid" }
   | { readonly kind: "invalid"; readonly message: string };
@@ -1066,6 +1102,9 @@ export type FallbackPolicyValidation =
  * the draft: a rejected save reverts the control, and reverting someone's
  * half-typed family name because it is half-typed is the behaviour the ticket
  * separates the two failure kinds to prevent.
+ *
+ * A model in two tiers is NOT a validation failure - see
+ * {@link fallbackTierConflicts}.
  */
 export function validateFallbackPolicyDraft(
   draft: FallbackPolicy,
@@ -1103,11 +1142,11 @@ function draftIssueMessage(
     // Reachable only through a stored policy or a race the editor does not
     // produce: the editor carries the marker through a rename and clears it
     // on a delete, so the id names a group in every draft it builds.
-    return 'Choose an existing group under "For a model not in any group".';
+    return 'Choose an existing tier under "For a model not in any tier".';
   }
   if (head === "tierGroups") {
     if (fifth === "modelFamily") {
-      return `${candidateSubject(draft, second, fourth)} needs a model.`;
+      return `${candidateSubject(draft, second, fourth)} needs a model or pattern.`;
     }
     if (fifth === "reasoningEffort") {
       return `${candidateSubject(draft, second, fourth)} has a blank effort level - pick one, or leave it unset.`;
@@ -1132,16 +1171,17 @@ function draftIssueMessage(
 }
 
 /**
- * The row an error is about, as a sentence subject: "Model 2 in “fast”".
+ * The row an error is about, as a sentence subject: "Row 2 in “fast”".
  *
- * Position for the row and NAME for the group, which is not an inconsistency:
- * a group has an editable name the user chose and can find on screen, while a
- * candidate row has nothing but its provider and family - and the family is
- * the field that is blank in the case this exists for, so naming the row by it
- * would produce "The model called “” needs a family name".
+ * Position for the row and NAME for the tier, which is not an inconsistency:
+ * a tier has an editable name the user chose and can find on screen, while a
+ * row has nothing but its provider and pattern - and the pattern is the field
+ * that is blank in the case this exists for, so naming the row by it would
+ * produce "The model called “” needs a pattern".
  *
  * Positions are 1-based, because they are being read by a person counting rows
- * rather than indexing an array.
+ * rather than indexing an array - and they are the `#` rank the editor prints
+ * on each row, so the sentence and the table agree.
  */
 function candidateSubject(
   draft: FallbackPolicy,
@@ -1149,9 +1189,7 @@ function candidateSubject(
   candidateIndex: PropertyKey | undefined,
 ): string {
   const row =
-    typeof candidateIndex === "number"
-      ? `Model ${candidateIndex + 1}`
-      : "A model";
+    typeof candidateIndex === "number" ? `Row ${candidateIndex + 1}` : "A row";
   const group = groupName(draft, groupIndex);
   return group === null ? row : `${row} in ${group}`;
 }
@@ -1174,7 +1212,7 @@ function groupName(
   if (typeof index !== "number") return null;
   if (index < 0 || index >= draft.tierGroups.length) return null;
   const id = draft.tierGroups[index].id.trim();
-  return id === "" ? `group ${index + 1}` : `“${id}”`;
+  return id === "" ? `tier ${index + 1}` : `“${id}”`;
 }
 
 /**
@@ -1182,7 +1220,7 @@ function groupName(
  * the thing that is missing.
  */
 function groupPosition(index: PropertyKey | undefined): string {
-  return typeof index === "number" ? `Group ${index + 1}` : "A model group";
+  return typeof index === "number" ? `Tier ${index + 1}` : "A tier";
 }
 
 /**
@@ -1204,10 +1242,10 @@ function groupListIssueMessage(draft: FallbackPolicy): string {
   const seen = new Set<string>();
   for (const group of draft.tierGroups) {
     const id = group.id.trim();
-    if (seen.has(id)) return `Two model groups are both called “${id}”.`;
+    if (seen.has(id)) return `Two tiers are both called “${id}”.`;
     seen.add(id);
   }
-  return "Two groups have the same name.";
+  return "Two tiers have the same name.";
 }
 
 export function createFallbackPolicyDraftState(

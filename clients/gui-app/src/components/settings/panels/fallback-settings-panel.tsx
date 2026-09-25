@@ -5,6 +5,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -13,6 +14,8 @@ import {
 import {
   tierGroupsNameDestinationFor,
   type FallbackPolicy,
+  type TierConflict,
+  type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   HostRpcError,
@@ -53,7 +56,11 @@ import { useFallbackPolicyResetMutation } from "@/hooks/providers/use-fallback-p
 import { useFallbackPolicyRestoreTierGroupsMutation } from "@/hooks/providers/use-fallback-policy-restore-tier-groups-mutation";
 import { useFallbackPolicyPreviewTierGroupsQuery } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
 import { useFallbackSettingsProfileLabels } from "@/components/settings/panels/fallback/fallback-profile-labels";
-import { useFallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
+import {
+  useFallbackCatalogOptions,
+  type FallbackCatalogOptions,
+} from "@/components/settings/panels/fallback/fallback-catalog-options";
+import { useFallbackPolicyPatternLines } from "@/hooks/providers/use-fallback-policy-pattern-lines";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
@@ -94,6 +101,7 @@ import {
 import {
   createFallbackPolicyDraftState,
   createFallbackSaveRequestId,
+  fallbackTierConflicts,
   fallbackDisplayOrderEnabling,
   fallbackLadderFrom,
   fallbackPolicyDraftReducer,
@@ -187,6 +195,42 @@ function fallbackPanelDescription(scope: HostScope): string {
   const base = "When a provider blocks a turn, try these in order.";
   if (scope.host === null) return base;
   return `${base} Applies to your chat agents on ${scope.hostLabel}.`;
+}
+
+/** A host that does not read patterns has no pattern conflicts to draw. */
+const NO_TIER_CONFLICTS: readonly TierConflict[] = [];
+
+/**
+ * The tier list the editor's preview may ask about, or `null` for "ask
+ * nothing" - the panel's gate, documented where it is called.
+ *
+ * On a 1.0 line: the draft only while it is exactly what the host holds, which
+ * is today's gate. On 1.1 the same comparison is made with the draft's BLANK
+ * rows set aside, and the whole draft is sent, blank rows included. The host
+ * answers a blank row as a skipped row in its place, so every `candidateIndex`
+ * still pairs to the row on screen - and a freshly added row no longer blanks
+ * every other row's verdict while it waits for its pattern. A blank row is
+ * never saved (the draft's own validation still refuses it), which is why it
+ * is set aside before comparing with the persisted list rather than required
+ * to be in it.
+ */
+function previewableTierGroups(input: {
+  readonly keyed: readonly KeyedGroup[];
+  readonly persisted: readonly TierGroup[];
+  readonly draft: readonly TierGroup[];
+  readonly blankRowsTravel: boolean;
+}): readonly TierGroup[] | null {
+  const { keyed, persisted, draft, blankRowsTravel } = input;
+  if (!blankRowsTravel) {
+    return keyedGroupsMatch(keyed, persisted) ? draft : null;
+  }
+  const withoutBlankRows = keyed.map((group) => ({
+    ...group,
+    candidates: group.candidates.filter(
+      (candidate) => candidate.value.modelFamily.trim() !== "",
+    ),
+  }));
+  return keyedGroupsMatch(withoutBlankRows, persisted) ? draft : null;
 }
 
 function FallbackSettingsPanelBody(props: {
@@ -394,10 +438,12 @@ function FallbackPolicyEditor(props: {
    * The gate is one condition doing three jobs, which is why it is this one and
    * not a validity check:
    *
-   *  - **it is askable.** The request schema requires a non-empty `modelFamily`,
-   *    so the empty row "Add a model" creates cannot be encoded at all. An
-   *    uncommitted list holding one would be a malformed request produced by
-   *    ordinary editing.
+   *  - **it is askable.** The 1.0 request schema requires a non-empty
+   *    `modelFamily`, so the empty row "Add model" creates cannot be encoded at
+   *    all there. An uncommitted list holding one would be a malformed request
+   *    produced by ordinary editing. A 1.1 line takes blank rows and answers
+   *    each as a skipped row, so there the gate looks past them - see
+   *    `previewableTierGroups`.
    *  - **the answer is attributable.** Verdicts pair to rows by `candidateIndex`,
    *    which is sound only while the list they were computed for is the list
    *    being rendered. Previewing a list the editor is not showing would put one
@@ -417,11 +463,35 @@ function FallbackPolicyEditor(props: {
   // Same shape, same reason: one model-catalog read per distinct harness in the
   // draft serves every row's Model and Effort cells.
   const catalog = useFallbackCatalogOptions(state.draft.tierGroups);
+  // What this host does with a tier row, off the NEGOTIATED lines (never off a
+  // response): the pattern combobox and the conflict rendering need `get`@1.1,
+  // and a blank draft row may ride the preview only on `previewTierGroups`@1.1.
+  const patternLines = useFallbackPolicyPatternLines();
+  /**
+   * Every model two tiers of the DRAFT both claim, over the catalogs the editor
+   * already holds - rendered on the rows involved and never a gate: nothing
+   * here stops a save, the master switch or the timings (spec decision 9). A
+   * host that does not read patterns gets none, because "one model, one tier"
+   * is a pattern-era rule and a 1.0 host routes by its own word matcher.
+   */
+  const conflicts = useMemo<readonly TierConflict[]>(
+    () =>
+      patternLines.patterns
+        ? fallbackTierConflicts(
+            state.draft.tierGroups,
+            catalog.catalogsByHarness,
+          )
+        : NO_TIER_CONFLICTS,
+    [patternLines.patterns, state.draft.tierGroups, catalog.catalogsByHarness],
+  );
 
   const previewQuery = useFallbackPolicyPreviewTierGroupsQuery(
-    keyedGroupsMatch(state.keyedTierGroups, state.persisted.tierGroups)
-      ? state.draft.tierGroups
-      : null,
+    previewableTierGroups({
+      keyed: state.keyedTierGroups,
+      persisted: state.persisted.tierGroups,
+      draft: state.draft.tierGroups,
+      blankRowsTravel: patternLines.blankPreviewRows,
+    }),
   );
 
   /**
@@ -1061,7 +1131,9 @@ function FallbackPolicyEditor(props: {
                 // screen, so an edit on the Equivalent models tab clears it the
                 // moment the user adds a destination for their own model. A host
                 // call could only answer for what is saved.
-                tierStepHint={<TierStepHint policy={state.draft} />}
+                tierStepHint={
+                  <TierStepHint policy={state.draft} catalog={catalog} />
+                }
               />
               {saveStatusFor("ladder", "mt-3")}
             </div>
@@ -1094,6 +1166,8 @@ function FallbackPolicyEditor(props: {
             preview={previewQuery.data?.candidates ?? null}
             labelFor={profileLabelFor}
             catalog={catalog}
+            patternsSupported={patternLines.patterns}
+            conflicts={conflicts}
             previewPending={previewQuery.isFetching}
             // The distinction `preview` cannot make (FC9). `preview` is
             // data-or-null and a null renders no line, so a FAILED check was
@@ -1627,6 +1701,18 @@ function ProfileStepHint(): ReactNode {
  * protocol FOR this call site: the question is asked about a draft that has
  * never been saved, which no RPC can answer.
  *
+ * ## Which catalog the predicate is given
+ *
+ * The editor's cached one for the last-run harness (`catalogFor`), or `null`
+ * while it has not loaded - never a read of its own. It is enough by
+ * construction: the catalog matters only to a row ON the last-run harness (a
+ * pattern is matched against that harness's labels, and only a same-harness row
+ * can be "the blocked model and nothing else"), and a draft with such a row is
+ * exactly a draft whose harness set - the editor's read - includes it. With no
+ * such row the answer comes from the default tier and the catalog changes
+ * nothing. `null` is the protocol's ID-only answer, the safe direction it
+ * documents.
+ *
  * ## Why the model label is its own read
  *
  * The sentence names a MODEL, and it must name it the way every other surface
@@ -1647,8 +1733,10 @@ function ProfileStepHint(): ReactNode {
  */
 function TierStepHint({
   policy,
+  catalog,
 }: {
   readonly policy: FallbackPolicy;
+  readonly catalog: FallbackCatalogOptions;
 }): ReactNode {
   const hostId = useAddressableHostId();
   // `useOptionalHostClient()`, not `useHostClient()`, and the reason is this
@@ -1691,7 +1779,7 @@ function TierStepHint({
       defaultTierGroupId: policy.defaultTierGroupId,
       harnessId: lastRun.harnessId,
       model: lastRun.model,
-      catalog: null,
+      catalog: catalog.catalogFor(lastRun.harnessId),
     })
   ) {
     return null;
@@ -2141,7 +2229,7 @@ function unknownRequestAccount(carries: FallbackSaveCarries): string {
     case "reset":
       return "We couldn't confirm whether model routing was reset.";
     case "restore":
-      return "We couldn't confirm whether the default model groups were restored.";
+      return "We couldn't confirm whether the default tiers were restored.";
   }
 }
 
@@ -2313,7 +2401,7 @@ function refusalPrefix(carries: FallbackSaveCarries): string {
     case "reset":
       return "Couldn't reset these settings";
     case "restore":
-      return "Couldn't restore the default groups";
+      return "Couldn't restore the default tiers";
   }
 }
 
@@ -2325,7 +2413,7 @@ function refusedWithoutReason(carries: FallbackSaveCarries): string {
     case "reset":
       return "Couldn't reset these settings.";
     case "restore":
-      return "Couldn't restore the default groups.";
+      return "Couldn't restore the default tiers.";
   }
 }
 

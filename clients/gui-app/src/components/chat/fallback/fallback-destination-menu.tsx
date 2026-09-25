@@ -41,8 +41,10 @@ import {
   fallbackProviderModelLabel,
   useFallbackModelLabels,
   useFallbackProfileLabels,
+  type FallbackDestinationDescription,
   type FallbackModelLabelResolver,
 } from "./fallback-identity";
+import { FallbackPatternGlyph } from "@/components/settings/panels/fallback/fallback-pattern-glyph";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import {
   useFallbackListTargets,
@@ -833,24 +835,56 @@ function ModelRow({
           <HarnessIcon harnessId={knownHarness} className="size-3" />
         )
       }
-      // The RESOLVED model and its effort, with the family only as the
-      // fallback for a candidate the host stopped resolving. Titling by
-      // `modelFamily` unconditionally meant a group named `gpt` offered a
-      // click that would launch `gpt-6-astra`, and the row never said so.
+      // The RESOLVED model and its effort, with the tier row's pattern only as
+      // the fallback for a candidate the host stopped resolving. Titling by
+      // `modelFamily` unconditionally meant a tier row `*gpt*` offered a click
+      // that would launch `gpt-6-astra`, and the row never said so.
       //
       // The resolved arm is named by its CATALOGUE label - the row beside the
       // grace card that says "Switching to Claude Fable" must not offer
-      // "claude-fable-5-1[1m]". The family arm stays raw; it is a group name,
-      // not a slug.
-      title={fallbackDestinationRowTitle(
-        fallbackDestinationOfModelTarget(target, labelFor, modelLabelFor),
-      )}
+      // "claude-fable-5-1[1m]". The pattern arm stays raw and is drawn AS a
+      // pattern; it is what the user wrote, not a slug.
+      title={
+        <ModelRowTitle
+          destination={fallbackDestinationOfModelTarget(
+            target,
+            labelFor,
+            modelLabelFor,
+          )}
+        />
+      }
       recommended={false}
       severity={target.severity}
       usedPercent={target.usedPercent}
       note={target.skip?.label ?? labelFor(target.profileId)}
       warnings={target.warnings}
     />
+  );
+}
+
+/**
+ * An equivalent-model row's title: "Codex · GPT-6-Astra · high", or - for a row
+ * the host could not resolve - "Codex · [*] *luna* · high", the pattern in the
+ * tier editor's own badge and mono face, so it cannot read as a model's name.
+ * The badge's text alternative is "pattern", so the row is announced as one.
+ */
+function ModelRowTitle(props: {
+  readonly destination: FallbackDestinationDescription;
+}): ReactNode {
+  const { destination } = props;
+  if (!destination.modelIsFamily) {
+    return fallbackDestinationRowTitle(destination);
+  }
+  return (
+    <>
+      {destination.providerLabel}
+      {" · "}
+      <FallbackPatternGlyph tone="accent" />{" "}
+      <span className="font-mono">{destination.modelLabel}</span>
+      {destination.effortLabel === null
+        ? null
+        : ` · ${destination.effortLabel}`}
+    </>
   );
 }
 
@@ -869,7 +903,7 @@ function TargetRow({
   readonly disabled: boolean;
   readonly onClick: () => void;
   readonly icon: ReactNode | null;
-  readonly title: string;
+  readonly title: ReactNode;
   readonly recommended: boolean;
   readonly severity: string;
   readonly usedPercent: number | null;
