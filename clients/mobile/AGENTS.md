@@ -17,25 +17,30 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
 
 ## Layout invariants
 
-**One layout, every device.** The installed app is a phone-layout product on
-iPad as much as iPhone — by product decision, not by measurement. Three pieces
-hold it, and all three have to move together or the app half-changes shell:
+**One layout, every device — in the installed app.** The installed app is a
+phone-layout product on iPad as much as iPhone — by product decision, not by
+measurement. This same entry is also served to a plain browser tab (the
+launcher's `gui-app` stream), and that tab is **not** phone-only: it decides
+by width like any other window, so `make dev-gui-app` still shows the desktop
+layout in a wide browser. Three pieces hold the native side, and all three
+have to move together or the app half-changes shell:
 
-- `src/web/main.tsx` calls `setPhoneLayoutOnly(true)` **unconditionally**, and
-  `useIsMobileViewport()` reads that before it consults a media query. It is
-  deliberately not `isMobileApp()`: this same bundle is served to a plain
-  browser tab as the launcher's `gui-app` stream, where the native flag is
-  false, so keying layout off it would put that tab on the desktop layout
-  against phone CSS. `isMobileApp()` stays product-only (store copy, the
-  single-composer draft model) and decides no layout anywhere.
-- `src/web/index.css` pushes every Tailwind breakpoint out of reach, so `md:`
-  and `lg:` utilities cannot paint desktop controls over the phone shell at
-  tablet widths. The comment there explains why it is a sentinel value and not
+- `src/web/main.tsx` calls `setPhoneLayoutOnly(Capacitor.isNativePlatform())`,
+  and `useIsMobileViewport()` reads that before it consults a media query. It
+  is set from the same check as `isMobileApp()` but is deliberately a separate
+  flag: `isMobileApp()` stays product-only (store copy, the single-composer
+  draft model) and decides no layout anywhere.
+- `main.tsx` loads one of two stylesheets off that same check, before the
+  first render. `src/web/index.css` is the shared entry with the real
+  breakpoints, and is what the browser tab gets. `src/web/index.native.css`
+  imports it and pushes every Tailwind breakpoint out of reach, so `md:` and
+  `lg:` utilities cannot paint desktop controls over the phone shell at tablet
+  widths. The comment there explains why it is a sentinel value and not
   `--breakpoint-*: initial`. **Raw `@media` rules outside Tailwind do not get
   this for free** — a hand-written `max-width: 767px` tier is phone styling
   that silently stops applying on a tablet running the phone shell. Either key
-  it on the resolved layout, or override it here in `mobile.css`, which is what
-  the first-task coachmark's type scale does.
+  it on the resolved layout, or override it in `index.native.css`, which is
+  what the first-task coachmark's type scale does.
 - Both platforms are portrait-locked on tablets as well as phones. iOS:
   `UISupportedInterfaceOrientations~ipad` in **both** `Info.plist` and
   `Info-Dev.plist` (Debug builds use the latter, so they are what the lock is
@@ -48,25 +53,6 @@ hold it, and all three have to move together or the app half-changes shell:
   targetSdk 36 ignores that lock on anything sw600dp or larger. The opt-out
   disappears at targetSdk 37 and the comment in the manifest says what to do
   then (delete both; the phone layout handles free rotation).
-
-**Known limitation — the dev browser tab, 768–1024px, onboarding acts only.**
-This entry is also served to a plain browser tab (the launcher's `gui-app`
-stream), where `isMobileApp()` is false, so `OnboardingPage` mounts
-`OnboardingActs` rather than the welcome run. The hook says phone at every
-width there, but four of upstream's onboarding stylesheets — `onboarding.css`,
-`onboarding-import.css`, `onboarding-host-picker.css`, `onboarding-agents.css`
-— still gate their phone geometry behind a hand-written `max-width: 767px`,
-which the breakpoint sentinel cannot reach. Widen that tab past 768 and the
-acts render phone JS in desktop geometry: provider grid, 40px Continue.
-
-**It cannot happen in the installed app**, which never reaches those acts. It
-is left unfixed on purpose: the only two remedies are duplicating upstream's
-tiers here or rewriting upstream CSS, and neither is worth doing to a dev-only
-surface. The real fix belongs upstream and is small — the acts shell already
-carries `data-phone` from `useIsMobileViewport()` (`onboarding-page.tsx`), and
-`onboarding.css` already keys one rule on it, so those tiers want
-`[data-phone="true"]` instead of a width. Raise it there rather than patching
-around it here.
 
 ## Host and auth invariants
 

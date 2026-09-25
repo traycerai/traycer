@@ -3,7 +3,8 @@ import { isPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
  * VIEWPORT signal: "is the window currently narrow?" - nothing more, except in
- * a bundle that ships only the phone layout, where the answer is always yes.
+ * the installed mobile app, which ships only the phone layout, so the answer
+ * there is always yes.
  *
  * This is one of THREE distinct device/shell signals; picking the wrong one
  * causes subtle bugs, so choose by the question you are asking:
@@ -11,9 +12,9 @@ import { isPhoneLayoutOnly } from "@/lib/mobile-app";
  * - "Would resizing the window change this?" -> `useIsMobileViewport()`
  *   (this file). Pure layout: hamburger vs tab strip, drawer vs dialog.
  *   Flips live with the media query - a narrow DESKTOP browser window gets
- *   the mobile layout, and that is correct. The one exception is the mobile
- *   bundle, which has no desktop layout to offer and says so through
- *   `isPhoneLayoutOnly()` below; resizing cannot move it.
+ *   the mobile layout, and that is correct. The one exception is the
+ *   installed mobile app, which has no desktop layout to offer and says so
+ *   through `isPhoneLayoutOnly()` below; resizing cannot move it.
  * - "Is this the installed mobile app, as a product?" -> `isMobileApp()`
  *   (`@/lib/mobile-app`). Set once by the Capacitor entry, immutable.
  *   UX-policy divergence only (e.g. the single-composer draft model) -
@@ -57,7 +58,7 @@ function subscribeToMobileQuery(onChange: () => void): () => void {
  * six rotations delivered `change` against a stale width.
  */
 function readIsMobileSnapshot(): boolean {
-  // Policy before measurement: the mobile bundle has one layout at any width.
+  // Policy before measurement: the installed app has one layout at any width.
   if (isPhoneLayoutOnly()) return true;
   return window.matchMedia(MOBILE_QUERY).matches;
 }
