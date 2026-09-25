@@ -1716,4 +1716,73 @@ describe("host.getRateLimitUsage v5.0 antigravity arm + downgrade bridges", () =
       ).sort(),
     ).toEqual(["1", "2", "3", "4"]);
   });
+
+  // The tests above cover only the AVAILABLE antigravity arm. The
+  // `available: false` arm is a separate code path: none of
+  // `degradeProviderRateLimitsToV30/V21/V12` touch it (their available-arm
+  // maps never match a `provider: "antigravity"` row), so it is never
+  // rewritten to `unsupported_provider` the way an available cursor/grok/
+  // Hugging-Face/OpenCode row is. The v4.0 frozen union
+  // (`providerRateLimitsSchemaV80`) pins `provider` to the pre-Antigravity
+  // enum, so it refuses an unavailable antigravity row exactly like the
+  // available one above - it has no way to name the provider at all. But the
+  // v3.0/v2.1/v1.2 lines' unavailable arm (`unavailableProviderRateLimitsSchemaV2`
+  // / `V1`) tags `provider` with the LIVE, ever-growing `providerIdSchema`
+  // enum rather than a frozen one, so `{ provider: "antigravity", available:
+  // false, ... }` parses cleanly there even though those lines predate
+  // Antigravity entirely. The bridges therefore check the provider id before
+  // parsing (`namesProviderNewerThanV40`); these tests pin that refusal on
+  // every line - without the check, 5 -> 3/2/1 passed the row through with
+  // `ok: true`.
+  describe("the antigravity UNAVAILABLE arm on the 5.0 -> N bridges", () => {
+    const antigravityUnavailable = {
+      provider: "antigravity" as const,
+      available: false as const,
+      reason: "timeout" as const,
+    };
+
+    it("refuses on the 5.0 -> 4.0 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV4.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+
+    it("refuses on the 5.0 -> 3.0 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV3.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+
+    it("refuses on the 5.0 -> 2.1 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV2.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+
+    it("refuses on the 5.0 -> 1.2 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV1.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+  });
 });

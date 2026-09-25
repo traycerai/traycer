@@ -75,8 +75,10 @@ const EMPTY_RATE_LIMIT_REQUESTS: ReadonlyArray<
  * `fetchProviderRateLimits` with `target.fetchScope` - the tab's pinned host,
  * never the default-host-bound `useProviderRateLimitFetchScope` - so a
  * refresh from a tab-scoped picker reads and writes the host that tab runs
- * on; the `httpFetch` lane (openrouter, kilocode) refetches this profile's own
- * passive query directly. Refresh is independent of profile selection and
+ * on; the `httpFetch` lane (openrouter, kilocode, huggingface, opencode,
+ * cursor, antigravity) refetches this profile's own passive query directly,
+ * keyed by its profile id - which only antigravity, among those, has more
+ * than one of. Refresh is independent of profile selection and
  * picker/menu open state - each entry's `refresh` is a plain function a
  * caller invokes for whichever profile it is previewing.
  */
