@@ -114,8 +114,9 @@ bun run --cwd clients/mobile compile | test | build:web | sync:ios | sync:androi
 bun run --cwd clients/mobile dev:ios -- --slot <slot>      # dev:android
 ```
 
-`compile` and `test` are whole-project runs: leave them to the commit hook and
-CI, and run one only to diagnose its failure (see the root `AGENTS.md`).
+`compile` and `test` are whole-project runs. The commit hook compiles, and CI
+tests; run one yourself only to diagnose its failure (see the root
+`AGENTS.md`).
 
 Normal entry points live in the internal repo: `make dev-gui-app` then
 `make dev-ios` / `make dev-android` (resolve the worktree's slot, install,

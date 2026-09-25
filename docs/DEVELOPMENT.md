@@ -12,13 +12,16 @@ Deeper notes for working on the Traycer clients, CLI, and protocol.
 
 ```sh
 bun install
-bun run build           # all packages
 bunx nx run @traycer/protocol:build   # a single package
 ```
 
+`bun run build` builds every package; CI does that on each PR, so don't run it
+locally unless you are changing packaging. The same goes for the other
+whole-repo checks (see [`AGENTS.md`](../AGENTS.md)).
+
 ## Pre-commit hooks
 
-Install the hygiene hooks once with `pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg`; they then run on every commit (`pre-commit run --all-files` to run manually). The `commit-msg` hook type is required for DCO sign-off enforcement. Lint and format are enforced in CI.
+Install the hygiene hooks once with `pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg`; they then run on every commit, on what the commit affects. `pre-commit run --all-files` checks the whole repository, which CI already does. The `commit-msg` hook type is required for DCO sign-off enforcement. Lint and format are enforced in CI.
 
 ## Workspace layout
 

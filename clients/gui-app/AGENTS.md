@@ -13,18 +13,20 @@ Tailwind v4, shadcn/ui, Vitest + Testing Library.
 bun run dev
 bun run lint:files <paths>   # the files you changed; CI runs the whole-project lint
 bunx vitest run <path>       # one test file; CI runs the suite
-bun run react-doctor   # manual after .ts/.tsx changes; not in pre-commit
 ```
 
-Changed-files-only: `npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
+After .ts/.tsx changes, run react-doctor on the changed files only (manual; not
+in pre-commit): `npx -y react-doctor@latest . --verbose --diff <base> --offline
+--no-score`. `bun run react-doctor` scans the whole project.
 
 After making changes, lint the files you changed with `bun run lint:files
 <paths>` and fix all errors. `@shadcn/lint` runs there and reads
 `components.json` and `src/index.css`, so its errors name this app's real
 variants, sizes and tokens — the fix is in the message. Don't run `bun run
-lint`, `compile`, `test` or `build` here: each is a whole-project run (the lint
-needs about 9 GB whichever files you touched), and the commit hook and CI run
-them (see the root `AGENTS.md`).
+lint`, `test` or `build` here, and run `compile` only to diagnose its failure:
+each is a whole-project run (the lint needs about 9 GB whichever files you
+touched). The commit hook lints and compiles, and CI runs all four (see the
+root `AGENTS.md`).
 
 **A `shadcn/no-restyle` error is answered in `src/components/ui/`, not in
 `eslint.config.mjs`.** Every design-system component has a CONTRACT in that
@@ -42,8 +44,7 @@ and the reason written above it.
 **Commits:** nothing needs running by hand before a commit — repo-root
 `pre-commit` already runs the affected checks (see root `AGENTS.md`), and
 `lint:files` above is feedback while you work, not a gate. Tests are CI, not
-the hook. Re-run checks only when diagnosing
-failures. `react-doctor` stays manual (not hooked).
+the hook. `react-doctor` stays manual (not hooked).
 
 ## Map
 
