@@ -633,9 +633,21 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pastePending,
     annotationPreparationPending,
   );
+  // The phone sheet (`ComposerShell`'s `expansion`). Sending drops back to the
+  // compact card: an empty full-screen editor over a reply that just started
+  // is the wrong thing to be looking at.
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const composerExpansion = useMemo(
+    () => ({
+      expanded: composerExpanded,
+      onExpandedChange: setComposerExpanded,
+    }),
+    [composerExpanded],
+  );
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
       submitDraft(source);
+      setComposerExpanded(false);
     },
     [submitDraft],
   );
@@ -788,6 +800,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onDragLeave={onDragLeave}
                 dragOverlayVariant={dragOverlayVariant}
                 utilityRail={null}
+                expansion={composerExpansion}
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
                     taskId={taskId}

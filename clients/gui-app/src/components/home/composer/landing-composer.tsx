@@ -183,6 +183,16 @@ export function LandingComposer(props: LandingComposerProps) {
   // Only the toolbar slot swaps, so the editor keeps its position in the tree
   // and never remounts when the viewport crosses the breakpoint.
   const isMobile = useIsMobileViewport();
+  // The phone sheet (`ComposerShell`'s `expansion`); a sent draft drops it
+  // back to the compact card.
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const composerExpansion = useMemo(
+    () => ({
+      expanded: composerExpanded,
+      onExpandedChange: setComposerExpanded,
+    }),
+    [composerExpanded],
+  );
 
   useEffect(() => {
     return () => {
@@ -639,6 +649,7 @@ export function LandingComposer(props: LandingComposerProps) {
     raiseHostNotice(
       refusal === null ? null : { kind: "refused", message: refusal.message },
     );
+    if (refusal === null) setComposerExpanded(false);
     return refusal === null;
   }, [actions, canSubmit, draftId, pickerStore, raiseHostNotice, toolbarStore]);
 
@@ -713,6 +724,7 @@ export function LandingComposer(props: LandingComposerProps) {
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
+      expansion={composerExpansion}
       topBanner={
         <>
           <ComposerHostNotice

@@ -788,6 +788,12 @@ function editorAttributes(
   return {
     class: cn(
       "block max-h-[min(50vh,15rem)] min-h-10 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent text-ui leading-relaxed text-foreground focus:outline-none",
+      // The phone layout caps the editor against what is VISIBLE, not the
+      // screen: `--spacing-safe-dvh` already has the keyboard taken off it, so
+      // with the keyboard up a long draft keeps the conversation in view
+      // instead of pushing it off the top. A pull on the grabber
+      // (`composer-expand-handle.tsx`) lifts the cap.
+      "max-md:max-h-[min(calc(var(--spacing-safe-dvh)*0.3),15rem)]",
       className,
     ),
     "data-testid": "composer-editor",
