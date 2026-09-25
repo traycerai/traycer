@@ -207,6 +207,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           // Model name only: the row has room for it, but the thinking-effort
           // suffix the desktop pill adds reads as clutter at this width.
           labelDisplay="model-only"
+          embedding={null}
         />
         {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
         {dictation === null && dictationPreparing !== null ? (

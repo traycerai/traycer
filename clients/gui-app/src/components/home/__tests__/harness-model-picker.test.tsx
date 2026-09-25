@@ -1015,6 +1015,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
   const resolvedInput = input ?? {};
   const selection = resolvedInput.selection ?? defaultSelection();
   const store = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "picker-test",
     values: {
       permission: "supervised",
@@ -1073,6 +1074,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
           profileAdmission={resolvedInput.profileAdmission ?? null}
           terminalLoginSurface={null}
+          embedding={null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>

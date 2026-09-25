@@ -120,6 +120,12 @@ interface HarnessModelPickerPanelProps {
     string | null,
     ProfileRowAdmission
   > | null;
+  /**
+   * Hand focus to the active composer's editor on close. `false` for an
+   * embedded picker (`HarnessModelPickerEmbedding`): Radix's own restore
+   * returns focus to the surface's face instead.
+   */
+  readonly closeFocusesComposer: boolean;
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
@@ -177,6 +183,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     createProfileDisabled,
     createProfileDisabledReason,
     profileAdmission,
+    closeFocusesComposer,
   } = props;
   const openAddProfile = useProviderProfileAddFlowStore(
     (state) => state.openForHarness,
@@ -207,8 +214,11 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // Return focus to the composer editor (not the trigger pill) on close so
       // the user can keep typing after picking a model. No-op on surfaces with
       // no registered composer (e.g. the terminal launcher), where Radix's
-      // default focus restore stands.
+      // default focus restore stands. An embedded picker never asks: the
+      // registry falls back to ANY registered composer, which from outside
+      // one would pull an unrelated chat to the front.
       onCloseAutoFocus={(event) => {
+        if (!closeFocusesComposer) return;
         if (focusActiveComposer()) event.preventDefault();
       }}
       ref={contentRef}

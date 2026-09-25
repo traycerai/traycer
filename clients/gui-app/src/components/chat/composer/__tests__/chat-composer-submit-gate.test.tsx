@@ -69,6 +69,7 @@ describe("chat-composer submit gate (path resolution)", () => {
     editorRef.current = editorHandle({ content: DIRTY, ready: true });
     const pickerStore = createComposerPickerStore();
     const toolbarStore = createComposerToolbarStore({
+      purpose: "run",
       seedKey: "chat-submit-gate-test",
       values: {
         permission: "supervised",
@@ -402,6 +403,7 @@ function mountSubmitHook(args: {
 }) {
   const pickerStore = createComposerPickerStore();
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "chat-submit-gate-ready-test",
     values: {
       permission: "supervised",

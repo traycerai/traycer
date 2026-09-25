@@ -230,6 +230,7 @@ function mutableFakeEditor(initial: JsonContent): {
 
 function makeToolbarStore(seedKey: string) {
   return createComposerToolbarStore({
+    purpose: "run",
     seedKey,
     values: {
       permission: "supervised",

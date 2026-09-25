@@ -163,6 +163,7 @@ function createLandingToolbarStore(
   profileId: string | null,
 ): ComposerToolbarStore {
   return createComposerToolbarStore({
+    purpose: "run",
     seedKey: `landing-durability:${profileId ?? "ambient"}`,
     values: {
       permission: "supervised",

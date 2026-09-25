@@ -125,6 +125,7 @@ function mountSubmit(
   onSubmitMessage: (input: ChatComposerSubmitInput) => boolean,
 ) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "reconcile-submit",
     values: {
       permission: "supervised",
