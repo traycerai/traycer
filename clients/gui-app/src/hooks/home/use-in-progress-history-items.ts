@@ -6,7 +6,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { useWorkingEpicIds } from "@/stores/use-working-epic-ids";
+import { useTurnEpicIds } from "@/stores/use-working-epic-ids";
 
 const EMPTY_EPIC_IDS: readonly string[] = [];
 const EMPTY_ITEMS: readonly HistoryItem[] = [];
@@ -29,7 +29,8 @@ export interface UseInProgressHistoryItemsParams {
 }
 
 /**
- * The rows for the tasks an agent is working on right now, newest first.
+ * The rows for the tasks an agent is replying in right now, newest first. A
+ * task whose only activity is a background shell or monitor is not lifted.
  *
  * The phone's cheap counterpart to `useCurrentTasks`, which is what Home uses
  * to build the same group on desktop. That hook cannot be mounted here: the
@@ -40,7 +41,7 @@ export interface UseInProgressHistoryItemsParams {
  *
  * What is left is the two things the `inProgress` group actually needs:
  *
- *  1. {@link useWorkingEpicIds} - a `useSyncExternalStore` read over the
+ *  1. {@link useTurnEpicIds} - a `useSyncExternalStore` read over the
  *     agent-activity store and the warm chat/epic registries. Already
  *     populated, no request of its own.
  *  2. The rows. Most come from the feed the caller already fetched; the
@@ -60,7 +61,7 @@ export function useInProgressHistoryItems(
   // `updatedBucket` are rendered strings, and a fresh `Date.now()` per render
   // would rebuild every row to say the same thing.
   const [nowMs] = useState(() => Date.now());
-  const workingEpicIds = useWorkingEpicIds();
+  const workingEpicIds = useTurnEpicIds();
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
