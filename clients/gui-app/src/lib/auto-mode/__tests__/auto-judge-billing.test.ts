@@ -386,7 +386,7 @@ describe("autoJudgeTarget", () => {
     });
   });
 
-  // The wire accepts `judgeDefaultModel: ""`, and Settings' `defaultJudgeModelFor`
+  // The wire accepts `judgeDefaultModel: ""`, and Settings' `judgeSwitchModel`
   // reads it as "no default"; the composer must reach the same answer for the
   // same row rather than naming a blank model.
   it("under fallback, reads an empty judgeDefaultModel as no default and names the composer's model", () => {
@@ -800,7 +800,7 @@ describe("autoModeMidTurnLock", () => {
         judgeBilling: PROVIDER_NATIVE_BILLING,
       }),
     ).toBe(
-      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
   });
 
@@ -910,18 +910,21 @@ describe("autoJudgeGetKnowsReasoningEffort", () => {
     expect(autoJudgeGetKnowsReasoningEffort(null)).toBe(false);
   });
 
-  it("is false for {major: 1, minor: 1} - predates the 1.2 line", () => {
+  it("is false for {major: 1, minor: 2} - predates the 1.3 line (1.2 is the last-pick line, which runs the model's own default)", () => {
     expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 1 })).toBe(
+      false,
+    );
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 2 })).toBe(
       false,
     );
   });
 
-  it("is true for exactly {major: 1, minor: 2}", () => {
-    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 2 })).toBe(true);
+  it("is true for exactly {major: 1, minor: 3}", () => {
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 3 })).toBe(true);
   });
 
-  it("is true for {major: 1, minor: 3} - a later 1.x minor", () => {
-    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 3 })).toBe(true);
+  it("is true for {major: 1, minor: 4} - a later 1.x minor", () => {
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 4 })).toBe(true);
   });
 
   it("is false for {major: 2, minor: 0} - a different major line", () => {
@@ -931,24 +934,27 @@ describe("autoJudgeGetKnowsReasoningEffort", () => {
   });
 });
 
-// The Effort FIELD's gate, on the `set` line, through the same comparison as
+// The effort FOOTER's gate, on the `set` line, through the same comparison as
 // the label gate above (`negotiatedLineReaches`).
 describe("autoJudgeSetStoresReasoningEffort", () => {
   it("is false for null - no handshake yet", () => {
     expect(autoJudgeSetStoresReasoningEffort(null)).toBe(false);
   });
 
-  it("is false for {major: 1, minor: 1} - the request upgrade resets the effort", () => {
+  it("is false for {major: 1, minor: 1} and {major: 1, minor: 2} - the request upgrade resets the effort", () => {
     expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 1 })).toBe(
+      false,
+    );
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 2 })).toBe(
       false,
     );
   });
 
-  it("is true for {major: 1, minor: 2} and later 1.x minors", () => {
-    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 2 })).toBe(
+  it("is true for {major: 1, minor: 3} and later 1.x minors", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 3 })).toBe(
       true,
     );
-    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 3 })).toBe(
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 4 })).toBe(
       true,
     );
   });

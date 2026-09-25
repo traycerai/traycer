@@ -1,7 +1,7 @@
 /**
- * The pure half of Settings ▸ Permissions ▸ Judge: what a choice of provider
- * commits, which providers and accounts can run a judge today, and what is
- * wrong with the stored judge record.
+ * The pure half of Settings ▸ Permissions ▸ Judge: what a provider switch in
+ * the judge's picker commits, which providers can run a judge today, and what
+ * is wrong with a judge record.
  *
  * Kept apart from the tab because a module that exports a component may
  * export nothing else - fast refresh replaces the whole module, so
@@ -14,11 +14,7 @@ import {
   modelMatchIsCovered,
   resolveModelBySlug,
 } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
-import {
-  isProfileEnabled,
-  type ProviderCliState,
-  type ProviderProfile,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type {
   AutoJudgeBlocked,
   AutoJudgeSelection,
@@ -27,8 +23,8 @@ import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 /**
- * Why a provider cannot run a judge on this machine today, as the Provider
- * field's disabled row says it. `null` when it can.
+ * Why a provider cannot run a judge on this machine today, as the warning
+ * line and the dimmed last pick say it. `null` when it can.
  *
  * Checked in the order a fix has to happen: a provider that is turned off is
  * that first, whatever else is wrong with it; one that is signed out is
@@ -55,20 +51,6 @@ export function judgeProviderBlocker(
   return row.unavailableReason === "other" ? "Not available" : "Not installed";
 }
 
-/**
- * Why one account of a provider cannot run the judge, or `null` when it can:
- * an account turned off host-wide, or one whose provider takes an API key and
- * has none stored for it.
- */
-export function judgeProfileBlocker(profile: ProviderProfile): string | null {
-  if (!isProfileEnabled(profile)) return "Turned off";
-  const apiKey = profile.apiKey ?? null;
-  if (apiKey !== null && apiKey.supported && !apiKey.configured) {
-    return "No API key";
-  }
-  return null;
-}
-
 /** The provider state behind a catalog row, or `undefined` when unknown. */
 export function providerForHarness(
   providers: ReadonlyArray<ProviderCliState> | undefined,
@@ -82,55 +64,19 @@ export function providerForHarness(
 }
 
 /**
- * The account a newly chosen provider judges on: its first account that can
- * run one, as a COMMIT id (ambient is `null`, never the wire sentinel). `null`
- * - the ambient login - when `providers.list` has not answered or the provider
- * offers no runnable account, which is what the host falls back to anyway.
+ * The model a provider switch in the judge's picker commits: the row's
+ * `judgeDefaultModel` when it names one, else `""`, which the judge's toolbar
+ * store resolves to that provider's catalog default once its models load.
+ * Only Claude Code names one today. `""` on the row reads as none too - the
+ * wire accepts it - so it never becomes a model the picker commits.
  */
-export function firstOfferedJudgeProfileId(
-  provider: ProviderCliState | undefined,
-): string | null {
-  const profile = provider?.profiles.find(
-    (candidate) => judgeProfileBlocker(candidate) === null,
-  );
-  return profile === undefined ? null : profileCommitId(profile);
-}
-
-/**
- * The model a newly chosen provider judges on: the row's `judgeDefaultModel`
- * when it names one, else its catalog's first model - adapters list their
- * recommended model first, and there is no "default" flag to read instead.
- * `null` when neither is known yet: the catalog has not answered, and the
- * caller waits for it rather than committing a guess.
- */
-export function defaultJudgeModelFor(
-  row: GuiHarnessOption,
-  models: ReadonlyArray<GuiAgentModelOption> | undefined,
-): string | null {
-  const named = row.judgeDefaultModel ?? null;
-  if (named !== null && named.length > 0) return named;
-  return models?.at(0)?.slug ?? null;
-}
-
-/**
- * The selection a choice of provider commits: that provider, its default judge
- * model and its first runnable account. `null` while the model is not known.
- */
-export function judgeSelectionForProvider(input: {
-  readonly row: GuiHarnessOption;
-  readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
-  readonly provider: ProviderCliState | undefined;
-}): AutoJudgeSelection | null {
-  const model = defaultJudgeModelFor(input.row, input.models);
-  if (model === null) return null;
-  return {
-    harnessId: input.row.id,
-    model,
-    profileId: firstOfferedJudgeProfileId(input.provider),
-    // The host's default for the model (its lowest advertised effort); the
-    // Judge tab's effort field is where a person raises it.
-    reasoningEffort: null,
-  };
+export function judgeSwitchModel(
+  harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+  harnessId: string,
+): string {
+  const named =
+    harnesses?.find((row) => row.id === harnessId)?.judgeDefaultModel ?? null;
+  return named !== null && named.length > 0 ? named : "";
 }
 
 /**
@@ -146,7 +92,10 @@ export type JudgeWarningCause =
   | { readonly kind: "profile" };
 
 /**
- * What is wrong with the stored judge record, or `null` when it can run.
+ * What is wrong with a judge record, or `null` when it can run: the stored
+ * one, or the last pick the Judge tab keeps on show while Automatic is on
+ * (asked with `blocked: null`, since the host computes that verdict only for
+ * the stored selection).
  *
  * The host's own `blocked` verdict first, since it is the one the host acts
  * on; then a harness this build does not know; then the stored provider, whose
@@ -157,9 +106,9 @@ export type JudgeWarningCause =
  * model catalog or a providers read that has not answered is `undefined`, and
  * `undefined` is never evidence that something is gone - so nothing is
  * reported past the host's verdict until the harness catalog has answered.
- * The caller does not ask while a pick is in flight: the controls present the
- * pick, the record waits for the write, and the two differing is the one
- * difference that means nothing is wrong.
+ * The caller does not ask about the stored record while a pick is in flight:
+ * the tiles present the pick, the record waits for the write, and the two
+ * differing is the one difference that means nothing is wrong.
  */
 export function judgeWarningCause(input: {
   readonly stored: AutoJudgeSelection;
@@ -193,16 +142,18 @@ export function judgeWarningCause(input: {
 }
 
 /**
- * The line under a provider chosen whose catalog answered with nothing to
- * judge on: the pick stays on screen, uncommitted, and this says why.
+ * The second tile's line for a provider switch whose catalog answered with
+ * nothing to judge on: the switch waits in the picker's store, unsaved, and
+ * this says why.
  */
 export function judgeNoModelsLine(providerLabel: string): string {
   return `${providerLabel} offers no models on this machine. Pick another provider.`;
 }
 
 /**
- * The line under a provider whose catalog read failed. Reopening Settings
- * remounts the tab, and a query in error refetches on mount.
+ * The second tile's line for a provider switch whose catalog read failed.
+ * Reopening Settings remounts the tab, and a query in error refetches on
+ * mount.
  */
 export function judgeModelsFailedLine(providerLabel: string): string {
   return `Couldn't load ${providerLabel}'s models. Reopen Settings to try again, or pick another provider.`;

@@ -1,349 +1,401 @@
 import { describe, expect, it } from "vitest";
-import { validateVersionedRpcRegistry } from "@traycer/protocol/framework/index";
-import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  autoJudgeGetResponseSchema,
-  autoJudgeGetResponseSchemaV10,
-  autoJudgeGetResponseSchemaV11,
+  autoJudgeGetUpgradeV10ToV11,
   autoJudgeGetUpgradeV11ToV12,
+  autoJudgeGetUpgradeV12ToV13,
   autoJudgeGetV10,
   autoJudgeGetV11,
   autoJudgeGetV12,
-  autoJudgeSelectionSchema,
-  autoJudgeSelectionSchemaPreEffort,
-  autoJudgeSetRequestSchemaPreEffort,
-  autoJudgeSetResponseSchema,
-  autoJudgeSetResponseSchemaV10,
-  autoJudgeSetResponseSchemaV11,
+  autoJudgeSetUpgradeV10ToV11,
   autoJudgeSetUpgradeV11ToV12,
+  autoJudgeSetUpgradeV12ToV13,
   autoJudgeSetV10,
   autoJudgeSetV11,
   autoJudgeSetV12,
   projectAutoJudgeGetResponseToV10,
   projectAutoJudgeSetResponseToV10,
-  type AutoJudgeGetResponse,
+  type AutoJudgeGetRequest,
+  type AutoJudgeGetResponseV12,
   type AutoJudgeGetResponseV10,
-  type AutoJudgeSetResponse,
+  type AutoJudgeGetResponseV11,
+  type AutoJudgeSelectionPreEffort,
+  type AutoJudgeSetRequestPreEffort,
+  type AutoJudgeSetResponseV12,
   type AutoJudgeSetResponseV10,
+  type AutoJudgeSetResponseV11,
 } from "@traycer/protocol/host/auto-mode/contracts";
 
 /**
- * `autoJudge.get` / `autoJudge.set`'s `1.2` line: the `reasoningEffort` key
- * added to the judge selection. Unlike `1.1`, this is REQUEST growth too (the
- * `set` request's `selection` gains the field), and it is a KEY, not a value
- * or union-arm change, so no `responseGrowthProjectionGated` is declared for
- * it - a `<=1.1` caller's non-strict decode drops the key on its own. See
- * `contracts.ts`'s module docblock and the `1.2` section comment for the
- * motivation.
+ * `autoJudge.get` / `autoJudge.set`'s `1.2` line: the optional `lastSelection`
+ * key, the `1.1` -> `1.2` upgrade that cannot invent it, and the `1.0`
+ * projection that never copies it. See `contracts.ts`'s module docblock.
+ *
+ * `1.2` is a FIXED line since `1.3` opened (the judge's `reasoningEffort`):
+ * its selection is the pre-effort triple, bound through the `...V12` objects.
+ * `auto-judge-v13-contracts.test.ts` covers the head.
  */
 
-describe("autoJudge selection: 1.2 requires reasoningEffort, 1.0/1.1 do not", () => {
-  it("the live selection schema requires reasoningEffort", () => {
-    const withoutEffort = {
-      harnessId: "claude",
-      model: "claude-sonnet",
-      profileId: null,
-    };
-    expect(autoJudgeSelectionSchema.safeParse(withoutEffort).success).toBe(
-      false,
-    );
-    expect(
-      autoJudgeSelectionSchema.safeParse({
-        ...withoutEffort,
-        reasoningEffort: null,
-      }).success,
-    ).toBe(true);
-    expect(
-      autoJudgeSelectionSchema.safeParse({
-        ...withoutEffort,
-        reasoningEffort: "low",
-      }).success,
-    ).toBe(true);
-  });
+const selection: AutoJudgeSelectionPreEffort = {
+  harnessId: "claude",
+  model: "claude-sonnet",
+  profileId: null,
+};
 
-  it("the same literal (no reasoningEffort) parses under the frozen pre-effort schema", () => {
-    const withoutEffort = {
-      harnessId: "claude",
-      model: "claude-sonnet",
-      profileId: null,
-    };
-    expect(
-      autoJudgeSelectionSchemaPreEffort.safeParse(withoutEffort).success,
-    ).toBe(true);
-  });
-});
+const selectionEffective = {
+  harnessId: "claude",
+  model: "claude-sonnet",
+  source: "selection" as const,
+};
 
 describe("autoJudge.get/set@1.1 -> 1.2: the upgrade", () => {
-  it("upgradeRequest passes a get request through unchanged", () => {
-    const request = {};
-    expect(autoJudgeGetUpgradeV11ToV12.upgradeRequest(request)).toEqual(
-      request,
-    );
-  });
-
-  it("set's upgradeRequest turns a 1.1 selection into one with reasoningEffort: null", () => {
-    const v11Request = {
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-      },
+  it("leaves lastSelection absent and preserves a non-null selection with effective/blocked", () => {
+    const v11: AutoJudgeGetResponseV11 = {
+      selection,
+      effective: selectionEffective,
+      blocked: null,
     };
-    const upgraded = autoJudgeSetUpgradeV11ToV12.upgradeRequest(v11Request);
-    expect(upgraded).toEqual({
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-        reasoningEffort: null,
-      },
-    });
-    // The upgraded shape is a valid 1.2 request.
-    const parsed = autoJudgeSetV12.requestSchema.safeParse(upgraded);
-    expect(parsed.success).toBe(true);
-  });
-
-  it("set's upgradeRequest passes selection: null through unchanged", () => {
-    const v11Request = autoJudgeSetRequestSchemaPreEffort.parse({
-      selection: null,
-    });
-    const upgraded = autoJudgeSetUpgradeV11ToV12.upgradeRequest(v11Request);
-    expect(upgraded).toEqual({ selection: null });
-  });
-
-  it("get's upgradeResponse adds reasoningEffort: null to a selection and leaves effective/blocked untouched", () => {
-    const v11Response = autoJudgeGetResponseSchemaV11.parse({
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-      },
-      effective: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        source: "selection",
-      },
-      blocked: null,
-    });
-    const upgraded = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11Response);
-    expect(upgraded).toEqual({
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-        reasoningEffort: null,
-      },
-      effective: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        source: "selection",
-      },
-      blocked: null,
-    });
+    const upgraded = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11);
+    expect(Object.hasOwn(upgraded, "lastSelection")).toBe(false);
+    expect(upgraded.selection).toEqual(selection);
+    expect(upgraded.effective).toEqual(selectionEffective);
+    expect(upgraded.blocked).toBeNull();
     expect(autoJudgeGetV12.responseSchema.safeParse(upgraded).success).toBe(
       true,
     );
+
+    const setV11: AutoJudgeSetResponseV11 = {
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+    };
+    const setUpgraded = autoJudgeSetUpgradeV11ToV12.upgradeResponse(setV11);
+    expect(Object.hasOwn(setUpgraded, "lastSelection")).toBe(false);
+    expect(setUpgraded.selection).toEqual(selection);
+    expect(setUpgraded.effective).toEqual(selectionEffective);
+    expect(setUpgraded.blocked).toBeNull();
+    expect(autoJudgeSetV12.responseSchema.safeParse(setUpgraded).success).toBe(
+      true,
+    );
   });
 
-  it("get's upgradeResponse leaves a fallback effective untouched", () => {
-    const v11Response = autoJudgeGetResponseSchemaV11.parse({
+  it("leaves lastSelection absent with a null selection and a fallback effective", () => {
+    const v11: AutoJudgeGetResponseV11 = {
       selection: null,
       effective: { source: "fallback" },
       blocked: null,
-    });
-    const upgraded = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11Response);
-    expect(upgraded.effective).toEqual({ source: "fallback" });
+    };
+    const upgraded = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11);
+    expect(Object.hasOwn(upgraded, "lastSelection")).toBe(false);
     expect(upgraded.selection).toBeNull();
-  });
-
-  it("get's upgradeResponse turns a null selection into null, not an object", () => {
-    const v11Response = autoJudgeGetResponseSchemaV11.parse({
-      selection: null,
-    });
-    const upgraded = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11Response);
-    expect(upgraded.selection).toBeNull();
-  });
-
-  it("set's upgradeResponse adds reasoningEffort: null to a selection and leaves effective/blocked untouched", () => {
-    const v11Response = autoJudgeSetResponseSchemaV11.parse({
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-      },
-      effective: null,
-      blocked: { reason: "unsupported-harness" },
-    });
-    const upgraded = autoJudgeSetUpgradeV11ToV12.upgradeResponse(v11Response);
-    expect(upgraded).toEqual({
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-        reasoningEffort: null,
-      },
-      effective: null,
-      blocked: { reason: "unsupported-harness" },
-    });
-    expect(autoJudgeSetV12.responseSchema.safeParse(upgraded).success).toBe(
-      true,
-    );
-  });
-
-  it("set's upgradeResponse leaves a fallback effective untouched", () => {
-    const v11Response = autoJudgeSetResponseSchemaV11.parse({
-      selection: null,
-      effective: { source: "fallback" },
-      blocked: null,
-    });
-    const upgraded = autoJudgeSetUpgradeV11ToV12.upgradeResponse(v11Response);
     expect(upgraded.effective).toEqual({ source: "fallback" });
+    expect(upgraded.blocked).toBeNull();
+    expect(autoJudgeGetV12.responseSchema.safeParse(upgraded).success).toBe(
+      true,
+    );
+
+    const setV11: AutoJudgeSetResponseV11 = {
+      selection: null,
+      effective: { source: "fallback" },
+      blocked: null,
+    };
+    const setUpgraded = autoJudgeSetUpgradeV11ToV12.upgradeResponse(setV11);
+    expect(Object.hasOwn(setUpgraded, "lastSelection")).toBe(false);
+    expect(setUpgraded.selection).toBeNull();
+    expect(setUpgraded.effective).toEqual({ source: "fallback" });
+    expect(setUpgraded.blocked).toBeNull();
+    expect(autoJudgeSetV12.responseSchema.safeParse(setUpgraded).success).toBe(
+      true,
+    );
+  });
+
+  it("preserves absent effective/blocked as absent", () => {
+    const v11: AutoJudgeGetResponseV11 = { selection: null };
+    const upgraded = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11);
+    expect(Object.hasOwn(upgraded, "lastSelection")).toBe(false);
+    expect(Object.hasOwn(upgraded, "effective")).toBe(false);
+    expect(Object.hasOwn(upgraded, "blocked")).toBe(false);
+    expect(upgraded.selection).toBeNull();
+    expect(autoJudgeGetV12.responseSchema.safeParse(upgraded).success).toBe(
+      true,
+    );
+
+    const setV11: AutoJudgeSetResponseV11 = { selection: null };
+    const setUpgraded = autoJudgeSetUpgradeV11ToV12.upgradeResponse(setV11);
+    expect(Object.hasOwn(setUpgraded, "lastSelection")).toBe(false);
+    expect(Object.hasOwn(setUpgraded, "effective")).toBe(false);
+    expect(Object.hasOwn(setUpgraded, "blocked")).toBe(false);
+    expect(autoJudgeSetV12.responseSchema.safeParse(setUpgraded).success).toBe(
+      true,
+    );
+  });
+
+  it("upgradeRequest is identity", () => {
+    const getRequest: AutoJudgeGetRequest = {};
+    expect(autoJudgeGetUpgradeV11ToV12.upgradeRequest(getRequest)).toBe(
+      getRequest,
+    );
+
+    const setRequest: AutoJudgeSetRequestPreEffort = { selection };
+    expect(autoJudgeSetUpgradeV11ToV12.upgradeRequest(setRequest)).toBe(
+      setRequest,
+    );
+    const setNull: AutoJudgeSetRequestPreEffort = { selection: null };
+    expect(autoJudgeSetUpgradeV11ToV12.upgradeRequest(setNull)).toBe(setNull);
   });
 });
 
-describe("autoJudge.get/set@1.2 -> 1.0: the projection still strips the effort", () => {
-  it("strips reasoningEffort from selection and maps a fallback effective to provider-disabled", () => {
-    const input: AutoJudgeGetResponse = {
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-        reasoningEffort: "high",
-      },
-      effective: { source: "fallback" },
+describe("autoJudge.get/set@1.1 parse of a 1.2 answer", () => {
+  it("drops lastSelection as an object and otherwise equals the input minus the key", () => {
+    const v12: AutoJudgeGetResponseV12 = {
+      selection,
+      effective: selectionEffective,
       blocked: null,
+      lastSelection: selection,
     };
-    const expected: AutoJudgeGetResponseV10 = {
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-      },
-      effective: null,
-      blocked: { reason: "provider-disabled" },
-    };
-    const projected = projectAutoJudgeGetResponseToV10(input);
-    expect(projected).toEqual(expected);
-    expect(
-      projected.selection !== null &&
-        Object.hasOwn(projected.selection, "reasoningEffort"),
-    ).toBe(false);
-    expect(autoJudgeGetV10.responseSchema.safeParse(projected).success).toBe(
-      true,
-    );
-  });
-
-  it("does the same projection for autoJudge.set's echo", () => {
-    const input: AutoJudgeSetResponse = {
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-        reasoningEffort: "low",
-      },
-      effective: { source: "fallback" },
+    const parsed = autoJudgeGetV11.responseSchema.parse(v12);
+    expect(Object.hasOwn(parsed, "lastSelection")).toBe(false);
+    expect(parsed).toEqual({
+      selection,
+      effective: selectionEffective,
       blocked: null,
-    };
-    const expected: AutoJudgeSetResponseV10 = {
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-      },
-      effective: null,
-      blocked: { reason: "provider-disabled" },
-    };
-    const projected = projectAutoJudgeSetResponseToV10(input);
-    expect(projected).toEqual(expected);
-    expect(
-      projected.selection !== null &&
-        Object.hasOwn(projected.selection, "reasoningEffort"),
-    ).toBe(false);
-    expect(autoJudgeSetV10.responseSchema.safeParse(projected).success).toBe(
-      true,
-    );
-  });
-
-  it("strips reasoningEffort even when effective is not a fallback", () => {
-    const input: AutoJudgeGetResponse = {
-      selection: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        profileId: null,
-        reasoningEffort: null,
-      },
-      effective: {
-        harnessId: "claude",
-        model: "claude-sonnet",
-        source: "selection",
-      },
-      blocked: null,
-    };
-    const projected = projectAutoJudgeGetResponseToV10(input);
-    expect(projected.selection).toEqual({
-      harnessId: "claude",
-      model: "claude-sonnet",
-      profileId: null,
     });
-    expect(projected.effective).toEqual(input.effective);
+
+    const setV12: AutoJudgeSetResponseV12 = {
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+      lastSelection: selection,
+    };
+    const setParsed = autoJudgeSetV11.responseSchema.parse(setV12);
+    expect(Object.hasOwn(setParsed, "lastSelection")).toBe(false);
+    expect(setParsed).toEqual({
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+    });
   });
 
-  it("passes a null selection through as null", () => {
-    const input: AutoJudgeGetResponse = { selection: null };
-    expect(projectAutoJudgeGetResponseToV10(input).selection).toBeNull();
+  it("drops lastSelection: null the same way", () => {
+    const v12: AutoJudgeGetResponseV12 = {
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+      lastSelection: null,
+    };
+    const parsed = autoJudgeGetV11.responseSchema.parse(v12);
+    expect(Object.hasOwn(parsed, "lastSelection")).toBe(false);
+    expect(parsed).toEqual({
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+    });
+
+    const setV12: AutoJudgeSetResponseV12 = {
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+      lastSelection: null,
+    };
+    const setParsed = autoJudgeSetV11.responseSchema.parse(setV12);
+    expect(Object.hasOwn(setParsed, "lastSelection")).toBe(false);
+    expect(setParsed).toEqual({
+      selection,
+      effective: selectionEffective,
+      blocked: null,
+    });
   });
 });
 
-describe("autoJudge.get/set@1.0/1.1 -> 1.2: the frozen request/response identities", () => {
-  it("binds the 1.0 request/response objects by identity", () => {
-    expect(autoJudgeGetV10.responseSchema).toBe(autoJudgeGetResponseSchemaV10);
-    expect(autoJudgeSetV10.requestSchema).toBe(
-      autoJudgeSetRequestSchemaPreEffort,
-    );
-    expect(autoJudgeSetV10.responseSchema).toBe(autoJudgeSetResponseSchemaV10);
+describe("autoJudge.get/set@1.2 schema", () => {
+  it("accepts lastSelection as an object, as null, and absent (absent stays absent)", () => {
+    const asObject = autoJudgeGetV12.responseSchema.parse({
+      selection: null,
+      lastSelection: selection,
+    });
+    expect(asObject.lastSelection).toEqual(selection);
+
+    const asNull = autoJudgeGetV12.responseSchema.parse({
+      selection: null,
+      lastSelection: null,
+    });
+    expect(asNull.lastSelection).toBeNull();
+
+    const absent = autoJudgeGetV12.responseSchema.parse({ selection: null });
+    expect(Object.hasOwn(absent, "lastSelection")).toBe(false);
+
+    const setAsObject = autoJudgeSetV12.responseSchema.parse({
+      selection: null,
+      lastSelection: selection,
+    });
+    expect(setAsObject.lastSelection).toEqual(selection);
+
+    const setAsNull = autoJudgeSetV12.responseSchema.parse({
+      selection: null,
+      lastSelection: null,
+    });
+    expect(setAsNull.lastSelection).toBeNull();
+
+    const setAbsent = autoJudgeSetV12.responseSchema.parse({
+      selection: null,
+    });
+    expect(Object.hasOwn(setAbsent, "lastSelection")).toBe(false);
   });
 
-  it("binds the 1.1 request/response objects by identity", () => {
-    expect(autoJudgeGetV11.responseSchema).toBe(autoJudgeGetResponseSchemaV11);
-    // 1.1 changes the response only; the request is still the pre-effort one.
-    expect(autoJudgeSetV11.requestSchema).toBe(
-      autoJudgeSetRequestSchemaPreEffort,
+  it("rejects a malformed lastSelection", () => {
+    const emptyHarness = {
+      selection: null,
+      lastSelection: { harnessId: "", model: "m", profileId: null },
+    };
+    expect(autoJudgeGetV12.responseSchema.safeParse(emptyHarness).success).toBe(
+      false,
     );
-    expect(autoJudgeSetV11.responseSchema).toBe(autoJudgeSetResponseSchemaV11);
-  });
+    expect(autoJudgeSetV12.responseSchema.safeParse(emptyHarness).success).toBe(
+      false,
+    );
 
-  it("binds the canonical head names to the 1.2 objects", () => {
-    expect(autoJudgeGetV12.responseSchema).toBe(autoJudgeGetResponseSchema);
-    expect(autoJudgeSetV12.responseSchema).toBe(autoJudgeSetResponseSchema);
+    const asString = {
+      selection: null,
+      lastSelection: "not-a-selection",
+    };
+    expect(autoJudgeGetV12.responseSchema.safeParse(asString).success).toBe(
+      false,
+    );
+    expect(autoJudgeSetV12.responseSchema.safeParse(asString).success).toBe(
+      false,
+    );
   });
 });
 
-describe("autoJudge.get/set registry entries at 1.2", () => {
-  it("has latestMinor 2 for both methods, with version 2 bound to the V12 contracts and their upgrade paths", () => {
-    for (const method of ["autoJudge.get", "autoJudge.set"] as const) {
-      const entry = hostRpcRegistry[method];
-      expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(entry[1].latestMinor).toBe(2);
+describe("autoJudge.get/set 1.0 projection ignores lastSelection", () => {
+  // Each `expected` is the answer the projection gave a 1.0 caller before
+  // 1.2 existed, written out rather than recomputed, so a change to the
+  // projection itself fails here and not only a leak of the new key.
+  const cases: readonly {
+    input: AutoJudgeGetResponseV12;
+    expected: AutoJudgeGetResponseV10;
+  }[] = [
+    {
+      input: {
+        selection: null,
+        effective: { source: "fallback" },
+        blocked: null,
+      },
+      expected: {
+        selection: null,
+        effective: null,
+        blocked: { reason: "provider-disabled" },
+      },
+    },
+    {
+      input: { selection, effective: selectionEffective, blocked: null },
+      expected: { selection, effective: selectionEffective, blocked: null },
+    },
+    {
+      input: {
+        selection: null,
+        effective: {
+          harnessId: "traycer",
+          model: "traycer-model",
+          source: "default",
+        },
+        blocked: null,
+      },
+      expected: {
+        selection: null,
+        effective: {
+          harnessId: "traycer",
+          model: "traycer-model",
+          source: "default",
+        },
+        blocked: null,
+      },
+    },
+    {
+      input: {
+        selection,
+        effective: null,
+        blocked: { reason: "unsupported-harness" },
+      },
+      expected: {
+        selection,
+        effective: null,
+        blocked: { reason: "unsupported-harness" },
+      },
+    },
+    { input: { selection: null }, expected: { selection: null } },
+  ];
+
+  it("serves autoJudge.get's 1.0 caller today's answer whether lastSelection is present, null, or absent", () => {
+    for (const { input, expected } of cases) {
+      for (const lastSelection of [selection, null, undefined]) {
+        // The 1.0 projection takes the head's answer: a 1.2 answer reaches
+        // it through the 1.2 -> 1.3 upgrade (effort `null`, which the
+        // projection strips again).
+        const projected = projectAutoJudgeGetResponseToV10(
+          autoJudgeGetUpgradeV12ToV13.upgradeResponse(
+            lastSelection === undefined ? input : { ...input, lastSelection },
+          ),
+        );
+        expect(projected).toStrictEqual(expected);
+        expect(Object.hasOwn(projected, "lastSelection")).toBe(false);
+        expect(
+          autoJudgeGetV10.responseSchema.safeParse(projected).success,
+        ).toBe(true);
+      }
     }
-
-    const getEntry = hostRpcRegistry["autoJudge.get"][1].versions[2];
-    expect(getEntry.contract).toBe(autoJudgeGetV12);
-    expect(getEntry.upgradeFromPreviousVersion).toBe(
-      autoJudgeGetUpgradeV11ToV12,
-    );
-    // A new KEY is structural growth: a <=1.1 caller's non-strict decode
-    // drops it, so no value/union-arm growth claim is made for 1.2.
-    expect("responseGrowthProjectionGated" in getEntry).toBe(false);
-
-    const setEntry = hostRpcRegistry["autoJudge.set"][1].versions[2];
-    expect(setEntry.contract).toBe(autoJudgeSetV12);
-    expect(setEntry.upgradeFromPreviousVersion).toBe(
-      autoJudgeSetUpgradeV11ToV12,
-    );
-    expect("responseGrowthProjectionGated" in setEntry).toBe(false);
   });
 
-  it("validates the registry as constructed", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  it("does the same for autoJudge.set's echo", () => {
+    for (const { input, expected } of cases) {
+      const setInput: AutoJudgeSetResponseV12 = input;
+      const setExpected: AutoJudgeSetResponseV10 = expected;
+      for (const lastSelection of [selection, null, undefined]) {
+        const projected = projectAutoJudgeSetResponseToV10(
+          autoJudgeSetUpgradeV12ToV13.upgradeResponse(
+            lastSelection === undefined
+              ? setInput
+              : { ...setInput, lastSelection },
+          ),
+        );
+        expect(projected).toStrictEqual(setExpected);
+        expect(Object.hasOwn(projected, "lastSelection")).toBe(false);
+        expect(
+          autoJudgeSetV10.responseSchema.safeParse(projected).success,
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+describe("autoJudge.get/set chained 1.0 -> 1.1 -> 1.2 upgrade", () => {
+  it("has no lastSelection, and no-default still becomes unsupported-harness", () => {
+    const v10: AutoJudgeGetResponseV10 = {
+      selection: null,
+      effective: null,
+      blocked: { reason: "no-default" },
+    };
+    const v11 = autoJudgeGetUpgradeV10ToV11.upgradeResponse(v10);
+    const v12 = autoJudgeGetUpgradeV11ToV12.upgradeResponse(v11);
+    expect(Object.hasOwn(v12, "lastSelection")).toBe(false);
+    expect(v12).toEqual({
+      selection: null,
+      effective: null,
+      blocked: { reason: "unsupported-harness" },
+    });
+    expect(autoJudgeGetV12.responseSchema.safeParse(v12).success).toBe(true);
+
+    const setV10: AutoJudgeSetResponseV10 = {
+      selection: null,
+      effective: null,
+      blocked: { reason: "no-default" },
+    };
+    const setV11 = autoJudgeSetUpgradeV10ToV11.upgradeResponse(setV10);
+    const setV12 = autoJudgeSetUpgradeV11ToV12.upgradeResponse(setV11);
+    expect(Object.hasOwn(setV12, "lastSelection")).toBe(false);
+    expect(setV12).toEqual({
+      selection: null,
+      effective: null,
+      blocked: { reason: "unsupported-harness" },
+    });
   });
 });

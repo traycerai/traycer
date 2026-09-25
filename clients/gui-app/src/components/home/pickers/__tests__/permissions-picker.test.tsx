@@ -399,7 +399,7 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     const item = autoMenuItem();
     expect(item.hasAttribute("data-disabled")).toBe(true);
     expect(item.textContent).toContain(
-      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
     expect(screen.queryByTestId("permission-option-meta")).toBeNull();
     expect(

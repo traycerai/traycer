@@ -13,6 +13,7 @@ import {
   autoModeOfferableHere,
   normalizePermissionMode,
   normalizeReasoningForModel,
+  type ReasoningFallback,
   normalizeServiceTierForModel,
   type HarnessModelSelection,
   type HarnessOption,
@@ -49,6 +50,8 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  * Catalog data (harness availability + the selected harness's models) is
  * TanStack Query state pushed in via `setCatalog` by
  * `useComposerToolbarStore`; this store never fetches.
+ *
+ * Every store is created for a `ComposerToolbarPurpose`, fixed for its life.
  */
 export interface ComposerToolbarValues {
   readonly permission: PermissionMode;
@@ -113,7 +116,9 @@ export interface ComposerToolbarCatalog {
 
 interface ComposerToolbarDerived {
   /** Resolved selection: availability-rerouted harness + concrete model slug
-   *  (empty only while the catalog is still resolving). */
+   *  (empty only while the catalog is still resolving). A `"setting"` store
+   *  reroutes nothing and holds its non-empty slug; see
+   *  `ComposerToolbarPurpose`. */
   readonly selection: HarnessModelSelection;
   readonly selectedModel: ModelOption | null;
   /** Raw permission clamped to what the selected harness honors - the single
@@ -204,7 +209,31 @@ export type ComposerToolbarStore = StoreApi<ComposerToolbarStoreState>;
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 
+/**
+ * Why a toolbar store exists - a property of its surface, so it is fixed at
+ * creation and never changes.
+ *
+ * - `"run"`: the store configures a turn about to launch (every composer, the
+ *   terminal launcher, the fork dialogs, the add-node menu). The derived
+ *   selection is clamped to what can run here - an unavailable (or, on the
+ *   terminal surface, GUI-only) provider is swapped for the first eligible
+ *   one, and a slug the loaded catalog does not list is presented as its
+ *   first row (`selectionHealedForDisplay`) - and a provider switch is a
+ *   composer `HarnessChanged`.
+ * - `"setting"`: the store edits a stored value that is shown back exactly as
+ *   stored, with any problem explained beside it rather than silently healed.
+ *   The selection is never clamped: an unavailable provider stays selected,
+ *   and a non-empty slug the catalog does not list is held with no
+ *   substitute. An EMPTY slug still resolves to the catalog's default once
+ *   that catalog loads, with the emit deferred until it does - that is what
+ *   lets a provider switch land on a real model. `tuiOnly` narrows nothing.
+ *   And it is not a composer, so `applyComposerSelection` tracks no
+ *   `HarnessChanged`.
+ */
+export type ComposerToolbarPurpose = "run" | "setting";
+
 export interface CreateComposerToolbarStoreInput {
+  readonly purpose: ComposerToolbarPurpose;
   readonly seedKey: string;
   readonly values: ComposerToolbarValues;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
@@ -214,11 +243,24 @@ export interface CreateComposerToolbarStoreInput {
   readonly chatLineCarriesAutoMode: boolean | null;
   /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
   readonly hostId: string | null;
+  /**
+   * What an effort the selected model does not advertise clamps to, for
+   * display and emit alike (`normalizeReasoningForModel`). Composer surfaces
+   * pass `"model-default"`; the Settings judge passes `"lowest"`, the level
+   * its host runs an unset effort at. Fixed at creation like `purpose`: it is
+   * a property of the surface.
+   */
+  readonly reasoningFallback: ReasoningFallback;
 }
 
 export function createComposerToolbarStore(
   input: CreateComposerToolbarStoreInput,
 ): ComposerToolbarStore {
+  const { purpose } = input;
+  const policy: ToolbarSurfacePolicy = {
+    purpose,
+    reasoningFallback: input.reasoningFallback,
+  };
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
     chatLineCarriesAutoMode: input.chatLineCarriesAutoMode,
@@ -232,7 +274,7 @@ export function createComposerToolbarStore(
     const update = (patch: Partial<ComposerToolbarValues>): void => {
       const state = get();
       const values = { ...state.values, ...patch };
-      const derived = deriveToolbarState(values, state.catalog, state);
+      const derived = deriveToolbarState(values, state.catalog, state, policy);
       const settings = settingsFromDerived(derived);
       // Never persist a surface-rerouted harness. When the derived harness
       // differs from the user's raw choice it was clamped by the surface
@@ -269,7 +311,7 @@ export function createComposerToolbarStore(
       seedKey: input.seedKey,
       values: input.values,
       catalog: initialCatalog,
-      ...deriveToolbarState(input.values, initialCatalog, null),
+      ...deriveToolbarState(input.values, initialCatalog, null, policy),
       onSettingsChange: input.onSettingsChange,
       pendingSettingsEmit: false,
 
@@ -290,16 +332,31 @@ export function createComposerToolbarStore(
       // harness switch restores its remembered model/effort/tier (or the
       // model's own defaults via the `""` no-carry lever) without the multiple
       // emits that sequenced `setSelection`/`setReasoning`/`setServiceTier`
-      // calls would produce. Owns the `HarnessChanged` analytics for this path.
+      // calls would produce. Owns the `HarnessChanged` analytics for this path,
+      // which a `"setting"` store skips: its switches are not a composer's.
       applyComposerSelection: ({ selection, reasoning, serviceTier }) => {
-        const prev = get().values.selection.harnessId;
-        if (prev !== selection.harnessId) {
+        const previous = get().values;
+        if (
+          purpose === "run" &&
+          previous.selection.harnessId !== selection.harnessId
+        ) {
           Analytics.getInstance().track(AnalyticsEvent.HarnessChanged, {
-            from: prev,
+            from: previous.selection.harnessId,
             to: selection.harnessId,
           });
         }
-        update({ selection, reasoning, serviceTier });
+        // A `"setting"` store has no composer memory behind it, so the `""`
+        // no-carry lever arrives on EVERY commit - a re-click of the checked
+        // row included - and reading it as "reset" would drop the effort the
+        // user set in the footer on a click that changed nothing. The current
+        // effort is carried instead; the derive clamps it to the new model
+        // (kept while that model advertises it, else the surface's fallback),
+        // which is what a run store's memory does for a model it has seen.
+        const carriedReasoning =
+          purpose === "setting" && reasoning.length === 0
+            ? previous.reasoning
+            : reasoning;
+        update({ selection, reasoning: carriedReasoning, serviceTier });
       },
       setReasoning: (next) => {
         update({ reasoning: next });
@@ -311,7 +368,12 @@ export function createComposerToolbarStore(
       applySeed: (seedKey, values) => {
         const state = get();
         if (state.seedKey === seedKey) return;
-        const derived = deriveToolbarState(values, state.catalog, state);
+        const derived = deriveToolbarState(
+          values,
+          state.catalog,
+          state,
+          policy,
+        );
         set({
           seedKey,
           values,
@@ -324,7 +386,12 @@ export function createComposerToolbarStore(
       setCatalog: (catalog) => {
         const state = get();
         if (sameCatalog(state.catalog, catalog)) return;
-        const derived = deriveToolbarState(state.values, catalog, state);
+        const derived = deriveToolbarState(
+          state.values,
+          catalog,
+          state,
+          policy,
+        );
         // The emit decision lives in one named, testable place. A catalog push
         // never touches `values`: the raw sticky selection is the user's.
         const emit = decideCatalogTransition(state, derived);
@@ -357,19 +424,23 @@ function settingsFromDerived(derived: ComposerToolbarDerived): ChatRunSettings {
   });
 }
 
+/** The surface's fixed choices, threaded into every derive together. */
+interface ToolbarSurfacePolicy {
+  readonly purpose: ComposerToolbarPurpose;
+  readonly reasoningFallback: ReasoningFallback;
+}
+
 function deriveToolbarState(
   values: ComposerToolbarValues,
   catalog: ComposerToolbarCatalog,
   previous: ComposerToolbarDerived | null,
+  policy: ToolbarSurfacePolicy,
 ): ComposerToolbarDerived {
-  // If the active provider is unavailable (disabled in Settings, or its CLI
-  // can't launch) - or, on the terminal surface, isn't TUI-capable - present
-  // the first eligible one instead so a hidden/disabled/GUI-only provider is
-  // never shown as selected or sent.
-  const availabilitySelection = effectiveSelectionFromHarnesses(
+  const { purpose, reasoningFallback } = policy;
+  const availabilitySelection = presentedHarnessSelection(
     values.selection,
-    catalog.harnesses,
-    catalog.tuiOnly,
+    catalog,
+    purpose,
   );
   // Cross-harness guard: only resolve a model from the catalog when the model
   // list actually belongs to the harness we're presenting.
@@ -382,11 +453,11 @@ function deriveToolbarState(
   // distinguishable from one still loading (hold the slug for display).
   const catalogLoadedForHarness =
     catalogBelongsToHarness && catalog.modelsLoaded;
-  const resolvedSlug = resolveModelSlug(
-    availabilitySelection.harnessId,
-    availabilitySelection.modelSlug,
+  const resolvedSlug = presentedModelSlug(
+    availabilitySelection,
     models,
     catalogLoadedForHarness,
+    purpose,
   );
   const selection: HarnessModelSelection =
     resolvedSlug === availabilitySelection.modelSlug
@@ -451,7 +522,11 @@ function deriveToolbarState(
       supportedPermissionModes,
       hostKnowsAutoMode,
     ),
-    reasoning: normalizeReasoningForModel(values.reasoning, selectedModel),
+    reasoning: normalizeReasoningForModel(
+      values.reasoning,
+      selectedModel,
+      reasoningFallback,
+    ),
     // Clamp the sticky tier to the selected model (single site for display AND
     // emit) so a tier carried over from another model - e.g. Codex "priority"
     // after a switch to Claude, whose upgrade tier is "fast" - is dropped here
@@ -618,6 +693,9 @@ function modelCoveredByCatalog(
 //   - `none` - loaded, and no row claims the slug by either pass - presents
 //     the preferred model in its place, for display and launch only
 //     (`selectionHealedForDisplay`).
+//
+// A `"setting"` store never takes that last branch: its non-empty slug is the
+// stored value and is held verbatim, listed or not (see `presentedModelSlug`).
 function resolveModelSlug(
   harnessId: ProviderId,
   modelSlug: string,
@@ -636,6 +714,50 @@ function resolveModelSlug(
   if (modelMatchIsCovered(match)) return modelSlug;
   if (!catalogLoadedForHarness) return modelSlug;
   return findDefaultModel(models)?.slug ?? "";
+}
+
+// The model slug a store presents for its (already presented) selection. A
+// `"setting"` store holds a non-empty slug verbatim - a slug the loaded catalog
+// no longer lists is still what is stored, so it is shown as such rather than
+// healed onto the first row. Only an EMPTY slug resolves, to the catalog
+// default once it loads, exactly as a run store's does.
+function presentedModelSlug(
+  selection: HarnessModelSelection,
+  models: ReadonlyArray<ModelOption>,
+  catalogLoadedForHarness: boolean,
+  purpose: ComposerToolbarPurpose,
+): string {
+  if (purpose === "setting" && selection.modelSlug.length > 0) {
+    return selection.modelSlug;
+  }
+  return resolveModelSlug(
+    selection.harnessId,
+    selection.modelSlug,
+    models,
+    catalogLoadedForHarness,
+  );
+}
+
+// The selection a store presents before its model slug resolves.
+//
+// A `"run"` store is about to launch, so if the active provider is unavailable
+// (disabled in Settings, or its CLI can't launch) - or, on the terminal
+// surface, isn't TUI-capable - it presents the first eligible one instead, so
+// a hidden/disabled/GUI-only provider is never shown as selected or sent.
+//
+// A `"setting"` store presents the stored provider as it is, runnable or not:
+// the surface explains what is wrong with it instead of swapping it out.
+function presentedHarnessSelection(
+  selection: HarnessModelSelection,
+  catalog: ComposerToolbarCatalog,
+  purpose: ComposerToolbarPurpose,
+): HarnessModelSelection {
+  if (purpose === "setting") return selection;
+  return effectiveSelectionFromHarnesses(
+    selection,
+    catalog.harnesses,
+    catalog.tuiOnly,
+  );
 }
 
 function effectiveSelectionFromHarnesses(

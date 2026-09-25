@@ -20,8 +20,8 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
-  autoJudgeGetV12,
-  autoJudgeSetV12,
+  autoJudgeGetV13,
+  autoJudgeSetV13,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type {
@@ -150,7 +150,7 @@ export interface AutoJudgeTargetInput {
   readonly runModelSlug: string;
   /**
    * The run harness's catalog `judgeDefaultModel`, or `null` for none. `""`
-   * reads as none too - the wire accepts it, and `defaultJudgeModelFor` in
+   * reads as none too - the wire accepts it, and `judgeSwitchModel` in
    * Settings already reads it that way.
    */
   readonly runJudgeDefaultModel: string | null;
@@ -165,8 +165,8 @@ const NO_JUDGE_TARGET: AutoJudgeTarget = { kind: "none" };
  * else `null` while neither is known.
  *
  * `""` is "no default" too, not a slug: the wire accepts it, and Settings'
- * `defaultJudgeModelFor` already reads it that way, so the composer row and
- * the Judge tab name the same judge for the same catalog row. Read as a slug
+ * `judgeSwitchModel` already reads it that way, so the composer row and the
+ * Judge tab's picker land on the same judge for the same catalog row. Read as a slug
  * it rendered "Reviewed by  on …" with a blank where the model goes.
  */
 function fallbackJudgeModelSlug(
@@ -393,27 +393,28 @@ export function negotiatedLineReaches(
 
 /**
  * Whether the negotiated `autoJudge.get` line is one whose host runs the judge
- * at a reasoning effort of its own (`1.2`, where the selection carries one and
+ * at a reasoning effort of its own (`1.3`, where the selection carries one and
  * the host defaults to the model's lowest). Below it the host runs the model's
- * own default, so no LABEL - the composer's Auto row or Settings' "Now:" line -
- * may name an effort it does not apply.
+ * own default, so no LABEL - the composer's Auto row, the judge tile's face or
+ * Settings' "Now:" line - may name an effort it does not apply.
  */
 export function autoJudgeGetKnowsReasoningEffort(
   version: SchemaVersion | null,
 ): boolean {
-  return negotiatedLineReaches(version, autoJudgeGetV12.schemaVersion);
+  return negotiatedLineReaches(version, autoJudgeGetV13.schemaVersion);
 }
 
 /**
  * Whether the negotiated `autoJudge.set` line can STORE a reasoning effort
- * (`1.2`, the line that added the field). Below it the request upgrade resets
- * the effort to the model's default, so Settings' Effort FIELD would write
- * something the host silently discards; the field is hidden instead.
+ * (`1.3`, the line that added the field). Below it the request upgrade resets
+ * the effort to the model's default, so the judge picker's effort footer would
+ * write something the host silently discards; the footer is hidden instead and
+ * the write carries `null`.
  */
 export function autoJudgeSetStoresReasoningEffort(
   version: SchemaVersion | null,
 ): boolean {
-  return negotiatedLineReaches(version, autoJudgeSetV12.schemaVersion);
+  return negotiatedLineReaches(version, autoJudgeSetV13.schemaVersion);
 }
 
 /**
@@ -597,7 +598,7 @@ export function autoModeMidTurnLock(input: {
   if (!input.turnActive || input.currentModeIsAuto) return null;
   if (input.judgeBilling === null) return AUTO_MID_TURN_UNRESOLVED_LOCK;
   if (input.judgeBilling.kind !== "provider-native") return null;
-  return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.`;
+  return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ ${input.judgeBilling.harnessLabel} ▸ Permissions.`;
 }
 
 /**

@@ -1019,11 +1019,11 @@ describe("useAutoJudgeBilling", () => {
 
   // The billing's `effortLabel` rides the NEGOTIATED `autoJudge.get` line, not
   // merely the model's own catalog: `autoJudgeGetKnowsReasoningEffort` gates
-  // it off below `1.2`, so the same catalog and selection must answer
+  // it off below `1.3`, so the same catalog and selection must answer
   // differently depending only on which line the host negotiated.
   describe("effortLabel rides the negotiated autoJudge.get line", () => {
-    it("carries the model's lowest advertised effort label when the negotiated line is 1.2 and the selection names no effort", () => {
-      judgeGetVersion.current = { major: 1, minor: 2 };
+    it("carries the model's lowest advertised effort label when the negotiated line is 1.3 and the selection names no effort", () => {
+      judgeGetVersion.current = { major: 1, minor: 3 };
       autoJudgeGetData = {
         selection: {
           harnessId: CLAUDE_HARNESS_ID,
@@ -1052,34 +1052,41 @@ describe("useAutoJudgeBilling", () => {
       });
     });
 
-    it("carries no effort label when the negotiated line is 1.1, even though the model advertises efforts", () => {
-      judgeGetVersion.current = { major: 1, minor: 1 };
-      autoJudgeGetData = {
-        selection: {
+    it.each([
+      { major: 1, minor: 1 },
+      // 1.2 is the last-pick line: that host runs the model's own default.
+      { major: 1, minor: 2 },
+    ])(
+      "carries no effort label when the negotiated line is %o, even though the model advertises efforts",
+      (line) => {
+        judgeGetVersion.current = line;
+        autoJudgeGetData = {
+          selection: {
+            harnessId: CLAUDE_HARNESS_ID,
+            model: JUDGE_MODEL_SLUG,
+            profileId: null,
+            reasoningEffort: null,
+          },
+        };
+        providersListData = { providers: [] };
+        judgeModelsQueryMock.mockReturnValue(
+          judgeModelsAnswered([
+            judgeModelRowWithEfforts(JUDGE_MODEL_SLUG, ["high", "low"]),
+          ]),
+        );
+
+        const { result } = renderHook(() =>
+          useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        );
+
+        expect(result.current).toEqual({
+          kind: "provider",
           harnessId: CLAUDE_HARNESS_ID,
-          model: JUDGE_MODEL_SLUG,
-          profileId: null,
-          reasoningEffort: null,
-        },
-      };
-      providersListData = { providers: [] };
-      judgeModelsQueryMock.mockReturnValue(
-        judgeModelsAnswered([
-          judgeModelRowWithEfforts(JUDGE_MODEL_SLUG, ["high", "low"]),
-        ]),
-      );
-
-      const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
-      );
-
-      expect(result.current).toEqual({
-        kind: "provider",
-        harnessId: CLAUDE_HARNESS_ID,
-        harnessLabel: "Claude Code",
-        modelLabel: JUDGE_MODEL_SLUG,
-        effortLabel: null,
-      });
-    });
+          harnessLabel: "Claude Code",
+          modelLabel: JUDGE_MODEL_SLUG,
+          effortLabel: null,
+        });
+      },
+    );
   });
 });
