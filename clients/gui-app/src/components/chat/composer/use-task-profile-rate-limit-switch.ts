@@ -64,6 +64,22 @@ export interface TaskProfileRateLimitSwitch {
   readonly switchOtherTaskChats: (nextProfileId: string | null) => void;
 }
 
+/**
+ * The last task-scope check id handed out, renderer-wide.
+ *
+ * Module-level rather than per hook: the id is part of the sibling reads'
+ * cache key, and the query cache outlives any one composer. A per-mount counter
+ * restarted at the same ids on a remount - reopening the chat, or a second
+ * composer for the same task - and so read a previous mount's cached answers
+ * back without asking the host.
+ */
+let lastTaskScopeCheckId = 0;
+
+function nextTaskScopeCheckId(): number {
+  lastTaskScopeCheckId += 1;
+  return lastTaskScopeCheckId;
+}
+
 const NO_AFFECTED: ReadonlyArray<AffectedTaskChat> = [];
 const NO_CANDIDATES: ReadonlyArray<string> = [];
 const SCOPE_NONE: TaskChatScope = { kind: "none" };
@@ -175,8 +191,9 @@ export function useTaskProfileRateLimitSwitch(input: {
     });
   }, [chatId, chatRecords, enabled, epicId, tabHostId]);
 
-  // The latest explicit check: which warning episode it was made in, and a
-  // counter that makes each check its own set of reads.
+  // The latest explicit check: which warning episode it was made in, and an
+  // id no other check in this renderer has used, which makes it its own set
+  // of reads.
   const [check, setCheck] = useState<{
     readonly episodeKey: string | null;
     readonly id: number;
@@ -184,7 +201,7 @@ export function useTaskProfileRateLimitSwitch(input: {
   const requested =
     enabled && episodeKey !== null && check.episodeKey === episodeKey;
   const resolveScope = useCallback(() => {
-    setCheck((previous) => ({ episodeKey, id: previous.id + 1 }));
+    setCheck({ episodeKey, id: nextTaskScopeCheckId() });
   }, [episodeKey]);
 
   const batch = useChatRunSettingsBatch({
