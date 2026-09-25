@@ -218,4 +218,25 @@ describe("<PhoneEpicResourcesFallbackMount />", () => {
     view.rerender(<PhoneEpicPane monitorOpen={false} />);
     expect(resourcesRegistry.get("epic-1")).toBeNull();
   });
+
+  // The footer readout alone: header monitor off, no navigator chips. The
+  // pane's settings gate reads that as nobody wanting numbers; the readout
+  // is still a global consumer, and on an old host it has no other source.
+  it("feeds a footer-only readout on an old host with the sheet closed", () => {
+    useSettingsStore.setState({
+      showGlobalResourceMonitor: false,
+      navigatorResourceMetrics: [],
+    });
+    render(<PhoneEpicPane monitorOpen />);
+
+    act(() => streamFor("global").onScopeSupport("unsupported"));
+    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
+
+    act(() => streamFor("epic:epic-1").onSnapshot(epicSnapshot()));
+    expect(
+      resourcesRegistry
+        .getGlobalProjection()
+        .owners.map((row) => row.owner.ownerId),
+    ).toEqual(["term-1"]);
+  });
 });

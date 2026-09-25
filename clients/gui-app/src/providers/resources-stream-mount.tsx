@@ -48,7 +48,25 @@ export interface GlobalResourcesStreamMountProps {
 export function ResourcesStreamMount(
   props: ResourcesStreamMountProps,
 ): ReactNode {
-  const { epicId } = props;
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
+  const navigatorChipsWanted = useSettingsStore(
+    (state) => state.navigatorResourceMetrics.length > 0,
+  );
+  useEpicResourcesLease(
+    props.epicId,
+    showGlobalResourceMonitor || navigatorChipsWanted,
+  );
+  return null;
+}
+
+/**
+ * Holds the registry entry for `epicId` while `wanted`, releasing it when that
+ * turns false or the caller unmounts. The caller owns the demand: the settings
+ * gate above for a pane or sheet, the old-host fallback below.
+ */
+function useEpicResourcesLease(epicId: string, wanted: boolean): void {
   const wsStreamClient = useWsStreamClient();
   // Named for the same reason the global mount is: these entries are what the
   // registry aggregates when no global stream exists (a pre-v1.1 host), so a
@@ -57,16 +75,9 @@ export function ResourcesStreamMount(
   const hostId = useStreamHostId();
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
   const resourcesUnsupported = resourcesSupport === "unsupported";
-  const showGlobalResourceMonitor = useSettingsStore(
-    (state) => state.showGlobalResourceMonitor,
-  );
-  const navigatorChipsWanted = useSettingsStore(
-    (state) => state.navigatorResourceMetrics.length > 0,
-  );
-  const streamWanted = showGlobalResourceMonitor || navigatorChipsWanted;
 
   useEffect(() => {
-    if (resourcesUnsupported || !streamWanted) return;
+    if (resourcesUnsupported || !wanted) return;
     const override = getResourcesStreamClientFactoryOverride();
     if (override === null && wsStreamClient === null) return;
     // Token identifies the transport this entry is bound to; a host swap changes
@@ -96,9 +107,7 @@ export function ResourcesStreamMount(
     return () => {
       resourcesRegistry.release(epicId);
     };
-  }, [epicId, hostId, resourcesUnsupported, streamWanted, wsStreamClient]);
-
-  return null;
+  }, [epicId, hostId, resourcesUnsupported, wanted, wsStreamClient]);
 }
 
 /**
@@ -116,6 +125,10 @@ export function ResourcesStreamMount(
  * The verdict is the full one - the pre-check for a local host, and the live
  * global stream's own negotiation for a remote one - read against the ambient
  * host this pane's lease would be opened on.
+ *
+ * The demand is the consumer itself, NOT the pane's settings gate: a footer
+ * readout is a global consumer with the header monitor and the navigator
+ * chips both off, and that gate would read it as nobody wanting numbers.
  */
 export function PhoneEpicResourcesFallbackMount(
   props: ResourcesStreamMountProps,
@@ -123,8 +136,8 @@ export function PhoneEpicResourcesFallbackMount(
   const consumerPresent = useGlobalResourcesConsumerPresent();
   const hostId = useStreamHostId();
   const globalUnsupported = useGlobalResourcesUnsupported(hostId);
-  if (!consumerPresent || !globalUnsupported) return null;
-  return <ResourcesStreamMount epicId={props.epicId} />;
+  useEpicResourcesLease(props.epicId, consumerPresent && globalUnsupported);
+  return null;
 }
 
 export function GlobalResourcesStreamMount(
