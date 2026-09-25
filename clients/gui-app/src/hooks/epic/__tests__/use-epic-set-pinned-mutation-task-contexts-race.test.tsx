@@ -35,10 +35,23 @@ interface SetPinnedRequest {
   readonly pinned: boolean;
 }
 
+/**
+ * Flips the NEXT `epic.setPinned` dispatch into a rejection, for the
+ * failed-write regression test below. A holder rather than a `let` re-read
+ * per test: `mockClient.request` closes over it once at module scope, and
+ * every test resets it in `afterEach` so a failure requested by one test
+ * cannot leak into the next.
+ */
+const failNextRequest = { value: false };
+
 const mockClient = {
   getActiveHostId: () => HOST_ID,
   getRequestContextUserId: () => USER_ID,
   request: (_method: string, params: unknown) => {
+    if (failNextRequest.value) {
+      failNextRequest.value = false;
+      return Promise.reject(new Error("epic.setPinned rejected"));
+    }
     const { pinned } = params as SetPinnedRequest;
     return Promise.resolve({ pinned });
   },
@@ -119,6 +132,7 @@ function makeWrapper(
 describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", () => {
   afterEach(() => {
     useAuthStore.getState().setSignedOut();
+    failNextRequest.value = false;
   });
 
   it("a stale in-flight getTaskContexts refetch requested before the write cannot land after it settles", async () => {
@@ -206,5 +220,88 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
     ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
 
     stop();
+  });
+
+  /**
+   * Small review fix on top of the above: the committed-bit re-patch in
+   * `onSuccess` now scopes `setEpicPinnedInTaskContextsCaches` with
+   * `hostId: null` - every host's task-contexts cache for this user, not just
+   * the dispatch host's. Before, an unpin dispatched to host-1 left a SECOND
+   * host's own `epic.getTaskContexts` cache holding the pre-write `found` row
+   * forever (`staleTime: Infinity`, nothing ever asks again). The optimistic
+   * patch and its `onError` rollback stay host-scoped on purpose - the
+   * rollback inverts the bit, which is only right where the pre-write bit was
+   * the opposite, true of the dispatch host's own copy and not of another
+   * host's - so this is exercised through `onSuccess` alone.
+   */
+  it("a successful write patches a SECOND host's task-contexts cache too, not only the dispatch host's", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const otherHostKey = hostQueryKeys.epicTaskContexts("host-2", USER_ID, [
+      "epic-b",
+    ]);
+    queryClient.setQueryData<GetTaskContextsResponse>(
+      otherHostKey,
+      foundResponse("epic-b", true),
+    );
+
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    // Dispatch follows the window's host (`hostId: null` in the variables),
+    // which this harness's mocked binding resolves to HOST_ID - a different
+    // host from the one whose cache is seeded above.
+    await result.current.mutateAsync({
+      epicId: "epic-b",
+      pinned: false,
+      isLocalHome: false,
+      hostId: null,
+    });
+
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(otherHostKey)?.tasks
+        .row,
+    ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
+  });
+
+  it("leaves a second host's task-contexts cache untouched when the write fails", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const otherHostKey = hostQueryKeys.epicTaskContexts("host-2", USER_ID, [
+      "epic-b",
+    ]);
+    const original = foundResponse("epic-b", true);
+    queryClient.setQueryData<GetTaskContextsResponse>(otherHostKey, original);
+
+    failNextRequest.value = true;
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        epicId: "epic-b",
+        pinned: false,
+        isLocalHome: false,
+        hostId: null,
+      }),
+    ).rejects.toThrow();
+
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(otherHostKey),
+    ).toEqual(original);
   });
 });

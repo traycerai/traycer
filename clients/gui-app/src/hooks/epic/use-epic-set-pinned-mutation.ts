@@ -211,6 +211,17 @@ export function useEpicSetPinned() {
         // tab menu's retry makes that read likely rather than theoretical.
         // Cancel whatever is still in flight, then re-apply the committed bit
         // over anything that already landed during the write.
+        //
+        // On EVERY host's cache for this user, matching the cancel's reach: a
+        // pin is one bit per user and epic whichever host answered it, a
+        // task-contexts key carries its host, and with `staleTime: Infinity` a
+        // copy this missed would render the pre-write bit until its key
+        // changed. Here and not in the optimistic patch, deliberately: its
+        // `onError` rollback INVERTS the bit, which is only right where the
+        // pre-write bit was the opposite - true of the rendered source, not of
+        // another host's copy - whereas this is the committed bit. A host
+        // that never resolved the epic holds no `found` row, and the patch
+        // touches only `found` rows.
         await cancelInFlightTaskContextsReads(
           queryClient,
           ctx.userId,
@@ -218,7 +229,7 @@ export function useEpicSetPinned() {
         );
         setEpicPinnedInTaskContextsCaches(
           queryClient,
-          scope,
+          { hostId: null, userId: ctx.userId },
           variables.epicId,
           variables.pinned,
         );
