@@ -83,8 +83,7 @@ const PULL_THRESHOLD_PX = 24;
  * landing on the edge never opens anything. Pointer capture keeps the pull on
  * this element once it starts; `preventDefault` on the press keeps the editor
  * focused so the keyboard does not dip mid-gesture. The bar itself is hidden
- * from assistive technology; a visually hidden button beside it carries the
- * same toggle for a keyboard, a screen reader or a switch, which cannot pull.
+ * from assistive technology; `ComposerExpandButton` is its accessible twin.
  */
 function ComposerGrabber({
   expanded,
@@ -113,27 +112,40 @@ function ComposerGrabber({
   };
 
   return (
-    <>
-      <div
-        aria-hidden
-        data-composer-grabber=""
-        className="absolute inset-x-0 top-0 z-30 flex h-5 touch-none items-center justify-center"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerEnd}
-        onPointerCancel={onPointerEnd}
-      >
-        <span className="h-1 w-9 rounded-full bg-foreground/25" />
-      </div>
-      <button
-        type="button"
-        className="sr-only"
-        aria-expanded={expanded}
-        onClick={() => onExpandedChange(!expanded)}
-      >
-        {expanded ? "Collapse composer" : "Expand composer"}
-      </button>
-    </>
+    <div
+      aria-hidden
+      data-composer-grabber=""
+      className="absolute inset-x-0 top-0 z-30 flex h-5 touch-none items-center justify-center"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+    >
+      <span className="h-1 w-9 rounded-full bg-foreground/25" />
+    </div>
+  );
+}
+
+/**
+ * The same toggle for a keyboard, a screen reader or a switch, which cannot
+ * pull. Visually hidden until it takes keyboard focus, then shown in the
+ * card's corner so the focus has a visible owner. Mounted whenever the sheet
+ * is available, not only while the grabber shows, so collapsing from it never
+ * removes the element that holds focus.
+ */
+function ComposerExpandButton({
+  expanded,
+  onExpandedChange,
+}: ComposerExpansion): ReactNode {
+  return (
+    <button
+      type="button"
+      className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:right-3 focus-visible:top-2 focus-visible:z-30 focus-visible:rounded-md focus-visible:bg-card focus-visible:px-2 focus-visible:py-1 focus-visible:text-ui-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden"
+      aria-expanded={expanded}
+      onClick={() => onExpandedChange(!expanded)}
+    >
+      {expanded ? "Collapse composer" : "Expand composer"}
+    </button>
   );
 }
 
@@ -212,6 +224,7 @@ function ComposerAreaImpl({
       >
         {overlay}
         {showGrabber ? <ComposerGrabber {...expansion} /> : null}
+        {expansion === null ? null : <ComposerExpandButton {...expansion} />}
         <div
           data-composer-utility-overlay=""
           className={cn(

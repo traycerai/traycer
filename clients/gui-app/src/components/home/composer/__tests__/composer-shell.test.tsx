@@ -231,18 +231,24 @@ describe("ComposerShell phone expansion", () => {
     expect(grabber()).toBeNull();
   });
 
-  it("renders no grabber on a phone viewport when expansion is null", () => {
+  it("renders no grabber and no hidden button on a phone viewport when expansion is null", () => {
     viewportMock.phone = true;
     renderShellWithEditor(null, <OverflowingEditor />);
 
     expect(grabber()).toBeNull();
+    expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
   });
 
-  it("shows no grabber while the draft still fits its box", () => {
+  it("shows no grabber while the draft still fits its box, but keeps the hidden button", () => {
     viewportMock.phone = true;
     renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
 
     expect(grabber()).toBeNull();
+    // Mounted whatever the draft's size, so collapsing from it never removes
+    // the element holding keyboard focus.
+    expect(
+      screen.getByRole("button", { name: "Expand composer" }),
+    ).not.toBeNull();
   });
 
   it("shows the grabber once the draft outgrows its box, as a bar with a hidden button beside it", () => {
@@ -260,14 +266,24 @@ describe("ComposerShell phone expansion", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("toggles the sheet from the hidden button", () => {
+  it("toggles the sheet from the hidden button, which stays mounted across the collapse", () => {
     viewportMock.phone = true;
     const expansion = makeExpansion(true);
-    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const view = render(shellWith(expansion, FITTING_EDITOR));
+    const button = screen.getByRole("button", { name: "Collapse composer" });
+    button.focus();
 
-    fireEvent.click(screen.getByRole("button", { name: "Collapse composer" }));
-
+    fireEvent.click(button);
     expect(expansion.onExpandedChange).toHaveBeenCalledWith(false);
+
+    // The owner collapses; the grabber goes (the draft fits) but the button
+    // is the same element, still focused.
+    view.rerender(shellWith(makeExpansion(false), FITTING_EDITOR));
+    expect(grabber()).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand composer" })).toBe(
+      button,
+    );
+    expect(document.activeElement).toBe(button);
   });
 
   it("notices an editor that mounts after the frame", async () => {
