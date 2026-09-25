@@ -462,6 +462,28 @@ describe("OrganizationProvider lifecycle projection", () => {
     expect(invalidateQueries).not.toHaveBeenCalled();
   });
 
+  it("invalidates History when its invalidation marker changes without a loaded task", () => {
+    state.view = { ...emptyView(), historyInvalidation: "marker-1" };
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const rendered = renderProvider(queryClient, null);
+    act(() => {});
+    invalidateQueries.mockClear();
+
+    state.view = { ...state.view, historyInvalidation: "marker-2" };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-1", "organization.history"),
+    });
+  });
+
   it("does not retain another account's group projection", async () => {
     const taskOneTabId = openTask("task-1");
     state.view = viewWithGroup([

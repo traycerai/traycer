@@ -235,18 +235,8 @@ export function OrganizationProvider({
       void queryClient.invalidateQueries({
         predicate: (entry) =>
           entry.queryKey.includes("cloud.listTasks") &&
-          entry.queryKey.includes(userId) &&
-          entry.queryKey.some(
-            (part) =>
-              typeof part === "object" &&
-              part !== null &&
-              "filters" in part &&
-              typeof part.filters === "object" &&
-              part.filters !== null &&
-              ("labelNames" in part.filters ||
-                "groupIds" in part.filters ||
-                "includeUngrouped" in part.filters),
-          ),
+          entry.queryKey.includes(hostId) &&
+          entry.queryKey.includes(userId),
       });
     }
     current.confirmedView = view;
@@ -453,12 +443,25 @@ function organizationFiltersChanged(
   previous: OrganizationView,
   next: OrganizationView,
 ): boolean {
+  if (previous.historyInvalidation !== next.historyInvalidation) return true;
   if (
     JSON.stringify([previous.groups, previous.catalog]) !==
     JSON.stringify([next.groups, next.catalog])
   )
     return true;
   // Loading metadata for a new page must not invalidate the page that loaded it.
+  if (
+    previous.appearances.some((appearance) => {
+      const current = next.appearances.find(
+        (row) => row.taskId === appearance.taskId,
+      );
+      return (
+        current !== undefined &&
+        JSON.stringify(appearance) !== JSON.stringify(current)
+      );
+    })
+  )
+    return true;
   return Object.entries(previous.taskLabels).some(
     ([id, labels]) =>
       Object.hasOwn(next.taskLabels, id) &&

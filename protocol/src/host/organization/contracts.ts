@@ -84,6 +84,8 @@ export const organizationViewSchema = lazySchema(() =>
     taskLabels: z.record(z.string(), taskLabelStateSchema),
     ready: z.boolean(),
     authenticationRequired: z.boolean(),
+    // Opaque cache invalidation token, not a cloud data version. Older hosts omit it.
+    historyInvalidation: z.string().optional(),
     pending: z.array(
       z.object({
         commandIds: z.array(id),
