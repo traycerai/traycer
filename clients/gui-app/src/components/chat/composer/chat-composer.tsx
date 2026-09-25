@@ -633,11 +633,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pastePending,
     annotationPreparationPending,
   );
-  // The phone sheet (`ComposerShell`'s `expansion`). Sending drops back to the
-  // compact card: an empty full-screen editor over a reply that just started
-  // is the wrong thing to be looking at. Gated the way the send button is,
-  // so a submit the composer refuses outright leaves the draft where the
-  // user is looking at it.
+  // The phone sheet (`ComposerShell`'s `expansion`). The submit handlers
+  // below `canSubmit` drop it back to the compact card on a send.
   const [composerExpanded, setComposerExpanded] = useState(false);
   const composerExpansion = useMemo(
     () => ({
@@ -646,16 +643,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     }),
     [composerExpanded],
   );
-  const handleSubmitDraft = useCallback(
-    (source: ChatComposerSubmitSource): void => {
-      submitDraft(source);
-      if (canSubmit) setComposerExpanded(false);
-    },
-    [canSubmit, submitDraft],
-  );
-  const handleSubmitFromButton = useCallback((): void => {
-    handleSubmitDraft("enter");
-  }, [handleSubmitDraft]);
   // Whether a Cmd+Enter here would steer (vs queue), gating the discovery hints
   // (decisions 8, 9). Capability comes from the host; the setting is the opt-out.
   const steerHintActive = steerHintIsActive({
@@ -702,6 +689,20 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
+  // Sending drops the phone sheet back to the compact card: an empty
+  // full-screen editor over a reply that just started is the wrong thing to
+  // be looking at. Gated the way the send button is, so a submit the composer
+  // refuses outright leaves the draft where the user is looking at it.
+  const handleSubmitDraft = useCallback(
+    (source: ChatComposerSubmitSource): void => {
+      submitDraft(source);
+      if (canSubmit) setComposerExpanded(false);
+    },
+    [canSubmit, submitDraft],
+  );
+  const handleSubmitFromButton = useCallback((): void => {
+    handleSubmitDraft("enter");
+  }, [handleSubmitDraft]);
 
   return (
     <>

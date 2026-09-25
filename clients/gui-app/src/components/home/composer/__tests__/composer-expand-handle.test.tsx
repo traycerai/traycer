@@ -56,10 +56,7 @@ describe("ComposerExpandHandle", () => {
   it("collapses on a pull down past the threshold while expanded", () => {
     const onExpandedChange = vi.fn();
     render(
-      <ComposerExpandHandle
-        expanded={true}
-        onExpandedChange={onExpandedChange}
-      />,
+      <ComposerExpandHandle expanded onExpandedChange={onExpandedChange} />,
     );
     const handle = getHandle();
 
@@ -116,7 +113,7 @@ describe("ComposerExpandHandle", () => {
   });
 
   it("reflects the expanded state in its label and aria-expanded", () => {
-    render(<ComposerExpandHandle expanded={true} onExpandedChange={vi.fn()} />);
+    render(<ComposerExpandHandle expanded onExpandedChange={vi.fn()} />);
 
     const handle = screen.getByRole("button", { name: "Collapse composer" });
     expect(handle.getAttribute("aria-expanded")).toBe("true");
