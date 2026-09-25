@@ -37,6 +37,7 @@ import {
   type ChatMessageActionsResult,
   type ChatMessageActionsInput,
 } from "@/components/epic-canvas/renderers/use-chat-message-actions";
+import type { ChatMessageDeliveryPhase } from "@/components/chat/chat-message";
 import type { InlineEditState } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
@@ -943,5 +944,77 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     });
 
     expect(resolveMocks.resolveDraftImageBytes).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The opening prompt's delivery footer, through the hook the chat tile calls:
+ * `setupCardShown` has to reach the row's actions, not just the helper that
+ * reads it.
+ */
+describe("opening prompt delivery status beside the setup card", () => {
+  function deliveryPhaseFor(
+    phase: ChatMessageDeliveryPhase,
+    setupCardShown: boolean,
+  ): ChatMessageDeliveryPhase | null {
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            messageDelivery: {
+              messageId: TARGET_MESSAGE_ID,
+              revision: 1,
+              state: { phase },
+            },
+            setupCardShown,
+          }),
+        ),
+      { wrapper },
+    );
+    const actions = result.current.messageActionsFor(baseMessage());
+    if (actions === null || actions.type !== "user") {
+      throw new Error("no user message actions");
+    }
+    expect(actions.enabled).toBe(false);
+    return actions.deliveryPhase;
+  }
+
+  it("preparing beside a setup card shows no status", () => {
+    expect(deliveryPhaseFor("preparing", true)).toBeNull();
+  });
+
+  it("preparing with no setup card still shows 'Setting up'", () => {
+    expect(deliveryPhaseFor("preparing", false)).toBe("preparing");
+  });
+
+  it("pending beside a setup card still shows 'Sending'", () => {
+    expect(deliveryPhaseFor("pending", true)).toBe("pending");
+  });
+
+  it("drops the status when a setup card appears on a later render", () => {
+    // Every other input keeps its identity across the rerender, so only
+    // `setupCardShown` changes - the row's actions must follow it.
+    const stable = baseInput({
+      messageDelivery: {
+        messageId: TARGET_MESSAGE_ID,
+        revision: 1,
+        state: { phase: "preparing" },
+      },
+    });
+    const { result, rerender } = renderHook(
+      ({ setupCardShown }: { readonly setupCardShown: boolean }) =>
+        useChatMessageActions({ ...stable, setupCardShown }),
+      { wrapper, initialProps: { setupCardShown: false } },
+    );
+    expect(result.current.messageActionsFor(baseMessage())).toMatchObject({
+      type: "user",
+      deliveryPhase: "preparing",
+    });
+
+    rerender({ setupCardShown: true });
+    expect(result.current.messageActionsFor(baseMessage())).toMatchObject({
+      type: "user",
+      deliveryPhase: null,
+    });
   });
 });

@@ -112,16 +112,23 @@ const DELIVERING_USER_MESSAGE_ACTIONS: Readonly<
 };
 
 /**
- * A preparing row beside the chat's setup card: still copy-only, but with no
- * status of its own, because the card already shows that setup wait.
+ * A preparing row beside the chat's setup card: still copy-only, with no
+ * status of its own. See {@link deliveringUserMessageActionsFor}.
  */
 const PREPARING_BESIDE_SETUP_CARD_ACTIONS = deliveringUserMessageActions(null);
 
 /**
  * The actions of a row the host has accepted and not started. `pending` always
- * reads "Sending": the host has not yet confirmed it has the prompt, and no
- * card covers that. `preparing` reads "Setting up" only when no setup card is
- * in the transcript to show that wait.
+ * reads "Sending": the host has not yet confirmed it has the prompt, and nothing
+ * else on screen says so.
+ *
+ * `preparing` reads "Setting up" only when the transcript has no setup card.
+ * With one, the wait is already on screen in one of two places, and a status
+ * here would repeat it. While a workspace is still being created or set up, the
+ * card itself spins. Once none is - the card reads ready, failed, or is an
+ * earlier window's - the pre-turn "Working…" row is showing: the host marks the
+ * turn activating before the phase moves to `preparing`, and
+ * `useRenderedMessages` suppresses that row only while the card is in flight.
  */
 export function deliveringUserMessageActionsFor(
   phase: ChatMessageDeliveryPhase,

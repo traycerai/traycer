@@ -14,6 +14,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -2022,7 +2023,7 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
 
   const openingPrompt = plainUserMessage("Fix the copy button");
 
-  function setupCardRow(): ChatMessageModel {
+  function setupCardRow(state: SetupWorkspaceState): ChatMessageModel {
     return {
       ...plainUserMessage(""),
       id: "setup-card:owner-1:0:1500",
@@ -2036,7 +2037,7 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
               epicId: "epic-1",
               ownerId: "owner-1",
               ownerKind: "chat",
-              state: "setting-up",
+              state,
             },
             workspaces: [],
             createdAt: 1500,
@@ -2067,7 +2068,10 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
   }
 
   it("preparing with the setup card showing: no 'Setting up' status, Copy only", () => {
-    renderOpeningPrompt("preparing", [setupCardRow(), openingPrompt]);
+    renderOpeningPrompt("preparing", [
+      setupCardRow("setting-up"),
+      openingPrompt,
+    ]);
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByText("Setting up")).toBeNull();
     expect(screen.queryByLabelText("Edit message")).toBeNull();
@@ -2076,8 +2080,16 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
   });
 
   it("pending with the setup card showing: still reads 'Sending'", () => {
-    renderOpeningPrompt("pending", [setupCardRow(), openingPrompt]);
+    renderOpeningPrompt("pending", [setupCardRow("setting-up"), openingPrompt]);
     expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+
+  // A ready card no longer spins. The pre-turn "Working…" row shows the wait
+  // from then on (`useRenderedMessages`'s setup gating), so this row still adds
+  // no status of its own.
+  it("preparing beside a ready setup card: still no 'Setting up' status", () => {
+    renderOpeningPrompt("preparing", [setupCardRow("ready"), openingPrompt]);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("preparing with no setup card: keeps its 'Setting up' status", () => {

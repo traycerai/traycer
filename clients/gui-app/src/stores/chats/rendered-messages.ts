@@ -1678,9 +1678,10 @@ function withoutWithdrawnUserRow(
 }
 
 /**
- * Whether the rendered transcript carries a worktree setup card. While it does,
- * the card is what shows an unstarted opening prompt's setup wait, so the
- * prompt's own "Setting up" status would say the same thing twice.
+ * Whether the rendered transcript carries a worktree setup card, in any state.
+ * While it does, an unstarted opening prompt drops its own "Setting up" status:
+ * the card, or the pre-turn "Working…" row once the card is no longer in flight
+ * (`setupGating` above), already shows that wait.
  */
 export function transcriptShowsSetupCard(
   rows: ReadonlyArray<ChatMessageModel>,
