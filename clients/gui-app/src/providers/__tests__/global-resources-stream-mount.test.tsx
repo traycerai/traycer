@@ -129,6 +129,27 @@ describe("GlobalResourcesStreamMount", () => {
   });
 
   /**
+   * A monitor whose host the pre-check convicted acquires nothing, so it has
+   * no stream of its own to speed up - and must not speed up the one another
+   * holder (a footer readout) is keeping at background.
+   */
+  it("adds no interactive demand from a mount that holds no lease", () => {
+    const demands: string[] = [];
+    __setResourcesStreamClientFactoryForTests(() => ({
+      close: () => undefined,
+      setDemand: (demand) => demands.push(demand),
+    }));
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background"]);
+
+    streamMock.support = "supported";
+    streamMock.version = { major: 1, minor: 0 };
+    render(<GlobalResourcesStreamMount interactive />);
+
+    expect(demands).toEqual(["background"]);
+  });
+
+  /**
    * The other side of the gate, and the reason it is still the PRE-STREAM
    * verdict: when the pre-check CAN convict — a local host, where the
    * client-wide capability cache is real — nothing is dialled at all. That is

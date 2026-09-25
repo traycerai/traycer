@@ -264,13 +264,20 @@ export function GlobalResourcesStreamMount(
   // Demand is aggregated by the registry across every lease holder, so a
   // holder that unmounts while interactive (the phone's header panel closing)
   // drops the shared stream back to background instead of leaving it at the
-  // cadence only the departed holder asked for.
+  // cadence only the departed holder asked for. Only a mount that HOLDS the
+  // lease may add demand: one that acquired nothing (its host convicted by the
+  // pre-check, or no transport yet) would otherwise speed up another holder's
+  // stream on a machine it is not watching.
+  const holdsLease =
+    !resourcesUnsupported &&
+    (getResourcesStreamClientFactoryOverride() !== null ||
+      wsStreamClient !== null);
   useEffect(
     () =>
-      props.interactive
+      props.interactive && holdsLease
         ? resourcesRegistry.holdInteractiveGlobalDemand()
         : undefined,
-    [props.interactive],
+    [holdsLease, props.interactive],
   );
 
   return null;
