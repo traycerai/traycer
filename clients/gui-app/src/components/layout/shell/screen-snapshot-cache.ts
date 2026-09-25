@@ -1,4 +1,8 @@
-import type { ScreenSnapshot } from "@/components/layout/shell/screen-snapshot";
+import {
+  releaseScreenSnapshot,
+  type ScreenSnapshot,
+} from "@/components/layout/shell/screen-snapshot";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 /**
  * The frozen screens a swipe can move, keyed by the history entry each one
@@ -21,7 +25,9 @@ import type { ScreenSnapshot } from "@/components/layout/shell/screen-snapshot";
  */
 
 /**
- * How many frozen screens are worth holding at once.
+ * How many frozen screens are worth holding at once - the active retention
+ * profile's number, read on every filing so the phone runs its own without a
+ * platform branch here.
  *
  * Retention is by RECENCY rather than by distance from the current entry,
  * because the cursor moves: a single gesture can only reach the entry either
@@ -32,12 +38,32 @@ import type { ScreenSnapshot } from "@/components/layout/shell/screen-snapshot";
  * nothing to move and fell back to instant navigation.
  *
  * The count bounds what a distance rule bounded before - a frozen screen is a
- * whole DOM tree held out of the collector's reach - and it is sized to cover
- * a run of swipes rather than a whole session: deep enough that consecutive
- * steps keep animating, small enough that a long walk releases the screens it
- * has left behind.
+ * whole DOM tree held out of the collector's reach, canvas pixels included.
+ *
+ * WHY THE PHONE HOLDS ONE. A depth of N animates a run of N - 1 steps, not N:
+ * every commit files the screen it has just left - the drag's own outgoing
+ * copy, handed straight back here by `use-swipe-nav-transition` - so one slot
+ * is always spent on the step the user just took. Two is therefore worth
+ * exactly what one is; both animate the first back of a run and miss on the
+ * second. One is the smallest number that still animates what the phone
+ * actually does:
+ *
+ *  - the immediate back, whose destination is the entry the app left LAST and
+ *    so is the newest thing here;
+ *  - the forward that undoes it, whose destination is the screen that same
+ *    commit filed on its way out;
+ *  - and an oscillation between the two, indefinitely, because every step
+ *    files exactly the screen the next one asks for.
+ *
+ * What it gives up is the second and later step of a run in ONE direction, and
+ * giving that up is not a failure: {@link readScreenSnapshot} answers `null`
+ * and the gesture performs the instant navigation it did before this
+ * transition existed. Three spare screens of held DOM is the wrong price for
+ * animating a swipe run on a process iOS kills at 2 GB.
  */
-const MAX_RETAINED_SCREENS = 4;
+function maxRetainedScreens(): number {
+  return getRetentionProfile().retainedScreenSnapshots;
+}
 
 const snapshotsByEntryKey = new Map<string, ScreenSnapshot>();
 
@@ -75,8 +101,15 @@ export function rememberScreenSnapshot(
 ): void {
   snapshotsByEntryKey.delete(leavingKey);
   snapshotsByEntryKey.set(leavingKey, snapshot);
+  const cap = maxRetainedScreens();
   for (const key of snapshotsByEntryKey.keys()) {
-    if (snapshotsByEntryKey.size <= MAX_RETAINED_SCREENS) break;
+    if (snapshotsByEntryKey.size <= cap) break;
+    // Dropped, never destroyed. An evicted screen can still be ON SCREEN: a
+    // committed settle is carrying the destination it read from here while
+    // this very call files the outgoing copy over it, and at a cap of one that
+    // filing is what evicts it. Releasing its canvases would blank a terminal
+    // tile mid-transition. Unreferenced is enough - the collector owns the
+    // rest, and {@link clearScreenSnapshots} is where waiting for it is not.
     snapshotsByEntryKey.delete(key);
   }
 }
@@ -91,7 +124,24 @@ export function readScreenSnapshot(entryKey: string): ScreenSnapshot | null {
   return snapshotsByEntryKey.get(entryKey) ?? null;
 }
 
-/** Releases every held screen. For teardown and for tests. */
+/**
+ * Releases every held screen, and DESTROYS them rather than only letting go.
+ *
+ * Both callers are moments where letting go is not enough. The hook unmounting
+ * is the cheap one; the app going off screen is the one that matters, because
+ * a backgrounded iOS app is measured - and killed - while it is suspended and
+ * no collection runs at all. So the pixel buffers go now
+ * ({@link releaseScreenSnapshot}) instead of whenever the collector next gets
+ * a turn.
+ *
+ * Destroying is safe HERE and not on eviction, because the caller takes the
+ * transition's layers down before clearing: nothing held here is on screen by
+ * the time this runs. See the note in {@link rememberScreenSnapshot} for the
+ * eviction side.
+ */
 export function clearScreenSnapshots(): void {
+  for (const snapshot of snapshotsByEntryKey.values()) {
+    releaseScreenSnapshot(snapshot);
+  }
   snapshotsByEntryKey.clear();
 }

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { createMemoryHistory } from "@tanstack/react-router";
 import {
   applyScreenSnapshotScroll,
   captureScreenSnapshot,
@@ -18,11 +20,24 @@ import {
   swipeNavCommits,
   swipeNavPlaneTransform,
 } from "@/components/layout/shell/swipe-nav-transition-motion";
+import {
+  useSwipeNavTransition,
+  type SwipeNavRouter,
+} from "@/components/layout/shell/use-swipe-nav-transition";
+import { __resetDocumentVisibilitySubscribersForTests } from "@/lib/dom/document-visibility";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 const WIDTH_PX = 400;
 
 afterEach(() => {
   clearScreenSnapshots();
+  setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+  setMobileApp(false);
   document.body.innerHTML = "";
 });
 
@@ -255,6 +270,159 @@ describe("the snapshot cache", () => {
       "zero refiled",
     );
     expect(readScreenSnapshot("entry-4")?.node.textContent).toBe("screen 4");
+  });
+});
+
+/**
+ * The phone's cap, which is ONE - and the cases that matter are the ones that
+ * still work at one, not the count itself. A depth of N animates a run of
+ * N - 1 steps, because every commit files the screen it just left, so two is
+ * worth exactly what one is and one is the floor.
+ */
+describe("the snapshot cache on the phone", () => {
+  function snapshotOf(text: string): ScreenSnapshot {
+    const node = document.createElement("div");
+    node.textContent = text;
+    return { node, scrollOffsets: [] };
+  }
+
+  it("holds one frozen screen, and releases the one it was holding", () => {
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+
+    rememberScreenSnapshot("entry-a", snapshotOf("first"));
+    rememberScreenSnapshot("entry-b", snapshotOf("second"));
+
+    expect(readScreenSnapshot("entry-b")?.node.textContent).toBe("second");
+    expect(readScreenSnapshot("entry-a")).toBeNull();
+  });
+
+  // The walk the whole cap is chosen for. Every navigation files the screen it
+  // leaves, so the entry a back swipe is heading to is always the newest thing
+  // in the cache - and after that swipe commits, the screen it CAME from is,
+  // which is what the forward swipe undoing it asks for. One slot sustains the
+  // pair indefinitely; the deeper cache only ever bought the second step of a
+  // run in one direction.
+  it("has the previous screen for a back swipe, and for the forward that undoes it", () => {
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    // A -> B -> C: each departure files the screen being left.
+    rememberScreenSnapshot("entry-a", snapshotOf("screen a"));
+    rememberScreenSnapshot("entry-b", snapshotOf("screen b"));
+
+    // At C, a back swipe asks for B and animates.
+    expect(readScreenSnapshot("entry-b")?.node.textContent).toBe("screen b");
+    // Its commit leaves C, filing the drag's own outgoing copy.
+    rememberScreenSnapshot("entry-c", snapshotOf("screen c"));
+
+    // At B, the forward swipe that undoes it asks for C and animates.
+    expect(readScreenSnapshot("entry-c")?.node.textContent).toBe("screen c");
+    rememberScreenSnapshot("entry-b", snapshotOf("screen b again"));
+
+    // And back again, for as long as the user keeps changing their mind.
+    expect(readScreenSnapshot("entry-b")?.node.textContent).toBe(
+      "screen b again",
+    );
+  });
+
+  // The second back of a run is the one a cap of one gives up, and giving it
+  // up is a documented fallback rather than a break: no frozen destination
+  // means the gesture performs the instant navigation it always did.
+  it("answers null for the step beyond the one it holds", () => {
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    rememberScreenSnapshot("entry-a", snapshotOf("screen a"));
+    rememberScreenSnapshot("entry-b", snapshotOf("screen b"));
+    rememberScreenSnapshot("entry-c", snapshotOf("screen c"));
+
+    expect(readScreenSnapshot("entry-c")).not.toBeNull();
+    expect(readScreenSnapshot("entry-b")).toBeNull();
+    expect(readScreenSnapshot("entry-a")).toBeNull();
+  });
+});
+
+/**
+ * The reclaim at the background edge. A frozen screen is a bet on a gesture
+ * about to happen, and a suspended app is one where none can be - which is
+ * also the only moment iOS measures the process it is deciding whether to
+ * kill.
+ */
+describe("frozen screens while the app is off screen", () => {
+  function screenWithCanvas(): ScreenSnapshot {
+    const node = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 480;
+    node.appendChild(canvas);
+    return { node, scrollOffsets: [] };
+  }
+
+  function mountTransition(): { readonly unmount: () => void } {
+    const router: SwipeNavRouter = {
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      // The filling side is driven directly by these cases; what is under test
+      // is the hook's own reclaim, not the departure subscription.
+      subscribe: () => () => undefined,
+    };
+    return renderHook(() =>
+      useSwipeNavTransition(
+        router,
+        () => undefined,
+        () => null,
+      ),
+    );
+  }
+
+  function reportVisibility(state: "hidden" | "visible"): void {
+    Object.defineProperty(document, "visibilityState", {
+      value: state,
+      configurable: true,
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  }
+
+  afterEach(() => {
+    // Hands `visibilityState` back to the prototype's own answer.
+    Reflect.deleteProperty(document, "visibilityState");
+    __resetDocumentVisibilitySubscribersForTests();
+  });
+
+  it("drops every held screen when the app goes off screen", () => {
+    setMobileApp(true);
+    rememberScreenSnapshot("entry-a", screenWithCanvas());
+    const { unmount } = mountTransition();
+
+    reportVisibility("hidden");
+
+    expect(readScreenSnapshot("entry-a")).toBeNull();
+    unmount();
+  });
+
+  // Dropping the reference is not enough at this edge: the process is measured
+  // while it is suspended, so nothing collects the pixel buffers before iOS
+  // reads the number it kills on.
+  it("gives up the canvas pixels rather than waiting for a collection", () => {
+    setMobileApp(true);
+    const screen = screenWithCanvas();
+    rememberScreenSnapshot("entry-a", screen);
+    const { unmount } = mountTransition();
+
+    reportVisibility("hidden");
+
+    const canvas = screen.node.querySelector("canvas");
+    expect(canvas?.width).toBe(0);
+    expect(canvas?.height).toBe(0);
+    unmount();
+  });
+
+  it("leaves the held screen alone while the app is on screen", () => {
+    setMobileApp(true);
+    rememberScreenSnapshot("entry-a", screenWithCanvas());
+    const { unmount } = mountTransition();
+
+    reportVisibility("visible");
+
+    expect(readScreenSnapshot("entry-a")).not.toBeNull();
+    unmount();
   });
 });
 

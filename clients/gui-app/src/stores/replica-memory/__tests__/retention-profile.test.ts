@@ -52,6 +52,16 @@ describe("RetentionProfile", () => {
     expect(MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals).toBeLessThan(
       DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals,
     );
+    expect(MOBILE_RETENTION_PROFILE.retainedScreenSnapshots).toBeLessThan(
+      DESKTOP_RETENTION_PROFILE.retainedScreenSnapshots,
+    );
+  });
+
+  // The floor, and it is a floor rather than a tuning: the swipe cache spends
+  // one slot on the screen every commit files behind itself, so anything below
+  // one animates nothing at all.
+  it("keeps at least the screen a back swipe is heading to, on the phone", () => {
+    expect(MOBILE_RETENTION_PROFILE.retainedScreenSnapshots).toBe(1);
   });
 
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {

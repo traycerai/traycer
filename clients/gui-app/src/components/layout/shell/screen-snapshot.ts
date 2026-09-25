@@ -183,3 +183,26 @@ function dropExcludedSubtrees(clone: HTMLElement): void {
     excluded.remove();
   }
 }
+
+/**
+ * Gives up a frozen screen's pixel buffers.
+ *
+ * Everything else a snapshot holds is plain detached DOM, which costs nothing
+ * once nothing names it. A `<canvas>` is not: the copy {@link
+ * restoreCanvasPixels} paints owns a backing store of width x height x 4
+ * bytes - a full-screen terminal tile at a phone's device pixel ratio is
+ * megabytes on its own - and that store lives until the collector reaches the
+ * element. Zeroing the dimensions drops it on this line instead, which is the
+ * whole point: this is called at the moments the app can least afford to wait
+ * for a collection, and a suspended iOS app is measured while nothing runs at
+ * all.
+ *
+ * One-way, and only for a screen nothing is showing: what it leaves behind is
+ * the same clone with its canvases blanked.
+ */
+export function releaseScreenSnapshot(snapshot: ScreenSnapshot): void {
+  for (const canvas of snapshot.node.querySelectorAll("canvas")) {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}

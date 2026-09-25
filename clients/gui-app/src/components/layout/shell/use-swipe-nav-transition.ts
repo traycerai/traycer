@@ -25,6 +25,10 @@ import type {
 import { usePanelAnimationDuration } from "@/hooks/use-panel-animation-duration";
 import { navDrawerSettleTransition } from "@/components/layout/shell/nav-drawer-motion";
 import { isMobileApp } from "@/lib/mobile-app";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 
 /**
  * The router surface this needs, and no more: the live history to read the
@@ -171,14 +175,41 @@ export function useSwipeNavTransition(
     });
   }, [router]);
 
+  // A frozen screen is a bet on a gesture that is about to happen, and an app
+  // that is off screen is an app where none can be: the phone suspends the
+  // WebView on an app switch, and iOS measures the process - and kills it -
+  // exactly while it sits there. So the bet is called off at the edge rather
+  // than carried through the background. The transition's own layers come down
+  // with it, and that is what makes destroying the held canvases safe: after
+  // `clearView` nothing here is showing a snapshot.
+  //
+  // The signal is `visibilitychange`, through the same window-wide
+  // subscription every other reclaim reads. WKWebView hides the document when
+  // the app backgrounds - it is where Capacitor's own web-side `pause` is
+  // emitted from - so this is that edge without reaching for a native plugin
+  // the gui-app bundle does not have.
+  //
+  // Nothing is rebuilt on the way back. The cache refills from the next
+  // navigation, and a swipe that beats it falls back to the instant step it
+  // already has.
+  useEffect(() => {
+    if (!isMobileApp()) return;
+    return subscribeDocumentVisibility(() => {
+      if (isDocumentVisible()) return;
+      settleRef.current?.stop();
+      clearView();
+      clearScreenSnapshots();
+    });
+  }, [clearView]);
+
   useEffect(() => {
     return () => {
       settleRef.current?.stop();
       settleRef.current = null;
-      // Up to four frozen DOM trees are held for the swipes this hook serves;
-      // nothing else reads them, so they leave when it does. A remount refills
-      // the cache on the next navigation, and a gesture that arrives before
-      // then falls back to the instant step it already has.
+      // The frozen DOM trees are held for the swipes this hook serves; nothing
+      // else reads them, so they leave - and are destroyed - when it does. A
+      // remount refills the cache on the next navigation, and a gesture that
+      // arrives before then falls back to the instant step it already has.
       clearScreenSnapshots();
     };
   }, []);

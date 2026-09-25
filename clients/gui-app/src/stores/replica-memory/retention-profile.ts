@@ -1,7 +1,7 @@
 import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
 
 /**
- * The four count caps that decide how much of the app stays RESIDENT while
+ * The five count caps that decide how much of the app stays RESIDENT while
  * the user is elsewhere, chosen once per shell.
  *
  * All four used to be bare module constants with no platform branch, so the
@@ -32,6 +32,14 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /**
+   * Frozen screens held for the phone's history swipes
+   * (`screen-snapshot-cache`). Not a session pool like the four above - each
+   * one is a detached `cloneNode(true)` of the whole screen, canvas pixels
+   * included - but the same kind of cap for the same reason, so it is chosen
+   * in the same place. See that module for why the phone's number is 1.
+   */
+  readonly retainedScreenSnapshots: number;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -40,6 +48,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  retainedScreenSnapshots: 4,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -48,6 +57,7 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  retainedScreenSnapshots: 1,
 });
 
 /**
