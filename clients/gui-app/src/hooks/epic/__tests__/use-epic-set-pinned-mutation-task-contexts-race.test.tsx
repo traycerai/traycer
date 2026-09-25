@@ -304,4 +304,177 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
       queryClient.getQueryData<GetTaskContextsResponse>(otherHostKey),
     ).toEqual(original);
   });
+
+  /**
+   * Review fix on top of the above two: `onSuccess` now also calls
+   * `restartInFlightFirstTaskContextsReads`. `cancelInFlightTaskContextsReads`
+   * (the helper the first test in this file exercises) deliberately skips a
+   * FIRST fetch - one that holds no data yet - because cancelling it alone
+   * would strand it pending and idle with nothing to show. But that fetch was
+   * requested BEFORE the write committed, so the response it eventually
+   * delivers is exactly the same kind of late, pre-write answer the stale
+   * REFETCH case is guarding against, and `staleTime: Infinity` would keep it
+   * forever. The fix cancels it (`revert: true`, so no error state - see the
+   * next test) and starts a fresh fetch in its place.
+   */
+  it("restarts a data-less first fetch requested before the write, so its stale answer cannot become the cached one", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+      "epic-b",
+    ]);
+    let fetchCount = 0;
+    // Assigned only inside the queryFn closure below - see the identical
+    // pattern's own note in the first test in this file for why this is a
+    // holder rather than a `let`.
+    const stale: {
+      resolve: ((value: GetTaskContextsResponse) => void) | null;
+    } = { resolve: null };
+    const observer = new QueryObserver<GetTaskContextsResponse>(queryClient, {
+      queryKey: taskContextsKey,
+      queryFn: () => {
+        fetchCount += 1;
+        // The FIRST fetch - requested before the write below - never settles
+        // on its own; it holds no data the whole time it is in flight, which
+        // is exactly the shape `restartInFlightFirstTaskContextsReads` looks
+        // for. The SECOND fetch is the restart's own refetch, and it answers
+        // with the COMMITTED bit, as a fetch issued after the write would.
+        if (fetchCount === 1) {
+          return new Promise<GetTaskContextsResponse>((resolve) => {
+            stale.resolve = resolve;
+          });
+        }
+        return Promise.resolve(foundResponse("epic-b", false));
+      },
+    });
+    const stop = observer.subscribe(() => undefined);
+    await waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(true);
+    });
+    expect(fetchCount).toBe(1);
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey),
+    ).toBeUndefined();
+
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    // The write: unpin epic-b, while the data-less first fetch above is still
+    // in flight. `restartInFlightFirstTaskContextsReads` in `onSuccess`
+    // cancels it and fires the second, fresh fetch - fire-and-forget
+    // (`void queryClient.refetchQueries(...)`), so it can still be settling
+    // after `mutateAsync` itself resolves.
+    await result.current.mutateAsync({
+      epicId: "epic-b",
+      pinned: false,
+      isLocalHome: false,
+      hostId: null,
+    });
+
+    await waitFor(() => {
+      expect(fetchCount).toBe(2);
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey),
+      ).toBeDefined();
+    });
+
+    // The stale first fetch finally lands, well after the restart's fresh
+    // fetch already answered. Without the fix this is the ONLY fetch in
+    // flight and its `pinned: true` becomes the cache's answer, forever
+    // (`staleTime: Infinity`).
+    stale.resolve?.(foundResponse("epic-b", true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey)?.tasks
+        .row,
+    ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
+    // Exactly the restart's one extra fetch - not a third one from the stale
+    // response somehow being treated as still-current.
+    expect(fetchCount).toBe(2);
+
+    stop();
+  });
+
+  /**
+   * The restart cancels the data-less first fetch with `revert: true`
+   * specifically so the cancellation never surfaces as a query ERROR -
+   * `revert: false` would, for the instant before the replacement fetch
+   * starts (see `restartInFlightFirstTaskContextsReads`'s own comment). An
+   * error status is not merely cosmetic here: any observer mounted on this
+   * query during that instant would flash an error state for a read the user
+   * never asked about and nothing actually failed.
+   */
+  it("never puts the restarted query into an error state", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+      "epic-b",
+    ]);
+    let fetchCount = 0;
+    const stale: {
+      resolve: ((value: GetTaskContextsResponse) => void) | null;
+    } = { resolve: null };
+    const observer = new QueryObserver<GetTaskContextsResponse>(queryClient, {
+      queryKey: taskContextsKey,
+      queryFn: () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return new Promise<GetTaskContextsResponse>((resolve) => {
+            stale.resolve = resolve;
+          });
+        }
+        return Promise.resolve(foundResponse("epic-b", false));
+      },
+    });
+    const statuses: string[] = [];
+    const stop = observer.subscribe(() => {
+      statuses.push(observer.getCurrentResult().status);
+    });
+    await waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(true);
+    });
+
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    await result.current.mutateAsync({
+      epicId: "epic-b",
+      pinned: false,
+      isLocalHome: false,
+      hostId: null,
+    });
+
+    await waitFor(() => {
+      expect(fetchCount).toBe(2);
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<GetTaskContextsResponse>(taskContextsKey),
+      ).toBeDefined();
+    });
+
+    stale.resolve?.(foundResponse("epic-b", true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(statuses).not.toContain("error");
+
+    stop();
+  });
 });

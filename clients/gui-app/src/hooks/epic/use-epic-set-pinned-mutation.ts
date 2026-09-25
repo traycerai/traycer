@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   useMutationState,
   useQueryClient,
+  type Query,
   type QueryClient,
 } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -233,6 +234,16 @@ export function useEpicSetPinned() {
           variables.epicId,
           variables.pinned,
         );
+        // The one read neither step above can reach: a FIRST fetch still in
+        // flight, holding no data to patch and deliberately not cancelled by
+        // the helper. It was requested before the write committed, so it is
+        // restarted rather than awaited - see the helper for why a plain
+        // refetch cannot do this.
+        await restartInFlightFirstTaskContextsReads(
+          queryClient,
+          ctx.userId,
+          variables.epicId,
+        );
         const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
           ctx.hostId,
           ctx.userId,
@@ -381,6 +392,51 @@ async function cancelInFlightTaskContextsReads(
     },
     { revert: false },
   );
+}
+
+/**
+ * Restarts in-flight FIRST `epic.getTaskContexts` fetches that ask for this
+ * epic, so a response requested before a pin write committed cannot become the
+ * cached answer after it.
+ *
+ * {@link cancelInFlightTaskContextsReads} leaves these alone on purpose: they
+ * hold no data a late response could overwrite, and cancelling one on its own
+ * strands it pending and idle. But the response they will deliver is exactly
+ * such a late answer, and `staleTime: Infinity` keeps it. Cancelling is
+ * therefore only safe when followed by a fresh fetch, which is what this does.
+ *
+ * `refetchQueries({ cancelRefetch: true })` alone is NOT enough: TanStack only
+ * cancels a running fetch on refetch when the query already has data, and
+ * otherwise hands back the running promise - the very read being replaced.
+ * The entries themselves are kept, so their observers receive the replacement.
+ * A query with no observer is skipped by `refetchQueries` and left pending,
+ * which is harmless: the next observer to mount fetches it from scratch.
+ */
+async function restartInFlightFirstTaskContextsReads(
+  queryClient: QueryClient,
+  userId: string,
+  epicId: string,
+): Promise<void> {
+  const firstReads = new Set(
+    queryClient.getQueryCache().findAll({
+      fetchStatus: "fetching",
+      predicate: (query) =>
+        query.state.data === undefined &&
+        epicTaskContextsQueryKeyMatchesScope(query.queryKey, {
+          hostId: null,
+          userId,
+        }) &&
+        taskContextsQueryKeyAsksFor(query.queryKey, epicId),
+    }),
+  );
+  if (firstReads.size === 0) return;
+  const restarted = { predicate: (query: Query) => firstReads.has(query) };
+  // `revert: true`, unlike the helper above: with no data to keep, reverting
+  // returns the entry to pending-idle quietly, where `revert: false` would
+  // dispatch the cancellation as a query ERROR (and log it) for the instant
+  // before the replacement fetch starts.
+  await queryClient.cancelQueries(restarted, { revert: true });
+  void queryClient.refetchQueries(restarted);
 }
 
 function taskContextsQueryKeyAsksFor(
