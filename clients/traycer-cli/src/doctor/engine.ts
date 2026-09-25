@@ -1339,7 +1339,14 @@ function probeWindowsScriptHostPolicy(): DoctorIssue | null {
           "/v",
           "Enabled",
         ],
-        { encoding: "utf8", windowsHide: true, timeout: 5000 },
+        // execFileSync copies a failing child's stderr into this process's
+        // stderr unless `stdio` is given; captured here, never forwarded.
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 5000,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
       );
     } catch {
       // Key or value absent - WSH enabled by default.
@@ -1378,6 +1385,7 @@ async function probeWindowsCredentialsAcl(
       encoding: "utf8",
       windowsHide: true,
       timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     return null;

@@ -55,7 +55,14 @@ export function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
       stdout = execFileSync(
         "tasklist",
         ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
-        { encoding: "utf8", windowsHide: true, timeout: 3000 },
+        // execFileSync copies a failing child's stderr into this process's
+        // stderr unless `stdio` is given; captured here, never forwarded.
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 3000,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
       );
     } catch {
       // tasklist missing or refused - the probe itself failed, so we
@@ -600,6 +607,7 @@ function readPosixProcessStartTimeMs(pid: number): number | null {
       stdout = execFileSync("ps", ["-p", String(pid), "-o", "etime="], {
         encoding: "utf8",
         timeout: 3000,
+        stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
       return null;
@@ -672,7 +680,12 @@ function readWindowsProcessStartTimeMs(pid: number): number | null {
         "-Command",
         `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString("o")`,
       ],
-      { encoding: "utf8", windowsHide: true, timeout: 5000 },
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
   } catch {
     return null;
@@ -787,6 +800,7 @@ function readProcessStartIdentityImpl(
           windowsHide: true,
           timeout: 5000,
           env: DETERMINISTIC_FORMAT_ENV,
+          stdio: ["ignore", "pipe", "pipe"],
         }),
       );
     }
@@ -795,6 +809,7 @@ function readProcessStartIdentityImpl(
         encoding: "utf8",
         timeout: 3000,
         env: DETERMINISTIC_FORMAT_ENV,
+        stdio: ["ignore", "pipe", "pipe"],
       }),
     );
   } catch {
@@ -986,6 +1001,7 @@ function readWindowsDeniedReadCreationMicrosImpl(pid: number): number | null {
         encoding: "utf8",
         windowsHide: true,
         timeout: WINDOWS_START_IDENTITY_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "pipe"],
       }),
     );
   } catch {

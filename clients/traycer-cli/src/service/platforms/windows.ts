@@ -2788,7 +2788,14 @@ function readCurrentUserSidFromWhoami(): string | null {
     stdout = execFileSync(
       windowsSystemExecutable("whoami.exe"),
       ["/user", "/fo", "csv", "/nh"],
-      { encoding: "utf8", windowsHide: true, timeout: 10_000 },
+      // execFileSync copies a failing child's stderr into this process's
+      // stderr unless `stdio` is given; captured here, never forwarded.
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
   } catch {
     return null;
