@@ -38,16 +38,22 @@
  *
  * Read-only means this connection can never write the database. It does not
  * stop SQLite mapping the `-shm` sidecar for a WAL-mode file, which is why an
- * unwritable directory is a failure rather than a silent `0`. (A WAL file
- * whose `-shm` is merely absent reads fine on both engines - verified - as
- * long as the directory can be written; it is the directory that decides.) It
- * also never runs a migration: the stamp is read off `chat_db_meta` directly,
- * not through the host's store open, which migrates on sight.
+ * unwritable directory is a failure rather than a silent `0`. A WAL file whose
+ * sidecars are absent - the state a clean close leaves - reads fine through
+ * `node:sqlite` and through Bun's bundled SQLite (Linux, Windows): the read-only
+ * open creates `-wal` and `-shm` itself when the directory can be written. Bun
+ * on macOS links Apple's system libsqlite3 instead, and that build fails the
+ * same open's first read with SQLITE_CANTOPEN (verified on 3.54.0), so the
+ * Bun engine creates the missing sidecars itself and retries once; see
+ * {@link openBunReadOnly}. It also never runs a migration: the stamp is read
+ * off `chat_db_meta` directly, not through the host's store open, which
+ * migrates on sight.
  *
  * Absent stores are neither readings nor failures. An epic directory without
  * `chat/chat.db` has nothing the target could fail to read.
  */
 import { lstat, readdir } from "node:fs/promises";
+import { closeSync, fchmodSync, openSync, statSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -374,13 +380,88 @@ async function bunChatDbOpener(): Promise<ChatDbOpener | null> {
     return null;
   }
   return (dbPath: string): OpenChatDb => {
-    const db = new Database(dbPath, { readonly: true });
+    const { db, stamp } = openBunReadOnly(Database, dbPath);
     return {
-      stampRow: () =>
-        db.query(SELECT_STAMP_SQL).get(CHAT_DB_SCHEMA_VERSION_KEY),
+      stampRow: () => stamp.get(CHAT_DB_SCHEMA_VERSION_KEY),
       close: () => db.close(),
     };
   };
+}
+
+/** A read-only Bun connection with its stamp statement already prepared. */
+interface BunStampReader {
+  readonly db: import("bun:sqlite").Database;
+  readonly stamp: import("bun:sqlite").BunStatement;
+}
+
+/**
+ * Bun's read-only open, with the one retry Apple's SQLite needs.
+ *
+ * On macOS Bun links the system libsqlite3, which will not create a WAL-mode
+ * database's `-wal`/`-shm` for a read-only connection and throws
+ * SQLITE_CANTOPEN while they are absent - and absent is the ordinary state of
+ * every idle store, because a clean close by the host's writer deletes both.
+ * The throw comes from the first statement, not from `new Database`, which
+ * reads nothing: SQLite opens the WAL when it first reads the schema, so the
+ * unit that is retried is open-and-prepare. Node's
+ * read-only open, and Bun's bundled SQLite elsewhere, create and leave both
+ * in that same state; this does exactly that and nothing more. Each MISSING
+ * sidecar is created empty (`wx`, so one a concurrent opener made first is
+ * left as it is) with the database file's own permission bits, which is
+ * what SQLite's unix VFS gives them, then fchmod-ed so the umask cannot
+ * change them. Then one retry, whose throw is the answer.
+ *
+ * Never a read-write open and never `immutable=1`: the first would let the
+ * survey write a store it only reads, the second would read past a live
+ * writer's WAL. Silent on purpose: the retry is a dev-loop artefact (the
+ * shipped CLI is Node), and a line about it would read as a fault in a
+ * support log.
+ */
+function openBunReadOnly(
+  Database: typeof import("bun:sqlite").Database,
+  dbPath: string,
+): BunStampReader {
+  try {
+    return prepareBunStampReader(Database, dbPath);
+  } catch (error) {
+    if (errnoCodeOf(error) !== "SQLITE_CANTOPEN") throw error;
+  }
+  const mode = statSync(dbPath).mode & 0o777;
+  for (const suffix of WAL_SIDECAR_SUFFIXES) {
+    createMissingEmptyFile(`${dbPath}${suffix}`, mode);
+  }
+  return prepareBunStampReader(Database, dbPath);
+}
+
+/** One open-and-prepare; a failed prepare closes its connection first. */
+function prepareBunStampReader(
+  Database: typeof import("bun:sqlite").Database,
+  dbPath: string,
+): BunStampReader {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return { db, stamp: db.query(SELECT_STAMP_SQL) };
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+const WAL_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
+
+function createMissingEmptyFile(path: string, mode: number): void {
+  let fd: number;
+  try {
+    fd = openSync(path, "wx", mode);
+  } catch (error) {
+    if (errnoCodeOf(error) === "EEXIST") return;
+    throw error;
+  }
+  try {
+    fchmodSync(fd, mode);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
