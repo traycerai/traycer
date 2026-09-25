@@ -49,6 +49,13 @@ export interface FileAssetState {
   readonly meta: FileAssetMeta | null;
   /** Human-readable one-liner, set only at `status === "fallback"`. */
   readonly reason: string | null;
+  /**
+   * `true` only at `status === "fallback"` when the host found no file at the
+   * path (moved, renamed or deleted while its tab stayed open). A surface
+   * shows that as its own state rather than a preview failure, since
+   * offering to open a file that is gone only ends in an error.
+   */
+  readonly missing: boolean;
   /** `null` until the header arrives. */
   readonly totalBytes: number | null;
   /** Meaningful only at `status === "ready"` - whether `url` resolved from the shared `imageBlobCache` (`fetcher` below never ran) rather than a fresh stream. See `ImagePreviewProps.servedFromCache` for why a consumer needs this. */
@@ -106,6 +113,7 @@ const LOADING_STATE: FileAssetState = {
   url: null,
   meta: null,
   reason: null,
+  missing: false,
   totalBytes: null,
   servedFromCache: false,
 };
@@ -170,6 +178,23 @@ function describeFailure(
   return renderKind === "image"
     ? IMAGE_FAILURE_MESSAGES[failure.reason]
     : documentFailureMessages(renderKind)[failure.reason];
+}
+
+/**
+ * A stream failure as this hook reports it: the copy to show, and whether the
+ * host found no file at all. An `Error` so that it can also reject the blob
+ * cache's fetch, which hands the same object back to every consumer's lease.
+ * That is how a failure arriving AFTER the header reaches the fallback state,
+ * e.g. a reconnect's retry finding the file deleted in between.
+ */
+class FileAssetFetchError extends Error {
+  readonly missing: boolean;
+
+  constructor(failure: AssetStreamFailure, renderKind: FileAssetRenderKind) {
+    super(describeFailure(failure, renderKind));
+    this.name = "FileAssetFetchError";
+    this.missing = failure.reason === "not-found";
+  }
 }
 
 function decodeFailureReason(renderKind: FileAssetRenderKind): string {
@@ -705,6 +730,7 @@ export function useHostFileAsset(args: {
         url: null,
         meta: null,
         reason: decodeFailureReason(renderKind),
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
       },
@@ -764,6 +790,7 @@ export function useHostFileAsset(args: {
             url: null,
             meta,
             reason: null,
+            missing: false,
             totalBytes: header.sizeBytes,
             servedFromCache: false,
           },
@@ -847,6 +874,7 @@ export function useHostFileAsset(args: {
                 url: resolution.url,
                 meta,
                 reason: null,
+                missing: false,
                 totalBytes: header.sizeBytes,
                 // `usedForFetch` is exactly "did the fetcher run" - false
                 // means `imageBlobCache.acquire` resolved this lease from
@@ -867,6 +895,7 @@ export function useHostFileAsset(args: {
                   error instanceof Error
                     ? error.message
                     : "This image could not be loaded.",
+                missing: error instanceof FileAssetFetchError && error.missing,
                 totalBytes: header.sizeBytes,
                 servedFromCache: false,
               },
@@ -885,8 +914,9 @@ export function useHostFileAsset(args: {
         // Over-cap telemetry lives in the shared entry's single failure path
         // (`acquireSharedAssetSubscription`), not here - this listener runs
         // once per mounted consumer of the same stream.
+        const fetchError = new FileAssetFetchError(failure, streamRenderKind);
         if (rejectFetch !== null) {
-          rejectFetch(new Error(describeFailure(failure, streamRenderKind)));
+          rejectFetch(fetchError);
           return;
         }
         if (!active) return;
@@ -896,7 +926,8 @@ export function useHostFileAsset(args: {
             status: "fallback",
             url: null,
             meta: null,
-            reason: describeFailure(failure, streamRenderKind),
+            reason: fetchError.message,
+            missing: fetchError.missing,
             totalBytes: null,
             servedFromCache: false,
           },
