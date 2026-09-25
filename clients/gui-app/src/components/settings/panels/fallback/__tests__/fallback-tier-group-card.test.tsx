@@ -986,6 +986,8 @@ describe("FallbackTierGroupCard - Pin 4: one-model-one-tier conflict block and '
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
   }
@@ -1061,6 +1063,114 @@ describe("FallbackTierGroupCard - Pin 4: one-model-one-tier conflict block and '
     // `rowRef.current?.querySelector([data-fallback-candidate-model])` - drop
     // that call (or query the wrong row's ref) and the trigger never opens.
     expect(frontierTrigger.getAttribute("aria-expanded")).toBe("true");
+  });
+});
+
+describe("FallbackTierGroupCard - R11: the edit action is named for what the row holds", () => {
+  function overlappingTierGroups(): {
+    readonly groups: readonly TierGroup[];
+    readonly conflicts: readonly TierConflict[];
+    readonly catalog: FallbackCatalogOptions;
+  } {
+    // Same overlap as Pin 4: frontier's `*gpt*` PATTERN and standard's EXACT
+    // `gpt-5.6-terra` both match "GPT-5.6-Terra" - a row of each kind, so the
+    // two conflict blocks can be told apart by their action's label.
+    const groups: TierGroup[] = [
+      { id: "frontier", candidates: [candidate("codex", "*gpt*", null)] },
+      {
+        id: "standard",
+        candidates: [candidate("codex", "gpt-5.6-terra", null)],
+      },
+    ];
+    const codexModel = model("codex", "gpt-5.6-terra", "GPT-5.6-Terra", []);
+    const catalogsByHarness = new Map([["codex" as const, [codexModel]]]);
+    const conflicts = findTierConflicts(groups, catalogsByHarness);
+    return {
+      groups,
+      conflicts,
+      catalog: catalogFixture(catalogsByHarness),
+    };
+  }
+
+  function renderOverlappingEditor(): void {
+    const { groups, conflicts, catalog } = overlappingTierGroups();
+    const policy = {
+      ...createDefaultFallbackPolicy(),
+      tierGroups: [...groups],
+      defaultTierGroupId: "frontier",
+    };
+    render(
+      <FallbackTierGroupsEditor
+        policy={policy}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={LABEL_FOR}
+        catalog={catalog}
+        patternsSupported
+        conflicts={conflicts}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+        headerAction={null}
+        testPanel={null}
+      />,
+    );
+  }
+
+  it("the pattern row's conflict block offers 'Edit pattern'", () => {
+    renderOverlappingEditor();
+    const frontierCard = screen.getByTestId("fallback-tier-group-frontier");
+    // Falsification: `editLabel` in `fallback-tier-group-card.tsx` hard-coded
+    // to `"Edit pattern"` regardless of `isModelPattern` - this would also
+    // pass, which is why the sibling assertion below (on the EXACT-pick row)
+    // is what actually pins the distinction.
+    expect(
+      within(frontierCard).getByRole("button", { name: "Edit pattern" }),
+    ).not.toBeNull();
+    expect(
+      within(frontierCard).queryByRole("button", { name: "Change model" }),
+    ).toBeNull();
+  });
+
+  it("the exact-pick row's conflict block offers 'Change model', not 'Edit pattern'", () => {
+    renderOverlappingEditor();
+    const standardCard = screen.getByTestId("fallback-tier-group-standard");
+    // Falsification: `editLabel` hard-coded to `"Edit pattern"` - this row
+    // holds no pattern (`gpt-5.6-terra` has no `*`), and offering to "edit"
+    // one names a thing that is not there.
+    expect(
+      within(standardCard).getByRole("button", { name: "Change model" }),
+    ).not.toBeNull();
+    expect(
+      within(standardCard).queryByRole("button", { name: "Edit pattern" }),
+    ).toBeNull();
+  });
+
+  it("an unmatched EXACT value's red status line offers 'Change model'", () => {
+    const props = baseCardProps([candidate("claude", "gpt-9", null)]);
+    renderCard({
+      ...props,
+      patternsSupported: true,
+      preview: [
+        preview({
+          candidateIndex: 0,
+          modelFamily: "gpt-9",
+          resolvedModel: null,
+          profileId: null,
+          skipReason: "family-unmatched",
+          skipLabel: null,
+          warnings: [],
+        }),
+      ],
+    });
+    expect(screen.getByRole("button", { name: "Change model" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit pattern" })).toBeNull();
   });
 });
 

@@ -629,4 +629,67 @@ describe("FallbackSettingsPanel - Pin 10: the preview gate on a blank-row-capabl
 
     expect(previewMocks.previewSpy).toHaveBeenLastCalledWith(null);
   });
+
+  it("R8: a blank row moved ABOVE a filled row is still sent in place, and the filled row below still renders its OWN preview line", () => {
+    // The blank row (post-move, candidateIndex 3) is skipped, the way a real
+    // host skips a blank row's slot rather than reporting on it - only nova's
+    // own post-move candidateIndex (4) carries matches.
+    previewMocks.previewData = {
+      candidates: [
+        previewRow(4, {
+          modelFamily: "nova",
+          matches: [
+            {
+              model: "nova",
+              profileId: null,
+              skipReason: null,
+              skipLabel: null,
+            },
+            {
+              model: "nova-backup",
+              profileId: null,
+              skipReason: null,
+              skipLabel: null,
+            },
+          ],
+        }),
+      ],
+    };
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    previewMocks.previewSpy.mockClear();
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add model or pattern" })[0],
+    );
+    // The new blank row lands last (index 4, after opus/ghost/sonnet/nova).
+    // One "Move up" swaps it with nova, so the draft becomes
+    // opus, ghost, sonnet, BLANK, nova - the blank now sits ABOVE a filled
+    // row, the one position the original Pin 10 (blank added and left last)
+    // could not distinguish from a stripped-blanks request.
+    fireEvent.click(screen.getAllByRole("button", { name: "Move up" })[4]);
+
+    // Falsification: `previewableTierGroups` (fallback-settings-panel.tsx)
+    // returning the non-blank `withoutBlankRows`-projected groups instead of
+    // `draft` - the sent payload would then drop the blank row entirely,
+    // shifting nova back to position 3 there instead of 4.
+    const lastCall: readonly TierGroup[] | null =
+      previewMocks.previewSpy.mock.calls.at(-1)?.[0] ?? null;
+    expect(lastCall).not.toBeNull();
+    const sentGroup = lastCall?.find((group) => group.id === GROUP_ID);
+    const sentFamilies = (sentGroup?.candidates ?? []).map(
+      (candidate) => candidate.modelFamily,
+    );
+    expect(sentFamilies).toEqual(["opus", "ghost", "sonnet", "", "nova"]);
+
+    // The filled row, now rendered below the blank one, still shows its own
+    // "Tries …" line, paired by ITS post-move position (4) - the blank row
+    // above it (position 3) renders no line at all, since `rowStatusLine`
+    // returns `null` for a blank `modelFamily` before any preview is even
+    // consulted.
+    const lines = previewLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toContain("Tries");
+    expect(lines[0].textContent).toContain("nova-backup");
+  });
 });

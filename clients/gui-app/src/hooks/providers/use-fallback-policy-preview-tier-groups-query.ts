@@ -2,6 +2,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   ProvidersFallbackPolicyPreviewTierGroupsResponse,
   TierGroup,
+  TierPreviewBlockedTuple,
 } from "@traycer/protocol/host/fallback-policy";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -91,6 +92,76 @@ export function useFallbackPolicyPreviewTierGroupsQuery(
       // which this page can observe. A short window freshens a revisit without
       // putting a settings page on a poll - and the walk costs a catalog read
       // per candidate, so re-asking it on a timer is the thing to avoid.
+      staleTime: 30 * 1000,
+    },
+  });
+}
+
+/**
+ * What the Test a model panel asks: the DRAFT tiers, the draft's default tier,
+ * and the hypothetical blocked run tuple.
+ */
+export interface FallbackPolicyTestTierGroupsRequest {
+  readonly groups: readonly TierGroup[];
+  readonly defaultTierGroupId: string | null;
+  readonly blocked: TierPreviewBlockedTuple;
+}
+
+/**
+ * The Test a model panel's dry run: the host runs the live walk as if
+ * `blocked` had just failed - routing, same-as-failed, permission-mode fit and
+ * the sibling-after-rate-limit rule - over the draft the user is looking at.
+ *
+ * The sibling of the editor's preview above, on the same host, method and
+ * cadence, and a separate hook only because the question is different: that
+ * one enumerates every draft row with no failed tuple, this one walks the one
+ * tier a failure routes to.
+ *
+ * `request === null` asks nothing. The panel passes `null` below the 1.1
+ * `previewTierGroups` line, where the request projection would strip `blocked`
+ * and the host would answer the editor's question instead of this one - the
+ * panel gates that on the NEGOTIATED line (`useFallbackPolicyPatternLines`),
+ * never on the response, because the 1.0 → 1.1 upgrade synthesises `matches`.
+ *
+ * The whole request is the cache identity - tuple, draft and default tier - so
+ * an answer is never drawn under a tuple or a draft it was not computed for.
+ * No `placeholderData` for the same reason the editor's preview has none.
+ */
+export function useFallbackPolicyTestTierGroupsQuery(
+  request: FallbackPolicyTestTierGroupsRequest | null,
+): UseQueryResult<
+  ProvidersFallbackPolicyPreviewTierGroupsResponse,
+  HostRpcError
+> {
+  const client = useHostClient();
+  const hostId = useAddressableHostId();
+  const supported = useHostSupportsMethod(
+    hostId,
+    FALLBACK_PREVIEW_TIER_GROUPS_METHOD,
+  );
+  return useHostQuery<
+    HostRpcRegistry,
+    "providers.fallbackPolicy.previewTierGroups"
+  >({
+    cacheKeyIdentity: undefined,
+    client,
+    method: FALLBACK_PREVIEW_TIER_GROUPS_METHOD,
+    params:
+      request === null
+        ? // Not the editor's own disabled key (`{ groups: [] }`): an editor
+          // with no tiers ENABLES that key, and this disabled observer must not
+          // read its answer as a dry run.
+          { groups: [...NO_GROUPS], defaultTierGroupId: null }
+        : {
+            groups: [...request.groups],
+            defaultTierGroupId: request.defaultTierGroupId,
+            blocked: request.blocked,
+          },
+    options: {
+      enabled: request !== null && supported,
+      // Same window and the same reason as the editor's preview: the answer
+      // moves with catalogs, accounts and gauges this page cannot observe, and
+      // the walk is not worth a poll.
       staleTime: 30 * 1000,
     },
   });

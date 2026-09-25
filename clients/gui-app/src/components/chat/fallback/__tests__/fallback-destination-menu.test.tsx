@@ -551,11 +551,12 @@ describe("FallbackDestinationMenu", () => {
     // always use `model` and this must go red (nothing to render at all, since
     // `model` is `null`).
     //
-    // The accessible name excludes the pattern glyph's `aria-hidden` "*" but
-    // keeps its sr-only "pattern" text (`FallbackPatternGlyph`), so an
-    // unresolved row now reads "Codex · pattern gpt" rather than the old
-    // plain "Codex · gpt" string.
-    const row = screen.getByRole("button", { name: /Codex · pattern gpt/ });
+    // `gpt` has no `*`, so it is an unresolved EXACT value, not a pattern:
+    // plain "Codex · gpt", never announced as "pattern" (review R6 - the
+    // tier editor draws the same value as an exact pick).
+    const row = screen.getByRole("button", { name: /Codex · gpt/ });
+    expect(row.textContent).not.toContain("pattern");
+    expect(within(row).queryByTestId("fallback-pattern-glyph")).toBeNull();
     // Falsification: widen that ternary to
     // `modelLabelFor(target.harnessId, model ?? target.modelFamily)` - a
     // one-character-looking change that reads as a simplification - and this
@@ -944,11 +945,12 @@ describe("FallbackDestinationMenu", () => {
       onPick,
       onOpenChange: () => undefined,
     });
-    // The accessible name excludes the pattern glyph's `aria-hidden` "*" but
-    // keeps its sr-only "pattern" text.
+    // `sonnet` has no `*`: an unresolved exact value, titled plainly and
+    // not announced as a pattern (review R6).
     const row = screen.getByRole("button", {
-      name: /Claude Code · pattern sonnet/,
+      name: /Claude Code · sonnet/,
     });
+    expect(within(row).queryByTestId("fallback-pattern-glyph")).toBeNull();
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("expected model row");
     }
@@ -2627,6 +2629,48 @@ describe("FallbackDestinationMenu - Pin 12: a pattern row's own presentation", (
     // text with no glyph and no `data-testid="fallback-pattern-glyph"`
     // anywhere on the page, and both assertions above go red.
     expect(screen.getByText("*luna*")).toBeDefined();
+  });
+
+  it("an unresolved value with NO `*` is an exact pick: plain raw-value title, no glyph, not announced as a pattern", () => {
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "gpt-5.6-terra",
+            model: null,
+            reasoningEffort: null,
+            severity: "ok",
+            usedPercent: null,
+            target: null,
+            selectable: false,
+            skip: fallbackSkip({
+              reason: "unresolved",
+              label: "No matching model on this provider",
+            }),
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+
+    // Falsification: drop the `isModelPattern(destination.modelLabel)` half
+    // of `ModelRowTitle`'s guard (fallback-destination-menu.tsx) - the row
+    // then wears the `*` badge and reads "Codex · pattern gpt-5.6-terra".
+    expect(screen.queryByTestId("fallback-pattern-glyph")).toBeNull();
+    const row = screen.getByRole("button", { name: /Codex · gpt-5\.6-terra/ });
+    expect(row.textContent).not.toContain("pattern");
+    expect(screen.getByText("Codex · gpt-5.6-terra")).toBeDefined();
   });
 
   it("two listTargets rows built from one pattern, each with its own resolved model, render as two SEPARATE rows - never deduped or merged", () => {

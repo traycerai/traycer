@@ -2,6 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
+  render,
   screen,
   waitFor,
   within,
@@ -19,13 +20,17 @@ import {
 import {
   createDefaultFallbackPolicy,
   fallbackPolicySchema,
+  findTierConflicts,
   type FallbackPolicy,
   type ProvidersFallbackPolicyGetResponse,
   type ProvidersFallbackPolicyResetResponse,
   type ProvidersFallbackPolicyRestoreTierGroupsResponse,
   type ProvidersFallbackPolicySetResponse,
+  type TierConflict,
   type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
+import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
 import {
   HostRpcError,
   HostTransportFailureError,
@@ -370,6 +375,8 @@ vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
+import { toKeyedGroups } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   openFallbackTab,
@@ -4909,7 +4916,7 @@ describe("FallbackSettingsPanel - Pin 5: no save gate over a rendered tier confl
 
     // The conflict block is still rendered on Equivalent models (nothing
     // about either save resolved or hid it) - there is no save gate over a
-    // conflict (spec decision 9).
+    // conflict (spec decision 2).
     openFallbackTab("equivalentModels");
     expect(
       screen.getAllByTestId("fallback-tier-conflict").length,
@@ -5034,6 +5041,283 @@ describe("FallbackSettingsPanel - Pin 9: deleting the flagship (default) tier", 
         expect(remaining.has(committed.defaultTierGroupId)).toBe(true);
       }
       expect(fallbackPolicySchema.safeParse(committed).success).toBe(true);
+    }
+  });
+});
+
+describe("FallbackSettingsPanel - R9: Undo of a removal is never refused for reintroducing a conflict", () => {
+  it("removing standard's row, turning frontier into a covering pattern, then Undo restores BOTH conflicting rows", async () => {
+    // A 1.1-negotiated host with a codex catalog wide enough for `*gpt*` to
+    // genuinely reach both models - the same shape Pin 5 uses.
+    patternLines.patterns = true;
+    catalogsByHarnessFixture.value = new Map([
+      [
+        "codex",
+        [
+          { slug: "gpt-6-astra", label: "GPT-6-Astra" },
+          { slug: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
+        ],
+      ],
+    ]);
+    // Stored: frontier's exact `gpt-6-astra` and standard's exact
+    // `gpt-5.6-terra` - two different models, so nothing conflicts yet.
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          {
+            id: "frontier",
+            candidates: [
+              {
+                harnessId: "codex",
+                modelFamily: "gpt-6-astra",
+                reasoningEffort: null,
+              },
+            ],
+          },
+          {
+            id: "standard",
+            candidates: [
+              {
+                harnessId: "codex",
+                modelFamily: "gpt-5.6-terra",
+                reasoningEffort: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // 1. Remove standard's only row - the toast's Undo action is what R9
+    // exercises below.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove gpt-5.6-terra" }),
+    );
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    const removalToast = toastSuccess.mock.calls.at(-1);
+    expect(removalToast).toBeDefined();
+
+    // 2. Commit frontier's row as a covering pattern through the combobox -
+    // nothing else claims a codex model right now (standard is empty), so
+    // this save goes through with no blocker.
+    fireEvent.click(screen.getByTestId("fallback-model-pattern-trigger"));
+    const patternInput = screen.getByTestId("fallback-model-pattern-input");
+    fireEvent.change(patternInput, { target: { value: "*gpt*" } });
+    fireEvent.keyDown(patternInput, { key: "Enter" });
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[1][0].policy.tierGroups.find(
+        (group) => group.id === "frontier",
+      )?.candidates[0].modelFamily,
+    ).toBe("*gpt*");
+
+    // 3. Press Undo on the removal toast raised in step 1.
+    //
+    // Falsification: any conflict-refusing guard added to `undoGroupsChange`
+    // / `applyGroupsInverse` (fallback-settings-panel.tsx) - e.g. returning
+    // early when `fallbackTierConflicts(next…)` is non-empty - would leave
+    // `setMutateAsync` uncalled a third time and standard's row un-restored.
+    removalToast?.[1].action.onClick();
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(3);
+    });
+
+    const undone = fallbackMocks.setMutateAsync.mock.calls[2][0].policy;
+    const frontierAfter = undone.tierGroups.find(
+      (group) => group.id === "frontier",
+    );
+    const standardAfter = undone.tierGroups.find(
+      (group) => group.id === "standard",
+    );
+    expect(frontierAfter?.candidates.map((c) => c.modelFamily)).toEqual([
+      "*gpt*",
+    ]);
+    expect(standardAfter?.candidates.map((c) => c.modelFamily)).toEqual([
+      "gpt-5.6-terra",
+    ]);
+
+    // 4. Both rows now genuinely conflict (frontier's `*gpt*` reaches
+    // standard's exact `gpt-5.6-terra` too) and both show it - the Undo did
+    // not refuse to reintroduce the conflict.
+    await waitFor(() => {
+      expect(screen.getAllByTestId("fallback-tier-conflict")).toHaveLength(2);
+    });
+  });
+});
+
+/** Shared by both R2 describe blocks below. */
+const R2_CONFLICTING_TIERS: TierGroup[] = [
+  {
+    id: "frontier",
+    candidates: [
+      { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
+    ],
+  },
+  {
+    id: "standard",
+    candidates: [
+      {
+        harnessId: "codex",
+        modelFamily: "gpt-5.6-terra",
+        reasoningEffort: null,
+      },
+    ],
+  },
+];
+
+describe("FallbackSettingsPanel - R2: a conflict block is role=alert only on its first appearance", () => {
+  beforeEach(() => {
+    patternLines.patterns = true;
+    catalogsByHarnessFixture.value = new Map([
+      ["codex", [{ slug: "gpt-5.6-terra", label: "GPT-5.6-Terra" }]],
+    ]);
+  });
+
+  it("both conflict blocks are role=alert on first render, and NEITHER is after leaving and returning to the tab", () => {
+    fallbackMocks.queryData = respond(
+      policy({ tierGroups: R2_CONFLICTING_TIERS }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    const first = screen.getAllByTestId("fallback-tier-conflict");
+    expect(first).toHaveLength(2);
+    for (const block of first) {
+      expect(block.getAttribute("role")).toBe("alert");
+    }
+
+    // `TabsContent` has no `forceMount`, so leaving unmounts the blocks and
+    // returning mounts them fresh.
+    openFallbackTab("plan");
+    openFallbackTab("equivalentModels");
+
+    const again = screen.getAllByTestId("fallback-tier-conflict");
+    expect(again).toHaveLength(2);
+    for (const block of again) {
+      // Falsification: `useConflictFirstAppearance`'s initializer returning
+      // `true` unconditionally, or the panel body rendered without
+      // `FallbackConflictAnnouncementsProvider` (fallback-settings-panel.tsx)
+      // - either would leave `role="alert"` here too.
+      expect(block.getAttribute("role")).toBeNull();
+    }
+  });
+
+  it("deleting an unrelated EARLIER tier re-keys the conflict blocks (ConflictBlock's key is the other tier's index) without re-announcing them", async () => {
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          // A claude row that conflicts with nothing - deleting it shifts
+          // frontier/standard's tierIndex by one, re-keying their
+          // `ConflictBlock`s, without the conflict itself changing.
+          {
+            id: "scratch",
+            candidates: [
+              {
+                harnessId: "claude",
+                modelFamily: "*fable*",
+                reasoningEffort: null,
+              },
+            ],
+          },
+          ...R2_CONFLICTING_TIERS,
+        ],
+      }),
+    );
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    for (const block of screen.getAllByTestId("fallback-tier-conflict")) {
+      expect(block.getAttribute("role")).toBe("alert");
+    }
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
+
+    await waitFor(() => {
+      const blocks = screen.getAllByTestId("fallback-tier-conflict");
+      expect(blocks).toHaveLength(2);
+      for (const block of blocks) {
+        // Falsification: the same two ablations as above - either would
+        // treat the re-keyed (remounted) block as a fresh first appearance.
+        expect(block.getAttribute("role")).toBeNull();
+      }
+    });
+  });
+});
+
+describe("FallbackSettingsPanel - R2 CONTROL: role=alert on every mount with no announcements provider", () => {
+  it("FallbackTierGroupsEditor rendered on its own (no FallbackConflictAnnouncementsProvider) keeps role=alert on both blocks", () => {
+    // Documented `null`-context behaviour: outside the provider, every block
+    // is treated as a first appearance, which is what a history-less render
+    // is. This is the control that isolates the OTHER two tests' subject -
+    // without it, a mutant that always renders `role="alert"` (the same
+    // mutant the first test above falsifies) would look identical to this
+    // one passing for an unrelated reason.
+    const groups = R2_CONFLICTING_TIERS;
+    const codexModel: GuiAgentModelOption = {
+      harnessId: "codex",
+      slug: "gpt-5.6-terra",
+      label: "GPT-5.6-Terra",
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      metadata: {},
+    };
+    const catalogsByHarness = new Map<
+      TierGroup["candidates"][number]["harnessId"],
+      readonly GuiAgentModelOption[]
+    >([["codex", [codexModel]]]);
+    const conflicts: readonly TierConflict[] = findTierConflicts(
+      groups,
+      catalogsByHarness,
+    );
+    const catalog: FallbackCatalogOptions = {
+      modelsFor: (harnessId) => catalogsByHarness.get(harnessId) ?? [],
+      catalogFor: (harnessId) => catalogsByHarness.get(harnessId) ?? null,
+      catalogsByHarness,
+      effortsFor: () => [],
+    };
+    render(
+      <FallbackTierGroupsEditor
+        policy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(id) => id}
+        catalog={catalog}
+        patternsSupported
+        conflicts={conflicts}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+        headerAction={null}
+        testPanel={null}
+      />,
+    );
+    const blocks = screen.getAllByTestId("fallback-tier-conflict");
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      expect(block.getAttribute("role")).toBe("alert");
     }
   });
 });

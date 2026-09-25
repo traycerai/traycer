@@ -45,6 +45,7 @@ import {
   type FallbackModelLabelResolver,
 } from "./fallback-identity";
 import { FallbackPatternGlyph } from "@/components/settings/panels/fallback/fallback-pattern-glyph";
+import { isModelPattern } from "@/components/settings/panels/fallback/fallback-model-patterns";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import {
   useFallbackListTargets,
@@ -864,15 +865,22 @@ function ModelRow({
 
 /**
  * An equivalent-model row's title: "Codex · GPT-6-Astra · high", or - for a row
- * the host could not resolve - "Codex · [*] *luna* · high", the pattern in the
- * tier editor's own badge and mono face, so it cannot read as a model's name.
- * The badge's text alternative is "pattern", so the row is announced as one.
+ * the host could not resolve to a PATTERN - "Codex · [*] *luna* · high", the
+ * pattern in the tier editor's own badge and mono face, so it cannot read as a
+ * model's name. The badge's text alternative is "pattern", so the row is
+ * announced as one.
+ *
+ * An unresolved value with no `*` is NOT a pattern: it is an exact pick the
+ * host could not find (or a 1.0 host's family word), which the tier editor
+ * draws as an exact pick (`isModelPattern`). It keeps the plain raw-value
+ * title here too, so Settings and the chat never disagree about what one
+ * stored value is.
  */
 function ModelRowTitle(props: {
   readonly destination: FallbackDestinationDescription;
 }): ReactNode {
   const { destination } = props;
-  if (!destination.modelIsFamily) {
+  if (!destination.modelIsFamily || !isModelPattern(destination.modelLabel)) {
     return fallbackDestinationRowTitle(destination);
   }
   return (

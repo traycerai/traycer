@@ -355,6 +355,62 @@ describe("FallbackModelPatternCombobox - Pin 2: disabled conflicting option + an
   });
 });
 
+describe("FallbackModelPatternCombobox - R5: arrow keys reach a refused option", () => {
+  // Same conflict groups as Pin 2: standard's row 0 is being edited; frontier
+  // already claims gpt-6-astra and flagship already claims gpt-6-sol.
+  function conflictGroups(): readonly TierGroup[] {
+    return [
+      group("frontier", [candidate("codex", "*astra*")]),
+      group("flagship", [candidate("codex", "*sol*")]),
+      group("standard", [candidate("codex", "")]),
+    ];
+  }
+
+  it("ArrowDown reaches the aria-disabled GPT-6-Astra model option; Enter announces the owned reason and ArrowUp returns to the pattern option", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: conflictGroups(),
+      groupIndex: 2,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    openPicker();
+    typeQuery("gpt-6-*");
+    // Typing resets the highlight to the first visible option, the pattern
+    // entry itself (Pin 2 pins this same starting point).
+    const patternOption = screen.getByTestId("fallback-model-pattern-option");
+    expect(activeOptionText()).toBe(patternOption.textContent);
+
+    // Falsification: deleting the `case "ArrowDown": case "ArrowUp":` branch
+    // in `onKeyDown` - cmdk's own arrow handling would then move the
+    // highlight instead, and `VALID_ITEM_SELECTOR` excludes
+    // `aria-disabled="true"` items, so it could never land on GPT-6-Astra.
+    pressKey("ArrowDown");
+    const astraOption = screen
+      .getAllByTestId("fallback-model-option")
+      .find((option) => option.textContent.includes("GPT-6-Astra"));
+    expect(astraOption).toBeDefined();
+    if (astraOption === undefined) return;
+    expect(astraOption.getAttribute("aria-disabled")).toBe("true");
+    const activeId = getInput().getAttribute("aria-activedescendant");
+    expect(activeId).not.toBeNull();
+    expect(document.getElementById(activeId ?? "")).toBe(astraOption);
+
+    pressKey("Enter");
+    expect(props.onChange).not.toHaveBeenCalled();
+    // Matches `modelOwnedReason`'s text, not a copy of it.
+    expect(props.onAnnounce).toHaveBeenCalledWith(
+      "GPT-6-Astra is in frontier. A model can be in only one tier.",
+    );
+
+    pressKey("ArrowUp");
+    const activeIdAfterUp = getInput().getAttribute("aria-activedescendant");
+    expect(document.getElementById(activeIdAfterUp ?? "")).toBe(patternOption);
+    expect(patternOption.getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
 describe("FallbackModelPatternCombobox - Pin 13: combobox-relevant integration", () => {
   it("a model outside an offered pattern's reach still renders (unmatched) and stays choosable when no other tier owns it", () => {
     const props = baseProps({
@@ -399,5 +455,153 @@ describe("FallbackModelPatternCombobox - Pin 13: combobox-relevant integration",
     expect(trigger.getAttribute("aria-label")).toBe(
       "Model or pattern: *opus*, pattern, 0 models",
     );
+  });
+});
+
+describe("FallbackModelPatternCombobox - R1: a bare `*` is named 'Any Codex model'", () => {
+  it("typing `*` alone offers 'Any Codex model' beside the mono pattern and the glyph", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: [group("flagship", [candidate("codex", "")])],
+      groupIndex: 0,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    openPicker();
+    typeQuery("*");
+    const patternOption = screen.getByTestId("fallback-model-pattern-option");
+    // Falsification: `isAnyModelPattern` in `fallback-model-patterns.ts`
+    // returning `false` for a bare `*` - `PatternOptionLabel` would then fall
+    // through to its plain-pattern branch and render only the mono `*`, with
+    // no "Any Codex model" text.
+    expect(patternOption.textContent).toContain("Any Codex model");
+    expect(patternOption.textContent).toContain("*");
+    expect(
+      within(patternOption).getByTestId("fallback-pattern-glyph"),
+    ).not.toBeNull();
+    fireEvent.click(patternOption);
+    expect(props.onChange).toHaveBeenCalledWith("*");
+  });
+
+  it("a stored bare `*` names the trigger 'Any Codex model' in its accessible name and face, counting the whole catalog", () => {
+    const props = baseProps({
+      modelFamily: "*",
+      groups: [group("flagship", [candidate("codex", "*")])],
+      groupIndex: 0,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    const trigger = screen.getByTestId("fallback-model-pattern-trigger");
+    // Falsification: same as above, on the closed trigger's `triggerFace` -
+    // `anyModel` would stay `null` and the accessible name would read
+    // "Model or pattern: *, pattern, 5 models" instead.
+    expect(trigger.getAttribute("aria-label")).toMatch(
+      /^Model or pattern: Any Codex model, pattern, 5 models/,
+    );
+    expect(trigger.textContent).toContain("Any Codex model");
+    expect(trigger.textContent).toContain("*");
+  });
+
+  it("CONTROL: a typed `*luna*` pattern renders only the mono pattern, with no 'Any … model' text", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: [group("flagship", [candidate("codex", "")])],
+      groupIndex: 0,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    openPicker();
+    typeQuery("*luna*");
+    const patternOption = screen.getByTestId("fallback-model-pattern-option");
+    expect(patternOption.textContent).not.toContain("Any");
+    expect(within(patternOption).getByText("*luna*")).not.toBeNull();
+  });
+});
+
+describe("FallbackModelPatternCombobox - R10: the input row's live match count and a blocked example", () => {
+  // frontier already claims gpt-6-astra, flagship already claims gpt-6-sol -
+  // the same conflict setup Pin 2 and R5 use.
+  function conflictGroups(): readonly TierGroup[] {
+    return [
+      group("frontier", [candidate("codex", "*astra*")]),
+      group("flagship", [candidate("codex", "*sol*")]),
+      group("standard", [candidate("codex", "")]),
+    ];
+  }
+
+  it("typing a `*` pattern shows the input row's live match count", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: [group("flagship", [candidate("codex", "")])],
+      groupIndex: 0,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    openPicker();
+    typeQuery("gpt-6-*");
+    // Falsification: dropping the `typedPatternEntry` addon (or the
+    // `isModelPattern(query)` gate that only shows it while a `*` is
+    // actually typed) - this testid would then never render.
+    expect(
+      screen.getByTestId("fallback-model-pattern-input-count").textContent,
+    ).toBe("4 models");
+  });
+
+  it("a plain word with no `*` shows no input-row count", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: [group("flagship", [candidate("codex", "")])],
+      groupIndex: 0,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    openPicker();
+    typeQuery("luna");
+    expect(
+      screen.queryByTestId("fallback-model-pattern-input-count"),
+    ).toBeNull();
+  });
+
+  it("a blocked pattern's hint carries a narrower example", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: conflictGroups(),
+      groupIndex: 2,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    openPicker();
+    typeQuery("gpt-6-*");
+    const hint = screen.getByText(/Narrow it/);
+    // Falsification: `blockedPatternExample` (fallback-model-patterns.ts)
+    // returning `null` here - the "for example" clause and the code text
+    // would then both be absent.
+    expect(hint.textContent).toContain("for example");
+    expect(within(hint).getByText("*gpt-6-luna*")).not.toBeNull();
+  });
+});
+
+describe("FallbackModelPatternCombobox - R12: aria-haspopup matches the popup it controls", () => {
+  it("the trigger declares aria-haspopup='dialog', matching the Radix Popover it opens", () => {
+    const props = baseProps({
+      modelFamily: "",
+      groups: [group("flagship", [candidate("codex", "")])],
+      groupIndex: 0,
+      candidateIndex: 0,
+      conflictCount: 0,
+    });
+    renderCombobox(props);
+    const trigger = screen.getByTestId("fallback-model-pattern-trigger");
+    // Falsification: `aria-haspopup="dialog"` reverted to `"listbox"` - the
+    // trigger would then announce a listbox while focus actually lands in
+    // the popover's `role="dialog"`, whose own combobox input is the real
+    // listbox owner.
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
   });
 });

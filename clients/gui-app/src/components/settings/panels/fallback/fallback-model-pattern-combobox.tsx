@@ -16,7 +16,10 @@ import {
 import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
 import { catalogModelForFamily } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import {
+  anyProviderModelLabel,
+  blockedPatternExample,
   buildPatternPicker,
+  isAnyModelPattern,
   isModelPattern,
   modelCountLabel,
   modelOwnedReason,
@@ -132,7 +135,12 @@ export function FallbackModelPatternCombobox(
     null,
   );
   const { contentRef, onOpenAutoFocus } = useCoarsePointerOpenAutoFocus();
-  const face = triggerFace(modelFamily, models, conflictCount);
+  const face = triggerFace(
+    modelFamily,
+    models,
+    conflictCount,
+    props.providerLabel,
+  );
   return (
     <Popover
       open={open}
@@ -156,7 +164,9 @@ export function FallbackModelPatternCombobox(
           type="button"
           variant="outline"
           role="combobox"
-          aria-haspopup="listbox"
+          // What opens is the popover - a `role="dialog"` holding the list's
+          // own combobox input and listbox - so that is what this names.
+          aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={popoverId}
           aria-label={face.accessibleName}
@@ -183,6 +193,9 @@ export function FallbackModelPatternCombobox(
             >
               {face.value ?? "Choose a model or pattern"}
             </span>
+            {face.anyModel === null ? null : (
+              <span className="min-w-0 truncate">{face.anyModel}</span>
+            )}
           </span>
           <span className="flex shrink-0 items-center gap-1.5">
             {face.pill === null ? null : (
@@ -241,6 +254,12 @@ interface TriggerFace {
   /** The text in the cell, or `null` for a blank row (the placeholder shows). */
   readonly value: string | null;
   readonly pattern: boolean;
+  /**
+   * "Any Codex model" for a bare `*` (spec §How patterns work), drawn beside
+   * the mono `*` so the row says it claims the whole provider; `null` for any
+   * other value.
+   */
+  readonly anyModel: string | null;
   readonly pill: string | null;
   readonly pillTone: "muted" | "destructive";
   /** Blank, matching nothing, or in two tiers: a row the user has to fix. */
@@ -291,12 +310,14 @@ function triggerFace(
   modelFamily: string,
   models: readonly GuiAgentModelOption[] | null,
   conflictCount: number,
+  providerLabel: string,
 ): TriggerFace {
   const stored = modelFamily.trim();
   if (stored === "") {
     return {
       value: null,
       pattern: false,
+      anyModel: null,
       pill: null,
       pillTone: "muted",
       invalid: true,
@@ -310,10 +331,14 @@ function triggerFace(
   const value = named === null ? stored : named.label;
   const pill = triggerPill({ conflictCount, pattern, unmatched, count });
   const pillTone = conflictCount > 0 || unmatched ? "destructive" : "muted";
-  const spoken = pattern ? `${value}, pattern` : value;
+  const anyModel = isAnyModelPattern(stored)
+    ? anyProviderModelLabel(providerLabel)
+    : null;
+  const spoken = pattern ? `${anyModel ?? value}, pattern` : value;
   return {
     value,
     pattern,
+    anyModel,
     pill,
     pillTone,
     invalid: unmatched || conflictCount > 0,
@@ -327,6 +352,174 @@ function triggerFace(
 /** The first option a query leaves visible - what Enter chooses before any arrow key. */
 function firstVisibleValue(entries: readonly PatternPickerEntry[]): string {
   return entries.find((entry) => !entry.hidden)?.value ?? "";
+}
+
+/**
+ * The query and highlight the list opens with.
+ *
+ * A stored pattern, or an exact value the catalog does not list, opens as the
+ * query - so "Edit pattern" edits it, and its matches are numbered the moment
+ * the list opens. A listed model opens the whole catalog with that model
+ * highlighted.
+ */
+function openingState(input: {
+  readonly stored: string;
+  readonly models: readonly GuiAgentModelOption[] | null;
+  readonly claims: ReadonlyMap<string, readonly TierClaim[]>;
+}): { readonly query: string; readonly highlighted: string } {
+  const { stored, models, claims } = input;
+  const storedModel =
+    stored === "" || models === null
+      ? null
+      : catalogModelForFamily(models, stored);
+  const query = storedModel === null ? stored : "";
+  const entries = buildPatternPicker({ query, models, claims });
+  const chosen =
+    storedModel === null
+      ? undefined
+      : entries.find(
+          (entry) =>
+            !entry.hidden &&
+            entry.kind === "model" &&
+            entry.model.slug === storedModel.slug,
+        );
+  return { query, highlighted: chosen?.value ?? firstVisibleValue(entries) };
+}
+
+/**
+ * The list's query and highlight: opened by {@link openingState}, then
+ * RE-SEEDED once if the provider's catalog answers while the list is open
+ * (review R7).
+ *
+ * Opened cold, the picker cannot know `gpt-5.6-terra` is a model, so the
+ * stored value becomes the query and the highlight the "contains" pattern -
+ * and once the model list lands, Enter would save `*gpt-5.6-terra*` and
+ * quietly turn a one-model row into a pattern. So the first render with a
+ * catalog re-seeds: exactly as a fresh open would when the user has not typed
+ * since, and otherwise onto the first option the current query leaves, which
+ * is now the exact model when it names one.
+ *
+ * Adjusted during render from the previous render's fact, React's pattern for
+ * state that follows a prop, rather than in an effect: an effect would paint
+ * one frame with the stale highlight, and Enter in that frame is the bug.
+ */
+function usePickerQuery(input: {
+  readonly stored: string;
+  readonly models: readonly GuiAgentModelOption[] | null;
+  readonly claims: ReadonlyMap<string, readonly TierClaim[]>;
+}): {
+  readonly query: string;
+  readonly setQuery: (next: string) => void;
+  readonly highlighted: string;
+  readonly setHighlighted: (next: string) => void;
+} {
+  const { stored, models, claims } = input;
+  const [opening] = useState(() => openingState({ stored, models, claims }));
+  const [query, setQuery] = useState(opening.query);
+  const [highlighted, setHighlighted] = useState(opening.highlighted);
+  const [catalogSeen, setCatalogSeen] = useState(models !== null);
+  if (!catalogSeen && models !== null) {
+    setCatalogSeen(true);
+    const reseeded =
+      query === stored
+        ? openingState({ stored, models, claims })
+        : {
+            query,
+            highlighted: firstVisibleValue(
+              buildPatternPicker({ query, models, claims }),
+            ),
+          };
+    setQuery(reseeded.query);
+    setHighlighted(reseeded.highlighted);
+  }
+  return { query, setQuery, highlighted, setHighlighted };
+}
+
+/** What the pattern option says about the list around it this render. */
+function pickerPatternState(
+  entries: readonly PatternPickerEntry[],
+  query: string,
+): {
+  /** The pattern option is on offer (visible). */
+  readonly patternOffered: boolean;
+  /** ...and the one-model-one-tier rule refuses it. */
+  readonly patternBlocked: boolean;
+  /**
+   * The pattern option while the user is TYPING a pattern (a `*`) - the one
+   * case the input row counts its reach.
+   */
+  readonly typedPatternEntry: PatternPickerPatternEntry | null;
+  /** A narrower, choosable pattern to suggest for a refused one. */
+  readonly narrowExample: string | null;
+} {
+  const entry = entries.find(
+    (candidate): candidate is PatternPickerPatternEntry =>
+      candidate.kind === "pattern" && !candidate.hidden,
+  );
+  if (entry === undefined) {
+    return {
+      patternOffered: false,
+      patternBlocked: false,
+      typedPatternEntry: null,
+      narrowExample: null,
+    };
+  }
+  const blocked = pickerEntryBlocked(entry);
+  return {
+    patternOffered: true,
+    patternBlocked: blocked,
+    typedPatternEntry: isModelPattern(query) ? entry : null,
+    narrowExample: blocked ? blockedPatternExample(entry) : null,
+  };
+}
+
+/**
+ * How far a typed pattern reaches, beside what is being typed (wireframe 2) -
+ * a refused option hides its own count, so without this a blocked pattern's
+ * reach is shown nowhere.
+ */
+function PatternInputCount(props: {
+  readonly entry: PatternPickerPatternEntry;
+  readonly blocked: boolean;
+}): ReactNode {
+  const { entry, blocked } = props;
+  return (
+    <span
+      className={cn("text-ui-xs tabular-nums", blocked && "text-destructive")}
+      data-testid="fallback-model-pattern-input-count"
+    >
+      {modelCountLabel(entry.matches === null ? null : entry.matches.length)}
+    </span>
+  );
+}
+
+/** The line under the list: how to choose, or how to get past a refusal. */
+function PickerHint(props: {
+  readonly blocked: boolean;
+  readonly example: string | null;
+}): ReactNode {
+  const { blocked, example } = props;
+  if (!blocked) {
+    return (
+      <p className="border-t border-border/40 px-3 py-2 text-ui-xs text-muted-foreground">
+        Pick one model to use exactly that one, or save a pattern to cover every
+        match. Typing a model&apos;s exact name puts it first instead.
+      </p>
+    );
+  }
+  return (
+    <p className="border-t border-border/40 px-3 py-2 text-ui-xs text-destructive">
+      Narrow it
+      {example === null ? null : (
+        <>
+          {" "}
+          (for example <code className="font-mono">{example}</code>)
+        </>
+      )}
+      , or move those models out of their tiers first. * matches anything,
+      checked against each model&apos;s name and ID.
+    </p>
+  );
 }
 
 function PatternPickerBody(props: {
@@ -369,44 +562,20 @@ function PatternPickerBody(props: {
           }),
     [models, groups, groupIndex, candidateIndex, harnessId],
   );
-  // A stored pattern, or an exact value the catalog does not list, opens as
-  // the query - so "Edit pattern" edits it, and its matches are numbered the
-  // moment the list opens. A listed model opens the whole catalog with that
-  // model highlighted.
-  const storedModel =
-    stored === "" || models === null
-      ? null
-      : catalogModelForFamily(models, stored);
-  const [query, setQuery] = useState(storedModel === null ? stored : "");
+  const { query, setQuery, highlighted, setHighlighted } = usePickerQuery({
+    stored,
+    models,
+    claims,
+  });
   const entries = useMemo(
     () => buildPatternPicker({ query, models, claims }),
     [query, models, claims],
   );
-  const [highlighted, setHighlighted] = useState(() => {
-    const initial = buildPatternPicker({
-      query: storedModel === null ? stored : "",
-      models,
-      claims,
-    });
-    const chosen = initial.find(
-      (entry) =>
-        !entry.hidden &&
-        entry.kind === "model" &&
-        storedModel !== null &&
-        entry.model.slug === storedModel.slug,
-    );
-    return chosen?.value ?? firstVisibleValue(initial);
-  });
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const visible = entries.filter((entry) => !entry.hidden);
-  const patternEntry = entries.find(
-    (entry): entry is PatternPickerPatternEntry => entry.kind === "pattern",
-  );
-  const patternBlocked =
-    patternEntry !== undefined &&
-    !patternEntry.hidden &&
-    pickerEntryBlocked(patternEntry);
+  const { patternOffered, patternBlocked, typedPatternEntry, narrowExample } =
+    pickerPatternState(entries, query);
 
   // The input's `aria-activedescendant` and `aria-controls` point at ids cmdk
   // mints for its own listbox and options, which exist only once they are in
@@ -491,7 +660,6 @@ function PatternPickerBody(props: {
   const showsExact = visible.some(
     (entry) => entry.kind === "model" && entry.exact,
   );
-  const patternOffered = patternEntry !== undefined && !patternEntry.hidden;
   return (
     <Command
       shouldFilter={false}
@@ -546,6 +714,14 @@ function PatternPickerBody(props: {
               <SearchIcon className="size-4 shrink-0 opacity-50" aria-hidden />
             )}
           </InputGroupAddon>
+          {typedPatternEntry === null ? null : (
+            <InputGroupAddon align="inline-end">
+              <PatternInputCount
+                entry={typedPatternEntry}
+                blocked={patternBlocked}
+              />
+            </InputGroupAddon>
+          )}
         </InputGroup>
       </div>
       <CommandList
@@ -574,6 +750,7 @@ function PatternPickerBody(props: {
               entry={entry}
               heading={heading}
               stored={stored}
+              providerLabel={providerLabel}
               onChoose={choose}
             />
           );
@@ -587,16 +764,7 @@ function PatternPickerBody(props: {
           </p>
         ) : null}
       </CommandList>
-      <p
-        className={cn(
-          "border-t border-border/40 px-3 py-2 text-ui-xs",
-          patternBlocked ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        {patternBlocked
-          ? "Narrow it, or move those models out of their tiers first. * matches anything, checked against each model's name and ID."
-          : "Pick one model to use exactly that one, or save a pattern to cover every match. Typing a model's exact name puts it first instead."}
-      </p>
+      <PickerHint blocked={patternBlocked} example={narrowExample} />
     </Command>
   );
 }
@@ -637,9 +805,10 @@ function PickerOption(props: {
   readonly entry: PatternPickerEntry;
   readonly heading: string | null;
   readonly stored: string;
+  readonly providerLabel: string;
   readonly onChoose: (entry: PatternPickerEntry) => void;
 }): ReactNode {
-  const { entry, heading, stored, onChoose } = props;
+  const { entry, heading, stored, providerLabel, onChoose } = props;
   const detailId = useId();
   return (
     <>
@@ -658,6 +827,7 @@ function PickerOption(props: {
           entry={entry}
           detailId={detailId}
           checked={stored !== "" && stored === entry.pattern}
+          providerLabel={providerLabel}
           onChoose={onChoose}
         />
       ) : (
@@ -672,13 +842,39 @@ function PickerOption(props: {
   );
 }
 
+/**
+ * The pattern option's first line: "Any Codex model" beside the mono `*` for
+ * a bare `*` (spec §How patterns work - the row claims the whole provider, and
+ * `*` alone does not say so), "Any model containing “luna”" for a typed word,
+ * and the pattern itself, in mono, otherwise.
+ */
+function PatternOptionLabel(props: {
+  readonly entry: PatternPickerPatternEntry;
+  readonly providerLabel: string;
+}): ReactNode {
+  const { entry, providerLabel } = props;
+  if (entry.word !== null) {
+    return <>Any model containing &ldquo;{entry.word}&rdquo;</>;
+  }
+  if (isAnyModelPattern(entry.pattern)) {
+    return (
+      <>
+        {anyProviderModelLabel(providerLabel)}{" "}
+        <span className="font-mono">{entry.pattern}</span>
+      </>
+    );
+  }
+  return <span className="font-mono">{entry.pattern}</span>;
+}
+
 function PatternOption(props: {
   readonly entry: PatternPickerPatternEntry;
   readonly detailId: string;
   readonly checked: boolean;
+  readonly providerLabel: string;
   readonly onChoose: (entry: PatternPickerEntry) => void;
 }): ReactNode {
-  const { entry, detailId, checked, onChoose } = props;
+  const { entry, detailId, checked, providerLabel, onChoose } = props;
   const blocked = entry.blockers.length > 0;
   return (
     <CommandItem
@@ -697,11 +893,7 @@ function PatternOption(props: {
       <FallbackPatternGlyph tone={blocked ? "destructive" : "accent"} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="min-w-0 break-words">
-          {entry.word === null ? (
-            <span className="font-mono">{entry.pattern}</span>
-          ) : (
-            <>Any model containing &ldquo;{entry.word}&rdquo;</>
-          )}
+          <PatternOptionLabel entry={entry} providerLabel={providerLabel} />
         </span>
         <span
           id={detailId}

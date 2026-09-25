@@ -162,6 +162,25 @@ export interface FallbackTierGroupsEditorProps {
   readonly onRestoreDefaults: () => void;
   readonly restorePending: boolean;
   readonly status: ReactNode;
+  /**
+   * The section header's own action, beside the intro - wireframe 1's "Test a
+   * model" button - or `null` for none.
+   */
+  readonly headerAction: ReactNode;
+  /**
+   * The Test a model panel, drawn under the header while it is open, or `null`
+   * while it is closed. Inline, not a dialog: the tiers it tests stay on
+   * screen below it.
+   *
+   * A render function because the panel's conflict "fix" puts the keyboard on
+   * a row, and the go-to-row that can do that is this editor's own (the
+   * conflict block's "Go to the <tier> row" uses the same one).
+   */
+  readonly testPanel:
+    | ((
+        goToRow: (tierIndex: number, candidateIndex: number) => void,
+      ) => ReactNode)
+    | null;
 }
 
 /**
@@ -196,6 +215,8 @@ export function FallbackTierGroupsEditor(
     onRestoreDefaults,
     restorePending,
     status,
+    headerAction,
+    testPanel,
   } = props;
 
   // Every edit below builds a new keyed list and projects it through
@@ -331,7 +352,11 @@ export function FallbackTierGroupsEditor(
               </>
             ) : null}
           </p>
+          {headerAction}
         </div>
+        {testPanel === null ? null : (
+          <TestPanelSlot render={testPanel} goToRow={goToRow} />
+        )}
         {groups.length === 0 ? (
           <EmptyGroups
             onRestoreDefaults={onRestoreDefaults}
@@ -702,6 +727,21 @@ function PreviewFooterStatus(props: {
       ) : null}
     </span>
   );
+}
+
+/**
+ * Draws the Test a model panel's render function as a component of its own,
+ * so the go-to-row reaches it as a PROP. The go-to-row reads the rows'
+ * container ref, which is sound only outside render - and the panel calls it
+ * from one place, the conflict footer's "fix" click - whereas calling the
+ * render function in the editor's own body would hand it that ref-reading
+ * function mid-render.
+ */
+function TestPanelSlot(props: {
+  readonly render: NonNullable<FallbackTierGroupsEditorProps["testPanel"]>;
+  readonly goToRow: (tierIndex: number, candidateIndex: number) => void;
+}): ReactNode {
+  return props.render(props.goToRow);
 }
 
 /**

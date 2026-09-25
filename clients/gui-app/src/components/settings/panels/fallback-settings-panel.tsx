@@ -5,6 +5,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useReducer,
   useRef,
@@ -90,6 +91,11 @@ import {
 } from "@/components/settings/panels/fallback/fallback-overrides-reset";
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
+import { FallbackConflictAnnouncementsProvider } from "@/components/settings/panels/fallback/fallback-conflict-announcements-provider";
+import {
+  FallbackTestModelButton,
+  FallbackTestModelPanel,
+} from "@/components/settings/panels/fallback/fallback-test-model-panel";
 import {
   applyGroupsInverse,
   keyedGroupsMatch,
@@ -335,32 +341,38 @@ function FallbackSettingsPanelBody(props: {
     return <FallbackPanelSkeleton />;
   }
 
+  // Remount on a host switch so one machine's draft can never be saved to
+  // another's policy, and on a reset so the editor re-seeds from the
+  // refetched policy. This is also what seeds the reducer, which is why there
+  // is no hydration effect anywhere in this file.
+  const editorKey = `${scope.hostId ?? ""}:${resetGeneration}`;
   return (
-    <FallbackPolicyEditor
-      // Remount on a host switch so one machine's draft can never be saved to
-      // another's policy, and on a reset so the editor re-seeds from the
-      // refetched policy. This is also what seeds the reducer, which is why
-      // there is no hydration effect anywhere in this file.
-      key={`${scope.hostId ?? ""}:${resetGeneration}`}
-      initialPolicy={query.data.policy}
-      // The polled count once it has answered, else the one this read carried.
-      inFlightCount={
-        inFlightCountQuery.data?.inFlightCount ?? query.data.inFlightCount
-      }
-      storedPolicyUnreadable={query.data.storedPolicyUnreadable}
-      hostLabel={scope.host === null ? null : scope.hostLabel}
-      refetchPolicy={refetchPolicy}
-      returnFocusToReset={returnFocusToReset}
-      onFocusReturned={clearResetFocusIntent}
-      onPolicyReplaced={() => {
-        // The remount below unmounts the Reset button the confirmation dialog
-        // captured as its opener, so the shared dialog's own restoration has
-        // nowhere to go. Focus follows the control across the replacement
-        // instead of falling to the document body.
-        setReturnFocusToReset(true);
-        setResetGeneration((generation) => generation + 1);
-      }}
-    />
+    // Which tier conflicts have been announced, for exactly the editor's
+    // lifetime - the same key - so leaving the Equivalent models tab and
+    // coming back does not read every conflict out again (review R2).
+    <FallbackConflictAnnouncementsProvider key={editorKey}>
+      <FallbackPolicyEditor
+        key={editorKey}
+        initialPolicy={query.data.policy}
+        // The polled count once it has answered, else the one this read carried.
+        inFlightCount={
+          inFlightCountQuery.data?.inFlightCount ?? query.data.inFlightCount
+        }
+        storedPolicyUnreadable={query.data.storedPolicyUnreadable}
+        hostLabel={scope.host === null ? null : scope.hostLabel}
+        refetchPolicy={refetchPolicy}
+        returnFocusToReset={returnFocusToReset}
+        onFocusReturned={clearResetFocusIntent}
+        onPolicyReplaced={() => {
+          // The remount below unmounts the Reset button the confirmation dialog
+          // captured as its opener, so the shared dialog's own restoration has
+          // nowhere to go. Focus follows the control across the replacement
+          // instead of falling to the document body.
+          setReturnFocusToReset(true);
+          setResetGeneration((generation) => generation + 1);
+        }}
+      />
+    </FallbackConflictAnnouncementsProvider>
   );
 }
 
@@ -470,7 +482,7 @@ function FallbackPolicyEditor(props: {
   /**
    * Every model two tiers of the DRAFT both claim, over the catalogs the editor
    * already holds - rendered on the rows involved and never a gate: nothing
-   * here stops a save, the master switch or the timings (spec decision 9). A
+   * here stops a save, the master switch or the timings (spec decision 2). A
    * host that does not read patterns gets none, because "one model, one tier"
    * is a pattern-era rule and a 1.0 host routes by its own word matcher.
    */
@@ -493,6 +505,49 @@ function FallbackPolicyEditor(props: {
       blankRowsTravel: patternLines.blankPreviewRows,
     }),
   );
+
+  /**
+   * The Test a model panel (spec §Wireframe 4): whether it is open, and the
+   * header button the keyboard goes back to when Escape or ✕ closes it - the
+   * panel's own controls are about to unmount, so the browser would otherwise
+   * drop focus on the body.
+   *
+   * Offered only where the host reads rows as patterns (`get`@1.1). Its tier
+   * verdict is the protocol's pattern router, and on a 1.0 host - whose rows
+   * are family WORDS on its own word matcher - that router would confidently
+   * name the wrong tier; the editor draws no conflicts there for the same
+   * reason. The older-host fallback inside the panel is for a `previewTierGroups`
+   * line below 1.1, which cannot run the walk for a blocked tuple.
+   */
+  const [testOpen, setTestOpen] = useState(false);
+  const testButtonRef = useRef<HTMLButtonElement | null>(null);
+  const testPanelId = useId();
+  const closeTest = useCallback((): void => {
+    setTestOpen(false);
+    testButtonRef.current?.focus();
+  }, []);
+  const renderTestPanel = (
+    goToRow: (tierIndex: number, candidateIndex: number) => void,
+  ): ReactNode =>
+    // The gate again, not only on the button: a host whose lines are
+    // renegotiated while the panel is open must not keep a pattern verdict up.
+    patternLines.patterns ? (
+      <FallbackTestModelPanel
+        id={testPanelId}
+        // The DRAFT, as the editor shows it - blank rows, an unsaved default
+        // tier and all - never the stored policy.
+        policy={state.draft}
+        catalog={catalog}
+        conflicts={conflicts}
+        labelFor={profileLabelFor}
+        // The negotiated `previewTierGroups` line, which is the same bit that
+        // lets a blank row travel (execution-run deviation 1).
+        simulates={patternLines.blankPreviewRows}
+        unsimulatedPreview={previewQuery.data?.candidates ?? null}
+        onClose={closeTest}
+        onGoToRow={goToRow}
+      />
+    ) : null;
 
   /**
    * A keystroke in a TEXT field: the draft moves and the inline validation
@@ -1196,6 +1251,18 @@ function FallbackPolicyEditor(props: {
             // answers about the same rows racing each other into the draft.
             restorePending={restoreMutation.isPending || saveInFlight}
             status={saveStatusFor("tierGroups", "mt-3")}
+            headerAction={
+              <FallbackTestModelButton
+                offered={patternLines.patterns}
+                open={testOpen}
+                panelId={testPanelId}
+                buttonRef={testButtonRef}
+                onToggle={() => {
+                  setTestOpen((open) => !open);
+                }}
+              />
+            }
+            testPanel={testOpen ? renderTestPanel : null}
           />
         </TabsContent>
         <TabsContent value="overrides" className="pt-5">

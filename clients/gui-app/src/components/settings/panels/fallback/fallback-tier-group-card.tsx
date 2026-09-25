@@ -35,6 +35,7 @@ import {
   type FallbackCatalogOptions,
 } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import {
+  isModelPattern,
   joinWithAnd,
   rowConflictModelCount,
   rowConflictsFor,
@@ -45,6 +46,10 @@ import {
   type TryStep,
 } from "@/components/settings/panels/fallback/fallback-model-patterns";
 import { FallbackModelPatternCombobox } from "@/components/settings/panels/fallback/fallback-model-pattern-combobox";
+import {
+  conflictAnnouncementKeys,
+  useConflictFirstAppearance,
+} from "@/components/settings/panels/fallback/fallback-conflict-announcements";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -602,6 +607,12 @@ function CandidateRow(props: {
       ?.querySelector<HTMLElement>(`[${FALLBACK_CANDIDATE_MODEL_ATTRIBUTE}]`)
       ?.click();
   };
+  // What "fix this row" is called: a pattern is edited, an exact pick is
+  // swapped for another model (review R11) - "Edit pattern" on a row holding
+  // `gpt-5.6-terra` names a thing the row does not have.
+  const editLabel = isModelPattern(candidate.modelFamily.trim())
+    ? "Edit pattern"
+    : "Change model";
   const commitModel = (next: string): void => {
     // Picking a different value keeps the effort only while the new value
     // offers it; a level that was valid for the old model and is not for
@@ -739,6 +750,7 @@ function CandidateRow(props: {
               pattern={candidate.modelFamily.trim()}
               providerLabel={providerLabel}
               canEdit={patternsSupported}
+              editLabel={editLabel}
               onEditPattern={editPattern}
             />
           )}
@@ -746,6 +758,11 @@ function CandidateRow(props: {
             <ConflictBlock
               key={conflict.others.map((other) => other.tierIndex).join(" ")}
               conflict={conflict}
+              harnessId={candidate.harnessId}
+              rowTierId={
+                groupIndex < tierGroups.length ? tierGroups[groupIndex].id : ""
+              }
+              editLabel={editLabel}
               onEditPattern={editPattern}
               onGoToRow={onGoToRow}
             />
@@ -770,9 +787,18 @@ function RowStatus(props: {
   readonly pattern: string;
   readonly providerLabel: string;
   readonly canEdit: boolean;
+  readonly editLabel: string;
   readonly onEditPattern: () => void;
 }): ReactNode {
-  const { id, status, pattern, providerLabel, canEdit, onEditPattern } = props;
+  const {
+    id,
+    status,
+    pattern,
+    providerLabel,
+    canEdit,
+    editLabel,
+    onEditPattern,
+  } = props;
   const warnings =
     status.warnings.length === 0 ? null : (
       <span>{status.warnings.join(" · ")}</span>
@@ -796,7 +822,7 @@ function RowStatus(props: {
             variant="link"
             onClick={onEditPattern}
           >
-            Edit pattern
+            {editLabel}
           </Button>
         ) : null}
       </div>
@@ -894,18 +920,39 @@ function TryStepView(props: {
  * tiers") - red, because it is the user's to fix, and never a gate: nothing
  * about it stops another edit from saving.
  *
- * `role="alert"` so a conflict that APPEARS - an edit elsewhere, an Undo, a
- * catalog that loads - is announced where it lands. It names the other tier,
- * says which tier handles the model meanwhile (the first-listed, which is
- * where routing sends it) and why, and offers the two ways out: edit this
- * row, or go to the other one.
+ * `role="alert"` on the conflict's FIRST appearance in the panel (spec
+ * §Accessibility) - an edit elsewhere, an Undo, a catalog that loads - so it
+ * is announced where it lands, and never again for the same conflict when the
+ * tab is revisited or a deletion re-keys the block
+ * (`fallback-conflict-announcements.ts`). It names the other tier, says which
+ * tier handles the model meanwhile (the first-listed, which is where routing
+ * sends it) and why, and offers the two ways out: edit this row, or go to the
+ * other one.
  */
 function ConflictBlock(props: {
   readonly conflict: RowConflict;
+  readonly harnessId: string;
+  /** The tier the row drawing this block belongs to - one of the conflict's tiers. */
+  readonly rowTierId: string;
+  readonly editLabel: string;
   readonly onEditPattern: () => void;
   readonly onGoToRow: (tierIndex: number, candidateIndex: number) => void;
 }): ReactNode {
-  const { conflict, onEditPattern, onGoToRow } = props;
+  const {
+    conflict,
+    harnessId,
+    rowTierId,
+    editLabel,
+    onEditPattern,
+    onGoToRow,
+  } = props;
+  const firstAppearance = useConflictFirstAppearance(
+    conflictAnnouncementKeys({
+      harnessId,
+      models: conflict.models,
+      tierIds: [rowTierId, ...conflict.others.map((other) => other.tierId)],
+    }),
+  );
   const labels = conflict.models.map((model) => model.label);
   const plural = labels.length > 1;
   const otherNames = conflict.others.map((other) =>
@@ -917,7 +964,7 @@ function ConflictBlock(props: {
   );
   return (
     <div
-      role="alert"
+      role={firstAppearance ? "alert" : undefined}
       className="flex max-w-xl flex-col gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-foreground"
       data-testid="fallback-tier-conflict"
     >
@@ -937,7 +984,7 @@ function ConflictBlock(props: {
           variant="link"
           onClick={onEditPattern}
         >
-          Edit pattern
+          {editLabel}
         </Button>
         {conflict.others.map((other, at) => (
           <Button

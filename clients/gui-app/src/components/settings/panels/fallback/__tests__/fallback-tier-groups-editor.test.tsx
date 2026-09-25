@@ -33,7 +33,10 @@ import {
   type FallbackCatalogOptions,
 } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import { fallbackTierConflicts } from "@/components/settings/panels/fallback/fallback-policy-draft";
-import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
+import {
+  FallbackTierGroupsEditor,
+  type FallbackTierGroupsEditorProps,
+} from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 
 /** The shape of the second argument the removal toasts pass `toast.success`. */
 interface UndoToastOptions {
@@ -164,6 +167,8 @@ function Harness(props: {
       onRestoreDefaults={() => {}}
       restorePending={false}
       status={null}
+      headerAction={null}
+      testPanel={null}
     />
   );
 }
@@ -210,6 +215,8 @@ function CommitCarryHarness(props: {
       onRestoreDefaults={() => {}}
       restorePending={false}
       status={null}
+      headerAction={null}
+      testPanel={null}
     />
   );
 }
@@ -681,6 +688,8 @@ describe("FallbackTierGroupsEditor - a duplicated group NAME withholds the previ
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
   }
@@ -776,6 +785,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     openDefaultGroupSelect();
@@ -811,6 +822,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     openDefaultGroupSelect();
@@ -849,6 +862,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     // Falsification: pass `isDefault={false}` unconditionally, or compare
@@ -893,6 +908,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     const nameInput =
@@ -962,6 +979,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     // Delete "fast" (index 0), which IS the default.
@@ -1014,6 +1033,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     // Delete "cheap" (index 1), which is NOT the default.
@@ -1056,6 +1077,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
@@ -1090,6 +1113,8 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     // Falsification: render `DefaultGroupSelect` unconditionally instead of
@@ -1147,6 +1172,8 @@ function RenameCarryHarness(props: {
       onRestoreDefaults={() => {}}
       restorePending={false}
       status={null}
+      headerAction={null}
+      testPanel={null}
     />
   );
 }
@@ -1240,6 +1267,8 @@ function RestoreHarness(props: {
       onRestoreDefaults={props.onRestoreDefaults}
       restorePending={props.restorePending}
       status={null}
+      headerAction={null}
+      testPanel={null}
     />
   );
 }
@@ -1371,6 +1400,8 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
         onRestoreDefaults={onRestoreDefaults}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />,
     );
     fireEvent.click(
@@ -1577,6 +1608,8 @@ describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () =
         onRestoreDefaults={() => {}}
         restorePending={false}
         status={null}
+        headerAction={null}
+        testPanel={null}
       />
     );
   }
@@ -1724,5 +1757,100 @@ describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () =
     // change" to a screen reader.
     expect(secondRegion).not.toBe(region);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Ticket 05, clause 7: the `testPanel` render-prop slot (`TestPanelSlot`) and
+ * the `headerAction` slot beside it. `TestPanelSlot` exists because the render
+ * function needs `goToRow` as a PROP rather than called inline mid-render (see
+ * that component's own doc comment) - moved there after the React compiler
+ * lint flagged the inline call.
+ */
+describe("FallbackTierGroupsEditor - the Test a model slot (ticket 05)", () => {
+  function twoTierGroups(): readonly TierGroup[] {
+    return [
+      tierGroup("frontier", [candidate("opus")]),
+      tierGroup("standard", [candidate("sonnet")]),
+    ];
+  }
+
+  function renderEditor(props: {
+    readonly headerAction?: ReactNode;
+    readonly testPanel: FallbackTierGroupsEditorProps["testPanel"];
+  }): void {
+    const groups = twoTierGroups();
+    const policy: FallbackPolicy = {
+      ...createDefaultFallbackPolicy(),
+      tierGroups: [...groups],
+    };
+    render(
+      <FallbackTierGroupsEditor
+        policy={policy}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        patternsSupported
+        conflicts={[]}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+        headerAction={props.headerAction ?? null}
+        testPanel={props.testPanel}
+      />,
+    );
+  }
+
+  it("calls the render prop with goToRow, rendered directly under the header, and clicking through it focuses the OTHER tier's Model cell", () => {
+    renderEditor({
+      testPanel: (goToRow) => (
+        <button type="button" onClick={() => goToRow(1, 0)}>
+          go
+        </button>
+      ),
+    });
+    const header = screen.getByTestId("fallback-tier-groups-header");
+    const button = screen.getByRole("button", { name: "go" });
+    // `TestPanelSlot` renders the function's own result with no wrapper, right
+    // after the header - the same position the real Test a model panel draws
+    // in (wireframe 1).
+    expect(header.nextElementSibling).toBe(button);
+
+    const standardCard = screen.getByTestId("fallback-tier-group-standard");
+    const standardTrigger = within(standardCard).getByTestId(
+      "fallback-model-pattern-trigger",
+    );
+    fireEvent.click(button);
+    // Falsification: the same focus target the conflict block's own "Go to
+    // the <tier> row" pins in `fallback-tier-group-card.test.tsx` - both reach
+    // the SAME `goToRow` on the editor, so a regression in either caller's
+    // wiring would show up as focus landing anywhere other than this trigger.
+    expect(document.activeElement).toBe(standardTrigger);
+  });
+
+  it("renders headerAction inside fallback-tier-groups-header, beside the intro", () => {
+    renderEditor({
+      headerAction: <span data-testid="test-header-action" />,
+      testPanel: null,
+    });
+    const header = screen.getByTestId("fallback-tier-groups-header");
+    within(header).getByTestId("test-header-action");
+  });
+
+  it("renders nothing between the header and the groups when testPanel is null", () => {
+    renderEditor({ testPanel: null });
+    const header = screen.getByTestId("fallback-tier-groups-header");
+    // With no test panel, the header's very next sibling is the default-tier
+    // control - nothing from the slot sits between them.
+    expect(header.nextElementSibling?.getAttribute("data-testid")).toBe(
+      "fallback-tier-default-group",
+    );
   });
 });

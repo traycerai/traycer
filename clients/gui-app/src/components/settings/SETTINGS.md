@@ -4390,21 +4390,36 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     SLUG; three or more other characters make the first option **Any model
     containing "…"**, which saves `*text*`; and a typed `*` builds the pattern
     as written (`*` is the only wildcard, matched case-insensitively against
-    slug and label by the protocol's `modelMatchesPattern`). The models the
-    pattern reaches are numbered in the order they would be tried. A pattern
-    row wears the `*` badge (text alternative "pattern") where the old
-    "family" tag was, and the trigger's pill - "2 models", or "1 conflict" -
-    is part of the trigger's accessible name.
+    slug and label by the protocol's `modelMatchesPattern`). A bare `*` is
+    named **Any <provider> model** ("Any Codex model") in the option, the
+    cell and its accessible name, beside the mono `*`, so the row says it
+    claims the whole provider. The models the pattern reaches are numbered in
+    the order they would be tried, and while a pattern is being typed the
+    input row counts how many it reaches. A pattern row wears the `*` badge
+    (text alternative "pattern") where the old "family" tag was, and the
+    trigger's pill - "2 models", or "1 conflict" - is part of the trigger's
+    accessible name. The trigger declares `aria-haspopup="dialog"`: what opens
+    is the popover, which holds the list's own combobox input and listbox.
+    A catalog that answers while the list is open re-seeds the highlight as a
+    fresh open would, so Enter on an exact pick still picks the model.
     **A model can be in only one tier.** A model another tier already owns is
     listed as **in <tier>** and cannot be picked; a pattern that would reach
     one is offered disabled, with the reason ("GPT-6-Astra is in frontier and
     GPT-6-Sol is in flagship") as its description, and Enter on it announces
     that reason through the editor's `role="status"` region rather than
-    saving. A stored policy that breaks the rule anyway (written by an older
+    saving; its hint suggests a narrower pattern that is free (for example
+    `*gpt-6-luna*`). The keyboard reaches refused options - the list drives its
+    own arrows, since cmdk's skip `aria-disabled` items - so a refusal can be
+    heard. A stored policy that breaks the rule anyway (written by an older
     client, or by an edit elsewhere) is RENDERED, never refused: both rows get a
-    red **conflict block** (`role="alert"`) naming the other tier, saying the
-    first tier handles the model because it is listed first, with **Edit
-    pattern** and **Go to the <tier> row** - the second moves focus to that
+    red **conflict block** naming the other tier, saying the first tier
+    handles the model because it is listed first, with **Edit pattern** (or
+    **Change model** on an exact-pick row) and **Go to the <tier> row**. The
+    block is `role="alert"` only on the conflict's FIRST appearance in the
+    panel (`fallback-conflict-announcements.tsx`, keyed by harness, model slug
+    and the set of tier ids, and held for the policy editor's lifetime): the
+    Equivalent models tab unmounts when left, and a permanent alert re-read
+    every conflict on every visit. **Go to the <tier> row** moves focus to that
     row's Model cell, addressed by the row's draft key like the removal
     handoff below. Conflicts are computed draft state
     (`fallbackTierConflicts` over `findTierConflicts` and the catalogs the
@@ -4451,12 +4466,51 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     resolved slug and never reaches it, so it returns no effort information.
     A stored effort outside the offered set keeps an option of its own and
     stays selected, marked as not offered - the same range-render rule the
-    provider select and the timings use. When nothing answers (an older host,
-    a harness the user no longer has, a cold slot) the effort text input
-    stands, because a select built from nothing would take away a level the
-    user can legitimately type. The provider select offers the GUI-capable
+    provider select and the timings use. Effort is ALWAYS a select - there is
+    no free-text effort input. When nothing is offered (an older host, a
+    harness the user no longer has, a cold slot) it still renders: disabled
+    on "Any effort" when that is the stored value, since there is nothing to
+    pick, and enabled when a value IS stored, so the one edit still possible -
+    clearing it back to "Any effort" - stays possible. The provider select offers the GUI-capable
     harnesses only - the rung skips anything else with `harness-not-gui` - and
     a stored id outside that set still gets an option of its own.
+    **Test a model** (`fallback-test-model-panel.tsx`, pure half in
+    `fallback-test-model.ts`) is a button in the section header that opens an
+    INLINE panel under it - not a dialog, so the tiers it tests stay on screen.
+    It reads "If <provider> <model> is blocked by <a rate limit | another
+    error> …", with the account (that provider's last-used, checked against its
+    live accounts; no control for a provider with none) and the permission mode
+    (the user's default, clamped to what the provider honours) beneath; agent
+    mode and fast mode are carried from the defaults, as the new-conversation
+    modal seeds them. It answers for the DRAFT, blank rows and an unsaved
+    default tier included. The tier comes from the protocol's
+    `routeTierGroupForFailedTuple` with the editor's cached catalog - the
+    readable-catalog answer - as "Traycer uses the <tier> tier · <model> is in
+    it through <pattern> (row n)". Every row of that tier follows with each
+    match in try order, from `previewTierGroups`@1.1 called with `blocked` set
+    to the tuple and the draft's `defaultTierGroupId`, so the host runs the
+    live walk (same-as-failed, permission-mode fit, the sibling rule after a
+    rate limit): **switches here** (`success`), **then**, and **skipped · …** -
+    neutral for the blocked model itself and a blank row ("blank, skipped"),
+    amber `warning` for the world, red for a pattern that matches nothing. The
+    wireframe's own words where it names one ("the blocked model"), the host's
+    label otherwise. Below the rows, "If none of these work: …" is the draft's
+    steps after the equivalent-model step for that failure. Three footers
+    cover what the header alone would hide: a model in no tier goes to the
+    default tier; with the default set to None there is no equivalent-model
+    step and it goes straight to the next step; a model in two tiers is handled
+    by the first-listed, with a red **fix** that moves focus to that tier's row
+    (the conflict block's go-to-row). A failure whose steps leave out the
+    equivalent-model step (or turn them all off) says so in one line, naming
+    the step it goes straight to, instead of a tier that never runs. Escape
+    and ✕ close
+    the panel and return focus to the button; the verdict region is
+    `aria-live="polite"`. It is offered only on a `get`@1.1 host, since its
+    router reads rows as patterns. On a host whose `previewTierGroups` line is
+    below 1.1, read off the negotiated line and never off whether `matches` is
+    present, the walk cannot be asked for, so the panel shows the tier verdict
+    and each row's first match from the editor's own preview, with "This host
+    can't simulate the walk; showing what your tiers say."
     Row ORDER inside a tier is load-bearing (the rung walks it and takes the
     first usable target) so rows carry ▲▼. TIER order is not a routing
     control: a model belongs to one tier, and when a draft breaks that rule the
@@ -4557,9 +4611,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   - **When an edit is SAVED depends on the control kind.** Switches, selects,
     ▲▼, buttons and the Model combobox (a value is saved only when an option is
     picked - typing into its search saves nothing) produce a complete value per
-    interaction and commit immediately. **Text fields (tier name, and the
-    effort input where no catalog levels are available) commit on BLUR or
-    Enter**, because their intermediate states are not values anyone means:
+    interaction and commit immediately. **The one text field, the tier name,
+    commits on BLUR or Enter**, because its intermediate states are not
+    values anyone means:
     "fast" passes through "f", "fa", "fas", and a save per character persists
     three tier names nobody chose and spends a catalog read per candidate
     previewing each. Local validation still runs per keystroke, so the inline

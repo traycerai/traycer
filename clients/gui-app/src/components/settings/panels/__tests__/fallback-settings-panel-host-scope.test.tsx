@@ -16,6 +16,7 @@ import {
   type ProvidersFallbackPolicySetResponse,
   type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
 
 /**
  * The scoping guarantee: a draft belongs to the host it was typed against, and
@@ -126,6 +127,18 @@ vi.mock(
 // the row's own stored family - so `modelTriggerText()` below can read it
 // straight off the Select's trigger. `importOriginal` keeps
 // `catalogModelForFamily`, which the card imports directly from this module.
+/**
+ * R4's own catalog: empty (`new Map()`) by default, populated by the Pin 6
+ * describe block below with a Codex catalog containing Terra - the one model
+ * that lets a genuine "one model, one tier" conflict exist under the pattern
+ * rule for that fixture's stored policy.
+ */
+const catalogsByHarnessFixture = vi.hoisted(
+  (): { value: Map<string, readonly GuiAgentModelOption[]> } => ({
+    value: new Map(),
+  }),
+);
+
 vi.mock(
   "@/components/settings/panels/fallback/fallback-catalog-options",
   async (importOriginal) => {
@@ -137,6 +150,9 @@ vi.mock(
       ...actual,
       useFallbackCatalogOptions: () => ({
         modelsFor: () => [],
+        catalogFor: (harnessId: string) =>
+          catalogsByHarnessFixture.value.get(harnessId) ?? null,
+        catalogsByHarness: catalogsByHarnessFixture.value,
         effortsFor: () => [],
       }),
     };
@@ -255,11 +271,57 @@ beforeEach(() => {
   });
   patternLines.patterns = false;
   patternLines.blankPreviewRows = false;
+  catalogsByHarnessFixture.value = new Map();
 });
 
 afterEach(() => {
   cleanup();
 });
+
+/** R4's own catalog entry: a full {@link GuiAgentModelOption}, no field left to a partial. */
+function modelOption(slug: string, label: string): GuiAgentModelOption {
+  return {
+    harnessId: "codex",
+    slug,
+    label,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  };
+}
+
+const GPT_TERRA = modelOption("gpt-5.6-terra", "GPT-5.6-Terra");
+
+/**
+ * frontier's `*gpt*` and standard's exact `gpt-5.6-terra` both claim the same
+ * codex model - a genuine "one model, one tier" conflict once a catalog
+ * containing Terra makes the pattern rule able to see it.
+ */
+function conflictingTierGroups(): TierGroup[] {
+  return [
+    {
+      id: "frontier",
+      candidates: [
+        { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
+      ],
+    },
+    {
+      id: "standard",
+      candidates: [
+        {
+          harnessId: "codex",
+          modelFamily: "gpt-5.6-terra",
+          reasoningEffort: null,
+        },
+      ],
+    },
+  ];
+}
 
 describe("FallbackSettingsPanel - a draft cannot travel to another host", () => {
   it("drops an uncommitted edit and shows the new host's policy when the scope moves", () => {
@@ -327,44 +389,31 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
 
 describe("FallbackSettingsPanel - Pin 6: a 1.0-negotiated host stays on the old fallback cell", () => {
   it('renders the Select-only Model cell, draws no conflict block even over a conflicting stored policy, and offers "Add model"', () => {
-    // A genuine "one model, one tier" conflict - frontier's `*gpt*` and
-    // standard's exact `gpt-5.6-terra` both claim the same codex model - which
-    // on a 1.1 host would draw a conflict block. On this 1.0-negotiated host
-    // (`patternLines.patterns === false`) the panel computes `conflicts` as
-    // `NO_TIER_CONFLICTS` regardless (fallback-settings-panel.tsx's
-    // `useMemo` for `conflicts`), so nothing should render it.
-    scopeMocks.queryData = respond({
-      tierGroups: [
-        {
-          id: "frontier",
-          candidates: [
-            { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
-          ],
-        },
-        {
-          id: "standard",
-          candidates: [
-            {
-              harnessId: "codex",
-              modelFamily: "gpt-5.6-terra",
-              reasoningEffort: null,
-            },
-          ],
-        },
-      ],
-    });
+    // On this 1.0-negotiated host (`patternLines.patterns === false`) the
+    // panel computes `conflicts` as `NO_TIER_CONFLICTS` regardless
+    // (fallback-settings-panel.tsx's `useMemo` for `conflicts`), so nothing
+    // should render it - even though the codex catalog below (containing
+    // Terra) makes the stored policy a GENUINE "one model, one tier" conflict
+    // under the pattern rule, the same fixture the inverse control renders it
+    // for on a 1.1 host.
+    catalogsByHarnessFixture.value = new Map([["codex", [GPT_TERRA]]]);
+    scopeMocks.queryData = respond({ tierGroups: conflictingTierGroups() });
     renderPanel();
     openFallbackTab("equivalentModels");
 
     // Falsification: hard-code `patternsSupported={true}` (or drop the prop)
     // in `FallbackPolicyEditor`'s render of `FallbackTierGroupsEditor`
     // (fallback-settings-panel.tsx) - the Model cell would then render as the
-    // pattern combobox instead of the plain Select this asserts.
+    // pattern combobox instead of the plain Select this asserts. Matched by
+    // prefix, not the exact string: the pattern trigger's accessible name is
+    // never exactly "Model or pattern" (it always carries the stored value
+    // and the match-count pill after it), so an exact match here would stay
+    // null regardless of which cell rendered - see the inverse control below.
     expect(
       screen.getAllByRole("combobox", { name: "Model" }).length,
     ).toBeGreaterThan(0);
     expect(
-      screen.queryByRole("combobox", { name: "Model or pattern" }),
+      screen.queryByRole("combobox", { name: /^Model or pattern/ }),
     ).toBeNull();
 
     // No conflict block, despite the stored policy above genuinely
@@ -378,5 +427,27 @@ describe("FallbackSettingsPanel - Pin 6: a 1.0-negotiated host stays on the old 
     expect(
       screen.queryByRole("button", { name: "Add model or pattern" }),
     ).toBeNull();
+  });
+
+  it("INVERSE CONTROL: the same fixture on a 1.1-negotiated host draws the pattern cell and both conflict blocks", () => {
+    // Same catalog, same stored policy as the test above - only
+    // `patternLines.patterns` differs. This is what proves the 1.0 test's
+    // negatives are not vacuous: they would fail here instead.
+    patternLines.patterns = true;
+    catalogsByHarnessFixture.value = new Map([["codex", [GPT_TERRA]]]);
+    scopeMocks.queryData = respond({ tierGroups: conflictingTierGroups() });
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    expect(
+      screen.getAllByRole("combobox", { name: /^Model or pattern/ }).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("combobox", { name: "Model" })).toBeNull();
+
+    expect(screen.getAllByTestId("fallback-tier-conflict").length).toBe(2);
+
+    expect(screen.queryAllByRole("button", { name: "Add model" }).length).toBe(
+      0,
+    );
   });
 });

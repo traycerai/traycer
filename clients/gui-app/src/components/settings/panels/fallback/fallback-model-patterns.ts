@@ -36,6 +36,22 @@ export function isModelPattern(value: string): boolean {
 export const CONTAINS_MIN_LENGTH = 3;
 
 /**
+ * Whether a pattern is `*` alone (or only stars, which match the same way):
+ * every model the provider lists. The spec names that row "Any Codex model"
+ * (§How patterns work) - a bare `*` in mono does not tell a reader the row
+ * claims the whole provider, which with the seed is why every one of its
+ * models shows as owned somewhere else.
+ */
+export function isAnyModelPattern(value: string): boolean {
+  return /^\*+$/.test(value.trim());
+}
+
+/** "Any Codex model" - how a {@link isAnyModelPattern} row is named. */
+export function anyProviderModelLabel(providerLabel: string): string {
+  return `Any ${providerLabel} model`;
+}
+
+/**
  * How many catalog models `pattern` matches today, or `null` when nothing can
  * say - no catalog has answered for this provider.
  */
@@ -177,6 +193,17 @@ export type PatternPickerEntry =
   | PatternPickerModelEntry;
 
 /**
+ * The pattern a query offers: a typed `*` as written, a plain word of
+ * {@link CONTAINS_MIN_LENGTH} or more as "contains", and nothing shorter - two
+ * letters match too much of a catalog to be a choice anyone means.
+ */
+function pickerPatternFor(text: string): string | null {
+  if (isModelPattern(text)) return text;
+  if (text.length >= CONTAINS_MIN_LENGTH) return `*${text}*`;
+  return null;
+}
+
+/**
  * Every option the combobox renders for `query`, in render order, HIDDEN ones
  * included.
  *
@@ -194,17 +221,6 @@ export type PatternPickerEntry =
  * order, which is the order a pattern tries its matches, so a match is numbered
  * by its position there.
  */
-/**
- * The pattern a query offers: a typed `*` as written, a plain word of
- * {@link CONTAINS_MIN_LENGTH} or more as "contains", and nothing shorter - two
- * letters match too much of a catalog to be a choice anyone means.
- */
-function pickerPatternFor(text: string): string | null {
-  if (isModelPattern(text)) return text;
-  if (text.length >= CONTAINS_MIN_LENGTH) return `*${text}*`;
-  return null;
-}
-
 export function buildPatternPicker(input: {
   readonly query: string;
   /** The provider's catalog, or `null` when it has not answered. */
@@ -345,6 +361,35 @@ export function patternOfferDetail(entry: PatternPickerPatternEntry): string {
   if (count === 1) return `${saves} and tries it`;
   if (count === 2) return `${saves} and tries both, in this order`;
   return `${saves} and tries all ${count}, in this order`;
+}
+
+/**
+ * A narrower pattern the refused one could become (wireframe 2's "Narrow it
+ * (for example `*luna*`)"), or `null` when every model it reaches is owned
+ * elsewhere and there is nothing narrower to suggest.
+ *
+ * Built from the first match no other tier owns, as "contains" its slug - and
+ * only offered when that suggestion would itself be choosable: `*gpt-6-luna*`
+ * could still reach an owned `gpt-6-luna-pro`, and a hint that leads to a
+ * second refusal is worse than none. Failing that, the slug alone, which is an
+ * exact pick of a model nobody owns.
+ */
+export function blockedPatternExample(
+  entry: PatternPickerPatternEntry,
+): string | null {
+  if (entry.matches === null) return null;
+  const owned = new Set(
+    entry.blockers.map((blocker) => blocker.model.slug.toLowerCase()),
+  );
+  const free = entry.matches.find(
+    (match) => !owned.has(match.slug.toLowerCase()),
+  );
+  if (free === undefined) return null;
+  const contains = `*${free.slug}*`;
+  const reachesOwned = entry.blockers.some((blocker) =>
+    modelMatchesPattern(contains, blocker.model),
+  );
+  return reachesOwned ? free.slug : contains;
 }
 
 /** "1 model", "4 models", or "? models" when there is no catalog to count. */
