@@ -3971,11 +3971,15 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         once it loads, as in the composer. A click on the provider already
         selected is not a switch: it keeps the model on show, as the
         composer's same click restores that provider's remembered model, so
-        it saves nothing. Only while the loaded catalog lists that model
-        (`selectionCatalogConfirmed`), though: a model the machine no longer
-        offers is not one to keep, and keeping it would save a judge that
-        cannot run, so the click lands on the recommended model instead, as
-        a real switch does. `selectionMarked` is true only while a pick this
+        it saves nothing. It stops keeping it only once that provider's
+        catalog has loaded without listing it (`selectionCatalogConfirmed`
+        false on a loaded catalog): a model the machine no longer offers is
+        not one to keep, and keeping it would save a judge that cannot run,
+        so the click lands on the recommended model instead, as a real switch
+        does. While the catalog is still loading, nothing yet says the model
+        is gone, so the click keeps it and saves nothing; otherwise the
+        store's `""` would resolve to the catalog's default on arrival and
+        overwrite a listed pick. `selectionMarked` is true only while a pick this
         build can name is on screen (`judgeSelectionMarked`), so nothing is
         checked before a first pick, and a stored harness this build does not
         know - whose store holds the unpicked seed - checks no unrelated row.

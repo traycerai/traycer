@@ -260,19 +260,24 @@ export function useJudgeToolbarStore(input: {
 
   // A click on the provider already selected keeps its model, as in the
   // composer, where the same click restores that provider's remembered model.
-  // Only while the loaded catalog lists it, though: a model this machine no
-  // longer offers is not one to keep, and saving it would save a judge that
-  // cannot run (flow 6). Nor an unresolved seed's `""`, which names no model
-  // of its own. Then, and for a real switch, the click lands on the
-  // provider's recommended judge model, else its first.
+  // It stops keeping it only once that provider's catalog has loaded without
+  // listing it: a model this machine no longer offers is not one to keep, and
+  // saving it would save a judge that cannot run (flow 6). While the catalog
+  // is still loading nothing yet says the model is gone, so the click keeps
+  // it and writes nothing, and the catalog's answer decides from then on.
+  // Never an unresolved seed's `""`, which names no model of its own. Then,
+  // and for a real switch, the click lands on the provider's recommended
+  // judge model, else its first.
   const providerSwitchModel = useCallback(
     (next: ProviderId): string => {
       const state = store.getState();
       const current = state.values.selection;
+      const catalogLoaded =
+        state.catalog.modelsHarnessId === next && state.catalog.modelsLoaded;
       if (
         current.harnessId === next &&
         current.modelSlug.length > 0 &&
-        state.selectionCatalogConfirmed
+        (!catalogLoaded || state.selectionCatalogConfirmed)
       ) {
         return current.modelSlug;
       }

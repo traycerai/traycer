@@ -1657,6 +1657,34 @@ describe("JudgeTab", () => {
         expect(writes()).toEqual([]);
         expect(face().textContent).toContain("Claude Opus");
       });
+
+      it("F1: re-clicking the provider already selected while its models still load keeps the stored model", async () => {
+        const OPUS: AutoJudgeSelection = {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+        };
+        setModels("claude", { kind: "pending" });
+        judgeRecord.current = { selection: OPUS };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(face());
+        await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+        act(() => {
+          setModels("claude", {
+            kind: "ready",
+            models: [
+              model("claude", "sonnet", "Claude Sonnet"),
+              model("claude", "opus", "Claude Opus"),
+            ],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([]);
+        expect(face().textContent).toContain("Claude Opus");
+      });
     });
 
     describe("N2: the checked Automatic radio's own click ends a pending switch", () => {
