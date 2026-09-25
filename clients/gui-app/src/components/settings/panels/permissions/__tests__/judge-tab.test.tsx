@@ -1558,7 +1558,7 @@ describe("JudgeTab", () => {
         expect(setJudgeMutate).not.toHaveBeenCalled();
       }
 
-      it("a last pick that is signed out reads as runnable until the harness list answers", async () => {
+      it("stays loading until the harness list answers, then treats a signed-out last pick as broken: the picker opens and nothing is written", async () => {
         lastBrokenCatalog();
         judgeCatalog.harnessesStatus = "pending";
         judgeRecord.current = { selection: null, lastSelection: CODEX_LAST };
@@ -1573,7 +1573,7 @@ describe("JudgeTab", () => {
         await expectLastBrokenOpensPicker();
       });
 
-      it("a last pick on a removed account reads as runnable until the providers list answers", async () => {
+      it("stays loading until the providers list answers, then treats a last pick on a removed account as broken: the picker opens and nothing is written", async () => {
         judgeCatalog.providers = undefined;
         judgeRecord.current = {
           selection: null,
