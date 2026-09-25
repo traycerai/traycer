@@ -27,6 +27,8 @@ import {
   type ChatMessageDeliveryPhase,
   type ChatMessageUserActions,
 } from "@/components/chat/chat-message";
+import { deliveringUserMessageActionsFor } from "@/components/epic-canvas/renderers/use-chat-message-actions";
+import { transcriptShowsSetupCard } from "@/stores/chats/rendered-messages";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
   chatTranscriptJumpKey,
@@ -2010,6 +2012,77 @@ describe("<UserMessageBody /> message delivery footer", () => {
     screen.getByLabelText("Edit message");
     screen.getByLabelText("Delete message");
     screen.getByLabelText("Copy message");
+  });
+});
+
+describe("<UserMessageBody /> delivery footer beside the worktree setup card", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const openingPrompt = plainUserMessage("Fix the copy button");
+
+  function setupCardRow(): ChatMessageModel {
+    return {
+      ...plainUserMessage(""),
+      id: "setup-card:owner-1:0:1500",
+      role: "system",
+      segments: [
+        {
+          id: "setup-card:owner-1:0:1500:card",
+          kind: "setup-card",
+          model: {
+            aggregate: {
+              epicId: "epic-1",
+              ownerId: "owner-1",
+              ownerKind: "chat",
+              state: "setting-up",
+            },
+            workspaces: [],
+            createdAt: 1500,
+            isActive: true,
+          },
+          viewTabId: "tab-1",
+          anchorMessageId: null,
+          isGenesisPin: true,
+        },
+      ],
+      senderLabel: null,
+    };
+  }
+
+  function renderOpeningPrompt(
+    phase: ChatMessageDeliveryPhase,
+    transcript: ReadonlyArray<ChatMessageModel>,
+  ): void {
+    render(
+      <UserMessageBody
+        actions={deliveringUserMessageActionsFor(
+          phase,
+          transcriptShowsSetupCard(transcript),
+        )}
+        message={openingPrompt}
+      />,
+    );
+  }
+
+  it("preparing with the setup card showing: no 'Setting up' status, Copy only", () => {
+    renderOpeningPrompt("preparing", [setupCardRow(), openingPrompt]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Setting up")).toBeNull();
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    expect(screen.queryByLabelText("Delete message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("pending with the setup card showing: still reads 'Sending'", () => {
+    renderOpeningPrompt("pending", [setupCardRow(), openingPrompt]);
+    expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+
+  it("preparing with no setup card: keeps its 'Setting up' status", () => {
+    renderOpeningPrompt("preparing", [openingPrompt]);
+    expect(screen.getByRole("status").textContent).toContain("Setting up");
   });
 });
 

@@ -79,7 +79,7 @@ import type {
 const NOOP = (): void => undefined;
 
 function deliveringUserMessageActions(
-  phase: ChatMessageDeliveryPhase,
+  phase: ChatMessageDeliveryPhase | null,
 ): ChatMessageUserActions {
   return {
     type: "user",
@@ -112,6 +112,28 @@ const DELIVERING_USER_MESSAGE_ACTIONS: Readonly<
 };
 
 /**
+ * A preparing row beside the chat's setup card: still copy-only, but with no
+ * status of its own, because the card already shows that setup wait.
+ */
+const PREPARING_BESIDE_SETUP_CARD_ACTIONS = deliveringUserMessageActions(null);
+
+/**
+ * The actions of a row the host has accepted and not started. `pending` always
+ * reads "Sending": the host has not yet confirmed it has the prompt, and no
+ * card covers that. `preparing` reads "Setting up" only when no setup card is
+ * in the transcript to show that wait.
+ */
+export function deliveringUserMessageActionsFor(
+  phase: ChatMessageDeliveryPhase,
+  setupCardShown: boolean,
+): ChatMessageUserActions {
+  if (phase === "preparing" && setupCardShown) {
+    return PREPARING_BESIDE_SETUP_CARD_ACTIONS;
+  }
+  return DELIVERING_USER_MESSAGE_ACTIONS[phase];
+}
+
+/**
  * The phase of `messageId` while the host has accepted it and not started it,
  * `null` for every other row. A withdrawn row is not asked about: it has already
  * left the rendered transcript (`useRenderedMessages`).
@@ -137,6 +159,12 @@ export interface ChatMessageActionsInput {
    * has not started.
    */
   readonly messageDelivery: ChatMessageDelivery | null;
+  /**
+   * Whether the rendered transcript carries a worktree setup card
+   * (`transcriptShowsSetupCard`). A preparing opening prompt drops its own
+   * "Setting up" status while it does - see `deliveringUserMessageActionsFor`.
+   */
+  readonly setupCardShown: boolean;
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
@@ -335,6 +363,7 @@ export function useChatMessageActions(
     canModifyMessages,
     canAct,
     messageDelivery,
+    setupCardShown,
     interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
@@ -987,7 +1016,7 @@ export function useChatMessageActions(
         persistentMessageId,
       );
       if (deliveryPhase !== null) {
-        return DELIVERING_USER_MESSAGE_ACTIONS[deliveryPhase];
+        return deliveringUserMessageActionsFor(deliveryPhase, setupCardShown);
       }
       if (
         inlineEditLocksMessageActions(activeInlineEdit, persistentMessageId)
@@ -1057,6 +1086,7 @@ export function useChatMessageActions(
       interviewDeliveryRetryProtocolSupported,
       mentionRoots,
       messageDelivery,
+      setupCardShown,
       pendingActions,
       acceptedActions,
       chatActions,

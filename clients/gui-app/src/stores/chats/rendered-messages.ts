@@ -1677,6 +1677,19 @@ function withoutWithdrawnUserRow(
   );
 }
 
+/**
+ * Whether the rendered transcript carries a worktree setup card. While it does,
+ * the card is what shows an unstarted opening prompt's setup wait, so the
+ * prompt's own "Setting up" status would say the same thing twice.
+ */
+export function transcriptShowsSetupCard(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) =>
+    row.segments.some((segment) => segment.kind === "setup-card"),
+  );
+}
+
 function projectActiveTurn(
   activeTurn: ChatActiveTurn | null,
   profileLabelsByTurnKey: ReadonlyMap<string, string>,

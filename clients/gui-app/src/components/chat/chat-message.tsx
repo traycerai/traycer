@@ -79,9 +79,10 @@ export type ChatMessageDeliveryPhase = "pending" | "preparing";
 export interface ChatMessageUserActions {
   readonly type: "user";
   /**
-   * Set while the host is still delivering this row, `null` otherwise. Such a
-   * row shows its phase and offers copy only (`enabled` is false and nothing is
-   * being edited); it becomes an ordinary message when it starts.
+   * The phase a row the host is still delivering shows under it, `null`
+   * otherwise. Such a row offers copy only (`enabled` is false and nothing is
+   * being edited); it becomes an ordinary message when it starts. A preparing
+   * row beside the chat's setup card is also `null` - the card shows that wait.
    */
   readonly deliveryPhase: ChatMessageDeliveryPhase | null;
   readonly enabled: boolean;

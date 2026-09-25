@@ -242,6 +242,7 @@ function baseInput(
     canModifyMessages: true,
     canAct: true,
     messageDelivery: null,
+    setupCardShown: false,
     interviewDeliveryRetryProtocolSupported: false,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,
