@@ -69,7 +69,6 @@ import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-sc
 import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
-  DEFAULT_SORT,
 } from "@/components/home/data/home-page.data";
 import {
   EpicsListChatHostFilterUnsupported,
@@ -83,6 +82,8 @@ import { HistoryTaskRow } from "@/components/epics/history-task-row";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { MobileHistoryList } from "@/components/epics/mobile/mobile-history-list";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
+import { useInProgressHistoryItems } from "@/hooks/home/use-in-progress-history-items";
+import { withInProgressFirst } from "@/lib/home/current-tasks";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import type { HistoryMessageHitsInputs } from "@/components/epics/history-message-hits";
@@ -118,6 +119,7 @@ import {
 } from "@/stores/auth/auth-store";
 import {
   DEFAULT_HISTORY_SEARCH,
+  hasActiveHistoryFilters,
   patchHistorySearch,
   type HistorySearchPatch,
   type HistorySearchState,
@@ -373,6 +375,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetchingNextPage,
     cloudPagePending,
     isCountPending,
+    currentUserId,
   } = useHistoryQuery({
     search,
     nowMs: props.historyNowMs,
@@ -392,7 +395,33 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // settled page yet"), and spreading them through the body made the panel
   // body's branch count grow with every field the query gained.
   const view = historyPanelView(data);
-  const items = view.items;
+  const pageItems = view.items;
+  // Declared here rather than beside its first render use: the in-progress
+  // lift below is the earliest reader, and one `search` verdict for the whole
+  // body beats two calls that could drift apart.
+  const hasActiveFilters = hasActiveHistoryFilters(search);
+  // The phone's replacement for Home's "In progress" group. History renders
+  // the feed's order, agent activity does not move a task up it, and the
+  // phone has no Home surface carrying those rows - so a task with an agent
+  // running can sit pages below where desktop shows it. Lifted into the
+  // panel's `items` rather than into the mobile body's prop so that selection,
+  // delete and pin all resolve a lifted row the same way they resolve any
+  // other. Desktop is untouched: it keeps `CurrentTasksSection`.
+  //
+  // `picker` is excluded for the reason `HistoryListBody` excludes it - it is
+  // a read-only destination browser, not the user's task feed. A narrowed
+  // History is excluded too: a search's ranking is what the user asked for,
+  // and a filtered feed must not be handed back a row the filter excluded.
+  const isMobileViewport = useIsMobileViewport();
+  const inProgress = useInProgressHistoryItems({
+    items: pageItems,
+    userId: currentUserId,
+    enabled: isMobileViewport && variant !== "picker" && !hasActiveFilters,
+  });
+  const items = useMemo(
+    () => withInProgressFirst(inProgress, pageItems),
+    [inProgress, pageItems],
+  );
   const worktreesByEpicId = view.worktreesByEpicId;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
@@ -690,8 +719,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     closeDeleteDialog();
   };
 
-  const hasActiveFilters = hasActiveHistoryFilters(search);
-
   const handleClear = () => {
     clearSearch();
   };
@@ -925,20 +952,6 @@ function useChatHostFilterGate(
     chatHostFilterSupported: support !== "unsupported",
     chatHostFilterUnsupported: data?.chatHostFilterUnsupported ?? false,
   };
-}
-
-function hasActiveHistoryFilters(search: HistorySearchState): boolean {
-  return (
-    (search.labelNames?.length ?? 0) > 0 ||
-    (search.groupIds?.length ?? 0) > 0 ||
-    !!search.includeUngrouped ||
-    search.repos.length > 0 ||
-    search.workspaces.length > 0 ||
-    search.chatHosts.length > 0 ||
-    search.ownershipScopes.length > 0 ||
-    (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
-    search.query.trim().length > 0
-  );
 }
 
 /**

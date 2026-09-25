@@ -2799,7 +2799,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       what the rename fixes.
       **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
       managed profiles and usage limits, but managed profiles exist for
-      `claude-code`, `codex`, and `grok` only — so on the other providers the fixed
+      `claude-code`, `codex`, `grok` and `antigravity` only — so on the other providers the fixed
       label promised a section that is not there. Elsewhere it reads
       **"Usage limits"**, which is the panel's own words for what remains (the
       section inside is headed exactly that). The ID never varies; this is

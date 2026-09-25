@@ -73,6 +73,19 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
 }));
 
+// The in-progress lift (`useInProgressHistoryItems`) backfills a running task
+// no listed page carries through `epic.getTaskContexts`, which needs a host
+// runtime this suite deliberately does not mount. Inert here: nothing is
+// running in these fixtures, so the lift has nothing to lift either way.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(),
+    localHomedTaskIds: new Set<string>(),
+    isFetching: false,
+    error: null,
+  }),
+}));
+
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: {} }),
 }));
