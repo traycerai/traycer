@@ -187,6 +187,7 @@ function preview(overrides: {
     harnessId: "claude",
     reasoningEffort: null,
     ...overrides,
+    matches: [],
     warnings: [...overrides.warnings],
   };
 }

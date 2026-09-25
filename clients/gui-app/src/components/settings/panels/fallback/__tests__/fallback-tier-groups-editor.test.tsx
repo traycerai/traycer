@@ -633,6 +633,7 @@ describe("FallbackTierGroupsEditor - a duplicated group NAME withholds the previ
       profileId: null,
       skipReason: null,
       skipLabel: null,
+      matches: [],
       warnings: [],
     };
   }

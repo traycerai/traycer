@@ -1691,6 +1691,7 @@ function TierStepHint({
       defaultTierGroupId: policy.defaultTierGroupId,
       harnessId: lastRun.harnessId,
       model: lastRun.model,
+      catalog: null,
     })
   ) {
     return null;

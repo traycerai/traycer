@@ -280,6 +280,7 @@ function previewRow(
     profileId: null,
     skipReason: null,
     skipLabel: null,
+    matches: [],
     warnings: [],
     ...overrides,
   };
