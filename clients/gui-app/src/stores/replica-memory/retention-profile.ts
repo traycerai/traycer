@@ -59,6 +59,32 @@ export interface RetentionProfile {
    * does not, and a pool nothing is rendering through is pure resident cost.
    */
   readonly diffWorkerPoolIdleMs: number | null;
+  /**
+   * Whether a diff surface that is MOUNTED BUT OFF SCREEN - inside a retained
+   * hidden top-level surface, or on a pane tab that is not the front one -
+   * gives its `@pierre/diffs` body back until it is shown again.
+   *
+   * The companion to the idle window above, and the reason that window ever
+   * gets to run on a phone. A phone keeps
+   * {@link RetentionProfile.retainedTopLevelSurfaces} surfaces mounted, so
+   * navigating away from a diff leaves its tile mounted and holding the pool
+   * open forever - the idle window measured on device never fired once. A
+   * hidden body has to be the falling edge as well as an unmount.
+   *
+   * It is a body drop rather than a lease release because a mounted
+   * `<FileDiff>` cannot be talked out of its pool: it captures the manager in
+   * the ref callback that creates its instance and never re-reads the
+   * context, so a terminated pool underneath one is re-initialized by the
+   * library on its next render, spawning isolates nothing can reach. Dropping
+   * the body (the gates render their loader instead) unmounts the instance,
+   * which is what releases the lease - and hands back the shadow-DOM token
+   * spans with it, which on a long diff outweigh the isolate.
+   *
+   * `false` on desktop, where tabbing away and back is constant and a
+   * re-highlight would be visible jank on a machine with the headroom to keep
+   * the DOM.
+   */
+  readonly dropHiddenDiffBodies: boolean;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -69,6 +95,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   maxLingeringPlainTerminals: 6,
   maxDiffHighlightWorkers: 3,
   diffWorkerPoolIdleMs: null,
+  dropHiddenDiffBodies: false,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -79,6 +106,7 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   maxLingeringPlainTerminals: 3,
   maxDiffHighlightWorkers: 1,
   diffWorkerPoolIdleMs: 45_000,
+  dropHiddenDiffBodies: true,
 });
 
 /**

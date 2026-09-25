@@ -69,6 +69,16 @@ describe("RetentionProfile", () => {
     expect(MOBILE_RETENTION_PROFILE.diffWorkerPoolIdleMs).toBe(45_000);
   });
 
+  it("pairs the phone's idle window with dropping hidden diff bodies", () => {
+    // The window cannot fire without the drop: the phone keeps
+    // `retainedTopLevelSurfaces` surfaces mounted, so a diff the user navigates
+    // away from stays mounted and holds the pool open forever. Measured on
+    // device - the 45 s window above never fired once until hidden bodies
+    // became a falling edge too.
+    expect(MOBILE_RETENTION_PROFILE.dropHiddenDiffBodies).toBe(true);
+    expect(DESKTOP_RETENTION_PROFILE.dropHiddenDiffBodies).toBe(false);
+  });
+
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {
     // The live-epic cap stays ABOVE the surface-retention window on purpose: a
     // surface past its retention window drops its DOM but its session stays
