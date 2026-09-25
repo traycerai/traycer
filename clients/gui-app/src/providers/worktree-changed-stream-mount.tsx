@@ -1,6 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { WorktreeChangedStreamClient } from "@traycer-clients/shared/host-transport/worktree-changed-stream-client";
+import {
+  WorktreeChangedStreamClient,
+  type WorktreeChangedCursorStore,
+} from "@traycer-clients/shared/host-transport/worktree-changed-stream-client";
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
@@ -60,6 +63,11 @@ export function WorktreeChangedStreamMount(): ReactNode {
     // Narrowed capture: the guard above does not narrow `wsStreamClient`
     // inside the nested `openClient` function declaration.
     const streamClient = wsStreamClient;
+    // One cursor per host binding, shared by every client the reopen lane
+    // builds: the rebuilt client's first subscribe is a reconnect too, and the
+    // host skips its catch-up (and so this client's full refetch) when the
+    // last frame received is still current.
+    const cursor: WorktreeChangedCursorStore = { current: null };
     const hostConnection = acquireHostConnection(hostId);
     let disposed = false;
     let currentClient: WorktreeChangedStreamClient | null = null;
@@ -76,6 +84,7 @@ export function WorktreeChangedStreamMount(): ReactNode {
       let openedAtMs = 0;
       client = new WorktreeChangedStreamClient({
         wsStreamClient: streamClient,
+        cursor,
         callbacks: {
           onChanged: (scope) => {
             if (currentClient !== client) return;
