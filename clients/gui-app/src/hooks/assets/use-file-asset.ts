@@ -180,6 +180,23 @@ function describeFailure(
     : documentFailureMessages(renderKind)[failure.reason];
 }
 
+/**
+ * A stream failure as this hook reports it: the copy to show, and whether the
+ * host found no file at all. An `Error` so that it can also reject the blob
+ * cache's fetch, which hands the same object back to every consumer's lease.
+ * That is how a failure arriving AFTER the header reaches the fallback state,
+ * e.g. a reconnect's retry finding the file deleted in between.
+ */
+class FileAssetFetchError extends Error {
+  readonly missing: boolean;
+
+  constructor(failure: AssetStreamFailure, renderKind: FileAssetRenderKind) {
+    super(describeFailure(failure, renderKind));
+    this.name = "FileAssetFetchError";
+    this.missing = failure.reason === "not-found";
+  }
+}
+
 function decodeFailureReason(renderKind: FileAssetRenderKind): string {
   return renderKind === "image"
     ? "This image could not be decoded."
@@ -878,7 +895,7 @@ export function useHostFileAsset(args: {
                   error instanceof Error
                     ? error.message
                     : "This image could not be loaded.",
-                missing: false,
+                missing: error instanceof FileAssetFetchError && error.missing,
                 totalBytes: header.sizeBytes,
                 servedFromCache: false,
               },
@@ -897,8 +914,9 @@ export function useHostFileAsset(args: {
         // Over-cap telemetry lives in the shared entry's single failure path
         // (`acquireSharedAssetSubscription`), not here - this listener runs
         // once per mounted consumer of the same stream.
+        const fetchError = new FileAssetFetchError(failure, streamRenderKind);
         if (rejectFetch !== null) {
-          rejectFetch(new Error(describeFailure(failure, streamRenderKind)));
+          rejectFetch(fetchError);
           return;
         }
         if (!active) return;
@@ -908,11 +926,8 @@ export function useHostFileAsset(args: {
             status: "fallback",
             url: null,
             meta: null,
-            reason: describeFailure(failure, streamRenderKind),
-            // The host reads the whole file before it sends the header, so
-            // "not found" always lands here, never on the post-header
-            // rejection path above.
-            missing: failure.reason === "not-found",
+            reason: fetchError.message,
+            missing: fetchError.missing,
             totalBytes: null,
             servedFromCache: false,
           },

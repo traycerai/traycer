@@ -769,6 +769,29 @@ describe("useFileAsset", () => {
     unmount();
   });
 
+  it("reports the file as missing when a reconnect's retry finds it deleted", async () => {
+    const { result, unmount } = renderHook(() =>
+      useFileAsset(WORKSPACE_REQUEST),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    // The header already arrived, so the failure travels through the blob
+    // cache's rejection rather than the pre-header path.
+    act(() => {
+      emitHeader(session, "deleted-during-reconnect", 3);
+      session.emitStatus("reconnecting", null);
+      emitFailure(session, "not-found");
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe("This file could not be found.");
+    expect(result.current.missing).toBe(true);
+    expect(imageBlobCache.size()).toBe(0);
+    unmount();
+  });
+
   it("reports a browser decode failure by discarding the ready asset", async () => {
     const { result, unmount } = renderHook(() =>
       useFileAsset(WORKSPACE_REQUEST),
