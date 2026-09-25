@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import {
   SKELETON_RESUME_BLOCK_SIZE,
@@ -8,8 +8,10 @@ import {
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
+  disposingForIdentityTeardown,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { forgetAllSkeletonsForResume } from "@/stores/chats/skeleton-resume-cache";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -197,6 +199,10 @@ function windowOf(harness: Harness) {
   return harness.handle.store.getState().transcriptWindow;
 }
 
+beforeEach(() => {
+  forgetAllSkeletonsForResume();
+});
+
 describe("skeleton resume: what a chat claims", () => {
   it("claims nothing before it holds a skeleton", () => {
     const harness = createHarness();
@@ -359,5 +365,63 @@ describe("skeleton resume: an answer the client cannot honour", () => {
     );
     expect(windowOf(harness).invalidated).toBe(true);
     harness.handle.dispose();
+  });
+});
+
+describe("skeleton resume: re-opening a chat whose session was closed", () => {
+  it("claims the skeleton the closed session left behind, and resumes into an empty window", () => {
+    const closed = createHarness();
+    openFully(closed, 0, 2 * BLOCK + 40);
+    // The warm pool evicts it: the session, its window and its socket go.
+    closed.handle.dispose();
+
+    const reopened = createHarness();
+    const cb = reopened.callbacks();
+    expect(windowOf(reopened).skeleton).toHaveLength(0);
+    expect(cb.readSkeletonResume()).toEqual({
+      derivation: SKELETON_RESUME_DERIVATION,
+      blockSize: BLOCK,
+      blockDigests: [
+        skeletonResumeBlockDigest(entries(0, BLOCK)),
+        skeletonResumeBlockDigest(entries(BLOCK, 2 * BLOCK)),
+      ],
+    });
+    cb.onWindowedSnapshot(bootstrapSnapshot(0, 2 * BLOCK + 44));
+    cb.onSkeletonChunk(
+      chunkFrame({
+        epoch: 0,
+        fromOrdinal: 2 * BLOCK,
+        entries: entries(2 * BLOCK, 2 * BLOCK + 44),
+        retainedRows: 2 * BLOCK,
+      }),
+    );
+    const window = windowOf(reopened);
+    expect(window.invalidated).toBe(false);
+    expect(window.skeletonComplete).toBe(true);
+    expect(window.skeleton.map((value) => value?.rowId)).toEqual(
+      entries(0, 2 * BLOCK + 44).map((value) => value.rowId),
+    );
+    reopened.handle.dispose();
+  });
+
+  it("leaves nothing behind across an identity change", () => {
+    const closed = createHarness();
+    openFully(closed, 0, 2 * BLOCK);
+    disposingForIdentityTeardown(() => {
+      closed.handle.dispose();
+    });
+    const reopened = createHarness();
+    expect(reopened.callbacks().readSkeletonResume()).toBe(null);
+    reopened.handle.dispose();
+  });
+
+  it("drops skeletons closed BEFORE the identity change too", () => {
+    const closed = createHarness();
+    openFully(closed, 0, 2 * BLOCK);
+    closed.handle.dispose();
+    disposingForIdentityTeardown(() => undefined);
+    const reopened = createHarness();
+    expect(reopened.callbacks().readSkeletonResume()).toBe(null);
+    reopened.handle.dispose();
   });
 });

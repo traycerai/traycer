@@ -95,6 +95,12 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { createSkeletonResumeOfferHolder } from "@/stores/chats/skeleton-resume-offer";
+import {
+  forgetAllSkeletonsForResume,
+  readSkeletonForResume,
+  rememberSkeletonForResume,
+  type SkeletonResumeCacheKey,
+} from "@/stores/chats/skeleton-resume-cache";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
   chatHolderId,
@@ -7134,6 +7140,14 @@ export function createChatSessionStoreWithNotificationDependencies(
     // of the host's resumed answer back into a whole stream. See
     // `skeleton-resume-offer.ts`.
     const skeletonResumeOffers = createSkeletonResumeOfferHolder();
+    // This chat's slot in the closed-chat skeleton cache: read when the window
+    // has nothing to offer, written when the session is disposed.
+    const skeletonCacheKey: SkeletonResumeCacheKey = {
+      userId: options.userId,
+      hostId: options.hostId,
+      epicId: options.epicId,
+      chatId: options.chatId,
+    };
 
     const callbacks: ChatStreamCallbacks = {
       onSnapshot: (frame) => {
@@ -7639,6 +7653,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // built yet holds no skeleton to describe anyway.
         skeletonResumeOffers.offer(
           storeReady && !disposed ? get().transcriptWindow : null,
+          () => readSkeletonForResume(skeletonCacheKey),
         ),
       onAccumulatedChanges: (frame) => {
         // Same downgrade guard as `onSkeletonChunk`, and it is not symmetry
@@ -11023,6 +11038,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         // outgoing account rather than written where the next one would find
         // it.
         if (!identityTeardownInProgress) handOffUnrecordedPromptToStash();
+        // Leave the skeleton behind for the next open of this chat to resume
+        // from - never across an identity change, whose teardown clears the
+        // cache instead.
+        if (!identityTeardownInProgress) {
+          rememberSkeletonForResume(skeletonCacheKey, get().transcriptWindow);
+        }
         clearSuppressedNotices();
         unsubscribeSweptObserver();
         stickySweptByAction.clear();
@@ -11850,6 +11871,8 @@ export function disposingForIdentityTeardown(run: () => void): void {
   // Bumped FIRST, so a capture already in flight is stale before any of the
   // teardown below runs.
   identityGeneration += 1;
+  // The closed chats' skeletons belong to the identity that is leaving.
+  forgetAllSkeletonsForResume();
   // Bumping it is now enough on its own. The handoff's last step is a
   // synchronous `installLandingDraft` guarded by a re-check of this same
   // generation, so there is no open transaction between the sample and the
