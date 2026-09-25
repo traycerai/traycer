@@ -366,10 +366,21 @@ function isLocalHomePinExempt(
 
 /**
  * Cancels in-flight `epic.getTaskContexts` refetches that ask for this epic,
- * keeping their cached data (`revert: false`), so a response requested before
- * a pin write cannot land after it. Every host: the tab strip's batch is keyed
- * by the WINDOW's host, which need not be the host a local-homed pin is
- * dispatched to.
+ * so a response requested before a pin write cannot land after it. Every
+ * host: the tab strip's batch is keyed by the WINDOW's host, which need not be
+ * the host a local-homed pin is dispatched to.
+ *
+ * `revert: true`, not `false`. In query-core `revert: false` does not "keep
+ * the data quietly": it dispatches the cancellation as a query ERROR -
+ * `status: "error"`, a `CancelledError`, the entry invalidated. A later
+ * `setQueryData` clears that, which is why it hides on the success path, where
+ * the patches below land; but wherever no patch follows - a write that failed,
+ * or another host's copy the patch had nothing to change in - nothing
+ * refetches, the error sticks, and History's title lookup counts it as real
+ * and swaps its list for an error panel. Reverting restores the pre-fetch
+ * state with its data instead. (That state also tracks manual `setQueryData`
+ * writes, but nothing here depends on it: `onSuccess` re-patches the written
+ * bit straight after its cancel.)
  */
 async function cancelInFlightTaskContextsReads(
   queryClient: QueryClient,
@@ -390,7 +401,7 @@ async function cancelInFlightTaskContextsReads(
         }) &&
         taskContextsQueryKeyAsksFor(query.queryKey, epicId),
     },
-    { revert: false },
+    { revert: true },
   );
 }
 
@@ -431,10 +442,9 @@ async function restartInFlightFirstTaskContextsReads(
   );
   if (firstReads.size === 0) return;
   const restarted = { predicate: (query: Query) => firstReads.has(query) };
-  // `revert: true`, unlike the helper above: with no data to keep, reverting
+  // `revert: true`, as in the helper above: with no data to keep, reverting
   // returns the entry to pending-idle quietly, where `revert: false` would
-  // dispatch the cancellation as a query ERROR (and log it) for the instant
-  // before the replacement fetch starts.
+  // dispatch the cancellation as a query ERROR (and log it).
   await queryClient.cancelQueries(restarted, { revert: true });
   void queryClient.refetchQueries(restarted);
 }
