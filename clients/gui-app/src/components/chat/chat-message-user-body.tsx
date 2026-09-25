@@ -969,6 +969,9 @@ function InlineUserMessageEditor({
         attachmentsStrip={null}
         editor={editorSlot}
         toolbar={toolbar}
+        // An edit in place stays in place: the message it replaces is the
+        // context for it.
+        expansion={null}
       />
     </div>
   );
