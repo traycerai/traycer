@@ -10,6 +10,9 @@ export const PROVIDERS = defineSettingsSection("providers", {
     description: "Coding agents, their accounts, models, and extensions.",
     keywords: [
       "claude",
+      // Its display name. The Judge tab's removed built-in reviewer card was
+      // the only entry that carried it, and "claude" alone does not answer it.
+      "claude code",
       "codex",
       "cursor",
       "grok",
@@ -23,10 +26,15 @@ export const PROVIDERS = defineSettingsSection("providers", {
       // The per-provider "Who reviews <provider>'s commands" select on a
       // provider's Permissions tab has no region group of its own, and it is
       // the switch that wins over the Permissions-page judge; these land that
-      // search on this page.
+      // search on this page. It is the switch's only home, so the words of the
+      // Judge tab's former "Providers with a built-in reviewer" card are here
+      // too. Like every concept on this page they land at its top, not on a
+      // provider's tab; the Judge tab's pointer line is the direct route.
       "auto mode judge",
       "classifier",
       "who reviews commands",
+      "built-in reviewer",
+      "own classifier",
     ],
   },
   apiKey: {

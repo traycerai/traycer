@@ -61,6 +61,7 @@ function createStore(
   onSettingsChange: ((model: string) => void) | null,
 ) {
   return createComposerToolbarStore({
+    purpose: "run",
     seedKey: `model-slug-${modelSlug}`,
     values: {
       permission: "supervised",

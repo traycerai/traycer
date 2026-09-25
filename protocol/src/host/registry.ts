@@ -833,12 +833,16 @@ import {
 } from "@traycer/protocol/host/session-import/scan";
 import {
   autoJudgeGetUpgradeV10ToV11,
+  autoJudgeGetUpgradeV11ToV12,
   autoJudgeGetV10,
   autoJudgeGetV11,
+  autoJudgeGetV12,
   autoJudgeListRecentV10,
   autoJudgeSetUpgradeV10ToV11,
+  autoJudgeSetUpgradeV11ToV12,
   autoJudgeSetV10,
   autoJudgeSetV11,
+  autoJudgeSetV12,
   autoPolicyGetV10,
   autoPolicySetV10,
   providersSetAutoJudgeV10,
@@ -5015,8 +5019,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     1: {
       // @1.0 is RELEASED (`host-v1.3.2-staging.39` advertised it), so the
       // Automatic judge's `{ source: "fallback" }` answer opens @1.1 rather
-      // than widening it in place.
-      latestMinor: 1,
+      // than widening it in place. @1.1 is RELEASED too (every host tag from
+      // `host-v1.3.2-staging.52` on), so the machine's last judge pick opens
+      // @1.2 the same way.
+      latestMinor: 2,
       versions: {
         0: {
           contract: autoJudgeGetV10,
@@ -5034,6 +5040,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // never to the Traycer pocket a 1.0 desktop would bill it to.
           responseGrowthProjectionGated: true,
         },
+        2: {
+          contract: autoJudgeGetV12,
+          upgradeFromPreviousVersion: autoJudgeGetUpgradeV11ToV12,
+          // No `responseGrowthProjectionGated`: `lastSelection` is a new
+          // KEY, not value growth, so a 1.1 caller's within-major re-parse
+          // strips it, as it does `providers.list@9.1`'s `autoJudge`. A 1.0
+          // caller still gets the 1.1 projection, which builds its answer
+          // field by field and so never copies the key.
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -5041,9 +5056,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "autoJudge.set": {
     degrade: { kind: "unsupported" },
     1: {
-      // Same line, same reason, as `autoJudge.get`: the echo reports the
-      // judge the new selection resolves to.
-      latestMinor: 1,
+      // Same line, same reasons, as `autoJudge.get`: the echo reports the
+      // judge the new selection resolves to, and (@1.2) the last pick this
+      // write left.
+      latestMinor: 2,
       versions: {
         0: {
           contract: autoJudgeSetV10,
@@ -5055,6 +5071,11 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // See `autoJudge.get@1.1`; the projection is
           // `projectAutoJudgeSetResponseToV10`.
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: autoJudgeSetV12,
+          upgradeFromPreviousVersion: autoJudgeSetUpgradeV11ToV12,
+          // See `autoJudge.get@1.2`: `lastSelection` is a new key.
         },
       },
       downgradePathsFromLatest: {},

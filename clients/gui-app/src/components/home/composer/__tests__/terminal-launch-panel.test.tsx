@@ -74,6 +74,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 function makeToolbarStore() {
   const store = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "test",
     values: {
       permission: "supervised",
@@ -120,6 +121,7 @@ function makeToolbarStore() {
 
 function makeGuiOnlyToolbarStore() {
   const store = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "test",
     values: {
       permission: "supervised",
