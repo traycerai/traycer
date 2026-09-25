@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { isMobileApp } from "@/lib/mobile-app";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { EpicResourceChipsStreamMount } from "@/providers/resources-stream-mount";
 import {
   useIsMobileSwitcherOpen,
   useMobileSwitcherStore,
@@ -45,7 +45,9 @@ export function MobileTabSwitcherMount(props: {
   }, [registerMount, tabId, unregisterMount]);
   return (
     <>
-      {open && isMobileApp() ? <ResourcesStreamMount epicId={epicId} /> : null}
+      {open && isMobileApp() ? (
+        <EpicResourceChipsStreamMount epicId={epicId} />
+      ) : null}
       <TabSwitcherSheet
         epicId={epicId}
         tabId={tabId}

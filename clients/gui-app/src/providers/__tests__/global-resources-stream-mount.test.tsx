@@ -106,6 +106,29 @@ describe("GlobalResourcesStreamMount", () => {
   });
 
   /**
+   * Two holders share one stream: a footer readout (background) and the
+   * phone's header panel, which unmounts as it closes. Its departure must
+   * take its interactive demand with it, not leave the stream at the cadence
+   * only the departed holder asked for.
+   */
+  it("drops back to background when an interactive holder unmounts", () => {
+    const demands: string[] = [];
+    __setResourcesStreamClientFactoryForTests(() => ({
+      close: () => undefined,
+      setDemand: (demand) => demands.push(demand),
+    }));
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    const header = render(<GlobalResourcesStreamMount interactive />);
+    expect(demands.at(-1)).toBe("interactive");
+
+    header.unmount();
+
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    expect(demands.at(-1)).toBe("background");
+  });
+
+  /**
    * The other side of the gate, and the reason it is still the PRE-STREAM
    * verdict: when the pre-check CAN convict — a local host, where the
    * client-wide capability cache is real — nothing is dialled at all. That is

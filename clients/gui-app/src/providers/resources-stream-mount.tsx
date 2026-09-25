@@ -62,6 +62,23 @@ export function ResourcesStreamMount(
 }
 
 /**
+ * The epic's lease for its resource CHIPS alone - the phone's tab switcher
+ * sheet, whose rows are the only place the installed app shows them. Unlike
+ * {@link ResourcesStreamMount} it ignores the header monitor setting: the
+ * monitor reads the global entry, and on an old host the pane's
+ * {@link PhoneEpicResourcesFallbackMount} supplies what it needs.
+ */
+export function EpicResourceChipsStreamMount(
+  props: ResourcesStreamMountProps,
+): ReactNode {
+  const chipsWanted = useSettingsStore(
+    (state) => state.navigatorResourceMetrics.length > 0,
+  );
+  useEpicResourcesLease(props.epicId, chipsWanted);
+  return null;
+}
+
+/**
  * Holds the registry entry for `epicId` while `wanted`, releasing it when that
  * turns false or the caller unmounts. The caller owns the demand: the settings
  * gate above for a pane or sheet, the old-host fallback below.
@@ -133,8 +150,8 @@ function useEpicResourcesLease(epicId: string, wanted: boolean): void {
 export function PhoneEpicResourcesFallbackMount(
   props: ResourcesStreamMountProps,
 ): ReactNode {
-  const consumerPresent = useGlobalResourcesConsumerPresent();
   const hostId = useStreamHostId();
+  const consumerPresent = useGlobalResourcesConsumerPresent(hostId);
   const globalUnsupported = useGlobalResourcesUnsupported(hostId);
   useEpicResourcesLease(props.epicId, consumerPresent && globalUnsupported);
   return null;
@@ -143,15 +160,16 @@ export function PhoneEpicResourcesFallbackMount(
 export function GlobalResourcesStreamMount(
   props: GlobalResourcesStreamMountProps,
 ): ReactNode {
-  // Registered for as long as this consumer is mounted, independent of whether
-  // its stream can open - see `global-resources-consumers.ts`.
-  useEffect(() => holdGlobalResourcesConsumer(), []);
   const wsStreamClient = useWsStreamClient();
   // Taken from the SAME binding as the client above, never from a prop or a
   // scope model: the host id republished on the projection is what a scoped
   // reader checks its data against, so it has to be the host this transport is
   // actually dialing rather than the one the caller believes it asked for.
   const hostId = useStreamHostId();
+  // Registered for as long as this consumer is mounted, independent of whether
+  // its stream can open, and under the host it dials - see
+  // `global-resources-consumers.ts`.
+  useEffect(() => holdGlobalResourcesConsumer(hostId), [hostId]);
   // The PRE-STREAM verdict only, never the full one the panel reads. The full
   // one includes this stream's own negotiation, so gating the acquire on it
   // would be a loop: acquire → learn `unsupported` → release → the verdict dies
@@ -243,21 +261,17 @@ export function GlobalResourcesStreamMount(
     // change), so this rarely fires on its own.
   }, [hostId, reacquireToken, resourcesUnsupported, wsStreamClient]);
 
-  // Declared after the acquire effect and carrying its full dependency set, so
-  // it runs on the same commit as any re-acquire and re-states the demand on
-  // the entry that acquire just installed. `getGlobal` is the registry's own
-  // accessor for that entry - no second handle needs to be held here.
-  useEffect(() => {
-    resourcesRegistry
-      .getGlobal()
-      ?.setDemand(props.interactive ? "interactive" : "background");
-  }, [
-    hostId,
-    props.interactive,
-    reacquireToken,
-    resourcesUnsupported,
-    wsStreamClient,
-  ]);
+  // Demand is aggregated by the registry across every lease holder, so a
+  // holder that unmounts while interactive (the phone's header panel closing)
+  // drops the shared stream back to background instead of leaving it at the
+  // cadence only the departed holder asked for.
+  useEffect(
+    () =>
+      props.interactive
+        ? resourcesRegistry.holdInteractiveGlobalDemand()
+        : undefined,
+    [props.interactive],
+  );
 
   return null;
 }

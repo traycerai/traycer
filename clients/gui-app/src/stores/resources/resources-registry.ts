@@ -95,6 +95,8 @@ class ResourcesRegistry {
   private readonly listeners = new Set<() => void>();
   private readonly globalListeners = new Set<() => void>();
   private globalVersion = 0;
+  /** Holders currently asking for interactive global cadence. */
+  private interactiveGlobalDemands = 0;
   private globalProjectionCache: {
     readonly version: number;
     readonly projection: GlobalResourceProjection;
@@ -366,6 +368,31 @@ class ResourcesRegistry {
    * release and re-acquire — which is what re-running an effect that names it
    * does.
    */
+  /**
+   * Registers one holder's interactive demand on the global stream; returns its
+   * release. The stream runs interactive while any holder asks for it and
+   * background otherwise, re-stated on every change and on every handle this
+   * registry builds - so the effective cadence never depends on which holder
+   * spoke last.
+   */
+  holdInteractiveGlobalDemand(): () => void {
+    this.interactiveGlobalDemands += 1;
+    this.applyGlobalDemand();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.interactiveGlobalDemands -= 1;
+      this.applyGlobalDemand();
+    };
+  }
+
+  private applyGlobalDemand(): void {
+    this.globalEntry?.handle.setDemand(
+      this.interactiveGlobalDemands > 0 ? "interactive" : "background",
+    );
+  }
+
   acquireGlobal(
     clientToken: unknown,
     hostId: string | null,
@@ -385,6 +412,7 @@ class ResourcesRegistry {
       this.globalEntry.hostId = hostId;
       this.globalEntry.unsubscribeStore = unsubscribeStore;
       this.globalEntry.leases += 1;
+      this.applyGlobalDemand();
       this.notifyGlobal();
       return handle;
     }
@@ -396,6 +424,7 @@ class ResourcesRegistry {
       leases: 1,
       unsubscribeStore: this.subscribeEntry(handle),
     };
+    this.applyGlobalDemand();
     this.notifyGlobal();
     return handle;
   }

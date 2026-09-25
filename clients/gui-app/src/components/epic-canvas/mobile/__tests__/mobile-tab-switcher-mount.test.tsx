@@ -16,7 +16,7 @@ vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", () => ({
 // The stream mount opens a real `resources.subscribe`; this file only asks
 // WHEN the switcher holds one, so a marker carrying its epic stands in.
 vi.mock("@/providers/resources-stream-mount", () => ({
-  ResourcesStreamMount: (props: { readonly epicId: string }) => (
+  EpicResourceChipsStreamMount: (props: { readonly epicId: string }) => (
     <div data-testid="resources-stream" data-epic-id={props.epicId} />
   ),
 }));

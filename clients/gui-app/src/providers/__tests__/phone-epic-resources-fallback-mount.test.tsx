@@ -15,6 +15,7 @@ import {
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { holdGlobalResourcesConsumer } from "@/stores/resources/global-resources-consumers";
 
 // Defaults are a REMOTE host as the transport reports one: `"unknown"` support
 // and no schema version, so the pre-check cannot convict and only the global
@@ -238,5 +239,18 @@ describe("<PhoneEpicResourcesFallbackMount />", () => {
         .getGlobalProjection()
         .owners.map((row) => row.owner.ownerId),
     ).toEqual(["term-1"]);
+  });
+
+  // A monitor scoped to another machine is not a reader of this pane's host:
+  // its fallback would aggregate that machine's entries, never these.
+  it("ignores a global consumer bound to another host", () => {
+    streamMock.version = { major: 1, minor: 0 };
+    const releaseOther = holdGlobalResourcesConsumer("host-2");
+    try {
+      render(<PhoneEpicPane monitorOpen={false} />);
+      expect(resourcesRegistry.get("epic-1")).toBeNull();
+    } finally {
+      releaseOther();
+    }
   });
 });
