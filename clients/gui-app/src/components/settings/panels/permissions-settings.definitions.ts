@@ -115,15 +115,15 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     kind: "group",
     search: { contributesTo: "judgeTab" },
     label: "Auto mode judge",
-    description:
-      "The model that reviews commands when a conversation runs in Auto mode. Stored on this machine.",
+    description: "Checks each command before it runs in Auto mode.",
     breadcrumb: "Judge",
     availableWhen: alwaysAvailable,
     keywords: [
       "auto mode judge",
       "classifier",
       "automatic",
-      "specific model",
+      "pick a model",
+      "recommended",
       "model",
       "provider",
       "account",

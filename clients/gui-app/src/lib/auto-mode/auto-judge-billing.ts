@@ -135,7 +135,7 @@ export interface AutoJudgeTargetInput {
   readonly runModelSlug: string;
   /**
    * The run harness's catalog `judgeDefaultModel`, or `null` for none. `""`
-   * reads as none too - the wire accepts it, and `defaultJudgeModelFor` in
+   * reads as none too - the wire accepts it, and `judgeSwitchModel` in
    * Settings already reads it that way.
    */
   readonly runJudgeDefaultModel: string | null;
@@ -150,8 +150,8 @@ const NO_JUDGE_TARGET: AutoJudgeTarget = { kind: "none" };
  * else `null` while neither is known.
  *
  * `""` is "no default" too, not a slug: the wire accepts it, and Settings'
- * `defaultJudgeModelFor` already reads it that way, so the composer row and
- * the Judge tab name the same judge for the same catalog row. Read as a slug
+ * `judgeSwitchModel` already reads it that way, so the composer row and the
+ * Judge tab's picker land on the same judge for the same catalog row. Read as a slug
  * it rendered "Reviewed by  on …" with a blank where the model goes.
  */
 function fallbackJudgeModelSlug(

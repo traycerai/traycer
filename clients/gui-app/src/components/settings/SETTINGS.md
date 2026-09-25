@@ -3904,104 +3904,210 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       `sessionImport.run`'s own negotiated line.
     - Below the row, one card per mode lists what it runs without asking, from
       `PERMISSION_MODE_DETAILS`, the same data as the picker's descriptions.
-  - **Judge** (`judge-tab.tsx`, `judge-model-field.tsx`) - **Auto mode judge**:
-    Automatic, or A specific model, over `autoJudge.get` / `autoJudge.set`
-    (`~/.traycer/host/config/auto-judge.json`, `selection: null` = Automatic).
-    Two readers share one cache entry with the composer's meta line, and the
-    harness catalog invalidates it when the Traycer row's enabled / available
-    / auth facts change (see `auto-judge-billing.ts`). The save invalidates it
-    too, after writing its echo.
+  - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
+    `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
+    `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
+    command in Auto mode on this machine, over `autoJudge.get` /
+    `autoJudge.set` (`~/.traycer/host/config/auto-judge.json`,
+    `selection: null` = Automatic). Two readers share one cache entry with the
+    composer's meta line, and the harness catalog invalidates it when the
+    Traycer row's enabled / available / auth facts change (see
+    `auto-judge-billing.ts`). The save invalidates it too, after writing its
+    echo.
     - The SELECTION comes from `useAutoJudgeQuery`, at Settings' 60 s
-      `staleTime`. It seeds the controls and is what a pick hands off to, so
-      an aged or invalidated copy still shows what is stored.
+      `staleTime`. It seeds the tiles and is what a pick hands off to, so an
+      aged or invalidated copy still shows what is stored.
     - The VERDICT (`effective`, `blocked`) comes from `useAutoJudgeVerdict`,
       the composer's own rule (`useAutoJudgeVerdictForClient`, which
-      `use-auto-judge-billing.ts` reads too). A
-      record the host has invalidated, or one never answered, is withheld
-      until a CURRENT read succeeds, and a failed re-read keeps it withheld.
-      `staleTime: Infinity`, so age alone hides nothing. An availability
-      transition, or a save whose echo the next read replaces, therefore
-      shows no Automatic status line and no warning line until the host has
-      answered again. Neither ever claims a verdict the host has since
-      withdrawn.
-    - **Automatic** shows what it resolves to NOW, from the host's `effective`:
-      - `null` → "No judge can run here · Auto mode asks you"
-      - `fallback` → "Now: the conversation's own provider · your account"
-      - `default` → "Now: {model} on Traycer · uses credits", where the model
-        is the catalog label for the slug when one exists
-        A host too old to report `effective` gets no status line. When Copilot
-        is enabled, a hint quotes Traycer's own measured rate (60–350 premium
-        requests per hour of Auto mode), which cannot go stale when GitHub
-        reprices. The figure is `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
-        (`lib/auto-mode/auto-judge-billing.ts`). The composer's meta line
-        quotes the same constant, so the two cannot drift.
-    - **A specific model** is three fields: Provider, Account (drawn only for
-      more than one profile) and Model. Model is a searchable combobox, not a
-      menu, because a catalog can be long.
-      - A provider that cannot judge is listed as a disabled option with its
-        reason ("Turned off", "Signed out", "Not installed", "Not available").
-        A listbox holds options and nothing else, so no control sits inside
-        it.
-      - While the DISPLAYED provider is a blocked one, a single "Open
-        Providers" link under the Provider field focuses that provider's
-        page. It is left out when the warning line below already carries a
-        Providers link (a stored blocked provider), so the fix is never
-        offered twice.
-      - A blocked provider that is not chosen offers no fix link of its own.
-        Providers is one click away in the sidebar.
-      - An account is disabled with "Turned off" or "No API key".
-      - Choosing a provider commits its `judgeDefaultModel`, else its first
-        catalog model.
-      - If only the catalog knows, the pick waits on screen UNCOMMITTED (model
-        `""`) until the catalog answers.
-        - It is never sent: the contract refuses an empty model.
-        - Choosing an account for it keeps it uncommitted.
-        - One line under the fields says why it is stuck. An empty catalog
-          gives "{Provider} offers no models on this machine. Pick another
-          provider." A failed read gives "Couldn't load {Provider}'s models.
-          Reopen Settings to try again, or pick another provider." Reopening
-          works because an errored query refetches on its next mount.
-      - The Model list says the same two things. It shows "Loading models…"
-        only while the read is pending, and "No matching models." only for a
-        search that matches nothing in a non-empty catalog.
-      - Its rows are labelled with `modelDisplayLabel`, the composer picker's
-        own label.
-      - The description states the billing: "Billed to that provider's
-        account, on top of the conversation itself." Copilot also gets the
-        rate.
-    - **Nothing is disabled while a write is in flight.** `autoJudgeWriteScope`
-      orders the writes. What the old disable stood in for is that the controls
-      must not re-seed from the record mid-write, and they do not: they present
-      the latest pick until ITS write settles, and TanStack runs per-call
-      callbacks only for the latest `mutate`, so an earlier write landing
-      cannot snap them back. A refused write clears the pick, and that is the
-      rollback. Only an unloaded record, or a host that cannot store a
-      selection (`autoJudge.set` unsupported, stated in one line), disables the
-      controls.
-    - **A failed read says so, one line each**, above the options: "Couldn't
+      `use-auto-judge-billing.ts` reads too). A record the host has
+      invalidated, or one never answered, is withheld until a CURRENT read
+      succeeds, and a failed re-read keeps it withheld. `staleTime: Infinity`,
+      so age alone hides nothing. An availability transition, or a save whose
+      echo the next read replaces, therefore shows no status line until the
+      host has answered again. No line ever claims a verdict the host has
+      since withdrawn.
+    - **The card** opens with one lead line, the group's description
+      ("Checks each command before it runs in Auto mode."), and a muted xs
+      "This machine" `Badge`, the one the Modes tab uses for "All machines".
+      `SettingsGroup` has no title slot, so the badge sits on the lead line.
+    - **Two tiles, one radio group**: "✦ Automatic" (with an outline
+      "Recommended" badge) and "◎ A model you pick". They sit side by side
+      while the card is at least `@lg` wide (a container query on the card)
+      and stack, Automatic first, below that.
+      - Each tile is a `ChoiceTile` (`components/ui/choice-tile.tsx`). Its
+        chosen, focused and disabled looks are read off the `RadioGroupItem`
+        it holds, so the tile can never say "chosen" while the radio does
+        not. The radio is labelled by the tile's title and described by its
+        description.
+      - The tile body is a pointer convenience: clicking it does what
+        choosing the tile does. Clicks on the radio (which answers through
+        `onValueChange`), on a link, or on an ENABLED model control belong to
+        those. Clicks from the picker's panel, which is portaled away but
+        bubbles through React, are ignored.
+      - Nothing interactive is nested inside the radio. The model control is
+        its sibling.
+    - **The model control is the composer's `HarnessModelPicker`**, minus its
+      effort and Fast footers (`withReasoning` / `withServiceTier` off). It is
+      the composer's picker in behaviour: a click on a provider, an account
+      or a model saves at once and keeps the panel open, and only an outside
+      click or Esc closes it. The rail commits only a provider that can run
+      here. One that cannot shows its sign-in or install steps and saves
+      nothing.
+      - It is hosted through the picker's `embedding` prop. The card draws
+        the face, so the picker draws no chip and no tooltip. A provider
+        switch (rail click, ⌘-digit, an account on another provider) commits
+        `judgeSwitchModel`: the row's `judgeDefaultModel` (only Claude Code
+        names one), else `""`, meaning that provider's catalog default once
+        it loads. `selectionMarked` is true only while a pick is on screen,
+        so nothing is checked before a first pick. Closing returns focus to
+        the face, never to a composer.
+      - `runTargetHostId` and `createProfileHostId` are both the gate's
+        `hostId`. It is concrete whenever Settings is scoped to a machine, so
+        the catalog reads and "Create new profile" (which mounts outside the
+        Settings binding) both reach that machine. It is `null` only while
+        Settings follows the effective host, where the two are the same
+        machine. `registerActivation` is false: the model-picker shortcut and
+        the palette's "Change model…" belong to the chat behind Settings.
+      - Its store (`useJudgeToolbarStore`) is built with
+        `createComposerToolbarStore`, never `useComposerToolbarStore`, whose
+        recording wrapper writes composer memory. `purpose: "setting"`: an
+        unavailable provider stays selected and a delisted slug is held as
+        stored, with the status line explaining it rather than a substitute,
+        and a provider switch tracks no `HarnessChanged`. Its catalog
+        `hostId` is `null`, so no composer-memory write lands and no host's
+        memory bucket is read: a judge pick never becomes the next chat's
+        model on that provider. It is fed the scoped host's harness list and
+        the models of the STORE's own harness, read only while that harness
+        is available. Its writer, installed through `setOnSettingsChange`,
+        is `useJudgePick`'s `request`, and it never sends `model: ""`.
+      - The seed key is `[row, seed selection, nonce]`, where the row is the
+        tile state below. A close bumps the nonce to throw away what the
+        store holds, since re-applying an unchanged key is a no-op.
+    - **Tile states** (`judgeTileState`). `displayed` is the latest pick,
+      else the record's selection. `last` is the pick being cleared while the
+      latest pick is a switch to Automatic (so the cleared pick shows dimmed
+      at once, instead of the cached `lastSelection` from before the save),
+      else the record's `lastSelection`, where absent and `null` both mean
+      none. `last` can run when `judgeWarningCause` over it, with
+      `blocked: null`, finds nothing. That check cannot see the host's own
+      `unsupported-harness` verdict, which the host computes only for the
+      stored selection, so such a last pick is saved on click and the echo's
+      amber line corrects it in one round trip.
+      - A host that cannot store a selection (`autoJudge.set` unsupported,
+        said in one line) shows its row's face at full opacity, inert, with
+        the picker disabled.
+      - The picker's own `disabled` is on in Loading, read-only and "last
+        pick runs", so it can never open there. The two rows that open it
+        keep it enabled, because a disabled picker force-closes.
+      - An inert face is never natively `disabled`. The composer's chip is a
+        plain `<button>`, which eats the click when disabled. It carries
+        `aria-disabled`, `tabIndex={-1}` and a `pointer-events-none` wrapper,
+        so a click on the dimmed chip lands on the tile and restores the last
+        pick. The dimming is the wrapper's opacity, lifted while the picker
+        is open from it.
+      - The face for a pick is `HarnessModelTrigger`: the provider icon, the
+        model's catalog label (else its slug), and the account (name and
+        accent dot) only when that provider has more than one here, as the
+        composer's chip. "Choose a model" is a `muted-outline` `Button` with
+        a chevron. A harness id this build does not know has no icon, so its
+        face is the text alone.
+      - With no last pick, the store is seeded with Traycer on
+        `effective.model` when `effective.source` is `default`, else the
+        first provider that can run here with `""`. That only decides where
+        the picker opens; nothing saves until something in it is clicked.
+
+      The rows:
+
+      | Row              | When                        | Selected            | Face                                | Clicking "A model you pick" |
+      | ---------------- | --------------------------- | ------------------- | ----------------------------------- | --------------------------- |
+      | Loading          | no record yet               | neither; both inert | none                                | nothing                     |
+      | Picked           | `displayed` set             | ◎                   | the pick                            | nothing                     |
+      | Last pick runs   | Automatic, `last` runs      | ✦                   | `last`, dimmed, inert               | restores `last`             |
+      | Last pick broken | Automatic, `last` can't run | ✦                   | `last` + why ("Signed out"), dimmed | opens the picker            |
+      | No last pick     | Automatic, no `last`        | ✦                   | "Choose a model", dimmed            | opens the picker            |
+
+    - **The last pick lives on the machine** (`lastSelection` on
+      `autoJudge.get` / `autoJudge.set@1.2`), beside the judge itself, so
+      every device showing that machine dims the same model and account, and
+      it survives closing Settings and restarting the app. A host older than
+      `1.2` reports none, and Automatic's second tile then says "Choose a
+      model"; everything else works.
+    - **A pending provider switch.** A provider click whose model is not
+      known yet (every provider but Claude Code, until its catalog answers)
+      leaves the store holding the switch, unsaved. The second tile's foot
+      reports it whichever tile is selected, because the pending pick belongs
+      to it:
+      - a spinner while that provider's models load. Closing the picker
+        keeps the switch, and it saves the moment they land;
+      - "{Provider} offers no models on this machine. Pick another provider."
+        when they load empty, and "Couldn't load {Provider}'s models. Reopen
+        Settings to try again, or pick another provider." when they fail.
+        Closing re-seeds from what is saved, and the line goes with it.
+      - While the switch waits, a re-derived seed (a harness list or verdict
+        settling on a cold host) does not replace it: it is a pick made on
+        this card that has not settled.
+      - Outside a pending switch, a close whose store differs from the seed
+        re-seeds too, so the next open starts from the machine's judge.
+    - **Keyboard.** The radio group is one Tab stop, and the model control is
+      another whenever it is enabled (Picked, and the two rows that open the
+      picker).
+      - Arrow keys move between the tiles, and Radix checks the radio they
+        land on. Arriving on ✦ switches to Automatic; arriving on ◎ in "last
+        pick runs" restores the last pick, as a click does.
+      - In the two rows that open the picker, arriving on ◎ only moves focus:
+        the controlled value stays ✦, and ◎ is announced as not checked.
+        Space or Enter there opens the picker through the item's `onKeyDown`
+        (and the embedding's `openRef`). Arrow keys never open it: the tab
+        tells an arrow's synthesized click from a real one by the same
+        held-arrow signal Radix uses.
+      - Esc closes the picker and returns focus to the face.
+      - Each foot is an `aria-live="polite"` region, so a status line is
+        announced when it changes.
+    - **Status lines.** Only the selected tile shows one (the pending switch
+      above is the exception).
+      - ✦, from the current `effective`:
+        - `default` → "Now: **{model} on Traycer** · uses Traycer credits",
+          where the model is the catalog label for the slug when one exists;
+        - `fallback` → "Now: **each conversation's own model** · on your
+          account there";
+        - `null` → "No judge can run here · Auto mode asks you";
+        - a host too old to report `effective` gets no line.
+        - While Copilot is enabled on this machine, the first two add
+          "Copilot conversations use premium requests when Traycer can't
+          answer: 60–350 per hour." The figure is
+          `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
+          (`lib/auto-mode/auto-judge-billing.ts`), which the composer's meta
+          line quotes too, so the two cannot drift.
+      - ◎, when the stored pick can run: "Billed to your **{Provider}**
+        account ({Account})", naming the account only when the provider has
+        more than one. A Copilot pick adds "Uses premium requests: 60–350 per
+        hour of Auto mode."
+      - ◎, when it cannot: **one amber line**, the first thing wrong with the
+        STORED record, one sentence, one fix. `judgeWarningCause`
+        (`auto-judge-selection.ts`) decides. Nothing past the host's own
+        `blocked` verdict is reported until the harness catalog answers: an
+        unanswered read is never evidence that something is gone. The line
+        also waits for a CURRENT verdict, since `blocked` is checked first.
+        The checks run in this order:
+        - `blocked.reason`
+        - a harness this build does not know
+        - an unusable provider (one sentence per blocker, with a Providers
+          link, then "Until then, Auto mode asks you.")
+        - a model no longer offered
+        - a removed account
+    - **Nothing is disabled while a write is in flight.**
+      `autoJudgeWriteScope` orders the writes. The tiles present the latest
+      pick until ITS write settles, and TanStack runs per-call callbacks only
+      for the latest `mutate`, so an earlier write landing cannot snap them
+      back. Meanwhile the selected tile's foot shows only a spinner, since
+      any line would describe the choice being replaced. A refused write
+      clears the pick, which is the rollback: the tiles snap back to what the
+      machine holds, and the mutation's toast says it was not saved.
+    - **A failed read says so, one line each**, above the tiles: "Couldn't
       read this machine's judge. Reopen Settings to try again." for the
       record, and "Couldn't load this machine's providers. Reopen Settings to
-      try again." for the harness catalog. Without the catalog the Provider
-      field stays disabled, and the warning line below waits on it; an
-      errored query refetches on its next mount.
-    - **At most one warning line** under the fields: the first thing wrong
-      with the STORED record, one sentence, one fix. The checks run in this
-      order:
-      - `blocked.reason`
-      - a harness this build does not know
-      - an unusable provider (one sentence per blocker, with a Providers link)
-      - a model no longer offered
-      - a removed account
-        `judgeWarningCause` (`auto-judge-selection.ts`) decides and returns
-        the cause; the tab only picks the sentence. Nothing past the host's
-        own `blocked` verdict is reported until the harness catalog answers:
-        an unanswered read is never evidence that something is gone. The line
-        also waits for a CURRENT verdict (see above), since `blocked` is
-        checked first. The line
-        is silent while a pick is on screen, since the record is about to
-        change or is not what the controls show. An uncommitted pick's own
-        line (above) is the one shown then. The line is also silent under
-        Automatic, whose status line speaks for it.
+      try again." for the harness catalog. An errored query refetches on its
+      next mount.
     - **The built-in reviewer pointer** (`built-in-reviewer-pointer.tsx`) is
       one line under the judge card. The tab has no reviewer switch of its
       own: the per-provider switch lives only on Providers ▸ {provider} ▸
