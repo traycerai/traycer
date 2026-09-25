@@ -16,7 +16,9 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
   epicPinReadingQueryKeyMatchesScope,
+  epicTaskContextsQueryKeyMatchesScope,
   setEpicPinnedInCloudTaskCaches,
+  setEpicPinnedInTaskContextsCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { cloudQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import {
@@ -152,9 +154,9 @@ export function useEpicSetPinned() {
     mapVariables: ({ epicId, pinned }) => ({ epicId, pinned }),
     options: {
       mutationKey: epicMutationKeys.setPinned(),
-      onMutate: (
+      onMutate: async (
         variables: SetEpicPinnedVariables,
-      ): SetEpicPinnedMutationContext => {
+      ): Promise<SetEpicPinnedMutationContext> => {
         // The host the request is ACTUALLY going to, resolved through the same
         // function the dispatch resolves it with. That is the point of doing it
         // here rather than reading the window's active host: the admission gate,
@@ -178,6 +180,13 @@ export function useEpicSetPinned() {
           throw new Error(EPIC_PIN_UNAUTHORIZED_MESSAGE);
         }
         const userId = dispatchClient?.getRequestContextUserId() ?? null;
+        if (userId !== null) {
+          await cancelInFlightTaskContextsReads(
+            queryClient,
+            userId,
+            variables.epicId,
+          );
+        }
         if (hostId !== null && userId !== null) {
           applyPinnedPatch(
             queryClient,
@@ -190,11 +199,29 @@ export function useEpicSetPinned() {
       },
       onSuccess: async (
         _response,
-        _variables,
+        variables: SetEpicPinnedVariables,
         ctx: SetEpicPinnedMutationContext,
       ) => {
         if (ctx.hostId === null || ctx.userId === null) return;
         const scope = { hostId: ctx.hostId, userId: ctx.userId };
+        // `epic.getTaskContexts` is the one pin source this handler does not
+        // invalidate - a refetch there is a cloud batch of up to 50 ids - so a
+        // read that was issued before the write and lands after it would put
+        // the pre-write bit back, with `staleTime: Infinity` keeping it. The
+        // tab menu's retry makes that read likely rather than theoretical.
+        // Cancel whatever is still in flight, then re-apply the committed bit
+        // over anything that already landed during the write.
+        await cancelInFlightTaskContextsReads(
+          queryClient,
+          ctx.userId,
+          variables.epicId,
+        );
+        setEpicPinnedInTaskContextsCaches(
+          queryClient,
+          scope,
+          variables.epicId,
+          variables.pinned,
+        );
         const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
           ctx.hostId,
           ctx.userId,
@@ -312,6 +339,50 @@ function isLocalHomePinExempt(
   if (!variables.isLocalHome || hostId === null) return false;
   return negotiatedSetPinnedServesLocalHome(
     readNegotiatedMethodVersion(hostId, "epic.setPinned"),
+  );
+}
+
+/**
+ * Cancels in-flight `epic.getTaskContexts` refetches that ask for this epic,
+ * keeping their cached data (`revert: false`), so a response requested before
+ * a pin write cannot land after it. Every host: the tab strip's batch is keyed
+ * by the WINDOW's host, which need not be the host a local-homed pin is
+ * dispatched to.
+ */
+async function cancelInFlightTaskContextsReads(
+  queryClient: QueryClient,
+  userId: string,
+  epicId: string,
+): Promise<void> {
+  await queryClient.cancelQueries(
+    {
+      fetchStatus: "fetching",
+      // Only a REFETCH of a query that already holds data. Cancelling a
+      // first fetch would strand it pending and idle - a spinner nothing
+      // resolves - and it has no cached bit for a late response to overwrite.
+      predicate: (query) =>
+        query.state.data !== undefined &&
+        epicTaskContextsQueryKeyMatchesScope(query.queryKey, {
+          hostId: null,
+          userId,
+        }) &&
+        taskContextsQueryKeyAsksFor(query.queryKey, epicId),
+    },
+    { revert: false },
+  );
+}
+
+function taskContextsQueryKeyAsksFor(
+  queryKey: readonly unknown[],
+  epicId: string,
+): boolean {
+  const params = queryKey[3];
+  return (
+    params !== null &&
+    typeof params === "object" &&
+    "taskIds" in params &&
+    Array.isArray(params.taskIds) &&
+    params.taskIds.includes(epicId)
   );
 }
 

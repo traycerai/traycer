@@ -157,7 +157,8 @@ function TabStripBody() {
     chatScopes: indicatorChatScopes,
   } = useHeaderTabIndicators(allTabs);
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
-  const retryUnansweredTaskPinReading = useRetryUnansweredTaskPinReading();
+  const retryUnansweredTaskPinReading =
+    useRetryUnansweredTaskPinReading(indicatorEpicIds);
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();
   const hostClient = useHostClient();

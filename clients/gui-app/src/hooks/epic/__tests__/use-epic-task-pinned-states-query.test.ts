@@ -16,6 +16,7 @@ import {
   chunkTaskIds,
   combineLocalPinReadings,
   combineTaskPinnedStateResults,
+  keepAnsweredOverTransientUnknown,
   overlayLocalHomedPinnedStates,
   useRetryUnansweredTaskPinReading,
   type TaskPinnedState,
@@ -345,6 +346,96 @@ describe("combineLocalPinReadings", () => {
   });
 });
 
+/**
+ * `structuralSharing` for the tab strip's batch. A retry re-asks a WHOLE
+ * chunk (up to 50 ids) for the one row that was unanswered, so its response
+ * replaces rows that already had an answer - and a TRANSIENT `unknown` for
+ * one of those must not demote a `found` reading to "pin state unknown".
+ * `confirmed-absent` is a real answer (the task is gone) and any NEW `found`
+ * wins outright; only `unknown` gets the earlier reading substituted back in.
+ */
+describe("keepAnsweredOverTransientUnknown", () => {
+  it("keeps the earlier `found` when the incoming resolution for the same id is `unknown`", () => {
+    const previous = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "unknown", reason: "transport" } },
+      undefined,
+    );
+
+    const merged = keepAnsweredOverTransientUnknown(previous, incoming);
+
+    expect(merged).toEqual(
+      taskContexts(
+        { row: { status: "found", task: listTaskLight("epic-a", true) } },
+        undefined,
+      ),
+    );
+  });
+
+  it("takes the new `confirmed-absent` over an earlier `found` - a real answer, not a transient miss", () => {
+    const previous = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "confirmed-absent" } },
+      undefined,
+    );
+
+    const merged = keepAnsweredOverTransientUnknown(previous, incoming);
+
+    expect(merged).toEqual(incoming);
+  });
+
+  it("takes a new `found` over an earlier `unknown`", () => {
+    const previous = taskContexts(
+      { row: { status: "unknown", reason: "transport" } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", false) } },
+      undefined,
+    );
+
+    const merged = keepAnsweredOverTransientUnknown(previous, incoming);
+
+    expect(merged).toEqual(incoming);
+  });
+
+  it("passes a non-response straight through, on either side", () => {
+    const incoming = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+
+    expect(keepAnsweredOverTransientUnknown(undefined, incoming)).toBe(
+      incoming,
+    );
+    expect(
+      keepAnsweredOverTransientUnknown({ notATasksResponse: true }, incoming),
+    ).toBe(incoming);
+  });
+
+  it("returns the incoming object's own identity when nothing needed substituting", () => {
+    // No `unknown` row to demote, so the function must not clone `incoming`
+    // defensively - a fresh object every combine would defeat the batch's
+    // OWN structural-sharing goal one layer up.
+    const previous = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", true) } },
+      undefined,
+    );
+    const incoming = taskContexts(
+      { row: { status: "found", task: listTaskLight("epic-a", false) } },
+      undefined,
+    );
+
+    expect(keepAnsweredOverTransientUnknown(previous, incoming)).toBe(incoming);
+  });
+});
+
 describe("overlayLocalHomedPinnedStates", () => {
   it("returns the SAME map object when there is nothing to overlay", () => {
     // Deliberate identity preservation, not merely equal content: the common
@@ -646,9 +737,12 @@ describe("useRetryUnansweredTaskPinReading", () => {
     });
     expect(answeredFetches).toBe(1);
 
-    const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
-      wrapper: wrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useRetryUnansweredTaskPinReading(["epic-a"]),
+      {
+        wrapper: wrapper(queryClient),
+      },
+    );
 
     result.current("epic-a");
 
@@ -691,9 +785,12 @@ describe("useRetryUnansweredTaskPinReading", () => {
     });
     expect(fetches).toBe(1);
 
-    const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
-      wrapper: wrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useRetryUnansweredTaskPinReading(["epic-a"]),
+      {
+        wrapper: wrapper(queryClient),
+      },
+    );
 
     result.current("epic-a");
 
@@ -712,9 +809,12 @@ describe("useRetryUnansweredTaskPinReading", () => {
     });
     const refetchSpy = vi.spyOn(queryClient, "refetchQueries");
 
-    const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
-      wrapper: wrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useRetryUnansweredTaskPinReading(["epic-a"]),
+      {
+        wrapper: wrapper(queryClient),
+      },
+    );
 
     result.current("epic-a");
 
@@ -813,9 +913,12 @@ describe("useRetryUnansweredTaskPinReading", () => {
       });
       expect(taskContextsFetches).toBe(1);
 
-      const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
-        wrapper: wrapper(queryClient),
-      });
+      const { result } = renderHook(
+        () => useRetryUnansweredTaskPinReading(["epic-l"]),
+        {
+          wrapper: wrapper(queryClient),
+        },
+      );
 
       result.current("epic-l");
 
@@ -889,9 +992,12 @@ describe("useRetryUnansweredTaskPinReading", () => {
       });
       expect(taskContextsFetches).toBe(1);
 
-      const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
-        wrapper: wrapper(queryClient),
-      });
+      const { result } = renderHook(
+        () => useRetryUnansweredTaskPinReading(["epic-l2"]),
+        {
+          wrapper: wrapper(queryClient),
+        },
+      );
 
       result.current("epic-l2");
 
@@ -965,9 +1071,12 @@ describe("useRetryUnansweredTaskPinReading", () => {
       });
       expect(pinReadingFetches).toBe(1);
 
-      const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
-        wrapper: wrapper(queryClient),
-      });
+      const { result } = renderHook(
+        () => useRetryUnansweredTaskPinReading(["epic-c"]),
+        {
+          wrapper: wrapper(queryClient),
+        },
+      );
 
       result.current("epic-c");
 
@@ -979,6 +1088,95 @@ describe("useRetryUnansweredTaskPinReading", () => {
 
       stopTaskContexts();
       stopPinReading();
+    });
+  });
+
+  /**
+   * The chunk-exact match (PR 2150 cold review, production change 1). Before
+   * this, the cloud arm's predicate matched ANY active `epic.getTaskContexts`
+   * query whose `taskIds` merely CONTAINED the epic - so a retry for the tab
+   * strip's own row also re-spent another surface's title-lookup batch that
+   * happened to ask for the same id among a different set.
+   */
+  describe("matches the strip's own chunk exactly", () => {
+    it("refetches the strip's own chunk and leaves another surface's differently-shaped lookup alone", async () => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      // The strip's own batch for its exact tracked ids.
+      const stripChunkKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+        "epic-x",
+      ]);
+      let stripFetches = 0;
+      const stripObserver = new QueryObserver<GetTaskContextsResponse>(
+        queryClient,
+        {
+          queryKey: stripChunkKey,
+          queryFn: () => {
+            stripFetches += 1;
+            return Promise.resolve(
+              taskContexts(
+                { missing: { status: "unknown", reason: "transport" } },
+                undefined,
+              ),
+            );
+          },
+        },
+      );
+      const stopStrip = stripObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(stripObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(stripFetches).toBe(1);
+
+      // A DIFFERENT surface's title lookup - different `taskIds` (it also
+      // asks about "epic-other"), but it CONTAINS "epic-x" and is ALSO
+      // unanswered for it. Pre-fix, `taskContextsQueryAsksFor` matched any
+      // key whose taskIds included the id, so this one matched too.
+      const otherLookupKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+        "epic-other",
+        "epic-x",
+      ]);
+      let otherFetches = 0;
+      const otherObserver = new QueryObserver<GetTaskContextsResponse>(
+        queryClient,
+        {
+          queryKey: otherLookupKey,
+          queryFn: () => {
+            otherFetches += 1;
+            return Promise.resolve(
+              taskContexts(
+                { missing: { status: "unknown", reason: "transport" } },
+                undefined,
+              ),
+            );
+          },
+        },
+      );
+      const stopOther = otherObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(otherObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(otherFetches).toBe(1);
+
+      const { result } = renderHook(
+        () => useRetryUnansweredTaskPinReading(["epic-x"]),
+        { wrapper: wrapper(queryClient) },
+      );
+
+      result.current("epic-x");
+
+      await waitFor(() => {
+        expect(stripFetches).toBe(2);
+      });
+      // The other surface's lookup - same epic id, different chunk - never
+      // refetched.
+      expect(otherFetches).toBe(1);
+
+      stopStrip();
+      stopOther();
     });
   });
 });

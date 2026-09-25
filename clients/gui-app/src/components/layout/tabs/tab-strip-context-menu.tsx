@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { isPreservedOrphanEpic } from "./preserved-orphan-epic";
 import {
   TAB_SPLIT_COMMANDS,
   resolveTabSplitCommandAvailability,
@@ -428,16 +429,10 @@ function usePreservedOrphanSession(tab: HeaderTab): boolean {
     },
     [epicId, registry],
   );
-  const getSnapshot = useCallback((): boolean => {
-    if (epicId === null) return false;
-    const state = registry.peek(epicId)?.store.getState();
-    return (
-      state?.durabilityPauseReason ===
-        "orphaned-local-edits-after-cloud-delete" ||
-      state?.retainedDurabilityPauseReason ===
-        "orphaned-local-edits-after-cloud-delete"
-    );
-  }, [epicId, registry]);
+  const getSnapshot = useCallback(
+    (): boolean => epicId !== null && isPreservedOrphanEpic(epicId),
+    [epicId],
+  );
   return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }
 

@@ -328,6 +328,34 @@ function registerEpicHeader(
 }
 
 /**
+ * Same lightweight handle as {@link registerEpicHeader}, with the store's
+ * projected state carrying the preserved-orphan pause reason
+ * `isPreservedOrphanEpic` reads (`preserved-orphan-epic.ts`). Composed over
+ * `buildHeaderEpicHandle` rather than threading a new parameter through it -
+ * every other call site in this file wants the plain handle, and the pause
+ * reason is a fact about ONE test's fixture, not a fourth argument every
+ * caller would have to pass `undefined`/`null` for.
+ */
+function registerPreservedOrphanEpicHeader(
+  tab: EpicTab,
+  permissionRole: PermissionRole,
+): void {
+  __getOpenEpicRegistryForTests().acquire(tab.id, () => {
+    const handle = buildHeaderEpicHandle(tab, permissionRole, []);
+    const state = {
+      ...handle.store.getState(),
+      durabilityPauseReason: "orphaned-local-edits-after-cloud-delete" as const,
+    };
+    const storeCallable = (_selector: unknown): unknown => state;
+    const storeBase: unknown = Object.assign(storeCallable, {
+      getState: () => state as never,
+      subscribe: () => () => undefined,
+    });
+    return { ...handle, store: storeBase as OpenEpicStoreHandle["store"] };
+  });
+}
+
+/**
  * Agent activity now arrives on the per-user notification room, so the epic
  * handle only supplies the live projection (the liveness filter) while the
  * working set is published as host presence.
@@ -1710,6 +1738,43 @@ describe("<TabStrip />", () => {
 
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
     await screen.findByText("Pin Task in History");
+
+    expect(pinTestState.retryUnansweredTaskPinReading).not.toHaveBeenCalled();
+  });
+
+  it("does not re-ask for a tab's pin reading when it is local-homed with no serving host", async () => {
+    // A local-homed row's owning host is who could actually answer it; with
+    // no serving host there is nobody to ask, and the window's batch cannot
+    // resolve an epic it does not own either. Re-asking here would just
+    // repeat the same unanswered result forever.
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: "local",
+      hostId: null,
+      pinnedKnown: false,
+    });
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+
+    expect(pinTestState.retryUnansweredTaskPinReading).not.toHaveBeenCalled();
+  });
+
+  it("does not re-ask for a tab's pin reading when the epic is a preserved orphan", async () => {
+    // Its cloud row is gone for good, so a re-ask can only ever come back
+    // the same way - the menu item already says "task deleted" regardless of
+    // what a retry would return.
+    openEpicFixture(EPIC_A);
+    registerPreservedOrphanEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
 
     expect(pinTestState.retryUnansweredTaskPinReading).not.toHaveBeenCalled();
   });
