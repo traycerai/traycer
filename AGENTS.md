@@ -25,12 +25,8 @@ are **not** here — the CLI provisions a signed host from GitHub Releases; see
 
 ```bash
 bun install
-bun run build
-bun run compile                 # never tsc directly
-bun run lint && bun run format
-make test-affected              # optional targeted run; CI owns the test gate
+bun scripts/lint-changed-files.mjs origin/main  # lint the files your branch changed
 bunx nx run @traycer-clients/traycer-cli:build   # single package
-pre-commit run --all-files      # explicit full-repo static validation
 
 make dev-desktop                # signed host from Releases + HMR desktop
 make dev-desktop VERSION=1.2.3  # pin host release
@@ -38,6 +34,25 @@ make dev-desktop VERSION=1.2.3  # pin host release
 
 `make dev-desktop` talks to the **production** cloud — no local backends. Details:
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+**Never run a full compile, lint, format, test or build locally.** That means
+`bun run compile`, `bun run lint`, `bun run format`, `bun run test`,
+`bun run build`, `make test-affected` (every test of each affected project), a
+project's whole `lint` (`bun run --cwd clients/gui-app lint`), and
+`pre-commit run --all-files`. gui-app's whole-project type-aware lint alone
+needs about 9 GB and its type-check about 5 GB, and two agents running them at
+once have stalled a 24 GB Mac. The checks still run, just not by hand: the
+pre-commit hook runs the affected ones on every commit (below), and CI runs
+all of them on the PR. After pushing, watch the checks (`gh pr checks
+--watch`) and fix what they report.
+
+To check work before committing, narrow the check to what you touched:
+
+- lint the changed files with `bun scripts/lint-changed-files.mjs origin/main`,
+  or `bun run lint:files <paths>` inside a project;
+- run one test file with `bunx vitest run <path>` from its project;
+- run one package's `compile` only to diagnose that package's failure. Never
+  run `tsc` directly; `compile` is the type-check.
 
 **Commits:** do **not** manually run `compile` / `build` / `lint` / `format`
 before committing. `pre-commit` already runs the local checks: lint on the
@@ -47,6 +62,11 @@ worktrees queue rather than stacking multi-GB type-checks. CI runs the
 whole-project lint and the `build` targets. Tests run in CI (`test.yml`), not
 in the hook; only re-run checks yourself when diagnosing a hook or CI failure.
 Commits need DCO (`git commit -s`).
+
+**nx runs without its daemon** (`useDaemonProcess: false` in `nx.json`). A
+daemon exits only after three hours without an nx command, so every worktree
+that agents keep committing in held one: one machine carried 18 of them,
+3.26 GB, each saving under a second per nx command. Don't turn it back on.
 
 ## Non-negotiable
 
