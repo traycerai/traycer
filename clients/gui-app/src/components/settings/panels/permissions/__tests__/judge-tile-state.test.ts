@@ -9,6 +9,7 @@ import {
   judgeFaceInert,
   judgePickerDisabled,
   judgeSeedSelection,
+  judgeSelectionMarked,
   judgeTileOpensPicker,
   judgeTileState,
   judgeUnpickedSeed,
@@ -91,6 +92,28 @@ describe("lastJudgePick", () => {
   });
 });
 
+describe("lastJudgePick, for a switch to Automatic (R4)", () => {
+  it("prefers the pick the draft clears over the record's own selection", () => {
+    // The record still holds the selection from before a pick whose write has
+    // not landed; the draft carries the pick that was on show.
+    expect(
+      lastJudgePick(
+        { selection: CLAUDE, lastSelection: null },
+        { id: 2, selection: null, clearing: CODEX },
+      ),
+    ).toBe(CODEX);
+  });
+
+  it("uses the cleared pick even when the record's selection is null", () => {
+    expect(
+      lastJudgePick(
+        { selection: null, lastSelection: null },
+        { id: 2, selection: null, clearing: CODEX },
+      ),
+    ).toBe(CODEX);
+  });
+});
+
 describe("shownJudgePick", () => {
   it("is null before the record answers, the displayed pick when there is one, else the last", () => {
     expect(shownJudgePick(undefined, null)).toBeNull();
@@ -128,6 +151,21 @@ describe("judgeTileState", () => {
         { draft: { id: 1, selection: CODEX, clearing: null } },
       ).row,
     ).toBe("picked");
+  });
+
+  it("loading until the harness and providers lists have answered, whatever the record says", () => {
+    expect(state({ selection: CLAUDE }, { catalogsAnswered: false })).toEqual({
+      row: "loading",
+      readOnly: false,
+      shown: null,
+      lastCause: null,
+    });
+    expect(
+      state(
+        { selection: null, lastSelection: CODEX },
+        { catalogsAnswered: false },
+      ).row,
+    ).toBe("loading");
   });
 
   it("no-last with no last pick", () => {
@@ -275,6 +313,32 @@ describe("judgeUnpickedSeed and judgeSeedSelection", () => {
         harnesses: HARNESSES,
       }).modelSlug,
     ).toBe("");
+  });
+});
+
+describe("judgeSelectionMarked", () => {
+  it("is true for a picked row naming a known harness", () => {
+    expect(judgeSelectionMarked(state({ selection: CLAUDE }, {}))).toBe(true);
+  });
+
+  it("is false for a picked row whose harness this build does not know", () => {
+    expect(
+      judgeSelectionMarked(
+        state(
+          { selection: { harnessId: "mystery", model: "m", profileId: null } },
+          {},
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false in last-runs and in no-last", () => {
+    expect(
+      judgeSelectionMarked(
+        state({ selection: null, lastSelection: CLAUDE }, {}),
+      ),
+    ).toBe(false);
+    expect(judgeSelectionMarked(state({ selection: null }, {}))).toBe(false);
   });
 });
 

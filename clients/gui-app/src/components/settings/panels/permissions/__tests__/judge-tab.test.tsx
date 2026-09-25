@@ -353,7 +353,7 @@ describe("JudgeTab", () => {
       expect(setJudgeMutate).not.toHaveBeenCalled();
     });
 
-    it("last-runs: Automatic is checked and the last pick is shown dimmed, inert, with its picker disabled", async () => {
+    it("last-runs: Automatic is checked and the last pick is shown dimmed, inert, and a click on the face itself brings the pick back instead of opening the picker", async () => {
       lastRuns();
       renderTab();
 
@@ -365,12 +365,17 @@ describe("JudgeTab", () => {
       expect(face().tabIndex).toBe(-1);
       // Native `disabled` would eat the click the tile needs to hear.
       expect(face().hasAttribute("disabled")).toBe(false);
-      // The picker is disabled: it never opens from the face.
-      fireEvent.click(pickRadio());
+      // The click lands on the face itself, not on the radio (whose handler
+      // returns early in last-runs, so it could not tell a live picker from a
+      // dead one). jsdom has no Tailwind, so `pointer-events-none` is not
+      // applied here and the click reaches the face; what keeps the picker
+      // shut is the face being inert. The tile hears it and restores the pick.
+      fireEvent.click(face());
       await act(async () => {
         await Promise.resolve();
       });
       expect(pickerPanel()).toBeNull();
+      expect(writes()).toEqual([CLAUDE_STORED]);
     });
 
     it("last-broken: the last pick is shown dimmed with its blocker, and its picker stays enabled", () => {
@@ -1226,6 +1231,375 @@ describe("JudgeTab", () => {
       expect(useProvidersFocusStore.getState().focusTab).toBe("permissions");
       expect(openSettingsMock).toHaveBeenCalledTimes(1);
       expect(openSettingsMock).toHaveBeenCalledWith(OPEN_PROVIDERS);
+    });
+  });
+
+  describe("review round 1", () => {
+    const OPUS: AutoJudgeSelection = {
+      harnessId: "claude",
+      model: "opus",
+      profileId: null,
+    };
+
+    /** Re-renders the tab after the test moved the mocked record or catalog. */
+    function nudge(): void {
+      act(() => {
+        setModels("claude", {
+          kind: "ready",
+          models: [
+            model("claude", "sonnet", "Claude Sonnet"),
+            model("claude", "opus", "Claude Opus"),
+          ],
+        });
+      });
+    }
+
+    async function closePicker(user: UserEvent): Promise<void> {
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(pickerPanel()).toBeNull());
+    }
+
+    async function switchToCodexAndClose(user: UserEvent): Promise<void> {
+      await user.click(face());
+      await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+      await closePicker(user);
+    }
+
+    async function flushTicks(): Promise<void> {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    }
+
+    describe("R1: a choice made on the card ends a pending switch", () => {
+      beforeEach(() => {
+        setModels("codex", { kind: "pending" });
+      });
+
+      it("P1: a later click on Automatic wins over a switch still waiting for its models", async () => {
+        judgeRecord.current = {
+          selection: CLAUDE_STORED,
+          lastSelection: CLAUDE_STORED,
+        };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        await user.click(screen.getByTestId("auto-judge-tile-automatic"));
+        expect(writes()).toEqual([null]);
+
+        act(() => {
+          setJudgeMutate.mock.calls[0][1].onSuccess();
+        });
+        judgeRecord.current = {
+          selection: null,
+          lastSelection: CLAUDE_STORED,
+        };
+        nudge();
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([null]);
+      });
+
+      it("Automatic already on: choosing it again still ends the pending switch", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+        // Another window moves the judge to Automatic: nothing to write here.
+        judgeRecord.current = { selection: null, lastSelection: CLAUDE_STORED };
+        nudge();
+
+        await user.click(screen.getByTestId("auto-judge-tile-automatic"));
+        expect(setJudgeMutate).not.toHaveBeenCalled();
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([]);
+      });
+
+      it("◎: restoring the last pick from its tile ends the pending switch", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+        // Another window moves the judge to Automatic; the row is now last-runs.
+        judgeRecord.current = { selection: null, lastSelection: CLAUDE_STORED };
+        nudge();
+        expect(faceDimmed()).toBe(true);
+
+        await user.click(screen.getByText(/Always the model you choose/));
+        expect(writes()).toEqual([CLAUDE_STORED]);
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([CLAUDE_STORED]);
+      });
+    });
+
+    describe("R2: a click that names the pick already on show writes nothing", () => {
+      it("P2: re-clicking the selected provider keeps its model and writes nothing", async () => {
+        judgeRecord.current = { selection: OPUS };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(face());
+        await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+
+        expect(writes()).toEqual([]);
+        expect(face().textContent).toContain("Claude Opus");
+      });
+
+      it("clicking the already-checked model row writes nothing", async () => {
+        judgeRecord.current = { selection: OPUS };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(face());
+        await user.click(
+          await screen.findByRole("option", { name: /Claude Opus/ }),
+        );
+
+        expect(writes()).toEqual([]);
+      });
+    });
+
+    describe("R3: a pending switch that cannot save is settled behind a closed picker", () => {
+      beforeEach(() => {
+        setModels("codex", { kind: "pending" });
+      });
+
+      function moveJudgeToOpus(): void {
+        judgeRecord.current = {
+          selection: OPUS,
+          effective: {
+            source: "selection",
+            harnessId: "claude",
+            model: "opus",
+          },
+        };
+        nudge();
+      }
+
+      async function expectOpusOnShowAndNextOpen(
+        user: UserEvent,
+      ): Promise<void> {
+        await flushTicks();
+        expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
+        expect(face().textContent).toContain("Claude Opus");
+        expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+          "Billed to your Claude Code account",
+        );
+        expect(setJudgeMutate).not.toHaveBeenCalled();
+
+        // The next open starts from the machine's judge, not from Codex.
+        await user.click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+        expect(
+          screen
+            .getByRole("tab", { name: /Claude/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(
+          screen
+            .getByRole("option", { name: /Claude Opus/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+      }
+
+      it("P4: models that fail after the close settle the switch, and the judge another window set shows", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        act(() => {
+          setModels("codex", { kind: "error" });
+        });
+        moveJudgeToOpus();
+
+        await expectOpusOnShowAndNextOpen(user);
+      });
+
+      it("models that arrive empty after the close settle the switch the same way", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        act(() => {
+          setModels("codex", { kind: "ready", models: [] });
+        });
+        moveJudgeToOpus();
+
+        await expectOpusOnShowAndNextOpen(user);
+      });
+
+      it("a provider that stops being available settles the switch, and coming back with models writes nothing", async () => {
+        judgeRecord.current = { selection: CLAUDE_STORED };
+        renderTab();
+        const user = userEvent.setup();
+        await switchToCodexAndClose(user);
+
+        judgeCatalog.harnesses = [
+          harness({
+            id: "claude",
+            label: "Claude Code",
+            nativeAutoJudge: true,
+          }),
+          harness({
+            id: "codex",
+            label: "Codex",
+            judgeDefaultModel: null,
+            available: false,
+          }),
+        ];
+        nudge();
+        await flushTicks();
+        expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
+
+        judgeCatalog.harnesses = [
+          harness({
+            id: "claude",
+            label: "Claude Code",
+            nativeAutoJudge: true,
+          }),
+          harness({ id: "codex", label: "Codex", judgeDefaultModel: null }),
+        ];
+        act(() => {
+          setModels("codex", {
+            kind: "ready",
+            models: [model("codex", "gpt-mini", "GPT Mini")],
+          });
+        });
+        await flushTicks();
+
+        expect(writes()).toEqual([]);
+        expect(face().textContent).toContain("Claude Sonnet");
+      });
+    });
+
+    describe("R4: a pick still saving stays on show when Automatic is chosen", () => {
+      it("P3: pick, then Automatic before the write lands, reads the pick dimmed, never Choose a model", async () => {
+        judgeRecord.current = { selection: null, lastSelection: null };
+        renderTab();
+        const user = userEvent.setup();
+
+        await user.click(face());
+        await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+        expect(writes()).toHaveLength(1);
+        await closePicker(user);
+
+        await user.click(screen.getByTestId("auto-judge-tile-automatic"));
+
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]).toBeNull();
+        expect(face().textContent).toContain("Claude Sonnet");
+        expect(face().textContent).not.toContain("Choose a model");
+        expect(faceDimmed()).toBe(true);
+      });
+    });
+
+    describe("R6: a stored harness this build does not know marks no row", () => {
+      it("opens the picker with no model row checked", async () => {
+        judgeRecord.current = {
+          selection: { harnessId: "mystery", model: "m", profileId: null },
+        };
+        renderTab();
+
+        await userEvent.setup().click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+
+        const rows = screen.getAllByRole("option");
+        expect(rows.length).toBeGreaterThan(0);
+        expect(
+          rows.filter((row) => row.getAttribute("aria-selected") === "true"),
+        ).toEqual([]);
+      });
+    });
+
+    describe("R7: the card waits for the lists a last pick is judged from", () => {
+      function expectLoadingAndInert(): void {
+        expect(automaticRadio().hasAttribute("disabled")).toBe(true);
+        expect(pickRadio().hasAttribute("disabled")).toBe(true);
+        expect(screen.queryByTestId("auto-judge-model-face")).toBeNull();
+        fireEvent.click(screen.getByTestId("auto-judge-tile-automatic"));
+        fireEvent.click(screen.getByTestId("auto-judge-tile-pick"));
+        expect(setJudgeMutate).not.toHaveBeenCalled();
+      }
+
+      async function expectLastBrokenOpensPicker(): Promise<void> {
+        expect(isChecked(automaticRadio())).toBe(true);
+        expect(faceDimmed()).toBe(true);
+        expect(faceInert()).toBe(false);
+        await userEvent
+          .setup()
+          .click(screen.getByText(/Always the model you choose/));
+        expect(
+          await screen.findByRole("dialog", { name: "Select model" }),
+        ).not.toBeNull();
+        expect(setJudgeMutate).not.toHaveBeenCalled();
+      }
+
+      it("a last pick that is signed out reads as runnable until the harness list answers", async () => {
+        lastBrokenCatalog();
+        judgeCatalog.harnessesStatus = "pending";
+        judgeRecord.current = { selection: null, lastSelection: CODEX_LAST };
+        renderTab();
+
+        expectLoadingAndInert();
+
+        judgeCatalog.harnessesStatus = "answered";
+        nudge();
+
+        expect(face().textContent).toContain("Signed out");
+        await expectLastBrokenOpensPicker();
+      });
+
+      it("a last pick on a removed account reads as runnable until the providers list answers", async () => {
+        judgeCatalog.providers = undefined;
+        judgeRecord.current = {
+          selection: null,
+          lastSelection: { ...CODEX_LAST, profileId: "work" },
+        };
+        renderTab();
+
+        expectLoadingAndInert();
+
+        judgeCatalog.providers = [
+          provider("claude-code", [profile("ambient", "ambient")]),
+          provider("codex", [profile("ambient", "ambient")]),
+        ];
+        nudge();
+
+        await expectLastBrokenOpensPicker();
+      });
+
+      it("a failed harness list does not keep the card loading", () => {
+        judgeCatalog.harnessesStatus = "failed";
+        picked();
+        renderTab();
+
+        expect(automaticRadio().hasAttribute("disabled")).toBe(false);
+        expect(pickRadio().hasAttribute("disabled")).toBe(false);
+      });
     });
   });
 

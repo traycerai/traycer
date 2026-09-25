@@ -704,6 +704,38 @@ describe("JudgeTab against the real query stack", () => {
       expect(sentModels(fixture)).toEqual(["gpt-x"]);
       expect(sentModels(fixture)).not.toContain("");
     });
+
+    it("R1: a click on Automatic while the switch waits wins when the catalog lands afterwards", async () => {
+      const fixture = createFixture();
+      renderTab(fixture);
+      await storedJudgeShown();
+      const user = userEvent.setup();
+
+      await switchProvider(user, /Codex/);
+      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+      await user.keyboard("{Escape}");
+      await flush();
+
+      await user.click(screen.getByRole("radio", { name: /Automatic/ }));
+      await waitFor(() => expect(fixture.held).toHaveLength(1));
+
+      act(() => {
+        setModels("codex", {
+          kind: "ready",
+          models: [model("codex", "gpt-x", "GPT X")],
+        });
+      });
+      // Writes are serialised, so a stray Codex write would queue behind the
+      // held one: answer it, then look at what the host was asked.
+      await act(async () => {
+        heldAt(fixture, 0).succeed();
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(sentModels(fixture)).toEqual([null]);
+      expect(fixture.held).toHaveLength(1);
+    });
   });
 
   describe("a verdict the host has since invalidated", () => {
@@ -885,6 +917,157 @@ describe("JudgeTab against the real query stack", () => {
         await flush();
         await waitFor(() => expect(effectiveText()).toBe(FALLBACK_LINE));
       });
+    });
+  });
+
+  it("R4: no frame across a pick, Automatic before its write lands, and both refetches reads Choose a model", async () => {
+    const fixture = createFixture();
+    fixture.setStored(null);
+    renderTab(fixture);
+    await waitFor(() => expect(faceText()).toContain("Choose a model"));
+    const user = userEvent.setup();
+    const watch = watchFaceText();
+
+    await switchProvider(user, /Claude/);
+    await waitFor(() => expect(fixture.held).toHaveLength(1));
+    await user.keyboard("{Escape}");
+    await flush();
+    fireEvent.click(screen.getByRole("radio", { name: /Automatic/ }));
+    // The mutation is serialised by its scope: the second write waits for the
+    // first, so the tiles run on the drafts alone until it is answered.
+    await flush();
+    expect(faceText()).toContain("Claude Sonnet");
+    expect(faceDimmed()).toBe(true);
+
+    await act(async () => {
+      heldAt(fixture, 0).succeed();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(fixture.held).toHaveLength(2));
+    await flush();
+    await act(async () => {
+      heldAt(fixture, 1).succeed();
+      await Promise.resolve();
+    });
+    await flush();
+    watch.stop();
+
+    expect(faceText()).toContain("Claude Sonnet");
+    expect(faceDimmed()).toBe(true);
+    const firstPick = watch.history.findIndex((text) =>
+      text.includes("Claude Sonnet"),
+    );
+    expect(firstPick).toBeGreaterThanOrEqual(0);
+    expect(
+      watch.history
+        .slice(firstPick)
+        .filter((text) => text.includes("Choose a model")),
+    ).toEqual([]);
+  });
+
+  describe("R8: the tab re-reads the judge when the window regains focus", () => {
+    const OPUS: AutoJudgeSelection = {
+      harnessId: "claude",
+      model: "opus",
+      profileId: null,
+    };
+    const FALLBACK_LINE =
+      "Now: each conversation's own model · on your account there";
+
+    function focusWindow(): void {
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+    }
+
+    beforeEach(() => {
+      setModels("claude", {
+        kind: "ready",
+        models: [
+          model("claude", "sonnet", "Claude Sonnet"),
+          model("claude", "opus", "Claude Opus"),
+        ],
+      });
+    });
+
+    it("shows a judge changed elsewhere, with no remount", async () => {
+      const fixture = createFixture();
+      renderTab(fixture);
+      await storedJudgeShown();
+
+      fixture.setStored(OPUS);
+      focusWindow();
+
+      await waitFor(() => expect(faceText()).toContain("Claude Opus"));
+    });
+
+    it("keeps the verdict line up while the focus refetch is held", async () => {
+      const fixture = createFixture();
+      fixture.setStored(null);
+      fixture.setEffective({ source: "fallback" });
+      renderTab(fixture);
+      await waitFor(() =>
+        expect(screen.getByTestId("auto-judge-effective").textContent).toBe(
+          FALLBACK_LINE,
+        ),
+      );
+
+      fixture.holdGets();
+      const before = fixture.getCalls();
+      focusWindow();
+      await waitFor(() => expect(fixture.getCalls()).toBeGreaterThan(before));
+      await flush();
+      expect(screen.getByTestId("auto-judge-effective").textContent).toBe(
+        FALLBACK_LINE,
+      );
+
+      await act(async () => {
+        fixture.releaseGets();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(screen.getByTestId("auto-judge-effective").textContent).toBe(
+        FALLBACK_LINE,
+      );
+    });
+
+    it("does not overwrite a pick still saving, whatever the re-read answers, before or after the save settles", async () => {
+      const fixture = createFixture();
+      renderTab(fixture);
+      await storedJudgeShown();
+      const user = userEvent.setup();
+
+      await openPicker(user);
+      await user.click(
+        await screen.findByRole("option", { name: /Claude Opus/ }),
+      );
+      await waitFor(() => expect(fixture.held).toHaveLength(1));
+      expect(faceText()).toContain("Claude Opus");
+
+      // The host has not stored the pick yet, and another window has moved
+      // the judge somewhere else entirely.
+      fixture.setStored({
+        harnessId: "codex",
+        model: "gpt-mini",
+        profileId: null,
+      });
+      fixture.holdGets();
+      const before = fixture.getCalls();
+      focusWindow();
+      await waitFor(() => expect(fixture.getCalls()).toBeGreaterThan(before));
+      await act(async () => {
+        fixture.releaseGets();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(faceText()).toContain("Claude Opus");
+
+      await act(async () => {
+        heldAt(fixture, 0).succeed();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(faceText()).toContain("Claude Opus");
     });
   });
 });
