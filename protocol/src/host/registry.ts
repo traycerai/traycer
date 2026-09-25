@@ -292,6 +292,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -12309,7 +12310,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 18,
+      latestMinor: 19,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12412,6 +12413,11 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.17 peer drops both on parse.
         18: {
           contract: chatSubscribeV118,
+        },
+        // @1.19 adds a nullable skeleton claim on open and `retainedRows` on
+        // the first resumed chunk. Older lines keep their complete streams.
+        19: {
+          contract: chatSubscribeV119,
         },
       },
     },
