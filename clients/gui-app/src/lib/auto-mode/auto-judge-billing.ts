@@ -490,7 +490,7 @@ export function autoModeMidTurnLock(input: {
   if (!input.turnActive || input.currentModeIsAuto) return null;
   if (input.judgeBilling === null) return AUTO_MID_TURN_UNRESOLVED_LOCK;
   if (input.judgeBilling.kind !== "provider-native") return null;
-  return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.`;
+  return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ ${input.judgeBilling.harnessLabel} ▸ Permissions.`;
 }
 
 /**

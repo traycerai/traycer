@@ -699,7 +699,7 @@ describe("autoModeMidTurnLock", () => {
         judgeBilling: PROVIDER_NATIVE_BILLING,
       }),
     ).toBe(
-      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
   });
 
