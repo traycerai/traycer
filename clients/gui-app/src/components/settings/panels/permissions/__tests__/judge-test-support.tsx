@@ -194,20 +194,23 @@ const modelsResultCache = new Map<
   string,
   {
     readonly state: ModelsState;
-    readonly enabled: boolean;
     readonly result: ModelsResult;
   }
 >();
 
-/** One result per (harness, state): the same object until the state moves. */
+/**
+ * One result per (harness, `enabled`, state): the same object until the state
+ * moves. `enabled` is part of the key because one render reads the same
+ * harness through several hooks with different gates (the judge store's
+ * catalog, the picker's selected and browsed entries), and a single slot per
+ * harness would rebuild the result, and its `models` array, on every
+ * alternation.
+ */
 function modelsResult(harnessId: string, enabled: boolean): ModelsResult {
   const state = modelsFor(harnessId);
-  const cached = modelsResultCache.get(harnessId);
-  if (
-    cached !== undefined &&
-    cached.state === state &&
-    cached.enabled === enabled
-  ) {
+  const key = `${enabled ? "on" : "off"}:${harnessId}`;
+  const cached = modelsResultCache.get(key);
+  if (cached !== undefined && cached.state === state) {
     return cached.result;
   }
   const result: ModelsResult = {
@@ -220,7 +223,7 @@ function modelsResult(harnessId: string, enabled: boolean): ModelsResult {
     error: state.kind === "error" ? new Error("models failed") : null,
     refetch: () => Promise.resolve({ data: undefined }),
   };
-  modelsResultCache.set(harnessId, { state, enabled, result });
+  modelsResultCache.set(key, { state, result });
   return result;
 }
 
