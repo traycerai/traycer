@@ -346,6 +346,43 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
   });
 
+  it("keeps a running session against a host that sends no turnInProgress, even with a background item visible", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    // An older host: no `turnInProgress`. A turn activating (running, no
+    // `activeTurn` yet) beside a visible background item reads exactly like
+    // background-only work, so the gate must keep the raw `runStatus`.
+    acquired.store.setState({
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: undefined,
+      backgroundItems: [
+        {
+          taskId: "bg-1",
+          title: "dev server",
+          blockId: "block-1",
+          parentTaskId: null,
+          kind: "command",
+          scheduledFor: null,
+          individualStopUnavailable: null,
+        },
+      ],
+    });
+
+    registry.release("epic-1", "chat-1", HOST);
+    vi.advanceTimersByTime(TTL_MS);
+
+    expect(owned.closeCount()).toBe(0);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
+  });
+
   it("keeps a lease-free session past the TTL while the host reports a turn activating", () => {
     const registry = new ChatSessionRegistry({
       idleTtlMs: TTL_MS,

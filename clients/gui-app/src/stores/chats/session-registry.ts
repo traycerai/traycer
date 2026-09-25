@@ -8,7 +8,10 @@ import {
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
-import { chatActivityIndicator } from "@/stores/chats/chat-run-activity";
+import {
+  chatActivityIndicator,
+  composerTurnStatus,
+} from "@/stores/chats/chat-run-activity";
 import {
   acceptedActionIsUnsettled,
   noticeCarriesOnlyCopy,
@@ -526,8 +529,19 @@ function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
   // running, and a re-lease reconnects to its current state. Counting it here
   // pinned a finished chat warm past the TTL and the cap, refused its epic's
   // park, and kept it awake on the app's background edge.
+  //
+  // Only a host that sends `turnInProgress` can tell those apart. Against an
+  // older one the reading is an approximation that cannot distinguish a turn
+  // still ACTIVATING (running, no `activeTurn` yet) from background-only work
+  // once a background item is visible, so this gate keeps the raw
+  // `runStatus` there: releasing a chat whose turn is starting is the costlier
+  // mistake.
+  const legacyHostRunning =
+    state.turnInProgress === undefined &&
+    composerTurnStatus(state.runStatus) !== null;
   return (
     state.activeTurn !== null ||
+    legacyHostRunning ||
     chatActivityIndicator(state) === "turn" ||
     state.pendingApprovals.length > 0 ||
     state.pendingFileEditApprovals.length > 0 ||
