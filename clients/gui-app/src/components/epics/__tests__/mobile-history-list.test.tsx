@@ -50,11 +50,17 @@ import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import type { EpicsListPanelVariant } from "@/components/epics/epics-list-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksCompleteness,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  patchHistorySearch,
+} from "@/lib/history-search";
 import {
   __resetTabNavigationControllerForTesting,
   openPhaseMigrationIntent,
@@ -117,6 +123,12 @@ const testState = vi.hoisted(() => ({
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
   fetchNextPage: vi.fn<() => void>(),
+  /** Epics an agent is working on right now, per the agent-activity store. */
+  workingEpicIds: new Set<string>() as ReadonlySet<string>,
+  /** Rows `epic.getTaskContexts` can answer, keyed by epic id. */
+  backfillTasks: new Map<string, ListTaskLight>(),
+  /** The id lists the in-progress lift asked that batch about. */
+  backfillIdCalls: [] as ReadonlyArray<string>[],
 }));
 
 // The desktop scope bar names the host through the directory, which needs a
@@ -145,7 +157,33 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     hasNextPage: false,
     isFetchingNextPage: false,
     cloudPagePending: testState.cloudPagePending,
+    currentUserId: "user-test",
   }),
+}));
+
+// The in-progress lift's two inputs, mocked at their own boundaries so the
+// real `useInProgressHistoryItems` / `withInProgressFirst` pair runs here: the
+// store says WHICH epics are running, and the by-id batch answers the running
+// epics no listed page carries.
+vi.mock("@/stores/use-working-epic-ids", () => ({
+  useWorkingEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+}));
+
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (taskIds: ReadonlyArray<string>) => {
+    testState.backfillIdCalls.push([...taskIds]);
+    return {
+      tasksById: new Map(
+        taskIds.flatMap((taskId) => {
+          const task = testState.backfillTasks.get(taskId);
+          return task === undefined ? [] : [[taskId, task] as const];
+        }),
+      ),
+      localHomedTaskIds: new Set<string>(),
+      isFetching: false,
+      error: null,
+    };
+  },
 }));
 
 vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
@@ -211,6 +249,41 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     permissionRole: "owner",
     isPinned: false,
     ...overrides,
+  };
+}
+
+/**
+ * A row as `epic.getTaskContexts` hands it back - what the in-progress lift
+ * backfills a running epic from when no listed page carries it.
+ */
+function backfillTask(overrides: {
+  readonly id: string;
+  readonly title: string;
+  readonly updatedAtMs: number;
+}): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: overrides.id,
+        title: overrides.title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: overrides.updatedAtMs,
+        createdBy: "user-test",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned: false,
   };
 }
 
@@ -390,6 +463,9 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     testState.fetchNextPage.mockReset();
     testState.refetch.mockReset();
     testState.refetch.mockResolvedValue(undefined);
+    testState.workingEpicIds = new Set<string>();
+    testState.backfillTasks = new Map<string, ListTaskLight>();
+    testState.backfillIdCalls = [];
     tabNavigationMocks.activateTabIntent.mockReset();
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -411,6 +487,78 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+
+  // The phone's replacement for Home's "In progress" group: History renders
+  // the feed's order, agent activity never moves a task up it, and the mobile
+  // shell mounts no Home surface to carry those rows.
+  describe("in-progress lift", () => {
+    it("puts a running task no listed page carries at the top", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "b", epicId: "b", title: "listed two" }),
+      ];
+      testState.workingEpicIds = new Set(["z"]);
+      testState.backfillTasks = new Map([
+        ["z", backfillTask({ id: "z", title: "running", updatedAtMs: 1 })],
+      ]);
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(3);
+      expect(cards[0]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
+    });
+
+    it("moves a listed running task to the top without duplicating it", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "b", epicId: "b", title: "listed two" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(3);
+      expect(cards[0]?.textContent).toContain("running");
+      expect(
+        cards.filter((card) => card.textContent.includes("running")).length,
+      ).toBe(1);
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
+
+    it("leaves the order alone while a search is active", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "best match" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { query: "match" }),
+      });
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(2);
+      expect(cards[0]?.textContent).toContain("best match");
+      expect(cards[1]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
+
+    it("stands down on desktop, which shows these rows on Home instead", async () => {
+      setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      renderPanel("page", "/");
+      const rows = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(rows[0]?.textContent).toContain("listed one");
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
   });
 
   describe("swipe tray", () => {

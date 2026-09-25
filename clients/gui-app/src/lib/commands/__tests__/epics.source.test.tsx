@@ -68,6 +68,9 @@ function historyResult(
     isFetching: false,
     error: null,
     hostId: "host-1",
+    // The identity the fixture's rows belong to. The palette source never
+    // reads it; it is here so the stub still satisfies the hook's contract.
+    currentUserId: "user-1",
     refetch: () => Promise.resolve(),
     fetchNextPage: () => undefined,
     hasNextPage: false,
