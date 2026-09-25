@@ -3964,28 +3964,38 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       shows its sign-in or install steps and saves nothing.
       - **Its effort footer is the judge's Effort control** (`withReasoning`
         on while the host's negotiated `autoJudge.set` is `1.3` or later,
-        `autoJudgeSetStoresReasoningEffort`; hidden below it, where the
-        request upgrade would reset the effort anyway, and every write then
-        carries `reasoningEffort: null`). The footer shows the level the
-        host RUNS: the stored effort while the model still advertises it,
-        else the lowest the model advertises by the canonical ladder
+        `autoJudgeSetStoresReasoningEffort`, AND the seed is the pick on
+        show, `judgeSelectionMarked`). It is hidden below that line, where
+        the request upgrade would reset the effort anyway and every write
+        then carries `reasoningEffort: null`; and it is hidden in the rows
+        whose seed is not a pick - "Choose a model", a last pick that cannot
+        run, a stored harness this build does not know - because a footer
+        change saves the store's selection, and there that would save the
+        placeholder, or a pick with an account the provider no longer has,
+        as the judge. Once a pick made in the panel lands, the row is Picked
+        and the footer appears. The footer shows the level the host RUNS:
+        the stored effort while the model still advertises it, else the
+        lowest the model advertises by the canonical ladder
         (`effectiveJudgeReasoningEffort`, the host's own rule, so the two
         cannot disagree). That is the store's `reasoningFallback: "lowest"`
         (`normalizeReasoningForModel`): a composer's store restores the
         vendor's default for an effort the model does not carry, and Grok's
-        default is Extra High, the level a stage-1 verdict measured 14 s at
+        default is High, the level a stage-1 verdict measured 14.4 s at
         against 8 s at Low - the reason the judge has an effort at all. A
         model that advertises no efforts disables the footer, as in the
         composer, and its pick carries `null`. Changing the footer saves at
-        once, like every other click in the panel. A model pick or a
-        provider switch saves the level the footer lands on for the new
-        model: the current level while that model advertises it, else its
-        lowest. The picker's funnel (`commitSelection`) sends the `""`
-        no-carry lever on every commit, a re-click of the checked row
-        included, because the judge store has no composer memory behind it
-        (`hostId: null`); a `"setting"` store therefore carries its CURRENT
-        effort through that lever (`applyComposerSelection`) rather than
-        resetting, so a re-click keeps the effort the user set and writes
+        once, like every other click in the panel. A fresh pick - another
+        model, or a provider switch - saves the new model's lowest, as the
+        spec rules for a pick with no effort of its own; the footer's level
+        is kept only while the (provider, model) pair is unchanged: a
+        re-click of the checked row, a same-provider rail click that keeps
+        the model, an account change. That is the `"setting"` store's own
+        rule in `applyComposerSelection`: it ignores the effort the picker's
+        funnel (`commitSelection`) passes in, because that funnel reads
+        composer memory, which the judge must not inherit. The catalog
+        `hostId` is `null`, but the memory store's pre-host `legacy` tier
+        still answers a `null` host, so an old composer effort for the same
+        model would otherwise move the judge on a click that changed
         nothing. The stored value is explicit, so a later catalog change to
         the model's ladder is resolved by the host's rule above rather than
         by whatever the file happens to say.
@@ -4038,11 +4048,21 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         also sends nothing that names the pick already on show at the effort
         the host already runs for it, so a re-commit of the same selection
         is a no-op, as in the composer, whether or not the footer has been
-        touched; a footer change on the pick on show is a write.
+        touched; a footer change on the pick on show is a write. The
+        comparison is against the level the host RUNS, not the file's raw
+        value: choosing Low in the footer while the file names a level the
+        model no longer advertises (so the footer already shows Low) is the
+        same no-op, and the file keeps its stale value, which the host
+        resolves to Low by the same rule until that provider advertises the
+        level again. Before the store's provider catalog has answered, the
+        store emits the stored effort unclamped and the no-op compares
+        against that same value, so a same-provider rail click while the
+        catalog loads writes nothing.
       - The seed key is `[row, seed selection, stored effort]`, where the
-        row is the tile state below. A re-seed from what is saved while the seed itself has
-        not changed (dropping a switch, settling a close) applies a key of its
-        own, since re-applying an unchanged key is a no-op.
+        row is the tile state below. A re-seed from what is saved while the
+        seed itself has not changed (dropping a switch, settling a close)
+        applies a key of its own, since re-applying an unchanged key is a
+        no-op.
     - **Tile states** (`judgeTileState`). The card is Loading until the
       machine has answered: the record, the harness list and the providers
       list, each with data or an error. Before then a last pick that cannot
@@ -4081,7 +4101,8 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - With no last pick, the store is seeded with Traycer on
         `effective.model` when `effective.source` is `default`, else the
         first provider that can run here with `""`. That only decides where
-        the picker opens; nothing saves until something in it is clicked.
+        the picker opens; nothing saves until a provider, account or model
+        in it is clicked, and the effort footer is not drawn until then.
 
       The rows:
 

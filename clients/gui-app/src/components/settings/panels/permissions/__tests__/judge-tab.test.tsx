@@ -2067,6 +2067,18 @@ describe("JudgeTab", () => {
         { id: "low", label: "Low", description: null },
       ],
     });
+    // A second provider's model that advertises the SAME level ("high") the
+    // judge is stored at on Claude, so a switch that carried the old effort
+    // across (rather than resetting it) would read as correct by accident.
+    const CODEX_REVERSED_MODEL = model("codex", "xturbo", "Codex X", {
+      defaultReasoningEffort: "xhigh",
+      supportedReasoningEfforts: [
+        { id: "xhigh", label: "Extra High", description: null },
+        { id: "high", label: "High", description: null },
+        { id: "medium", label: "Medium", description: null },
+        { id: "low", label: "Low", description: null },
+      ],
+    });
 
     function thinkingEffortGroup(): HTMLElement | null {
       return screen.queryByRole("group", { name: "Thinking effort" });
@@ -2075,6 +2087,12 @@ describe("JudgeTab", () => {
     function thinkingEffortSlider(): HTMLElement {
       return screen.getByRole("slider", { name: "Thinking effort" });
     }
+
+    // A4 seeds `legacy.effortByHarnessModel` directly; keep it from bleeding
+    // into a later test in this file or another.
+    afterEach(() => {
+      useComposerHarnessMemoryStore.getState().resetForTests();
+    });
 
     it("draws the footer only when autoJudge.set stores an effort; below that line a pick writes reasoningEffort: null", async () => {
       setModels("claude", {
@@ -2262,8 +2280,14 @@ describe("JudgeTab", () => {
       expect(writes()).toEqual([]);
     });
 
-    it("keeps the stored effort across a model pick while the new model advertises it, and drops to the new model's lowest when it does not", async () => {
-      // Advertises `high` (as `opus` does): the pick carries High over.
+    // R2/R3: a `"setting"` store owns its own effort. A model pick names a
+    // DIFFERENT (harness, model) pair than the one on show, so the effort
+    // resets to `""` and the "lowest" fallback resolves it against the NEW
+    // model's own ladder - never the previous model's stored level, even when
+    // the new model happens to advertise that same level too (`opus-next`
+    // advertises `high`, same as `opus`, and still lands on Medium, its own
+    // lowest).
+    it("resets to the new model's lowest advertised effort on every model pick, even one that still advertises the old level", async () => {
       const HIGH_TOO = model("claude", "opus-next", "Claude Opus Next", {
         defaultReasoningEffort: "medium",
         supportedReasoningEfforts: [
@@ -2271,8 +2295,6 @@ describe("JudgeTab", () => {
           { id: "high", label: "High", description: null },
         ],
       });
-      // Advertises no `high`: the pick lands on ITS lowest, Minimal - not on
-      // its own default and not on the stale High.
       const NO_HIGH = model("claude", "haiku-x", "Claude Haiku X", {
         defaultReasoningEffort: "medium",
         supportedReasoningEfforts: [
@@ -2308,7 +2330,7 @@ describe("JudgeTab", () => {
           harnessId: "claude",
           model: "opus-next",
           profileId: null,
-          reasoningEffort: "high",
+          reasoningEffort: "medium",
         },
         {
           harnessId: "claude",
@@ -2420,6 +2442,239 @@ describe("JudgeTab", () => {
 
       expect(face().textContent).not.toContain("· High");
       expect(face().textContent).not.toContain("· Low");
+    });
+
+    // R1: the footer is drawn only when the seed IS the pick on show -
+    // `judgeSelectionMarked(state)` - not merely because `autoJudge.set`
+    // stores an effort. `no-last`, `last-broken` and a `picked` row this
+    // build cannot name as a store selection must all hide it: none of them
+    // is a pick a footer edit could actually save.
+    describe("R1: the footer only draws over the pick on show", () => {
+      it("no footer in the no-last row, until a pick lands", async () => {
+        // Claude alone, so the picker's browsed rail defaults to it - the
+        // seed's unpicked harness - with no ambiguity about which provider's
+        // rows the dialog opens onto.
+        judgeCatalog.harnesses = [
+          harness({
+            id: "claude",
+            label: "Claude Code",
+            nativeAutoJudge: true,
+          }),
+        ];
+        setModels("claude", { kind: "ready", models: [EFFORT_MODEL] });
+        noLast();
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(pickRadio());
+        await screen.findByRole("dialog", { name: "Select model" });
+
+        expect(thinkingEffortGroup()).toBeNull();
+
+        await user.click(
+          await screen.findByRole("option", { name: /Claude Opus/ }),
+        );
+
+        expect(writes()).toEqual([
+          {
+            harnessId: "claude",
+            model: "opus",
+            profileId: null,
+            reasoningEffort: "low",
+          },
+        ]);
+        expect(thinkingEffortGroup()).not.toBeNull();
+      });
+
+      it("no footer in the last-broken row", async () => {
+        setModels("codex", {
+          kind: "ready",
+          models: [
+            model("codex", "gpt-mini", "GPT Mini", {
+              defaultReasoningEffort: "high",
+              supportedReasoningEfforts: [
+                { id: "low", label: "Low", description: null },
+                { id: "high", label: "High", description: null },
+              ],
+            }),
+          ],
+        });
+        lastBroken();
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+        renderTab();
+
+        await userEvent
+          .setup()
+          .click(screen.getByText(/Always the model you choose/));
+        await screen.findByRole("dialog", { name: "Select model" });
+
+        expect(thinkingEffortGroup()).toBeNull();
+        expect(writes()).toEqual([]);
+      });
+
+      it("no footer for a picked harness this build does not know", async () => {
+        // Unrecognized, so the store seeds from the unpicked fallback -
+        // Claude alone keeps that fallback off codex (ranked first) and onto
+        // the model that actually advertises an effort.
+        judgeCatalog.harnesses = [
+          harness({
+            id: "claude",
+            label: "Claude Code",
+            nativeAutoJudge: true,
+          }),
+        ];
+        setModels("claude", { kind: "ready", models: [EFFORT_MODEL] });
+        judgeRecord.current = {
+          selection: {
+            harnessId: "mystery",
+            model: "m",
+            profileId: null,
+            reasoningEffort: null,
+          },
+        };
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+        renderTab();
+
+        await userEvent.setup().click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+
+        expect(thinkingEffortGroup()).toBeNull();
+      });
+    });
+
+    // R2: a `"setting"` store owns its own effort. The commit funnel's
+    // incoming reasoning is honored only by matching it against the
+    // COMMITTED pair, never taken at face value: unchanged pair keeps the
+    // current effort (composer memory notwithstanding), changed pair resets
+    // it through the `""` lever.
+    describe("R2/R3: the setting store owns its effort, keyed by the committed pair", () => {
+      it("legacy composer memory does not move the judge on a re-click of the checked row", async () => {
+        useComposerHarnessMemoryStore.setState({
+          legacy: {
+            lastProfileByHarness: {},
+            lastModelByHarness: {},
+            effortByHarnessModel: {
+              "claude opus": {
+                reasoningEffort: "high",
+                serviceTier: null,
+                updatedAt: Date.now(),
+              },
+            },
+          },
+        });
+        setModels("claude", { kind: "ready", models: [EFFORT_MODEL] });
+        judgeRecord.current = {
+          selection: {
+            harnessId: "claude",
+            model: "opus",
+            profileId: null,
+            reasoningEffort: "low",
+          },
+        };
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(face());
+        await user.click(
+          await screen.findByRole("option", { name: /Claude Opus/ }),
+        );
+
+        expect(writes()).toEqual([]);
+        expect(thinkingEffortSlider().getAttribute("aria-valuetext")).toBe(
+          "Low",
+        );
+      });
+
+      it("a provider switch from a non-empty effort lands on the new model's lowest, even when the new model still advertises the old level", async () => {
+        setModels("claude", { kind: "ready", models: [EFFORT_MODEL] });
+        judgeRecord.current = {
+          selection: {
+            harnessId: "claude",
+            model: "opus",
+            profileId: null,
+            reasoningEffort: "high",
+          },
+        };
+        setModels("codex", { kind: "ready", models: [CODEX_REVERSED_MODEL] });
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(face());
+        await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+
+        expect(writes()).toEqual([
+          {
+            harnessId: "codex",
+            model: "xturbo",
+            profileId: null,
+            reasoningEffort: "low",
+          },
+        ]);
+        expect(thinkingEffortSlider().getAttribute("aria-valuetext")).toBe(
+          "Low",
+        );
+      });
+
+      it("a same-provider model change from a non-empty effort lands on the new model's lowest, even when the new model still advertises the old level", async () => {
+        setModels("claude", {
+          kind: "ready",
+          models: [EFFORT_MODEL, MAX_MODEL],
+        });
+        judgeRecord.current = {
+          selection: {
+            harnessId: "claude",
+            model: "opus",
+            profileId: null,
+            reasoningEffort: "high",
+          },
+        };
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(face());
+        await user.click(
+          await screen.findByRole("option", { name: /Claude Opus 2/ }),
+        );
+
+        expect(writes()).toEqual([
+          {
+            harnessId: "claude",
+            model: "opus2",
+            profileId: null,
+            reasoningEffort: "low",
+          },
+        ]);
+      });
+    });
+
+    // R4: a same-provider rail re-click keeps the model while its catalog is
+    // still loading (`providerSwitchModel`'s hold). With no model row to
+    // clamp against, the store emits the stored effort unclamped, and the
+    // write guard (`seedRunsEffort`) compares against that same value rather
+    // than `null`, so the identical re-commit is not sent.
+    it("a same-provider rail click while the catalog is loading writes nothing", async () => {
+      setModels("claude", { kind: "ready", models: [EFFORT_MODEL] });
+      judgeRecord.current = {
+        selection: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+          reasoningEffort: "low",
+        },
+      };
+      autoJudgeSetVersion.current = { major: 1, minor: 3 };
+      renderTab();
+      const user = userEvent.setup();
+      await user.click(face());
+      await screen.findByRole("dialog", { name: "Select model" });
+
+      act(() => {
+        setModels("claude", { kind: "pending" });
+      });
+
+      await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+
+      expect(writes()).toEqual([]);
     });
   });
 });

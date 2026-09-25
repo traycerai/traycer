@@ -231,8 +231,12 @@ export function useJudgeToolbarStore(input: {
   // on show AND the effort the host already runs for it (the stored effort if
   // the model still offers it, else its lowest - the same rule the seed
   // resolves through) changes nothing and is not sent, so a click on the
-  // checked row stays silent whether or not the footer has been touched. It
-  // reads the store harness's models below, so it sits after them.
+  // checked row stays silent whether or not the footer has been touched. The
+  // comparison is against the level the host RUNS, not the file's raw value:
+  // choosing the lowest in the footer while the file names a level the model
+  // no longer advertises is the same no-op, and the file keeps its stale
+  // value, which the host resolves identically until the level is advertised
+  // again. It reads the store harness's models below, so it sits after them.
   const writeJudge = useCallback(
     (settings: ChatRunSettings) => {
       if (settings.model.length === 0) return;
@@ -395,15 +399,21 @@ function judgeToolbarValues(
 /**
  * The effort the host runs the seed at, as the emit would spell it: the
  * stored effort while the model still advertises it, else the model's lowest
- * (`effectiveJudgeReasoningEffort`), and `null` for a model with none or a
- * catalog that has not answered - which is also what the store emits for it.
+ * (`effectiveJudgeReasoningEffort`), and `null` for a model with none. Before
+ * the catalog has answered there is no model row to clamp against, and the
+ * store emits the stored effort unclamped (`normalizeReasoningForModel` with
+ * no selected model returns its input), so that is the value to compare: a
+ * same-provider rail click while the catalog loads keeps the model and must
+ * write nothing.
  */
 function seedRunsEffort(
   models: ReadonlyArray<ModelOption> | undefined,
   seed: HarnessModelSelection,
   seedReasoning: string,
 ): string | null {
-  if (models === undefined) return null;
+  if (models === undefined) {
+    return seedReasoning.length === 0 ? null : seedReasoning;
+  }
   return (
     effectiveJudgeReasoningEffort(
       models,

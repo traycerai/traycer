@@ -617,6 +617,14 @@ function PickTileContent(
   const radioId = useId();
   const titleId = useId();
   const descriptionId = useId();
+  // The effort footer is the judge's Effort control: drawn only on a host
+  // whose `autoJudge.set` stores one, and only over the pick on show - a
+  // change in it saves the store's selection at once, and in the rows whose
+  // seed is a placeholder or a pick that cannot run ("Choose a model", a
+  // broken last pick, a harness this build does not know) that would save
+  // the seed as the judge. It is seeded with the level the host runs (the
+  // stored effort, else the model's lowest).
+  const drawsEffortFooter = props.storesEffort && judgeSelectionMarked(state);
   return (
     <>
       <RadioGroupItem
@@ -638,12 +646,10 @@ function PickTileContent(
       {state.row === "loading" ? null : (
         <HarnessModelPicker
           store={picker.toolbar.store}
-          // No Fast setting to carry. The effort footer is the judge's Effort
-          // control: drawn only on a host whose `autoJudge.set` stores one,
-          // seeded with the level the host runs (the stored effort, else the
-          // model's lowest), and every change in it saves at once.
+          // No Fast setting to carry; the effort footer per
+          // `drawsEffortFooter` above.
           withServiceTier={false}
-          withReasoning={props.storesEffort}
+          withReasoning={drawsEffortFooter}
           tuiOnly={false}
           lockedHarnessId={null}
           disabled={judgePickerDisabled(state)}

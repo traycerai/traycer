@@ -173,8 +173,11 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
  * The single `(harness, model)` commit funnel. Patches selection + reasoning +
  * tier in one `update()` (one derive, one emit), so a switch never sequences
  * multiple emits. The caller resolves `reasoning` / `serviceTier` from memory
- * before calling; `""` is the no-carry lever (the derive resolves it to the
- * selected model's own default).
+ * before calling; `""` is the no-carry lever (the derive resolves it through
+ * the surface's `reasoningFallback`: the selected model's own default for a
+ * composer, its lowest for the judge). A `"setting"` store ignores the
+ * incoming `reasoning` altogether and decides by the committed pair (see
+ * `applyComposerSelection`).
  */
 export interface ApplyComposerSelectionInput {
   readonly selection: HarnessModelSelection;
@@ -345,18 +348,29 @@ export function createComposerToolbarStore(
             to: selection.harnessId,
           });
         }
-        // A `"setting"` store has no composer memory behind it, so the `""`
-        // no-carry lever arrives on EVERY commit - a re-click of the checked
-        // row included - and reading it as "reset" would drop the effort the
-        // user set in the footer on a click that changed nothing. The current
-        // effort is carried instead; the derive clamps it to the new model
-        // (kept while that model advertises it, else the surface's fallback),
-        // which is what a run store's memory does for a model it has seen.
-        const carriedReasoning =
-          purpose === "setting" && reasoning.length === 0
-            ? previous.reasoning
-            : reasoning;
-        update({ selection, reasoning: carriedReasoning, serviceTier });
+        // A `"setting"` store owns its effort and ignores the one the funnel
+        // passes in. `commitSelection` reads composer memory, which a setting
+        // is not allowed to inherit: its catalog `hostId` is `null`, but the
+        // memory store's pre-host `legacy` tier answers a `null` host too, so
+        // an old composer effort for the same model would arrive here and
+        // move the setting on a click that changed nothing. What the commit
+        // means for the effort is decided by the (harness, model) pair alone:
+        // the same pair (a re-click of the checked row, a same-provider rail
+        // click that keeps the model, an account change) keeps the current
+        // effort, and a fresh pick starts from `""`, which the derive resolves
+        // through the surface's fallback - the new model's lowest for the
+        // judge. Effort ladders are not comparable across models, and a run
+        // store never carries one across models either (its memory is per
+        // pair).
+        const samePair =
+          previous.selection.harnessId === selection.harnessId &&
+          previous.selection.modelSlug === selection.modelSlug;
+        const settingReasoning = samePair ? previous.reasoning : "";
+        update({
+          selection,
+          reasoning: purpose === "setting" ? settingReasoning : reasoning,
+          serviceTier,
+        });
       },
       setReasoning: (next) => {
         update({ reasoning: next });

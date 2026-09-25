@@ -4,6 +4,7 @@ import type {
   HarnessOption,
   ModelOption,
   ProviderId,
+  ReasoningFallback,
 } from "@/components/home/data/landing-options";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -75,10 +76,11 @@ function createStore(input: {
   readonly harnessId?: ProviderId;
   readonly modelSlug?: string;
   readonly onSettingsChange?: ((settings: ChatRunSettings) => void) | null;
+  readonly reasoningFallback?: ReasoningFallback;
 }): ComposerToolbarStore {
   return createComposerToolbarStore({
     purpose: input.purpose,
-    reasoningFallback: "model-default",
+    reasoningFallback: input.reasoningFallback ?? "model-default",
     seedKey: [
       "setting-purpose",
       input.purpose,
@@ -319,7 +321,7 @@ describe("composer toolbar store setting purpose", () => {
 });
 
 describe("composer toolbar store setting purpose: the no-carry effort lever", () => {
-  it("a setting store carries its current effort through applyComposerSelection's \"\" while a run store resets to the model's own default", () => {
+  it("a setting store keeps its current effort through applyComposerSelection's \"\" on a re-click of the same pair, while a run store resets to the model's own default", () => {
     const withEfforts = {
       ...model("claude", "current", "Current"),
       defaultReasoningEffort: "high",
@@ -338,12 +340,22 @@ describe("composer toolbar store setting purpose: the no-carry effort lever", ()
     const runStore = createStore({ purpose: "run" });
     settingStore.getState().setCatalog(loaded);
     runStore.getState().setCatalog(loaded);
+    // Both stores sit on the model whose row is about to be re-clicked: the
+    // setting store keeps its effort only while the committed pair is the
+    // one it already holds.
+    const current = {
+      harnessId: "claude",
+      modelSlug: "current",
+      profileId: null,
+    } as const;
+    settingStore.getState().setSelection(current);
+    runStore.getState().setSelection(current);
     settingStore.getState().setReasoning("low");
     runStore.getState().setReasoning("low");
 
     // The funnel's no-carry lever, as a model-row re-click sends it.
     const commit = {
-      selection: { harnessId: "claude", modelSlug: "current", profileId: null },
+      selection: current,
       reasoning: "",
       serviceTier: "",
     } as const;
@@ -352,5 +364,116 @@ describe("composer toolbar store setting purpose: the no-carry effort lever", ()
 
     expect(settingStore.getState().reasoning).toBe("low");
     expect(runStore.getState().reasoning).toBe("high");
+  });
+});
+
+describe("composer toolbar store setting purpose: the commit funnel owns the setting store's effort", () => {
+  // Both models are on the same harness as `createStore`'s default
+  // ("claude"), so a commit naming MODEL_X again is a same-pair re-click and
+  // one naming MODEL_Y is a same-provider model change - never a harness
+  // switch. `reasoningFallback: "lowest"` mirrors the judge's own store
+  // (`useJudgeToolbarStore`), the only surface this rule currently binds.
+  const MODEL_X = {
+    ...model("claude", "model-x", "Model X"),
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: [
+      { id: "low", label: "Low", description: null },
+      { id: "high", label: "High", description: null },
+    ],
+  };
+  const MODEL_Y = {
+    ...model("claude", "model-y", "Model Y"),
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: [
+      { id: "medium", label: "Medium", description: null },
+      { id: "high", label: "High", description: null },
+      { id: "low", label: "Low", description: null },
+    ],
+  };
+
+  function loadedCatalog(): ComposerToolbarCatalog {
+    return catalog({
+      harnesses: [harness("claude", true)],
+      modelsHarnessId: "claude",
+      models: [MODEL_X, MODEL_Y],
+      modelsLoaded: true,
+    });
+  }
+
+  it("a setting store keeps its own effort when the committed pair is unchanged, ignoring the incoming reasoning", () => {
+    const emitted: string[] = [];
+    const settingStore = createStore({
+      purpose: "setting",
+      modelSlug: "model-x",
+      reasoningFallback: "lowest",
+      onSettingsChange: (settings) =>
+        emitted.push(settings.reasoningEffort ?? ""),
+    });
+    settingStore.getState().setCatalog(loadedCatalog());
+    settingStore.getState().setReasoning("low");
+    emitted.length = 0;
+
+    // The commit funnel's incoming "high" - as a stale composer-memory read
+    // would carry - names the SAME (harness, model) pair already on show.
+    settingStore.getState().applyComposerSelection({
+      selection: { harnessId: "claude", modelSlug: "model-x", profileId: null },
+      reasoning: "high",
+      serviceTier: "",
+    });
+
+    expect(settingStore.getState().reasoning).toBe("low");
+    expect(emitted).toEqual(["low"]);
+  });
+
+  it("a setting store resets to the new model's lowest advertised effort when the committed pair changes, ignoring the incoming reasoning", () => {
+    const emitted: string[] = [];
+    const settingStore = createStore({
+      purpose: "setting",
+      modelSlug: "model-x",
+      reasoningFallback: "lowest",
+      onSettingsChange: (settings) =>
+        emitted.push(settings.reasoningEffort ?? ""),
+    });
+    settingStore.getState().setCatalog(loadedCatalog());
+    settingStore.getState().setReasoning("low");
+    emitted.length = 0;
+
+    settingStore.getState().applyComposerSelection({
+      selection: { harnessId: "claude", modelSlug: "model-y", profileId: null },
+      reasoning: "high",
+      serviceTier: "",
+    });
+
+    expect(settingStore.getState().reasoning).toBe("low");
+    expect(emitted).toEqual(["low"]);
+  });
+
+  it("a run store always takes the incoming reasoning, pair unchanged or not", () => {
+    const emitted: string[] = [];
+    const runStore = createStore({
+      purpose: "run",
+      modelSlug: "model-x",
+      reasoningFallback: "lowest",
+      onSettingsChange: (settings) =>
+        emitted.push(settings.reasoningEffort ?? ""),
+    });
+    runStore.getState().setCatalog(loadedCatalog());
+    runStore.getState().setReasoning("low");
+    emitted.length = 0;
+
+    runStore.getState().applyComposerSelection({
+      selection: { harnessId: "claude", modelSlug: "model-x", profileId: null },
+      reasoning: "high",
+      serviceTier: "",
+    });
+    expect(runStore.getState().reasoning).toBe("high");
+
+    runStore.getState().applyComposerSelection({
+      selection: { harnessId: "claude", modelSlug: "model-y", profileId: null },
+      reasoning: "high",
+      serviceTier: "",
+    });
+    expect(runStore.getState().reasoning).toBe("high");
+    expect(emitted).toEqual(["high", "high"]);
   });
 });
