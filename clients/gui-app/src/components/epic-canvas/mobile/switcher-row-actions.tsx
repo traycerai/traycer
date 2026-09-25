@@ -59,6 +59,79 @@ const EXPORT_LABELS: Record<ArtifactExportFormat, string> = {
   pdf: "Export as PDF",
 };
 
+interface RowMenuInput {
+  readonly nodeId: string;
+  readonly kind: SwitcherRowKind;
+  readonly canMutate: boolean;
+  readonly chatWriteUnavailable: boolean;
+  readonly exportPending: boolean;
+  readonly closePending: boolean;
+  readonly onExport: (format: ArtifactExportFormat) => void;
+  readonly onRename: () => void;
+  readonly onDelete: () => void;
+}
+
+function rowMenuEntries(
+  input: RowMenuInput,
+): ReadonlyArray<SidebarRowMenuEntry> {
+  const { nodeId, kind, canMutate, chatWriteUnavailable } = input;
+  const isTerminal = kind === "terminal";
+  const disabledTooltip = chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null;
+  const exportEntry = (format: ArtifactExportFormat): SidebarRowMenuEntry => ({
+    kind: "item",
+    id: `export-${format}`,
+    label: EXPORT_LABELS[format],
+    icon: <FileDown className="size-3.5" />,
+    disabled: input.exportPending,
+    disabledTooltip: null,
+    variant: "default",
+    testIds: {
+      dropdown: `switcher-export-${format}-${nodeId}`,
+      context: `switcher-export-${format}-ctx-${nodeId}`,
+    },
+    onSelect: () => input.onExport(format),
+  });
+  return [
+    ...(kind === "artifact"
+      ? [
+          exportEntry("markdown"),
+          exportEntry("pdf"),
+          { kind: "separator" as const, id: "after-export" },
+        ]
+      : []),
+    {
+      kind: "item",
+      id: "rename",
+      label: "Rename",
+      icon: <Pencil className="size-3.5" />,
+      disabled: !canMutate || chatWriteUnavailable,
+      disabledTooltip,
+      variant: "default",
+      testIds: {
+        dropdown: `switcher-rename-${nodeId}`,
+        context: `switcher-rename-ctx-${nodeId}`,
+      },
+      onSelect: input.onRename,
+    },
+    { kind: "separator", id: "before-delete" },
+    {
+      kind: "item",
+      id: "delete",
+      label: isTerminal ? "Close" : "Delete",
+      icon: <Trash2 className="size-3.5" />,
+      disabled:
+        !canMutate || (isTerminal ? input.closePending : chatWriteUnavailable),
+      disabledTooltip,
+      variant: "destructive",
+      testIds: {
+        dropdown: `switcher-delete-${nodeId}`,
+        context: `switcher-delete-ctx-${nodeId}`,
+      },
+      onSelect: input.onDelete,
+    },
+  ];
+}
+
 /**
  * The per-row "…" actions for the switcher's flat lists: Rename + Delete for
  * agents/artifacts (delete confirmed), Rename + Close for PTY terminals (Close
@@ -72,8 +145,24 @@ const EXPORT_LABELS: Record<ArtifactExportFormat, string> = {
  * the item's open canvas tile so the mobile view never lands on a dead tile.
  */
 export function SwitcherRowActions(props: SwitcherRowActionsProps) {
-  const { epicId, tabId, kind, nodeId, name, cascadeSummary } = props;
   const canMutate = isEditableRole(useEpicPermissionRole());
+  // Keyed on the role so a change of access remounts the body: a dialog opened
+  // as an editor is gone for good once access is lost, rather than staying
+  // submittable or reappearing on its own if access comes back.
+  return (
+    <SwitcherRowActionsBody
+      key={canMutate ? "editor" : "viewer"}
+      {...props}
+      canMutate={canMutate}
+    />
+  );
+}
+
+function SwitcherRowActionsBody(
+  props: SwitcherRowActionsProps & { readonly canMutate: boolean },
+) {
+  const { epicId, tabId, kind, nodeId, name, cascadeSummary, canMutate } =
+    props;
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -169,77 +258,31 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
     killTerminal.mutate({ sessionId: nodeId });
   }, [closeOpenTile, killTerminal, nodeId]);
 
-  const isArtifact = kind === "artifact";
-  if (!canMutate && !isArtifact) return null;
+  if (!canMutate && kind !== "artifact") return null;
 
   const isTerminal = kind === "terminal";
-  const deleteLabel = isTerminal ? "Close" : "Delete";
   const deletePending =
     deleteChat.isPending ||
     deleteTuiAgent.isPending ||
     deleteArtifact.isPending;
 
-  const exportEntry = (format: ArtifactExportFormat): SidebarRowMenuEntry => ({
-    kind: "item",
-    id: `export-${format}`,
-    label: EXPORT_LABELS[format],
-    icon: <FileDown className="size-3.5" />,
-    disabled: exportArtifacts.isPending,
-    disabledTooltip: null,
-    variant: "default",
-    testIds: {
-      dropdown: `switcher-export-${format}-${nodeId}`,
-      context: `switcher-export-${format}-ctx-${nodeId}`,
-    },
-    onSelect: () =>
+  const entries = rowMenuEntries({
+    nodeId,
+    kind,
+    canMutate,
+    chatWriteUnavailable,
+    exportPending: exportArtifacts.isPending,
+    closePending: killTerminal.isPending,
+    onExport: (format) =>
       exportArtifacts.mutate({
         artifacts: [{ id: nodeId, title: name }],
         format,
         archive: false,
         archiveTitle: null,
       }),
+    onRename: () => setRenameOpen(true),
+    onDelete: isTerminal ? closeTerminal : () => setConfirmOpen(true),
   });
-
-  const entries: ReadonlyArray<SidebarRowMenuEntry> = [
-    ...(isArtifact
-      ? [
-          exportEntry("markdown"),
-          exportEntry("pdf"),
-          { kind: "separator" as const, id: "after-export" },
-        ]
-      : []),
-    {
-      kind: "item",
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil className="size-3.5" />,
-      disabled: !canMutate || chatWriteUnavailable,
-      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
-      variant: "default",
-      testIds: {
-        dropdown: `switcher-rename-${nodeId}`,
-        context: `switcher-rename-ctx-${nodeId}`,
-      },
-      onSelect: () => setRenameOpen(true),
-    },
-    { kind: "separator", id: "before-delete" },
-    {
-      kind: "item",
-      id: "delete",
-      label: deleteLabel,
-      icon: <Trash2 className="size-3.5" />,
-      disabled:
-        !canMutate ||
-        (isTerminal ? killTerminal.isPending : chatWriteUnavailable),
-      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
-      variant: "destructive",
-      testIds: {
-        dropdown: `switcher-delete-${nodeId}`,
-        context: `switcher-delete-ctx-${nodeId}`,
-      },
-      onSelect: isTerminal ? closeTerminal : () => setConfirmOpen(true),
-    },
-  ];
 
   return (
     <>
@@ -260,19 +303,15 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>
       </DropdownMenu>
-      {/* Mounted only while the user can mutate, so losing edit access closes
-          an open dialog instead of leaving it submittable. */}
-      {canMutate ? (
-        <SwitcherRenameDialog
-          open={renameOpen}
-          onOpenChange={setRenameOpen}
-          title={RENAME_TITLE[kind]}
-          initialValue={name}
-          nodeId={nodeId}
-          onSubmit={submitRename}
-        />
-      ) : null}
-      {isTerminal || !canMutate ? null : (
+      <SwitcherRenameDialog
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+        title={RENAME_TITLE[kind]}
+        initialValue={name}
+        nodeId={nodeId}
+        onSubmit={submitRename}
+      />
+      {isTerminal ? null : (
         <ConfirmDestructiveDialog
           blockedReason={null}
           open={confirmOpen}

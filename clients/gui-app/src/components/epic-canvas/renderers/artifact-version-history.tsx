@@ -397,8 +397,6 @@ function ArtifactVersionHistoryPanel(props: {
   const phone = useIsMobileViewport();
   const [detailOpen, setDetailOpen] = useState(false);
   const covering = phone || maximized;
-  const showList = !phone || !detailOpen;
-  const showDetail = !phone || detailOpen;
   const panelWidthPx = useArtifactVersionHistoryPanelWidthPx();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] =
@@ -465,6 +463,11 @@ function ArtifactVersionHistoryPanel(props: {
     availableEntries.at(0) ??
     null;
   const comparison = comparisonFor(entries, selected);
+  // A refresh can drop the picked version with nothing to fall back to; the
+  // list is then the only pane with anything to show.
+  const detailShown = phone && detailOpen && selected !== null;
+  const showList = !detailShown;
+  const showDetail = !phone || detailShown;
   const selectedBlob = useHostQuery({
     client: props.client,
     method: "epic.artifactVersions.getBlob",
@@ -1065,18 +1068,22 @@ function VersionDiffView(props: {
           marked Body only.
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5">
+      <div
+        data-mobile-shell-touch-scope={props.onBack === null ? undefined : ""}
+        className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5"
+      >
         <div className="flex min-w-0 items-center gap-2">
           {props.onBack === null ? null : (
             <Button
               type="button"
-              size="icon-xs"
-              variant="muted"
+              size="sm"
+              variant="ghost"
               aria-label="Back to versions"
               data-testid="artifact-version-history-back"
               onClick={props.onBack}
             >
               <ArrowLeftIcon />
+              Back
             </Button>
           )}
           <div className="min-w-0">
