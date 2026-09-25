@@ -12,6 +12,7 @@ import {
   isFoundTaskContext,
   type GetTaskContextsResponse,
   type TaskContextResolution,
+  type TaskContextUnknownReason,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -164,10 +165,12 @@ export function useEpicTaskPinnedStates(
       staleTime: Infinity,
       // A retry re-asks a WHOLE chunk (up to 50 ids) for the one row that was
       // unanswered, so its response replaces rows that already had an answer.
-      // A transient `unknown` for one of those must not demote it to "pin
-      // state unknown" - the earlier `found` is the better reading. Only
-      // `unknown` yields: `confirmed-absent` is a real answer (the task is
-      // gone), and any new `found` wins outright.
+      // A TRANSIENT `unknown` for one of those must not demote it to "pin
+      // state unknown" - the earlier `found` is the better reading. Only a
+      // transient reason yields: `confirmed-absent` (the task is gone) and an
+      // `unknown` that is an access answer (`denied`,
+      // `not-found-or-not-permitted`) are real answers, and a new `found`
+      // wins outright.
       structuralSharing: (previous: unknown, incoming: unknown) =>
         replaceEqualDeep(
           previous,
@@ -668,6 +671,15 @@ export function taskPinReadingChunks(
   );
 }
 
+/**
+ * `unknown` reasons that are an ANSWER about access rather than a failure to
+ * answer: the account lost the task, or was never shown it. Keeping an earlier
+ * `found` over one of these would leave a live Pin control on a task the
+ * account can no longer write, so they replace it like `confirmed-absent`.
+ */
+const ACCESS_ANSWER_REASONS: ReadonlySet<TaskContextUnknownReason> =
+  new Set<TaskContextUnknownReason>(["denied", "not-found-or-not-permitted"]);
+
 /** See the `structuralSharing` note in {@link useEpicTaskPinnedStates}. */
 export function keepAnsweredOverTransientUnknown(
   previous: unknown,
@@ -681,7 +693,11 @@ export function keepAnsweredOverTransientUnknown(
     // Typed as possibly absent: a record index is, whatever the record's type
     // says, and `isFoundTaskContext` takes the absence.
     const earlier: TaskContextResolution | undefined = previous.tasks[taskId];
-    if (resolution.status !== "unknown" || !isFoundTaskContext(earlier)) {
+    if (
+      resolution.status !== "unknown" ||
+      ACCESS_ANSWER_REASONS.has(resolution.reason) ||
+      !isFoundTaskContext(earlier)
+    ) {
       continue;
     }
     tasks ??= { ...incoming.tasks };
