@@ -1,7 +1,3 @@
-import {
-  CapacitorBarcodeScanner,
-  CapacitorBarcodeScannerTypeHint,
-} from "@capacitor/barcode-scanner";
 import type {
   ILinkCodeScanner,
   LinkCodeScanResult,
@@ -59,10 +55,17 @@ function classifyScanRejection(error: unknown): LinkCodeScanResult {
  * fullscreen scan UI — and rejects for every non-scan outcome, so this
  * adapter's job is to translate that single rejection channel into the
  * surface's explicit states.
+ *
+ * The plugin is imported when a scan starts, not with this module: its
+ * package entry re-exports `definitions.js`, which pulls in the ~390 KB
+ * `html5-qrcode` web scanner for one enum, and the entry point constructs
+ * this adapter at boot. A failed import lands in the same rejection path.
  */
 export class MobileLinkCodeScanner implements ILinkCodeScanner {
   async scan(): Promise<LinkCodeScanResult> {
     try {
+      const { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } =
+        await import("@capacitor/barcode-scanner");
       const result = await CapacitorBarcodeScanner.scanBarcode({
         hint: CapacitorBarcodeScannerTypeHint.QR_CODE,
         scanInstructions: "Point the camera at the QR on your desktop",
