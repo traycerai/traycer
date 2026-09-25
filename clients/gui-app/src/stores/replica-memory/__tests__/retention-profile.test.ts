@@ -13,6 +13,8 @@ import {
 import { DEFAULT_MAX_WARM_CHAT_SESSIONS } from "@/stores/chats/session-registry";
 import { MAX_LINGERING_PLAIN_TERMINALS } from "@/stores/terminals/terminal-session-registry";
 
+const NO_GRACE: ReadonlySet<string> = new Set();
+
 // Every consumer of the active profile reads `getRetentionProfile()` lazily,
 // so a test that switches it must restore the desktop profile afterward or
 // leak the switch into an unrelated suite sharing this module's singleton.
@@ -66,6 +68,13 @@ describe("RetentionProfile", () => {
     );
   });
 
+  it("grants a surface grace on mobile only", () => {
+    // Desktop retains five surfaces; a grace there would only delay dropping
+    // a sixth. The phone retains one, and the grace is what keeps Back instant.
+    expect(DESKTOP_RETENTION_PROFILE.topLevelSurfaceGraceMs).toBe(0);
+    expect(MOBILE_RETENTION_PROFILE.topLevelSurfaceGraceMs).toBeGreaterThan(0);
+  });
+
   it("getRetentionProfile reflects a profile switched at runtime", () => {
     expect(getRetentionProfile()).toBe(DESKTOP_RETENTION_PROFILE);
 
@@ -80,13 +89,23 @@ describe("retainedTopLevelSurfaceKeys honours the active profile", () => {
     const available = ["0", "1", "2", "3", "4", "5"];
     const recency = ["5", "4", "3", "2", "1", "0"];
 
-    const desktopRetained = retainedTopLevelSurfaceKeys(available, [], recency);
+    const desktopRetained = retainedTopLevelSurfaceKeys(
+      available,
+      [],
+      recency,
+      NO_GRACE,
+    );
     expect(desktopRetained.length).toBe(
       DESKTOP_RETENTION_PROFILE.retainedTopLevelSurfaces,
     );
 
     setRetentionProfile(MOBILE_RETENTION_PROFILE);
-    const mobileRetained = retainedTopLevelSurfaceKeys(available, [], recency);
+    const mobileRetained = retainedTopLevelSurfaceKeys(
+      available,
+      [],
+      recency,
+      NO_GRACE,
+    );
     expect(mobileRetained.length).toBe(
       MOBILE_RETENTION_PROFILE.retainedTopLevelSurfaces,
     );
@@ -97,6 +116,7 @@ describe("retainedTopLevelSurfaceKeys honours the active profile", () => {
       available,
       [],
       recency,
+      NO_GRACE,
     );
     expect(restoredRetained.length).toBe(desktopRetained.length);
   });

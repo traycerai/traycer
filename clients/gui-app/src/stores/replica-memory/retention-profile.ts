@@ -32,6 +32,17 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /**
+   * How long the surface just navigated away from stays mounted past
+   * `retainedTopLevelSurfaces` (`stores/tabs/top-level-surface-grace.ts`).
+   * Zero turns the grace off.
+   *
+   * A window of one surface keeps the phone's footprint down but makes Back
+   * a full re-mount of the task just left. The grace keeps that one surface
+   * for as long as a quick return is likely and gives its DOM back after.
+   * Desktop retains five surfaces already, so it has no use for a grace.
+   */
+  readonly topLevelSurfaceGraceMs: number;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -40,6 +51,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  topLevelSurfaceGraceMs: 0,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -48,6 +60,7 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 1,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  topLevelSurfaceGraceMs: 15_000,
 });
 
 /**

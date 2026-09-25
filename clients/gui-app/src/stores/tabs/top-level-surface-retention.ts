@@ -43,12 +43,15 @@ export function advanceTopLevelSurfaceRecency(
 
 /**
  * The retained subset of `availableKeys`: every active key, plus enough of
- * `recency` (in order) to fill {@link MAX_RETAINED_TOP_LEVEL_SURFACES}.
+ * `recency` (in order) to fill {@link MAX_RETAINED_TOP_LEVEL_SURFACES}, plus
+ * every key still in its grace (`top-level-surface-grace.ts`) on top of that
+ * count.
  */
 export function retainedTopLevelSurfaceKeys(
   availableKeys: ReadonlyArray<string>,
   activeKeys: ReadonlyArray<string>,
   recency: ReadonlyArray<string>,
+  graceKeys: ReadonlySet<string>,
 ): ReadonlyArray<string> {
   const available = new Set(availableKeys);
   const availableActiveKeys = activeKeys.filter((key) => available.has(key));
@@ -59,5 +62,5 @@ export function retainedTopLevelSurfaceKeys(
   const retained = new Set(
     ordered.slice(0, getRetentionProfile().retainedTopLevelSurfaces),
   );
-  return availableKeys.filter((key) => retained.has(key));
+  return availableKeys.filter((key) => retained.has(key) || graceKeys.has(key));
 }

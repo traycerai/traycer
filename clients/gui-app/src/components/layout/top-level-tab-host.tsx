@@ -71,6 +71,10 @@ import {
   advanceTopLevelSurfaceRecency,
   retainedTopLevelSurfaceKeys,
 } from "@/stores/tabs/top-level-surface-retention";
+import {
+  getTopLevelSurfaceGraceKeys,
+  subscribeTopLevelSurfaceGrace,
+} from "@/stores/tabs/top-level-surface-grace";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { STABLE_TILE_SURFACE_HOST_ENABLED } from "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch";
 import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
@@ -452,6 +456,14 @@ function useMountedSurfaceKeys(
   const [seenActiveSignature, setSeenActiveSignature] =
     useState(activeSignature);
   const [recency, setRecency] = useState<ReadonlyArray<string>>(activeRefKeys);
+  // The surface just left, kept past the window until its grace ends. Read
+  // from the store's return value: the grace ends on a timer, and that expiry
+  // has to reach the memo below as a changed input.
+  const graceKeys = useSyncExternalStore(
+    subscribeTopLevelSurfaceGrace,
+    getTopLevelSurfaceGraceKeys,
+    getTopLevelSurfaceGraceKeys,
+  );
 
   if (activeSignature !== seenActiveSignature) {
     setSeenActiveSignature(activeSignature);
@@ -461,8 +473,14 @@ function useMountedSurfaceKeys(
   }
 
   return useMemo(
-    () => retainedTopLevelSurfaceKeys(availableRefKeys, activeRefKeys, recency),
-    [activeRefKeys, availableRefKeys, recency],
+    () =>
+      retainedTopLevelSurfaceKeys(
+        availableRefKeys,
+        activeRefKeys,
+        recency,
+        graceKeys,
+      ),
+    [activeRefKeys, availableRefKeys, recency, graceKeys],
   );
 }
 

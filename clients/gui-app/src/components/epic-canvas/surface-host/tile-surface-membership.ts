@@ -75,6 +75,10 @@ import {
   advanceTopLevelSurfaceRecency,
   retainedTopLevelSurfaceKeys,
 } from "@/stores/tabs/top-level-surface-retention";
+import {
+  getTopLevelSurfaceGraceKeys,
+  subscribeTopLevelSurfaceGrace,
+} from "@/stores/tabs/top-level-surface-grace";
 import { isHostedSurfaceEligible } from "@/components/epic-canvas/surface-host/surface-owner";
 import {
   isChatRemoteDeleted,
@@ -156,6 +160,7 @@ function computeRetainedTopLevelRefKeys(): ReadonlyArray<string> {
     availableRefKeys,
     activeRefKeys,
     topLevelRecency,
+    getTopLevelSurfaceGraceKeys(),
   );
 }
 
@@ -245,4 +250,11 @@ subscribeChatRemoteDeletion(recomputeMembership);
 // directions: parking drops an epic's hosted chats, showing it again restores
 // them.
 subscribeEpicParking(recomputeMembership);
+// The grace ends on a timer and moves no store above, so its expiry has to
+// reach the recompute itself - or the hosted body of a surface whose grace
+// ended would outlive the surface it paints into. A grace STARTS inside the
+// ledger's own `useTabsStore` listener, which runs before this module's (the
+// ledger is imported, so subscribed, first): the tab change that starts one
+// never reaches the recompute with the departed surface missing from it.
+subscribeTopLevelSurfaceGrace(recomputeMembership);
 recomputeMembership();

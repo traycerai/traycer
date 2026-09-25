@@ -17,7 +17,13 @@ import {
 // it, so without this the tab opened below would never register with parking.
 import "@/lib/epics/epic-parking-open-tabs";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
-import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  PARK_HIDDEN_EPIC_AFTER_MS,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
+import { resetTopLevelSurfaceGraceForTesting } from "@/stores/tabs/top-level-surface-grace";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __resetAgentActivityStoreForTests,
@@ -1101,5 +1107,80 @@ describe("renderer parking (plan C, C1): a parked epic keeps no hosted surface",
     setEpicSurfaceVisibility(EPIC, "tab-1", true);
     expect(isEpicParked(EPIC)).toBe(false);
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+  });
+});
+
+describe("mobile surface grace: a tab just left keeps its hosted chat until the grace ends", () => {
+  const GRACE_MS = MOBILE_RETENTION_PROFILE.topLevelSurfaceGraceMs;
+  const A: TabRef = { kind: "epic", id: "tab-a" };
+  const B: TabRef = { kind: "epic", id: "tab-b" };
+
+  function seedTwoEpicTabs(): void {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        [A.id]: { tabId: A.id, epicId: "epic-a", name: "A" },
+        [B.id]: { tabId: B.id, epicId: "epic-b", name: "B" },
+      },
+      canvasByTabId: {
+        [A.id]: canvasWithChat("chat-a", "p1"),
+        [B.id]: canvasWithChat("chat-b", "p1"),
+      },
+      openTabOrder: [A.id, B.id],
+      activeTabId: A.id,
+    });
+    seedSingleTabStrip([A, B], A);
+    publishTileSurfaceEnvironment(
+      buildSyntheticTileSurfaceEnvironment("chat-a", {}),
+    );
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    resetAll();
+    resetTopLevelSurfaceGraceForTesting();
+  });
+
+  afterEach(() => {
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    resetAll();
+    resetTopLevelSurfaceGraceForTesting();
+    vi.useRealTimers();
+  });
+
+  it("keeps the departed tab's hosted record through the grace and drops it after", () => {
+    seedTwoEpicTabs();
+    const recordA = getTileSurfaceEnvironment("chat-a");
+    expect(recordA).not.toBeNull();
+
+    seedSingleTabStrip([A, B], B);
+
+    // The host keeps A's surface mounted for the grace, so its hosted chat
+    // body has to stay too - or Back re-mounts the transcript anyway.
+    expect(getTileSurfaceMembership().has("chat-a")).toBe(true);
+    expect(getTileSurfaceEnvironment("chat-a")).toBe(recordA);
+
+    vi.advanceTimersByTime(GRACE_MS - 1);
+    expect(getTileSurfaceMembership().has("chat-a")).toBe(true);
+
+    vi.advanceTimersByTime(1);
+    expect(getTileSurfaceMembership().has("chat-a")).toBe(false);
+    expect(getTileSurfaceEnvironment("chat-a")).toBeNull();
+    expect(getTileSurfaceMembership().has("chat-b")).toBe(true);
+  });
+
+  it("never drops the record when the user comes back inside the grace", () => {
+    seedTwoEpicTabs();
+    const recordA = getTileSurfaceEnvironment("chat-a");
+
+    seedSingleTabStrip([A, B], B);
+    vi.advanceTimersByTime(GRACE_MS / 3);
+    seedSingleTabStrip([A, B], A);
+    vi.advanceTimersByTime(GRACE_MS);
+
+    expect(getTileSurfaceEnvironment("chat-a")).toBe(recordA);
+    expect(getTileSurfaceMembership().has("chat-a")).toBe(true);
+    // B was the one left the second time, and its own grace has run out.
+    expect(getTileSurfaceMembership().has("chat-b")).toBe(false);
   });
 });

@@ -5,23 +5,36 @@ import {
   retainedTopLevelSurfaceKeys,
 } from "@/stores/tabs/top-level-surface-retention";
 
+const NO_GRACE: ReadonlySet<string> = new Set();
+
 describe("retainedTopLevelSurfaceKeys (pure)", () => {
   it("retains every key that is active or already in recency, under the cap", () => {
     const retained = retainedTopLevelSurfaceKeys(
       ["a", "b", "c"],
       ["c"],
       ["a", "b"],
+      NO_GRACE,
     );
     expect(new Set(retained)).toEqual(new Set(["a", "b", "c"]));
   });
 
   it("does not retain an available key that has never been active or recorded into recency", () => {
-    const retained = retainedTopLevelSurfaceKeys(["a", "b", "c"], ["c"], []);
+    const retained = retainedTopLevelSurfaceKeys(
+      ["a", "b", "c"],
+      ["c"],
+      [],
+      NO_GRACE,
+    );
     expect(retained).toEqual(["c"]);
   });
 
   it("retains a brand-new key immediately once it is active, even with no recency history", () => {
-    const retained = retainedTopLevelSurfaceKeys(["a", "new"], ["new"], ["a"]);
+    const retained = retainedTopLevelSurfaceKeys(
+      ["a", "new"],
+      ["new"],
+      ["a"],
+      NO_GRACE,
+    );
     expect(new Set(retained)).toEqual(new Set(["a", "new"]));
   });
 
@@ -31,6 +44,7 @@ describe("retainedTopLevelSurfaceKeys (pure)", () => {
       available,
       ["5"],
       ["4", "3", "2", "1", "0"],
+      NO_GRACE,
     );
     expect(retained).not.toContain("0");
     expect(retained).toContain("5");
@@ -38,7 +52,12 @@ describe("retainedTopLevelSurfaceKeys (pure)", () => {
   });
 
   it("drops keys no longer available even if still in recency", () => {
-    const retained = retainedTopLevelSurfaceKeys(["a"], ["a"], ["a", "stale"]);
+    const retained = retainedTopLevelSurfaceKeys(
+      ["a"],
+      ["a"],
+      ["a", "stale"],
+      NO_GRACE,
+    );
     expect(retained).toEqual(["a"]);
   });
 
@@ -48,6 +67,7 @@ describe("retainedTopLevelSurfaceKeys (pure)", () => {
       available,
       ["stale-active"],
       ["5", "4", "3", "2", "1", "0"],
+      NO_GRACE,
     );
 
     expect(retained).toHaveLength(MAX_RETAINED_TOP_LEVEL_SURFACES);
@@ -67,10 +87,35 @@ describe("retainedTopLevelSurfaceKeys (pure)", () => {
       available,
       ["epic:new"],
       ["draft:4", "draft:3", "draft:2", "draft:1", "epic:old"],
+      NO_GRACE,
     );
     expect(retained).not.toContain("epic:old");
     expect(retained).toContain("epic:new");
     expect(retained.length).toBe(MAX_RETAINED_TOP_LEVEL_SURFACES);
+  });
+});
+
+describe("retainedTopLevelSurfaceKeys with a grace set (pure)", () => {
+  it("retains a key in its grace on top of the cap", () => {
+    const available = ["0", "1", "2", "3", "4", "5", "graced"];
+    const retained = retainedTopLevelSurfaceKeys(
+      available,
+      ["5"],
+      ["4", "3", "2", "1", "0", "graced"],
+      new Set(["graced"]),
+    );
+    expect(retained).toContain("graced");
+    expect(retained).toHaveLength(MAX_RETAINED_TOP_LEVEL_SURFACES + 1);
+  });
+
+  it("does not retain a graced key that is no longer available", () => {
+    const retained = retainedTopLevelSurfaceKeys(
+      ["a"],
+      ["a"],
+      ["a"],
+      new Set(["closed"]),
+    );
+    expect(retained).toEqual(["a"]);
   });
 });
 

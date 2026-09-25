@@ -41,8 +41,12 @@ const MAX_TEST_WORKERS = Math.min(
 // were invisible for the same reason: the suite ran them uncompiled while the
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
+// `top-level-tab-host` joins them with the phone's surface grace: the set of
+// mounted surfaces shrinks when a timer ends the grace, so a memo that cached
+// the retained keys past that timer would keep a whole task screen mounted
+// for good. Its suite asserts the unmount, which only means something compiled.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card|top-level-tab-host)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

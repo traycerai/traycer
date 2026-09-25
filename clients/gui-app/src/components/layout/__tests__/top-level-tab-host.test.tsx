@@ -95,6 +95,12 @@ import {
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
+import { resetTopLevelSurfaceGraceForTesting } from "@/stores/tabs/top-level-surface-grace";
 
 const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
 
@@ -829,6 +835,107 @@ describe("<TopLevelTabHost />", () => {
         .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
         .contains(screen.getByTestId("landing-terminal-panel-body")),
     ).toBe(true);
+  });
+});
+
+describe("<TopLevelTabHost /> on the mobile profile: the surface just left keeps a grace", () => {
+  const GRACE_MS = MOBILE_RETENTION_PROFILE.topLevelSurfaceGraceMs;
+  const EPIC_C: TabRef = { kind: "epic", id: "epic-c" };
+  const REFS = [EPIC_A, EPIC_B, EPIC_C];
+
+  function resetStores(): void {
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    resetTopLevelSurfaceGraceForTesting();
+  }
+
+  function isMounted(ref: TabRef): boolean {
+    return (
+      screen.queryByTestId(`top-level-surface-${ref.kind}-${ref.id}`) !== null
+    );
+  }
+
+  // Renders on real timers - the epic body resolves through a lazy boundary -
+  // and only then fakes the clock, so the grace timer the next navigation arms
+  // is one the test controls.
+  async function renderOn(ref: TabRef): Promise<HTMLElement> {
+    seedSources(REFS);
+    setSingle(ref, REFS);
+    render(<TopLevelTabHost />);
+    const body = await screen.findByTestId(`epic-surface-body-${ref.id}`);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    return body;
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    resetStores();
+  });
+
+  it("keeps the surface just left mounted and hidden, and unmounts it when the grace ends", async () => {
+    const bodyA = await renderOn(EPIC_A);
+
+    act(() => setSingle(EPIC_B, REFS));
+
+    // Past the one-surface window, still mounted - and hidden, so it reads as
+    // a background tab to everything keyed on visibility (parking included).
+    expect(surfaceRef(EPIC_A).dataset.visible).toBe("false");
+    expect(surfaceRef(EPIC_A).getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByTestId("epic-surface-body-epic-a")).toBe(bodyA);
+    expect(surfaceRef(EPIC_B).dataset.visible).toBe("true");
+
+    act(() => {
+      vi.advanceTimersByTime(GRACE_MS - 1);
+    });
+    expect(isMounted(EPIC_A)).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(isMounted(EPIC_A)).toBe(false);
+    expect(surfaceRef(EPIC_B).dataset.visible).toBe("true");
+  });
+
+  it("goes Back to the SAME instance inside the grace, and grants the surface it leaves its own", async () => {
+    const bodyA = await renderOn(EPIC_A);
+
+    act(() => setSingle(EPIC_B, REFS));
+    act(() => {
+      vi.advanceTimersByTime(GRACE_MS / 3);
+    });
+    act(() => setSingle(EPIC_A, REFS));
+
+    // Not re-mounted: this is the instant Back the grace exists for.
+    expect(screen.getByTestId("epic-surface-body-epic-a")).toBe(bodyA);
+    expect(surfaceRef(EPIC_A).dataset.visible).toBe("true");
+    expect(surfaceRef(EPIC_B).dataset.visible).toBe("false");
+
+    act(() => {
+      vi.advanceTimersByTime(GRACE_MS);
+    });
+    expect(isMounted(EPIC_B)).toBe(false);
+    expect(screen.getByTestId("epic-surface-body-epic-a")).toBe(bodyA);
+  });
+
+  it("holds one extra surface, not two, when the user steps through three", async () => {
+    await renderOn(EPIC_A);
+
+    act(() => setSingle(EPIC_B, REFS));
+    act(() => setSingle(EPIC_C, REFS));
+
+    expect(isMounted(EPIC_A)).toBe(false);
+    expect(isMounted(EPIC_B)).toBe(true);
+    expect(surfaceRef(EPIC_C).dataset.visible).toBe("true");
   });
 });
 
