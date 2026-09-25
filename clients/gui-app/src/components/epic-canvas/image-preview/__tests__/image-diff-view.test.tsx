@@ -46,6 +46,7 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
         url: null,
         meta: null,
         reason: null,
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
         reportDecodeFailure: () => {},
@@ -58,6 +59,7 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
         url: null,
         meta: null,
         reason: "This image could not be decoded.",
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
       };
@@ -107,6 +109,7 @@ beforeEach(() => {
       height: 3,
     },
     reason: null,
+    missing: false,
     totalBytes: 12,
     servedFromCache: false,
   };
@@ -120,6 +123,7 @@ beforeEach(() => {
       height: 5,
     },
     reason: null,
+    missing: false,
     totalBytes: 18,
     servedFromCache: false,
   };
@@ -183,6 +187,7 @@ describe("<ImageDiffView />", () => {
       url: null,
       meta: null,
       reason: "This image could not be loaded.",
+      missing: false,
       totalBytes: null,
       servedFromCache: false,
     };
@@ -201,6 +206,7 @@ describe("<ImageDiffView />", () => {
       url: null,
       meta: null,
       reason: "This image could not be loaded.",
+      missing: false,
       totalBytes: null,
       servedFromCache: false,
     };
@@ -380,6 +386,7 @@ describe("<ImageDiffView />", () => {
       url: "blob:new",
       meta: null,
       reason: null,
+      missing: false,
       totalBytes: 18,
       servedFromCache: false,
     };
@@ -404,6 +411,7 @@ describe("<ImageDiffView />", () => {
         height: 40,
       },
       reason: null,
+      missing: false,
       totalBytes: 160_000,
       servedFromCache: false,
     };
@@ -412,6 +420,7 @@ describe("<ImageDiffView />", () => {
       url: "blob:new",
       meta: null,
       reason: null,
+      missing: false,
       totalBytes: 18,
       servedFromCache: false,
     };
@@ -428,6 +437,7 @@ describe("<ImageDiffView />", () => {
       url: "blob:old",
       meta: null,
       reason: null,
+      missing: false,
       totalBytes: 12,
       servedFromCache: false,
     };
@@ -436,6 +446,7 @@ describe("<ImageDiffView />", () => {
       url: "blob:new",
       meta: null,
       reason: null,
+      missing: false,
       totalBytes: 18,
       servedFromCache: false,
     };
