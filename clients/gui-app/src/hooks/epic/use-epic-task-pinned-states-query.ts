@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import {
   useQueries,
   useQueryClient,
+  type Query,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -24,7 +25,10 @@ import {
   useLocalHomedOpenEpicIds,
 } from "@/lib/registries/epic-session-registry";
 import { epicPinReadingListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
-import { epicTaskContextsQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  epicPinReadingQueryKeyMatchesScope,
+  epicTaskContextsQueryKeyMatchesScope,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import {
   CURRENT_EPIC_VERSION,
   CURRENT_PHASE_VERSION,
@@ -198,9 +202,11 @@ export function useLocalHomedOpenTaskRows(
   // Keyed on MEMBERSHIP and never on missingness, which is the distinction that
   // keeps this terminating. An epic entering the population changes the key once
   // and costs one fetch; a row the host genuinely omits (it is not that host's,
-  // or it has no durable pin) is then still absent and nothing asks again,
-  // because the population has not changed. A policy of "refetch while some open
-  // epic has no reading" would read its own output and never stop.
+  // or it has no durable pin) is then still absent and nothing asks again on its
+  // own, because the population has not changed. A policy of "refetch while some
+  // open epic has no reading" would read its own output and never stop. The one
+  // re-ask is demand-driven: opening that tab's menu
+  // (`useRetryUnansweredTaskPinReading`), which is not an output of this query.
   const pinReadingPopulations = useMemo(() => {
     const byHost = new Map<string, Array<string>>();
     for (const [epicId, hostId] of localHomedByHost) {
@@ -527,17 +533,45 @@ function taskContextsQueryAsksFor(
 }
 
 /**
- * Re-asks the host for one tab's pin reading when the last batch settled
- * without it - called when the tab's context menu opens, which is the moment
- * the reading is needed.
+ * Whether a cached per-host pin-reading page carries this epic's population,
+ * read off the key (`cloudQueryKeys.epicPinReading`: the sorted population sits
+ * just before the trailing marker). A host's population holds only the epics
+ * that host's live sessions own, so this alone selects the OWNING host's read.
+ */
+function pinReadingQueryAsksFor(
+  queryKey: readonly unknown[],
+  epicId: string,
+): boolean {
+  const population = queryKey[queryKey.length - 2];
+  return Array.isArray(population) && population.includes(epicId);
+}
+
+/**
+ * Re-asks for one tab's pin reading when the source that renders it settled
+ * without an answer - called when the tab's context menu opens, which is the
+ * moment the reading is needed.
  *
- * Demand-driven rather than a poll on purpose: an id the host keeps leaving
- * unanswered (a denied row, a cloud that stays unreachable) would otherwise
- * cost a cloud round trip forever, and an open menu is a bounded number of
- * asks. Only the batches that ask for this id AND did not answer it refetch;
- * an in-flight one is joined rather than restarted (`cancelRefetch: false`),
- * and a disabled one - no verdict, no host - is skipped by `refetchQueries`,
- * which keeps the batch's own spend gate the only one.
+ * Two sources, because two authorities render the pin:
+ *
+ * - a CLOUD-homed row reads the window host's `epic.getTaskContexts` batch;
+ * - a LOCAL-homed row reads its owning host's pin-reading list page
+ *   (`overlayLocalHomedPinnedStates`), and the window's batch cannot stand in
+ *   for it - that host does not own the epic, so it cannot resolve it.
+ *
+ * Exactly one source is re-asked per row, and only a query that asks for this
+ * epic AND whose cached answer does not cover it - judged by the same readers
+ * the renderer uses, so a query that already answered is never re-asked.
+ *
+ * Demand-driven rather than a poll on purpose: an id a host keeps leaving
+ * unanswered (a denied row, a cloud that stays unreachable, a local row with
+ * no durable pin) would otherwise cost a round trip forever, and an open menu
+ * is a bounded number of asks. This is also what keeps the pin-reading key's
+ * membership-not-missingness rule terminating: that rule forbids refetching
+ * because a reading is MISSING, which would read its own output; a person
+ * opening a menu is not an output of the query. An in-flight fetch is joined
+ * rather than restarted (`cancelRefetch: false`), and a disabled one - no
+ * verdict, no host - is skipped by `refetchQueries`, which keeps each query's
+ * own gate the only one.
  */
 export function useRetryUnansweredTaskPinReading(): (epicId: string) => void {
   const queryClient = useQueryClient();
@@ -545,19 +579,42 @@ export function useRetryUnansweredTaskPinReading(): (epicId: string) => void {
   return useCallback(
     (epicId: string) => {
       if (userId === null) return;
+      const scope = { hostId: null, userId };
+      // Which authority renders this row. A pin-reading population exists
+      // exactly for the local-homed epics a live session reports, which is the
+      // same set the overlay marks `home: "local"` - so its presence picks the
+      // owning host's read, and the window's batch is left alone: that host
+      // does not own the epic, and re-asking it would spend a cloud round trip
+      // on a question it cannot answer.
+      const asksForPinReading = (query: Query): boolean =>
+        epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) &&
+        pinReadingQueryAsksFor(query.queryKey, epicId);
+      const localHomed =
+        queryClient
+          .getQueryCache()
+          .findAll({ type: "active", predicate: asksForPinReading }).length > 0;
       void queryClient.refetchQueries(
         {
           type: "active",
-          predicate: (query) =>
-            epicTaskContextsQueryKeyMatchesScope(query.queryKey, {
-              hostId: null,
-              userId,
-            }) &&
-            taskContextsQueryAsksFor(query.queryKey, epicId) &&
-            !taskContextsResponseAnswers(
-              queryClient.getQueryData<GetTaskContextsResponse>(query.queryKey),
-              epicId,
-            ),
+          predicate: localHomed
+            ? (query) =>
+                asksForPinReading(query) &&
+                !combineLocalPinReadings([
+                  {
+                    data: queryClient.getQueryData<ListTasksResponse>(
+                      query.queryKey,
+                    ),
+                  },
+                ]).has(epicId)
+            : (query) =>
+                epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
+                taskContextsQueryAsksFor(query.queryKey, epicId) &&
+                !taskContextsResponseAnswers(
+                  queryClient.getQueryData<GetTaskContextsResponse>(
+                    query.queryKey,
+                  ),
+                  epicId,
+                ),
         },
         { cancelRefetch: false },
       );

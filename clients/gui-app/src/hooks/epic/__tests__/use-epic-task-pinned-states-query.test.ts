@@ -10,6 +10,7 @@ import {
   GET_TASK_CONTEXTS_MAX_IDS,
   type GetTaskContextsResponse,
   type ListTaskLight,
+  type ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   chunkTaskIds,
@@ -19,7 +20,7 @@ import {
   useRetryUnansweredTaskPinReading,
   type TaskPinnedState,
 } from "@/hooks/epic/use-epic-task-pinned-states-query";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, queryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 function listTaskLight(epicId: string | null, pinned: boolean): ListTaskLight {
@@ -718,5 +719,266 @@ describe("useRetryUnansweredTaskPinReading", () => {
     result.current("epic-a");
 
     expect(refetchSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A minimal `Omit<ListTasksRequest, "cursor">` for building a pin-reading
+   * key. Its content is irrelevant to routing - only the population and the
+   * scope (host/user) matter to `pinReadingQueryAsksFor` /
+   * `epicPinReadingQueryKeyMatchesScope` - so one fixed shape is reused for
+   * every pin-reading key in this describe block.
+   */
+  const PIN_READING_REQUEST = {
+    limit: 1,
+    filters: null,
+    extensionPhaseVersion: "1",
+    extensionEpicVersion: "1",
+  };
+
+  function localHomedRow(epicId: string, pinned: boolean): ListTaskLight {
+    return { ...listTaskLight(epicId, pinned), home: "local" as const };
+  }
+
+  function pinReadingPage(tasks: readonly ListTaskLight[]): ListTasksResponse {
+    return { tasks: [...tasks], hasMore: false };
+  }
+
+  /**
+   * Local-homed routing: a live session's own pin-reading list, not the
+   * window's `epic.getTaskContexts` batch, is the authority for a local-homed
+   * epic - that batch does not own it and cannot resolve it. These three
+   * cases pin the SELECTION between the two sources; each is built so that
+   * collapsing the routing back into "check both sources for every epic"
+   * (the pre-routing shape) makes it fail.
+   */
+  describe("routes to exactly one source per epic", () => {
+    it("refetches an unanswered LOCAL pin-reading query, and leaves an unanswered getTaskContexts query for the same epic alone", async () => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      // The owning host's pin-reading page for a population that includes
+      // "epic-l", settled without a local reading for it.
+      const pinReadingKey = queryKeys.cloudEpicPinReading(
+        HOST_ID,
+        USER_ID,
+        PIN_READING_REQUEST,
+        ["epic-l"],
+      );
+      let pinReadingFetches = 0;
+      const pinReadingObserver = new QueryObserver<ListTasksResponse>(
+        queryClient,
+        {
+          queryKey: pinReadingKey,
+          queryFn: () => {
+            pinReadingFetches += 1;
+            return Promise.resolve(pinReadingPage([]));
+          },
+        },
+      );
+      const stopPinReading = pinReadingObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(pinReadingObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(pinReadingFetches).toBe(1);
+
+      // The window's cloud batch also asks for "epic-l" (the same tab's
+      // reading is requested from both places before the routing knows which
+      // one owns it) and also settles without answering it. If routing were
+      // removed - both sources checked for every epic - this one would also
+      // refetch.
+      const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+        "epic-l",
+      ]);
+      let taskContextsFetches = 0;
+      const taskContextsObserver = new QueryObserver<GetTaskContextsResponse>(
+        queryClient,
+        {
+          queryKey: taskContextsKey,
+          queryFn: () => {
+            taskContextsFetches += 1;
+            return Promise.resolve(
+              taskContexts(
+                { missing: { status: "unknown", reason: "transport" } },
+                undefined,
+              ),
+            );
+          },
+        },
+      );
+      const stopTaskContexts = taskContextsObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(taskContextsObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(taskContextsFetches).toBe(1);
+
+      const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
+        wrapper: wrapper(queryClient),
+      });
+
+      result.current("epic-l");
+
+      await waitFor(() => {
+        expect(pinReadingFetches).toBe(2);
+      });
+      // The getTaskContexts query never refetched, even though it also asks
+      // for "epic-l" and also lacks an answer for it.
+      expect(taskContextsFetches).toBe(1);
+
+      stopPinReading();
+      stopTaskContexts();
+    });
+
+    it("does not refetch anything once the local pin-reading answers the epic, even with an unanswered getTaskContexts query for it", async () => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      const pinReadingKey = queryKeys.cloudEpicPinReading(
+        HOST_ID,
+        USER_ID,
+        PIN_READING_REQUEST,
+        ["epic-l2"],
+      );
+      let pinReadingFetches = 0;
+      const pinReadingObserver = new QueryObserver<ListTasksResponse>(
+        queryClient,
+        {
+          queryKey: pinReadingKey,
+          queryFn: () => {
+            pinReadingFetches += 1;
+            return Promise.resolve(
+              pinReadingPage([localHomedRow("epic-l2", true)]),
+            );
+          },
+        },
+      );
+      const stopPinReading = pinReadingObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(pinReadingObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(pinReadingFetches).toBe(1);
+
+      // Deliberately still unanswered for "epic-l2" - if routing were
+      // removed and both sources checked unconditionally, this would
+      // refetch even though the epic is local-homed and already known.
+      const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+        "epic-l2",
+      ]);
+      let taskContextsFetches = 0;
+      const taskContextsObserver = new QueryObserver<GetTaskContextsResponse>(
+        queryClient,
+        {
+          queryKey: taskContextsKey,
+          queryFn: () => {
+            taskContextsFetches += 1;
+            return Promise.resolve(
+              taskContexts(
+                { missing: { status: "unknown", reason: "transport" } },
+                undefined,
+              ),
+            );
+          },
+        },
+      );
+      const stopTaskContexts = taskContextsObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(taskContextsObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(taskContextsFetches).toBe(1);
+
+      const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
+        wrapper: wrapper(queryClient),
+      });
+
+      result.current("epic-l2");
+
+      // Nothing to refetch on either side - give any stray microtask a
+      // chance to land, then confirm neither count moved.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(pinReadingFetches).toBe(1);
+      expect(taskContextsFetches).toBe(1);
+
+      stopPinReading();
+      stopTaskContexts();
+    });
+
+    it("refetches an unanswered CLOUD getTaskContexts query, and leaves an unrelated active pin-reading query alone", async () => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      // "epic-c" is cloud-homed: no pin-reading population anywhere names it.
+      const taskContextsKey = hostQueryKeys.epicTaskContexts(HOST_ID, USER_ID, [
+        "epic-c",
+      ]);
+      let taskContextsFetches = 0;
+      const taskContextsObserver = new QueryObserver<GetTaskContextsResponse>(
+        queryClient,
+        {
+          queryKey: taskContextsKey,
+          queryFn: () => {
+            taskContextsFetches += 1;
+            return Promise.resolve(
+              taskContexts(
+                { missing: { status: "unknown", reason: "transport" } },
+                undefined,
+              ),
+            );
+          },
+        },
+      );
+      const stopTaskContexts = taskContextsObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(taskContextsObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(taskContextsFetches).toBe(1);
+
+      // An unrelated LOCAL epic's pin-reading query, also unanswered - present
+      // only to prove the cloud retry does not sweep it up. If the routing
+      // predicate dropped its per-epic population check, this would refetch
+      // too.
+      const pinReadingKey = queryKeys.cloudEpicPinReading(
+        HOST_ID,
+        USER_ID,
+        PIN_READING_REQUEST,
+        ["epic-other"],
+      );
+      let pinReadingFetches = 0;
+      const pinReadingObserver = new QueryObserver<ListTasksResponse>(
+        queryClient,
+        {
+          queryKey: pinReadingKey,
+          queryFn: () => {
+            pinReadingFetches += 1;
+            return Promise.resolve(pinReadingPage([]));
+          },
+        },
+      );
+      const stopPinReading = pinReadingObserver.subscribe(() => undefined);
+      await waitFor(() => {
+        expect(pinReadingObserver.getCurrentResult().isFetching).toBe(false);
+      });
+      expect(pinReadingFetches).toBe(1);
+
+      const { result } = renderHook(() => useRetryUnansweredTaskPinReading(), {
+        wrapper: wrapper(queryClient),
+      });
+
+      result.current("epic-c");
+
+      await waitFor(() => {
+        expect(taskContextsFetches).toBe(2);
+      });
+      // The unrelated pin-reading query never refetched.
+      expect(pinReadingFetches).toBe(1);
+
+      stopTaskContexts();
+      stopPinReading();
+    });
   });
 });
