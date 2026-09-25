@@ -34,12 +34,21 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-const { deleteTuiAgentMutate, deleteChatMutate, deleteArtifactMutate } =
-  vi.hoisted(() => ({
-    deleteTuiAgentMutate: vi.fn(),
-    deleteChatMutate: vi.fn(),
-    deleteArtifactMutate: vi.fn(),
-  }));
+const {
+  deleteTuiAgentMutate,
+  deleteChatMutate,
+  deleteArtifactMutate,
+  exportMutate,
+} = vi.hoisted(() => ({
+  deleteTuiAgentMutate: vi.fn(),
+  deleteChatMutate: vi.fn(),
+  deleteArtifactMutate: vi.fn(),
+  exportMutate: vi.fn(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({ mutate: exportMutate, isPending: false }),
+}));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicDeleteChat: () => ({ mutate: deleteChatMutate, isPending: false }),
@@ -237,5 +246,109 @@ describe("SwitcherRowActions terminal-agent delete", () => {
       tuiAgentId: NODE_ID,
       hostId: HOST_B,
     });
+  });
+});
+
+const ARTIFACT_NODE_ID = "artifact-1";
+
+describe("artifact export", () => {
+  it("lists both export items ahead of Rename on an artifact row, and exporting calls the mutation", () => {
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+        cascadeSummary={null}
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+      { button: 0 },
+    );
+
+    const markdownItem = screen.getByTestId(
+      `switcher-export-markdown-${ARTIFACT_NODE_ID}`,
+    );
+    const pdfItem = screen.getByTestId(
+      `switcher-export-pdf-${ARTIFACT_NODE_ID}`,
+    );
+    const renameItem = screen.getByTestId(
+      `switcher-rename-${ARTIFACT_NODE_ID}`,
+    );
+    expect(
+      markdownItem.compareDocumentPosition(renameItem) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(
+      pdfItem.compareDocumentPosition(renameItem) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    fireEvent.click(pdfItem);
+
+    expect(exportMutate).toHaveBeenCalledExactlyOnceWith({
+      artifacts: [{ id: ARTIFACT_NODE_ID, title: "Artifact One" }],
+      format: "pdf",
+      archive: false,
+      archiveTitle: null,
+    });
+  });
+
+  it("has no export items on a terminal-agent row", () => {
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="terminal-agent"
+        nodeId={NODE_ID}
+        name="Shared terminal agent"
+        cascadeSummary={null}
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
+      button: 0,
+    });
+
+    expect(
+      screen.queryByTestId(`switcher-export-markdown-${NODE_ID}`),
+    ).toBeNull();
+    expect(screen.queryByTestId(`switcher-export-pdf-${NODE_ID}`)).toBeNull();
+  });
+
+  it("keeps the artifact menu for a viewer, with export enabled and Rename disabled", () => {
+    handle.store.setState({ permissionRole: "viewer" });
+
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+        cascadeSummary={null}
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+      { button: 0 },
+    );
+
+    const pdfItem = screen.getByTestId(
+      `switcher-export-pdf-${ARTIFACT_NODE_ID}`,
+    );
+    expect(pdfItem.hasAttribute("data-disabled")).toBe(false);
+
+    const renameItem = screen.getByTestId(
+      `switcher-rename-${ARTIFACT_NODE_ID}`,
+    );
+    expect(renameItem.hasAttribute("data-disabled")).toBe(true);
   });
 });
