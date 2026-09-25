@@ -3,7 +3,11 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockHostDirectoryEntries,
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
@@ -18,7 +22,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 
 /**
  * The background enrichment surfaces (History, the Epic sweep row, owner
- * cards) read activity rows per path through ONE batcher per host client, in
+ * cards) read activity rows per path through ONE batcher per host, in
  * chunks larger than the Settings panel's, and treat a row as fresh for five
  * minutes - so a navigation that mounts several of them, or remounts one, no
  * longer sends a burst of small `worktree.listAllForHost` calls.
@@ -56,6 +60,9 @@ function paths(prefix: string, count: number): string[] {
 
 interface Fixture {
   readonly queryClient: QueryClient;
+  /** The spine every requester below is a routing view over. */
+  readonly spine: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly client: HostClient<HostRpcRegistry>;
   /** `activityPaths` of every selection-mode call, in order. */
   readonly calls: string[][];
@@ -65,38 +72,39 @@ interface Fixture {
 function createFixture(): Fixture {
   const queryClient = createAppQueryClient();
   const calls: string[][] = [];
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "worktree.listAllForHost": (params) => {
+        const requested = params.activityPaths ?? [];
+        calls.push([...requested]);
+        return Promise.resolve({
+          worktrees: requested.map(hostRow),
+          nextCursor: null,
+        });
+      },
+    },
+  });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {
-        "worktree.listAllForHost": (params) => {
-          const requested = params.activityPaths ?? [];
-          calls.push([...requested]);
-          return Promise.resolve({
-            worktrees: requested.map(hostRow),
-            nextCursor: null,
-          });
-        },
-      },
-    }),
+      mockHostDirectoryEntries.find((entry) => entry.hostId === hostId) ?? null,
+    messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  // One requester for the fixture: the batcher is shared per client, so each
-  // test builds its own spine and never inherits another test's batcher.
+  // The batcher is shared per query cache and host, so each test builds its
+  // own query client and never inherits another test's batcher.
   const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
     </QueryClientProvider>
   );
-  return { queryClient, client, calls, Wrapper };
+  return { queryClient, spine, messenger, client, calls, Wrapper };
 }
 
 afterEach(() => {
@@ -129,6 +137,57 @@ describe("background worktree enrichment", () => {
     expect(fixture.calls).toHaveLength(1);
     expect([...fixture.calls[0]].sort()).toEqual(
       [...history, ...sweepRow].sort(),
+    );
+  });
+
+  it("shares one batcher between requesters resolved separately for one host, and not across hosts", async () => {
+    const fixture = createFixture();
+    // As History and an owner card each resolve their own: two routing views
+    // over one spine, neither the other's object.
+    const historyClient = fixture.spine.createRequester(mockLocalHostEntry);
+    const ownerClient = fixture.spine.createRequesterForHostId(
+      mockLocalHostEntry.hostId,
+    );
+    const remoteClient = fixture.spine.createRequesterForHostId(
+      mockRemoteHostEntry.hostId,
+    );
+    const history = paths("history", 3);
+    const owned = paths("owned", 2);
+    const remote = paths("remote", 2);
+
+    const { result } = renderHook(
+      () => ({
+        history: useWorktreeEnrichmentForClient(historyClient, history, true),
+        owned: useWorktreeEnrichmentForClient(ownerClient, owned, true),
+        remote: useWorktreeEnrichmentForClient(remoteClient, remote, true),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.history.worktrees).toHaveLength(3);
+      expect(result.current.owned.worktrees).toHaveLength(2);
+      expect(result.current.remote.worktrees).toHaveLength(2);
+    });
+    // The messenger logs each call's host, the handler its paths, in the same
+    // order.
+    const hosts = fixture.messenger.calls.map(
+      (call) => call.authority.endpoint.hostId,
+    );
+    expect(hosts).toHaveLength(fixture.calls.length);
+    const byHost = fixture.calls.map((requested, index) => ({
+      hostId: hosts.at(index),
+      paths: [...requested].sort(),
+    }));
+    expect(byHost).toHaveLength(2);
+    expect(byHost).toEqual(
+      expect.arrayContaining([
+        {
+          hostId: mockLocalHostEntry.hostId,
+          paths: [...history, ...owned].sort(),
+        },
+        { hostId: mockRemoteHostEntry.hostId, paths: [...remote].sort() },
+      ]),
     );
   });
 
