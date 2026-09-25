@@ -15,8 +15,10 @@ import {
   autoJudgeBillingForRun,
   autoJudgeMetaLine,
   autoJudgeTarget,
+  autoModeMidTurnLock,
   harnessHasNativeAutoJudge,
   providerRunsItsOwnJudge,
+  type AutoJudgeBilling,
   type AutoJudgeTarget,
   type AutoJudgeTargetInput,
 } from "@/lib/auto-mode/auto-judge-billing";
@@ -678,5 +680,90 @@ describe("autoJudgeMetaLine", () => {
     expect(autoJudgeMetaLine({ kind: "blocked" })).toBe(
       "No judge available on this machine · asks you instead",
     );
+  });
+});
+
+describe("autoModeMidTurnLock", () => {
+  const PROVIDER_NATIVE_BILLING: AutoJudgeBilling = {
+    kind: "provider-native",
+    harnessId: "claude",
+    harnessLabel: "Claude Code",
+  };
+
+  it("locks with the exact sentence when a turn is active, the current mode isn't auto, and billing is provider-native", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: PROVIDER_NATIVE_BILLING,
+      }),
+    ).toBe(
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+    );
+  });
+
+  it("is null when no turn is active, even for provider-native billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: false,
+        currentModeIsAuto: false,
+        judgeBilling: PROVIDER_NATIVE_BILLING,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the current mode is already auto, even for provider-native billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: true,
+        judgeBilling: PROVIDER_NATIVE_BILLING,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for traycer billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: { kind: "traycer", modelLabel: "Sonnet 5" },
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for provider billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: {
+          kind: "provider",
+          harnessId: "claude",
+          harnessLabel: "Claude Code",
+          modelLabel: "Sonnet",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for blocked billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: { kind: "blocked" },
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when judgeBilling is null (still loading)", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: null,
+      }),
+    ).toBeNull();
   });
 });

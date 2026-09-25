@@ -22,6 +22,7 @@ interface RenderPickerOptions {
   readonly turnActive: boolean;
   readonly judgeBilling: AutoJudgeBilling | null;
   readonly onOpenPermissionSettings: (() => void) | null;
+  readonly onChange: (next: PermissionMode) => void;
 }
 
 const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
@@ -33,6 +34,7 @@ const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
   turnActive: false,
   judgeBilling: null,
   onOpenPermissionSettings: null,
+  onChange: vi.fn(),
 };
 
 // Plain object-spread merge rather than `??` defaults: several cases here
@@ -48,7 +50,7 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
     <PermissionsPicker
       value={options.value}
       disabled={false}
-      onChange={vi.fn()}
+      onChange={options.onChange}
       supportedPermissionModes={options.supportedPermissionModes}
       harnessLabel={options.harnessLabel}
       catalogSupportedModes={options.catalogSupportedModes}
@@ -338,6 +340,98 @@ describe("<PermissionsPicker /> - mid-turn notice", () => {
     expect(
       screen.queryByTestId("permission-option-mid-turn-notice"),
     ).toBeNull();
+  });
+});
+
+describe("<PermissionsPicker /> - mid-turn lock", () => {
+  const PROVIDER_NATIVE_BILLING: AutoJudgeBilling = {
+    kind: "provider-native",
+    harnessId: "claude",
+    harnessLabel: "Claude Code",
+  };
+
+  function autoMenuItem(): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) =>
+          option.querySelector(".font-medium")?.textContent === "Auto",
+      );
+    if (item === undefined) throw new Error("Auto menu item not found");
+    return item;
+  }
+
+  it("disables the Auto item and shows the lock sentence, with no meta line or mid-turn notice, when billing is provider-native and a turn is active on a non-auto value", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).toContain(
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+    );
+    expect(screen.queryByTestId("permission-option-meta")).toBeNull();
+    expect(
+      screen.queryByTestId("permission-option-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not call onChange when the locked Auto item is selected", () => {
+    const onChange = vi.fn();
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "supervised",
+      onChange,
+    });
+    openMenu();
+
+    fireEvent.click(autoMenuItem());
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not lock Auto when the current value is already auto", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "auto",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+  });
+
+  it("does not lock Auto when no turn is active, and still shows the provider-native meta line", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
+      "Reviewed by Claude Code's built-in classifier · no extra cost",
+    );
+  });
+
+  it("does not lock Auto for traycer billing, and keeps the mid-turn notice", () => {
+    renderPicker({
+      judgeBilling: { kind: "traycer", modelLabel: "Sonnet 5" },
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe("Switches now. Anything already waiting still asks you.");
   });
 });
 

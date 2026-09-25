@@ -455,3 +455,32 @@ export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
       return "No judge available on this machine · asks you instead";
   }
 }
+
+/**
+ * Why the composer's Auto row is disabled for the turn running now, or `null`
+ * when it is not.
+ *
+ * A flip into Auto mid-turn takes effect at once when Traycer's judge reviews
+ * (the host binds it at its own approval seam), so the row stays live and the
+ * `AUTO_MID_TURN_NOTICE` says so. It cannot when the run's own provider
+ * reviews: that classifier decides inside a session whose mode was fixed when
+ * the turn was spawned, and the host refuses the flip
+ * (`AUTO_MODE_PROVIDER_JUDGE_NEEDS_NEW_TURN`) rather than quietly run
+ * Traycer's judge on a provider the user switched it off for. The row is
+ * disabled with this sentence instead, so the refusal is something the user
+ * reads before choosing, never a toast after.
+ *
+ * Only a flip INTO Auto is locked. A turn already in Auto keeps its judge,
+ * whichever it is, and a `null` billing (still loading) locks nothing: the
+ * host is the gate that cannot be bypassed, this row is the explanation.
+ */
+export function autoModeMidTurnLock(input: {
+  readonly turnActive: boolean;
+  /** Whether the mode on display is already `auto`. */
+  readonly currentModeIsAuto: boolean;
+  readonly judgeBilling: AutoJudgeBilling | null;
+}): string | null {
+  if (!input.turnActive || input.currentModeIsAuto) return null;
+  if (input.judgeBilling?.kind !== "provider-native") return null;
+  return `${input.judgeBilling.harnessLabel}'s built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.`;
+}

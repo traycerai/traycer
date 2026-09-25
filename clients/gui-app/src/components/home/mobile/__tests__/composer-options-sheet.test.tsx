@@ -7,6 +7,7 @@ import {
   AUTO_MID_TURN_NOTICE,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
+import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 
 // The sheet portals to <body> and re-asserts the app theme there; the provider
 // itself is not under test.
@@ -33,6 +34,7 @@ function renderSheet(overrides: {
   readonly hostKnowsAutoMode: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onOpenPermissionSettings: () => void;
+  readonly judgeBilling: AutoJudgeBilling | null;
 }) {
   return render(
     <ComposerOptionsSheet
@@ -42,15 +44,14 @@ function renderSheet(overrides: {
       onPermissionChange={overrides.onPermissionChange}
       supportedPermissionModes={overrides.supportedPermissionModes}
       harnessLabel="Cursor"
-      // Today's-behaviour values: no catalog to union and no host whose judge
-      // this fixture could name, so every row renders exactly what it
-      // rendered before these props existed. The unsupported-copy branch is
-      // covered against the desktop picker, which shares the two pure helpers
-      // this sheet calls.
+      // Today's-behaviour values: no catalog to union, so every row renders
+      // exactly what it rendered before these props existed. The
+      // unsupported-copy branch is covered against the desktop picker, which
+      // shares the two pure helpers this sheet calls.
       catalogSupportedModes={null}
       hostKnowsAutoMode={overrides.hostKnowsAutoMode}
       turnActive={overrides.turnActive}
-      judgeBilling={null}
+      judgeBilling={overrides.judgeBilling}
       settingsLocked={overrides.settingsLocked}
       onOpenPermissionSettings={overrides.onOpenPermissionSettings}
     />,
@@ -69,6 +70,7 @@ function defaults(): {
   readonly hostKnowsAutoMode: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onOpenPermissionSettings: () => void;
+  readonly judgeBilling: AutoJudgeBilling | null;
 } {
   return {
     supportedPermissionModes: null,
@@ -79,6 +81,7 @@ function defaults(): {
     hostKnowsAutoMode: true,
     onOpenChange: vi.fn(),
     onOpenPermissionSettings: vi.fn(),
+    judgeBilling: null,
   };
 }
 
@@ -244,5 +247,48 @@ describe("ComposerOptionsSheet - trailing 'Permission settings…' row", () => {
     const closeOrder = onOpenChange.mock.invocationCallOrder[0];
     const openOrder = onOpenPermissionSettings.mock.invocationCallOrder[0];
     expect(closeOrder).toBeLessThan(openOrder);
+  });
+});
+
+describe("ComposerOptionsSheet - mid-turn lock", () => {
+  const PROVIDER_NATIVE_BILLING: AutoJudgeBilling = {
+    kind: "provider-native",
+    harnessId: "claude",
+    harnessLabel: "Claude Code",
+  };
+
+  it("disables the Auto row and shows the lock sentence, with no meta line or mid-turn notice, when billing is provider-native and a turn is active on a non-auto permission", () => {
+    renderSheet({
+      ...defaults(),
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      permission: "supervised",
+    });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(true);
+    expect(auto.textContent).toContain(
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Permission settings.",
+    );
+    expect(screen.queryByTestId("composer-options-permission-meta")).toBeNull();
+    expect(
+      screen.queryByTestId("composer-options-permission-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not call onPermissionChange when the locked Auto row is selected", async () => {
+    const props = {
+      ...defaults(),
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      permission: "supervised" as PermissionMode,
+    };
+    renderSheet(props);
+
+    await userEvent.click(
+      screen.getByTestId("composer-options-permission-auto"),
+    );
+
+    expect(props.onPermissionChange).not.toHaveBeenCalled();
   });
 });
