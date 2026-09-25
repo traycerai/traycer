@@ -12,6 +12,7 @@ import {
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
   chatTurnMinimapItems,
+  createChatTurnMinimapDeriveSlot,
   resolveChatTurnMinimapCurrentIndex,
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapHitStripWidth,
@@ -88,9 +89,15 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // identity below (the `refreshCurrent` callback, the published outline) stops
   // churning with it. The `useMemo` is left in place only to keep the lookup
   // itself off the re-render path; the cache is what makes the result stable.
+  const [deriveSlot] = useState(createChatTurnMinimapDeriveSlot);
   const items = useMemo(
-    () => chatTurnMinimapItems({ rows, window: transcriptWindow }),
-    [rows, transcriptWindow],
+    () =>
+      chatTurnMinimapItems({
+        rows,
+        window: transcriptWindow,
+        slot: deriveSlot,
+      }),
+    [deriveSlot, rows, transcriptWindow],
   );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const coarsePointer = useCoarsePointer();

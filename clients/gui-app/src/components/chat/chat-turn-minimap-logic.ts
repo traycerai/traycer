@@ -236,7 +236,7 @@ export function resolveChatTurnMinimapCurrentIndex(
 
 export const CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS = 200;
 const PREVIEW_SOURCE_SCAN_LIMIT = 16_384;
-const WHITESPACE_RE = /\s/;
+const NON_WHITESPACE_RUN_RE = /\S+/g;
 
 function sliceWholeCodePoints(text: string, maxUnits: number): string {
   if (text.length <= maxUnits) return text;
@@ -245,24 +245,43 @@ function sliceWholeCodePoints(text: string, maxUnits: number): string {
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 }
 
+/**
+ * The first `maxOut + 1`-and-a-bit characters of `text` with every whitespace
+ * run collapsed to one space and the ends trimmed - enough for the caller to
+ * see whether it overflows `maxOut`.
+ *
+ * Whole runs of non-whitespace are copied as slices and joined once. The
+ * character-at-a-time concatenation this replaced built a string node per
+ * character, and it ran for every human turn of the transcript on every
+ * derive. The cut-off is the same as that loop's: a run is copied until the
+ * output passes `maxOut + 1`, and at least one character of it is copied
+ * after a separating space.
+ */
 function collapseWhitespaceUpTo(text: string, maxOut: number): string {
-  let out = "";
-  let pendingSpace = false;
-  const scanLimit = Math.min(text.length, PREVIEW_SOURCE_SCAN_LIMIT);
-  for (let index = 0; index < scanLimit; index += 1) {
-    const ch = text[index];
-    if (WHITESPACE_RE.test(ch)) {
-      if (out.length > 0) pendingSpace = true;
-      continue;
+  const scanned =
+    text.length > PREVIEW_SOURCE_SCAN_LIMIT
+      ? text.slice(0, PREVIEW_SOURCE_SCAN_LIMIT)
+      : text;
+  const limit = maxOut + 1;
+  const parts: string[] = [];
+  let length = 0;
+  NON_WHITESPACE_RUN_RE.lastIndex = 0;
+  for (
+    let match = NON_WHITESPACE_RUN_RE.exec(scanned);
+    match !== null;
+    match = NON_WHITESPACE_RUN_RE.exec(scanned)
+  ) {
+    if (length > 0) {
+      parts.push(" ");
+      length += 1;
     }
-    if (pendingSpace) {
-      out += " ";
-      pendingSpace = false;
-    }
-    out += ch;
-    if (out.length > maxOut + 1) break;
+    const run = match[0];
+    const take = Math.min(run.length, Math.max(1, limit + 1 - length));
+    parts.push(take === run.length ? run : run.slice(0, take));
+    length += take;
+    if (length > limit) break;
   }
-  return out;
+  return parts.join("");
 }
 
 export function compactChatTurnMinimapPreview(
@@ -311,10 +330,29 @@ function isHumanUserRow(row: TranscriptListRow): boolean {
   );
 }
 
+/**
+ * Labels by the object they were compacted from: the skeleton entry for a cold
+ * row, the model for a hydrated one.
+ *
+ * A derive re-labels every human turn in the transcript, but the text behind a
+ * label changes only when that object is replaced - an edit arrives as a new
+ * entry (an index `updated`) or a new model. Entries survive the skeleton
+ * copies each chunk and index change make, so a re-derive re-uses every label
+ * it already built.
+ */
+const labelBySource = new WeakMap<object, string>();
+
 function chatTurnMinimapRowLabel(row: TranscriptListRow): string {
+  const source = row.kind === "hydrated" ? row.model : row.entry;
+  if (source !== null) {
+    const cached = labelBySource.get(source);
+    if (cached !== undefined) return cached;
+  }
   const text =
     row.kind === "hydrated" ? row.model.content : (row.entry?.preview ?? "");
-  return compactChatTurnMinimapPreview(text) ?? "Untitled message";
+  const label = compactChatTurnMinimapPreview(text) ?? "Untitled message";
+  if (source !== null) labelBySource.set(source, label);
+  return label;
 }
 
 function deriveChatTurnMinimapItems(
@@ -400,6 +438,26 @@ const lastDeriveByRows = new WeakMap<
 >();
 
 /**
+ * One minimap's memory of the last outline it derived from a COMPLETE
+ * skeleton - see {@link chatTurnMinimapItems}. Owned by the component, one per
+ * mounted minimap, so two tiles showing different chats never share one.
+ */
+export interface ChatTurnMinimapDeriveSlot {
+  readonly kind: "chat-turn-minimap-derive-slot";
+}
+
+export function createChatTurnMinimapDeriveSlot(): ChatTurnMinimapDeriveSlot {
+  return { kind: "chat-turn-minimap-derive-slot" };
+}
+
+const settledItemsBySlot = new WeakMap<
+  ChatTurnMinimapDeriveSlot,
+  ReadonlyArray<ChatTurnMinimapItem>
+>();
+
+const NO_ITEMS: ReadonlyArray<ChatTurnMinimapItem> = [];
+
+/**
  * The rail's turn list, derived at most once per structural change.
  *
  * ## Why this is not `useMemo(..., [rows])`
@@ -438,12 +496,28 @@ const lastDeriveByRows = new WeakMap<
  * The legacy line has no window and no ordinals, so it keys on the `rows` array
  * itself - which is exactly the memo this replaced, and bounded there because
  * that line hydrates the whole transcript anyway.
+ *
+ * ## Not while the skeleton is incomplete
+ *
+ * A streaming skeleton replaces the window once per publish, and each
+ * replacement misses the cache above - a whole-transcript scan per chunk for
+ * an outline that is not finished. So while `skeletonComplete` is false this
+ * returns the slot's last COMPLETE outline instead (empty before the first),
+ * and derives again once the skeleton completes.
+ *
+ * Holding the last outline rather than clearing it matters: a rebuild
+ * restreams a skeleton the client already has, and the append republish
+ * declares it short for one publish. Neither should blank the phone tile
+ * bar's outline. Items reach the list by `messageId`, so a held outline still
+ * selects the right turn; only its current-turn highlight can trail a
+ * renumbering until the stream completes.
  */
 export function chatTurnMinimapItems(input: {
   readonly rows: ReadonlyArray<TranscriptListRow>;
   readonly window: TranscriptWindow | null;
+  readonly slot: ChatTurnMinimapDeriveSlot;
 }): ReadonlyArray<ChatTurnMinimapItem> {
-  const { rows, window } = input;
+  const { rows, slot, window } = input;
   if (window === null) {
     const cached = lastDeriveByRows.get(rows);
     if (cached !== undefined) return cached;
@@ -451,10 +525,17 @@ export function chatTurnMinimapItems(input: {
     lastDeriveByRows.set(rows, items);
     return items;
   }
+  if (!window.skeletonComplete) {
+    return settledItemsBySlot.get(slot) ?? NO_ITEMS;
+  }
   const key = deriveCacheKey(rows);
   const cached = lastDeriveByWindow.get(window);
-  if (cached !== undefined && cached.key === key) return cached.items;
+  if (cached !== undefined && cached.key === key) {
+    settledItemsBySlot.set(slot, cached.items);
+    return cached.items;
+  }
   const items = deriveChatTurnMinimapItems(rows);
   lastDeriveByWindow.set(window, { key, items });
+  settledItemsBySlot.set(slot, items);
   return items;
 }
