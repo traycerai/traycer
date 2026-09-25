@@ -186,6 +186,60 @@ describe("chatWholeSetSliceBytes", () => {
     });
     expect(empty).toBeGreaterThan(0);
   });
+
+  function commands(count: number, command: string): ReadonlyArray<object> {
+    return Array.from({ length: count }, (_, index) => ({
+      id: `cmd-${String(index)}`,
+      command,
+    }));
+  }
+
+  it("does not re-serialize a slice it has already measured", () => {
+    // Every transcript publish re-settles the charge, and a publish that moved
+    // no slice hands back the very same slice objects.
+    const slices = {
+      queue: { items: [{ id: "q1" }] },
+      pendingApprovals: [],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+      backgroundItems: [],
+      managedCommands: commands(3, "bun test"),
+    };
+    const first = chatWholeSetSliceBytes(slices);
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      const again = chatWholeSetSliceBytes({ ...slices });
+
+      expect(again).toBe(first);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it("measures a replaced slice afresh, exactly", () => {
+    const managedCommands = commands(3, "bun test");
+    const base = {
+      queue: {},
+      pendingApprovals: [],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+      backgroundItems: [],
+    };
+    const before = chatWholeSetSliceBytes({ ...base, managedCommands });
+
+    // A `managedCommandsChanged` frame: the set is replaced, never mutated.
+    const replaced = commands(3, "bun run test --watch");
+    const after = chatWholeSetSliceBytes({
+      ...base,
+      managedCommands: replaced,
+    });
+
+    expect(after).toBe(
+      new TextEncoder().encode(JSON.stringify(replaced)).length,
+    );
+    expect(after).toBeGreaterThan(before);
+  });
 });
 
 describe("legacyTranscriptResidencyBytes", () => {

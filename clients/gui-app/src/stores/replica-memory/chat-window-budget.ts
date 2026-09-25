@@ -47,13 +47,38 @@ export function chatSessionChargeBytes(
 
 export function chatWholeSetSliceBytes(slices: ChatWholeSetSlices): number {
   return (
-    jsonByteLength(slices.queue) +
-    jsonByteLength(slices.pendingApprovals) +
-    jsonByteLength(slices.pendingFileEditApprovals) +
-    jsonByteLength(slices.pendingInterviews) +
-    jsonByteLength(slices.backgroundItems) +
-    jsonByteLength(slices.managedCommands)
+    sliceBytes(slices.queue) +
+    sliceBytes(slices.pendingApprovals) +
+    sliceBytes(slices.pendingFileEditApprovals) +
+    sliceBytes(slices.pendingInterviews) +
+    sliceBytes(slices.backgroundItems) +
+    sliceBytes(slices.managedCommands)
   );
+}
+
+/**
+ * Each slice's figure, by the slice object's identity.
+ *
+ * Every transcript publish re-settles the session's charge, and most publishes
+ * move none of these slices - a skeleton chunk, an index echo, a range answer.
+ * Re-serializing all six each time was a `JSON.stringify` of the whole managed
+ * command list (hundreds of entries on a long chat) per publish, producing a
+ * throwaway string only to measure it.
+ *
+ * Exact, not approximate, because the chat store never mutates a slice in
+ * place: a change to any of them is a new array or object in a new state, so
+ * a changed slice is a cache miss and is measured afresh. A `WeakMap`, so a
+ * replaced slice's figure goes with it.
+ */
+const sliceBytesByIdentity = new WeakMap<object, number>();
+
+function sliceBytes(slice: unknown): number {
+  if (typeof slice !== "object" || slice === null) return jsonByteLength(slice);
+  const cached = sliceBytesByIdentity.get(slice);
+  if (cached !== undefined) return cached;
+  const bytes = jsonByteLength(slice);
+  sliceBytesByIdentity.set(slice, bytes);
+  return bytes;
 }
 
 /**
