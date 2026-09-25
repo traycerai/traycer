@@ -3,8 +3,7 @@ import { FolderPlus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useWorktreeHostListingForClient } from "@/hooks/worktree/use-worktree-host-listing";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { cn } from "@/lib/utils";
 import { FolderRow } from "./folder-row";
@@ -54,33 +53,17 @@ export function WorkspaceFolderRows(props: {
     (item) =>
       (item.summary?.worktrees.filter((w) => !w.isMain).length ?? 0) > 0,
   );
-  const hostWorktreesQuery = useHostQuery<
-    HostRpcRegistry,
-    "worktree.listAllForHost"
-  >({
-    cacheKeyIdentity: undefined,
-    client: hostClient,
-    method: "worktree.listAllForHost",
-    // Whole-list mode (no per-viewport selection); this surface only reads the
-    // cheap base fields (uncommitted counts), so no activity enrichment.
-    params: {
-      includeActivity: false,
-      activityPaths: null,
-      cursor: null,
-      limit: null,
-      // A background read: serve the host's TTL-cached view. Only the
-      // Settings toolbar's explicit Refresh forces a disk recompute.
-      forceRefresh: false,
-    },
-    options: { enabled: hasAnyWorktrees && !props.readOnly },
-  });
+  const hostWorktrees = useWorktreeHostListingForClient(
+    hostClient,
+    hasAnyWorktrees && !props.readOnly,
+  );
   const uncommittedByPath = useMemo(() => {
     const byPath = new Map<string, number>();
-    for (const entry of hostWorktreesQuery.data?.worktrees ?? []) {
+    for (const entry of hostWorktrees.worktrees) {
       byPath.set(entry.worktreePath, entry.uncommittedCount);
     }
     return byPath;
-  }, [hostWorktreesQuery.data]);
+  }, [hostWorktrees.worktrees]);
 
   const trailing =
     props.trailingSlot === null ? null : (

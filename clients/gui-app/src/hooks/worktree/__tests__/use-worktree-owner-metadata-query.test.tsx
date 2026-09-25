@@ -86,7 +86,16 @@ describe("useWorktreeOwnerMetadata", () => {
     // plain folder to the per-workspace summary. Sending the plain folder to
     // the walk would return nothing for it, and it is that silent nothing -
     // falling through to the entry's null `branch` - that rendered "No branch".
+    // The one host listing first; the listing does not name this binding's
+    // worktree, so it is then read by selection.
     expect(fixture.calls("worktree.listAllForHost")).toEqual([
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: null,
+        forceRefresh: false,
+      },
       {
         includeActivity: true,
         activityPaths: [WORKTREE_PATH],

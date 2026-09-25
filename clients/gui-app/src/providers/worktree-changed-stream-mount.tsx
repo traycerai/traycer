@@ -10,6 +10,10 @@ import {
 } from "@/lib/host/stream-runtime-context";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 import {
+  markWorktreeChangedStreamClosed,
+  markWorktreeChangedStreamOpen,
+} from "@/lib/worktree/worktree-changed-coverage";
+import {
   createWorktreeChangedInvalidationScheduler,
   WORKTREE_CHANGED_INVALIDATION_DEBOUNCE_MS,
   WORKTREE_CHANGED_INVALIDATION_MAX_WAIT_MS,
@@ -61,6 +65,18 @@ export function WorktreeChangedStreamMount(): ReactNode {
     // inside the nested `openClient` function declaration.
     const streamClient = wsStreamClient;
     const hostConnection = acquireHostConnection(hostId);
+    // Whether this mount currently counts as covering its host (see
+    // `worktree-changed-coverage.ts`): set on an open stream, cleared on a
+    // terminal close and on unmount. A reconnect keeps it - the catch-up frame
+    // on resubscribe refetches everything the gap could have missed.
+    const streamHostId = hostId;
+    let covering = false;
+    const setCovering = (next: boolean): void => {
+      if (next === covering) return;
+      covering = next;
+      if (next) markWorktreeChangedStreamOpen(streamHostId);
+      else markWorktreeChangedStreamClosed(streamHostId);
+    };
     let disposed = false;
     let currentClient: WorktreeChangedStreamClient | null = null;
     const reopenScheduler = hostConnection.reconnect.openReopenLane(() => {
@@ -88,9 +104,11 @@ export function WorktreeChangedStreamMount(): ReactNode {
             if (currentClient !== client) return;
             if (status === "open") {
               openedAtMs = Date.now();
+              setCovering(true);
               return;
             }
             if (status === "closed") {
+              setCovering(false);
               // Events are the only frame this stream carries; a healthy but
               // quiet session must still reset the lane, or the backoff
               // ratchets one-way across the client's lifetime.
@@ -111,6 +129,7 @@ export function WorktreeChangedStreamMount(): ReactNode {
     openClient();
     return () => {
       disposed = true;
+      setCovering(false);
       reopenScheduler.dispose();
       const client = currentClient;
       currentClient = null;

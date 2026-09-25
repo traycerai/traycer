@@ -36,6 +36,10 @@ import {
   markEpicCreateSeedPending,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
+import {
+  isWorktreeChangedStreamOpen,
+  resetWorktreeChangedCoverageForTests,
+} from "@/lib/worktree/worktree-changed-coverage";
 
 /**
  * The marker is keyed per `(epicId, chatId)` pair, so this suite has to name
@@ -480,6 +484,24 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     worktreeMountStreamState.support = "supported";
     worktreeMountStreamState.hostId = "host-A";
     worktreeMountStreamState.hasClient = true;
+  });
+
+  it("counts its host as covered while the stream is open, and not after a terminal close or unmount", () => {
+    resetWorktreeChangedCoverageForTests();
+    const queryClient = createAppQueryClient();
+    const { unmount } = renderWorktreeChangedStreamMount(queryClient);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+
+    emitWorktreeMountStatus("closed", worktreeMountFatalClose("UNAUTHORIZED"));
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+    unmount();
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
   });
 
   it("opens exactly one host-scoped subscription and closes it on unmount", () => {

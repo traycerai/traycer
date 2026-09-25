@@ -75,7 +75,12 @@ function createFixture(): Fixture {
       requestId: () => "req-1",
       handlers: {
         "worktree.listAllForHost": (params) => {
-          const requested = params.activityPaths ?? [];
+          // The paged listing names none of these paths, so each is read by
+          // selection - the batching these tests are about.
+          if (params.activityPaths === null) {
+            return Promise.resolve({ worktrees: [], nextCursor: null });
+          }
+          const requested = params.activityPaths;
           calls.push([...requested]);
           return Promise.resolve({
             worktrees: requested.map(hostRow),

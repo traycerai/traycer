@@ -14,6 +14,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
 import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { resetWorktreePullRequestTouchesForTests } from "@/hooks/worktree/use-worktree-enrichment-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createAppQueryClient } from "@/lib/query-client";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
@@ -24,24 +25,20 @@ import {
 } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
 
 /**
- * Regression coverage for the History worktree amplification loop: a
- * per-path `worktree.changed` frame used to widen `useTaskWorktreeMetadata`'s
- * refetch to the WHOLE multi-path enrichment key it read (every owned row,
- * re-derived - spawning git for all of them), instead of just the one row the
- * frame named.
+ * What `worktree.changed` frames cost `useTaskWorktreeMetadata` (History and the
+ * Epic sweep row), on the wire.
  *
- * Against the pre-fix code, (mount), (a), (b) and (d) ALL fail on their
- * assertions: the old hook read ONE `activityPaths: ownedPaths` key rather
- * than one batched call per chunk of owned paths, so (mount) alone already
- * mismatches; and the old invalidator refetched any
- * multi-path key on every path frame - so a frame for one row, or for a row
- * not on the page at all, re-requested all 27 paths. (c) is the control and
- * passes on both: a root frame re-reads every owned row either way.
+ * The rows come from the ONE host listing (paged, never spawning git), so a
+ * frame - for a row, for several, or for the root - costs exactly one base
+ * listing call: the host re-derived the named rows before it published, and the
+ * listing carries them. No frame costs a selection-mode read (the kind that
+ * derives), which is what used to turn History's frames into per-row git work.
+ * The only selection read on mount is the PR-freshness touch, once per host
+ * per interval.
  *
- * Every count is read only once NOTHING is fetching. A per-path refetch waits
- * in the batcher's coalescing window before its RPC is sent, so asserting as
- * soon as the base call lands would pass vacuously over a regression that is
- * still queued.
+ * Every count is read only once NOTHING is fetching. A selection read waits in
+ * the batcher's coalescing window before its RPC is sent, so asserting as soon
+ * as the base call lands would pass vacuously over one still queued.
  */
 
 const HOST_ID = mockLocalHostEntry.hostId;
@@ -72,6 +69,7 @@ interface ListAllForHostCall {
 
 afterEach(() => {
   cleanup();
+  resetWorktreePullRequestTouchesForTests();
 });
 
 function perPathKey(path: string): QueryKey {
@@ -202,39 +200,34 @@ function selectionCallsOf(fixture: Fixture): readonly ListAllForHostCall[] {
 }
 
 describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost", () => {
-  it("(mount) costs exactly one base call and one selection call per background chunk of owned paths, covering every owned path once", async () => {
+  it("(mount) costs exactly one base call, and one PR-touch selection batch covering every owned path once", async () => {
     const fixture = createFixture();
     await mountAndSettle(fixture);
 
     const base = baseCallsOf(fixture);
     const selection = selectionCallsOf(fixture);
 
+    // The rows themselves come from the one base listing; the only selection
+    // read is the PR-freshness touch, due on the host's first mount.
     expect(base).toHaveLength(1);
     expect(selection).toHaveLength(Math.ceil(OWNED_COUNT / BATCH_LIMIT));
     for (const call of selection) {
-      expect(call.activityPaths).not.toBeNull();
       expect((call.activityPaths ?? []).length).toBeLessThanOrEqual(
         BATCH_LIMIT,
       );
     }
     const union = selection.flatMap((call) => call.activityPaths ?? []);
-    expect(union.length).toBe(OWNED_COUNT);
-    expect(new Set(union).size).toBe(OWNED_COUNT);
     expect([...union].sort()).toEqual([...OWNED_PATHS].sort());
   });
 
-  it("(a) a path frame for one on-screen path refetches only that path's per-path query", async () => {
+  it("(a) a path frame for an on-screen path costs exactly one base call and no selection call", async () => {
     const fixture = createFixture();
     const rendered = await mountAndSettle(fixture);
     fixture.clearCalls();
 
     const target = OWNED_PATHS[0];
-    const untouched = OWNED_PATHS.slice(1);
-    const beforeTarget =
-      fixture.queryClient.getQueryState(perPathKey(target))?.dataUpdateCount ??
-      0;
-    const beforeOthers = new Map(
-      untouched.map((path) => [
+    const before = new Map(
+      OWNED_PATHS.map((path) => [
         path,
         fixture.queryClient.getQueryState(perPathKey(path))?.dataUpdateCount ??
           0,
@@ -249,57 +242,43 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
     });
 
     await waitFor(() => {
-      expect(selectionCallsOf(fixture)).toHaveLength(1);
+      expect(baseCallsOf(fixture)).toHaveLength(1);
     });
     await settled(fixture);
 
-    // The wire first: this is what the host pays for.
-    const selection = selectionCallsOf(fixture);
-    expect(selection).toHaveLength(1);
-    expect(selection[0]?.activityPaths).toEqual([target]);
+    // The host re-derived the row before publishing, so the base listing
+    // carries it; nothing re-derives on a selection read.
     expect(baseCallsOf(fixture)).toHaveLength(1);
-
-    // Then the cache: that row's query refetched once, no other row's did.
-    expect(
-      fixture.queryClient.getQueryState(perPathKey(target))?.dataUpdateCount,
-    ).toBe(beforeTarget + 1);
-    for (const path of untouched) {
+    expect(selectionCallsOf(fixture)).toHaveLength(0);
+    for (const path of OWNED_PATHS) {
       expect(
-        fixture.queryClient.getQueryState(perPathKey(path))?.dataUpdateCount,
-      ).toBe(beforeOthers.get(path));
+        fixture.queryClient.getQueryState(perPathKey(path))?.dataUpdateCount ??
+          0,
+      ).toBe(before.get(path));
     }
-    // Still mounted with the same 27 owned rows - the burst didn't drop
-    // anything from the page.
     expect(rendered.result.current.worktreesByEpicId.get(EPIC_ID)).toHaveLength(
       OWNED_COUNT,
     );
   });
 
-  it("(a) two path frames in the same flush give ONE selection call with exactly both paths", async () => {
+  it("(a) two path frames in the same flush still cost one base call and no selection call", async () => {
     const fixture = createFixture();
     await mountAndSettle(fixture);
     fixture.clearCalls();
 
-    const first = OWNED_PATHS[0];
-    const second = OWNED_PATHS[1];
-
     act(() => {
       invalidateWorktreeChangedCaches(fixture.queryClient, HOST_ID, {
         root: false,
-        worktreePaths: new Set([first, second]),
+        worktreePaths: new Set([OWNED_PATHS[0], OWNED_PATHS[1]]),
       });
     });
 
     await waitFor(() => {
-      expect(selectionCallsOf(fixture)).toHaveLength(1);
+      expect(baseCallsOf(fixture)).toHaveLength(1);
     });
     await settled(fixture);
-    const selection = selectionCallsOf(fixture);
-    expect(selection).toHaveLength(1);
-    expect([...(selection[0]?.activityPaths ?? [])].sort()).toEqual(
-      [first, second].sort(),
-    );
     expect(baseCallsOf(fixture)).toHaveLength(1);
+    expect(selectionCallsOf(fixture)).toHaveLength(0);
   });
 
   it("(b) a frame naming an off-screen owned path, and one the host does not list at all, issues zero selection calls and exactly one base call", async () => {
@@ -343,7 +322,7 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
     );
   });
 
-  it("(c) control: a root frame gives exactly one base call and its selection calls cover every owned path exactly once (green on both old and new code)", async () => {
+  it("(c) a root frame costs exactly one base call and no selection call", async () => {
     const fixture = createFixture();
     await mountAndSettle(fixture);
     fixture.clearCalls();
@@ -358,25 +337,12 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
     await waitFor(() => {
       expect(baseCallsOf(fixture)).toHaveLength(1);
     });
-    await waitFor(() => {
-      const union = selectionCallsOf(fixture).flatMap(
-        (call) => call.activityPaths ?? [],
-      );
-      expect(new Set(union).size).toBe(OWNED_COUNT);
-    });
     await settled(fixture);
     expect(baseCallsOf(fixture)).toHaveLength(1);
-    const selection = selectionCallsOf(fixture);
-    const union = selection.flatMap((call) => call.activityPaths ?? []);
-    expect([...union].sort()).toEqual([...OWNED_PATHS].sort());
-    // R6: still bounded by the batch size, even though this control
-    // deliberately does not pin the exact selection-call count.
-    expect(selection.length).toBeLessThanOrEqual(
-      Math.ceil(OWNED_COUNT / BATCH_LIMIT),
-    );
+    expect(selectionCallsOf(fixture)).toHaveLength(0);
   });
 
-  it("(d) coalesces a burst of path frames (10×P1, 5×P2, 3×off-screen Q) inside the debounce window into one flush: one base call and one selection call covering exactly {P1,P2}", async () => {
+  it("(d) coalesces a burst of path frames (10×P1, 5×P2, 3×off-screen Q) inside the debounce window into one flush: one base call and no selection call", async () => {
     const fixture = createFixture();
     await mountAndSettle(fixture);
     fixture.clearCalls();
@@ -408,16 +374,9 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
       },
       { timeout: WORKTREE_CHANGED_INVALIDATION_DEBOUNCE_MS + 2_000 },
     );
-    await waitFor(() => {
-      expect(selectionCallsOf(fixture)).toHaveLength(1);
-    });
     await settled(fixture);
     expect(baseCallsOf(fixture)).toHaveLength(1);
-    const selection = selectionCallsOf(fixture);
-    expect(selection).toHaveLength(1);
-    expect([...(selection[0]?.activityPaths ?? [])].sort()).toEqual(
-      [p1, p2].sort(),
-    );
+    expect(selectionCallsOf(fixture)).toHaveLength(0);
 
     scheduler.dispose();
   });
