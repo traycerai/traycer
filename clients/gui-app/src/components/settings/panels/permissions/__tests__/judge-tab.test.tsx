@@ -744,6 +744,37 @@ describe("JudgeTab", () => {
       expect(screen.getByRole("option", { name: "Medium" })).not.toBeNull();
     });
 
+    it("shows 'Default (Low)' when the stored effort is one the model no longer advertises", () => {
+      // The host resolves an unadvertised stored id to the model's lowest
+      // effort; the field names that same default instead of painting an
+      // empty trigger (a Select whose value matches no item renders nothing).
+      judgeRecord.current = {
+        selection: {
+          harnessId: "claude",
+          model: "sonnet",
+          profileId: null,
+          reasoningEffort: "xhigh",
+        },
+      };
+      render(<JudgeTab />);
+
+      expect(screen.getByTestId("judge-effort-select").textContent).toContain(
+        "Default (Low)",
+      );
+
+      fireEvent.click(screen.getByTestId("judge-effort-select"));
+      fireEvent.click(screen.getByRole("option", { name: "Medium" }));
+
+      expect(setJudgeMutate.mock.calls[0][0]).toEqual({
+        selection: {
+          harnessId: "claude",
+          model: "sonnet",
+          profileId: null,
+          reasoningEffort: "medium",
+        },
+      });
+    });
+
     it("calls autoJudge.set with the picked effort", () => {
       render(<JudgeTab />);
 

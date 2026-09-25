@@ -52,9 +52,12 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
  *
  * So this suite now proves two things about a LEGACY row: it is still
  * PROJECTED at its ordinal (`rendered-messages.ts` is unchanged), and
- * rendering it paints nothing (`chat-message.tsx`'s `auto-judge-notice` case
- * returns `null`) and contributes no find units
- * (`chat-find-projection.ts`'s `segmentSearchText` returns `[]` for it).
+ * rendering it paints nothing at all - `chat-message.tsx`'s
+ * `auto-judge-notice` case returns `null` from the special-segment renderer,
+ * and (unlike the other special segments, which have no sender/body but no
+ * `system` role or timestamp either) the row's `system` role and timestamp do
+ * not fall through to the ordinary sender overline - and contributes no find
+ * units (`chat-find-projection.ts`'s `segmentSearchText` returns `[]` for it).
  *
  * The HOST half here is played by the protocol's own producers - the same
  * `buildRowSkeleton`, `sliceTranscriptTail` and `sliceTranscriptRange` the
@@ -362,8 +365,8 @@ function projectedNotices(handle: ChatSessionStoreHandle): Array<{
   });
 }
 
-function renderRow(model: ChatMessageModel): void {
-  render(
+function renderRow(model: ChatMessageModel): HTMLElement {
+  const { container } = render(
     <ChatMessage
       message={model}
       actions={null}
@@ -371,6 +374,7 @@ function renderRow(model: ChatMessageModel): void {
       nextStepActions={null}
     />,
   );
+  return container;
 }
 
 afterEach(() => {
@@ -408,11 +412,14 @@ describe("auto-mode judge notices in the windowed transcript", () => {
 
       const fallback = drawn.find((notice) => notice.marker === "fallback");
       if (fallback === undefined) throw new Error("fallback notice not drawn");
-      renderRow(fallback.model);
+      const container = renderRow(fallback.model);
       // But rendering it paints nothing: `chat-message.tsx`'s
-      // `auto-judge-notice` case returns `null`.
+      // `auto-judge-notice` case returns `null`, and the row's `system` role
+      // and timestamp do not fall through to the sender overline either.
+      expect(container.firstChild).toBeNull();
       expect(screen.queryByRole("note")).toBeNull();
       expect(screen.queryByText(FALLBACK_TEXT)).toBeNull();
+      expect(screen.queryByText(/system/i)).toBeNull();
       // And it contributes no find units either.
       expect(
         buildChatFindRows([fallback.model], "tile-notice", new Set())[0]?.units,
@@ -479,9 +486,14 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         })),
       ).toEqual(EXPECTED_NOTICES);
 
-      for (const notice of drawn) renderRow(notice.model);
-      // Nothing paints for any of the three, whichever sender wrote it.
+      const containers = drawn.map((notice) => renderRow(notice.model));
+      // Nothing paints for any of the three, whichever sender wrote it - not
+      // even the row's own `system` role and timestamp overline.
       expect(screen.queryAllByRole("note")).toHaveLength(0);
+      expect(screen.queryByText(/system/i)).toBeNull();
+      for (const container of containers) {
+        expect(container.firstChild).toBeNull();
+      }
       for (const notice of drawn) {
         expect(screen.queryByText(notice.message)).toBeNull();
         expect(
@@ -536,10 +548,13 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       );
       const live = drawn.at(0);
       if (live === undefined) throw new Error("live notice not drawn");
-      renderRow(live.model);
-      // Still paints nothing, exactly like a rehydrated legacy row.
+      const container = renderRow(live.model);
+      // Still paints nothing, exactly like a rehydrated legacy row - the
+      // row's `system` role and timestamp don't fall through either.
+      expect(container.firstChild).toBeNull();
       expect(screen.queryByRole("note")).toBeNull();
       expect(screen.queryByText(FALLBACK_TEXT)).toBeNull();
+      expect(screen.queryByText(/system/i)).toBeNull();
       expect(
         buildChatFindRows([live.model], "tile-notice", new Set())[0]?.units,
       ).toEqual([]);

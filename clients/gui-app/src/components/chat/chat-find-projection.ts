@@ -188,7 +188,7 @@ function chatFindUnitsForMessage(
   // A synthesized row whose single segment is a setup-card / forked-chat-link
   // / imported-chat-marker
   // renders that segment's own find anchor and no content block (the render side
-  // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
+  // is renderSpecialSegment in chat-message.tsx; both key off the shared
   // singleSpecialSegment predicate), so index the segment.
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
@@ -489,7 +489,7 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
         ),
       ];
     case "auto-judge-notice":
-      // Painted as nothing (see `renderSingleSpecialSegment`), so it has no
+      // Painted as nothing (see `renderSpecialSegment`), so it has no
       // text a find hit could be painted onto.
       return [];
     case "setup-card":

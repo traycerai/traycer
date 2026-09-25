@@ -111,6 +111,21 @@ function effortOptionsForModel(
 }
 
 /**
+ * The stored effort as the Effort field shows it: the stored id while the
+ * model still advertises it, else `null`, which the field paints as its
+ * "Default (<lowest>)" option. That is what the host runs for such an id
+ * (`effectiveJudgeReasoningEffort` falls back to the lowest advertised), and
+ * a `Select` whose value matches no item would paint an empty trigger instead.
+ */
+function storedEffortIfOffered(
+  effortOptions: ReadonlyArray<AgentReasoningEffortOption>,
+  stored: string | null,
+): string | null {
+  if (stored === null) return null;
+  return effortOptions.some((option) => option.id === stored) ? stored : null;
+}
+
+/**
  * Settings ▸ Permissions ▸ Judge: which model reviews commands in Auto mode on
  * this machine, and which providers review their own.
  */
@@ -484,7 +499,10 @@ function SpecificOption(props: {
             models={pick.models}
             modelsFailed={pick.modelsFailed}
             effortOptions={effortOptions}
-            effort={displayed?.reasoningEffort ?? null}
+            effort={storedEffortIfOffered(
+              effortOptions,
+              displayed?.reasoningEffort ?? null,
+            )}
             showEffort={props.showEffort}
             openProvidersFor={openProvidersTarget(pick, cause)}
             disabled={props.disabled}

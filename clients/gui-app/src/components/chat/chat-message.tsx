@@ -1,7 +1,10 @@
 import { memo, type ReactElement } from "react";
 import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
@@ -122,13 +125,10 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 
 // A synthesized row can carry a single full-width "special" segment (a
 // setup-card, a forked-chat-link or an imported-chat-marker) with no
-// sender/body. Render it directly,
-// bypassing the role branches below.
-function renderSingleSpecialSegment(
-  message: ChatMessageModel,
-): ReactElement | null {
-  const segment = singleSpecialSegment(message.segments);
-  if (segment === null) return null;
+// sender/body. Render it directly, bypassing the role branches below - and
+// when the segment paints nothing, paint nothing: the row's `system` role and
+// timestamp must not fall through to the ordinary sender overline.
+function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
   if (segment.kind === "setup-card") {
     return (
       <div
@@ -237,9 +237,9 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 
 function ChatMessageImpl(props: ChatMessageProps) {
   const { actions, message } = props;
-  const specialSegment = renderSingleSpecialSegment(message);
+  const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
-    return specialSegment;
+    return renderSpecialSegment(specialSegment);
   }
   if (message.role === "assistant") {
     return renderAssistantMessage(props);
