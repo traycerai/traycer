@@ -27,6 +27,7 @@
     "../shared/**/__tests__/**",
     "../shared/**/*.test.ts",
     "../shared/oxlint.config.ts",
+    "../../protocol/dist",
     "../../protocol/**/__tests__/**",
     "../../protocol/**/*.test.ts",
     "../../protocol/oxlint.config.ts"
