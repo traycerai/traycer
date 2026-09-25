@@ -1,4 +1,6 @@
 import type { ClipboardEventHandler, DragEventHandler, Ref } from "react";
+import { PHONE_COMPOSER_EDITOR_CAP_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
+import { cn } from "@/lib/utils";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
@@ -106,7 +108,13 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       isActive={isActive}
       disabled={disabled}
       placeholder={placeholder}
-      editorClassName="max-h-[3.5lh] min-h-9"
+      // Desktop keeps the chat editor compact; a phone lets it grow to the
+      // same cap as the landing composer, so a long draft has room before
+      // the grabber offers the sheet.
+      editorClassName={cn(
+        "max-h-[3.5lh] min-h-9",
+        PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
+      )}
       stabilizeImageAttachmentCaret
       onDocumentChange={onDocumentChange}
       onSelectionChange={onSelectionChange}
