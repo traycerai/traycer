@@ -35,7 +35,7 @@ import {
  * than one batched call per chunk of owned paths, so (mount) alone already
  * mismatches; and the old invalidator refetched any
  * multi-path key on every path frame - so a frame for one row, or for a row
- * not on the page at all, re-requested all 27 paths. (c) is the control and
+ * not on the page at all, re-requested every owned path. (c) is the control and
  * passes on both: a root frame re-reads every owned row either way.
  *
  * Every count is read only once NOTHING is fetching. A per-path refetch waits
@@ -47,7 +47,8 @@ import {
 const HOST_ID = mockLocalHostEntry.hostId;
 const EPIC_ID = "epic-1";
 const EPIC_OTHER = "epic-other";
-const OWNED_COUNT = 27;
+// More than one background chunk, so (mount) sees the chunking.
+const OWNED_COUNT = 40;
 const OTHER_COUNT = 3;
 // The background surfaces' chunk (History, the Epic sweep row), not Settings'.
 const BATCH_LIMIT = WORKTREE_BACKGROUND_ENRICH_BATCH_LIMIT;
@@ -268,7 +269,7 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
         fixture.queryClient.getQueryState(perPathKey(path))?.dataUpdateCount,
       ).toBe(beforeOthers.get(path));
     }
-    // Still mounted with the same 27 owned rows - the burst didn't drop
+    // Still mounted with the same owned rows - the burst didn't drop
     // anything from the page.
     expect(rendered.result.current.worktreesByEpicId.get(EPIC_ID)).toHaveLength(
       OWNED_COUNT,
