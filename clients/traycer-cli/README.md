@@ -87,6 +87,7 @@ Traycer-launched agent sessions receive environment variables such as `TRAYCER_A
 
 ```sh
 traycer agent list
+traycer agent binding --agent-id <agent-id> --json
 traycer agent inbox
 traycer agent send --to <agent-id> --message "Can you review this change?"
 traycer workspace list
@@ -94,6 +95,14 @@ traycer worktree create --workspace /path/to/repo --branch my-feature
 ```
 
 These commands are mainly intended for Traycer-managed automation, but they are regular CLI commands and can be scripted when the host is running and the required IDs are supplied.
+
+`traycer agent binding` prefers the dedicated metadata-only Host RPC. With a
+released Host that predates that RPC, it can recover local TUI bindings from
+the Host's existing authorized agent records and immediately projects them to
+the same five-field response. This compatibility path never subscribes to chat
+state or reads transcript bodies, though the authorized records it projects can
+include launch metadata while they are in CLI memory. GUI bindings require a
+Host with the dedicated RPC and otherwise return `E_HOST_UNSUPPORTED`.
 
 ## Host Security
 
