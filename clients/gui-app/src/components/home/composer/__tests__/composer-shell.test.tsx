@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useCallback, type ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
-import type { ComposerExpansion } from "@/components/home/composer/composer-expand-handle";
+import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "../composer-shell";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
 
@@ -141,32 +141,169 @@ function classTokens(element: Element | null): ReadonlyArray<string> {
     .filter((token) => token !== "");
 }
 
+function grabber(): Element | null {
+  return document.querySelector("[data-composer-grabber]");
+}
+
+function grabberOrThrow(): Element {
+  const element = grabber();
+  if (element === null) throw new Error("grabber missing");
+  return element;
+}
+
+function pull(zone: Element, fromY: number, toY: number): void {
+  fireEvent.pointerDown(zone, { clientY: fromY, pointerId: 1 });
+  fireEvent.pointerMove(zone, { clientY: toY, pointerId: 1 });
+  fireEvent.pointerUp(zone, { clientY: toY, pointerId: 1 });
+}
+
+const FITTING_EDITOR = (
+  <div data-testid="composer-editor" data-composer-editor="" />
+);
+
+/**
+ * An editor whose content is taller than its box, the way a capped
+ * ProseMirror editor reads once a draft outgrows it. jsdom lays nothing out,
+ * so the two heights are pinned on the element itself, before the frame's
+ * own ref runs (a child's ref callback fires first).
+ */
+function OverflowingEditor(): ReactNode {
+  const ref = useCallback((element: HTMLDivElement | null) => {
+    if (element === null) return;
+    Object.defineProperty(element, "scrollHeight", { value: 200 });
+    Object.defineProperty(element, "clientHeight", { value: 100 });
+  }, []);
+  return (
+    <div ref={ref} data-testid="composer-editor" data-composer-editor="" />
+  );
+}
+
+function renderShellWithEditor(
+  expansion: ComposerExpansion | null,
+  editor: ReactNode,
+): void {
+  render(
+    <ComposerShell
+      pickerStore={createComposerPickerStore()}
+      onDragOver={() => undefined}
+      onDrop={() => undefined}
+      onDragEnter={() => undefined}
+      onDragLeave={() => undefined}
+      dragOverlayVariant="images"
+      utilityRail={null}
+      attachmentsStrip={null}
+      editor={editor}
+      toolbar={<div />}
+      expansion={expansion}
+    />,
+  );
+}
+
 describe("ComposerShell phone expansion", () => {
+  // jsdom does not implement `setPointerCapture`, and the grabber calls it on
+  // every press.
+  beforeEach(() => {
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+  });
   afterEach(() => {
     viewportMock.phone = false;
   });
 
-  it("renders no handle on a desktop viewport, even when expansion is given", () => {
+  it("renders no grabber on a desktop viewport, even with an overflowing draft", () => {
     viewportMock.phone = false;
-    renderComposerShell("images", null, null, makeExpansion(false));
+    renderShellWithEditor(makeExpansion(false), <OverflowingEditor />);
 
+    expect(grabber()).toBeNull();
+  });
+
+  it("renders no grabber on a phone viewport when expansion is null", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(null, <OverflowingEditor />);
+
+    expect(grabber()).toBeNull();
+  });
+
+  it("shows no grabber while the draft still fits its box", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
+
+    expect(grabber()).toBeNull();
+  });
+
+  it("shows the grabber once the draft outgrows its box, as a bar and not a button", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(makeExpansion(false), <OverflowingEditor />);
+
+    expect(grabber()).not.toBeNull();
     expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
   });
 
-  it("renders the handle on a phone viewport", () => {
+  it("keeps the grabber while expanded, whatever the draft's size", () => {
     viewportMock.phone = true;
-    renderComposerShell("images", null, null, makeExpansion(false));
+    renderShellWithEditor(makeExpansion(true), FITTING_EDITOR);
 
-    expect(
-      screen.getByRole("button", { name: "Expand composer" }),
-    ).not.toBeNull();
+    expect(grabber()).not.toBeNull();
   });
 
-  it("renders no handle on a phone viewport when expansion is null", () => {
+  it("opens the sheet on a pull up past the threshold, once", () => {
     viewportMock.phone = true;
-    renderComposerShell("images", null, null, null);
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, <OverflowingEditor />);
+    const zone = grabberOrThrow();
 
-    expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
+    fireEvent.pointerDown(zone, { clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientY: 76, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientY: 40, pointerId: 1 });
+    fireEvent.pointerUp(zone, { clientY: 40, pointerId: 1 });
+
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(true);
+  });
+
+  it("closes the sheet on a pull down past the threshold while expanded", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+
+    pull(grabberOrThrow(), 100, 130);
+
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does nothing on a tap or a short wobble", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, <OverflowingEditor />);
+    const zone = grabberOrThrow();
+
+    pull(zone, 100, 100);
+    pull(zone, 100, 90);
+    fireEvent.click(zone);
+
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
+  });
+
+  it("ignores a pull in the direction the sheet already is", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, <OverflowingEditor />);
+
+    pull(grabberOrThrow(), 100, 160);
+
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the press from moving focus off the editor", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(makeExpansion(false), <OverflowingEditor />);
+
+    const notCancelled = fireEvent.pointerDown(grabberOrThrow(), {
+      clientY: 100,
+      pointerId: 1,
+    });
+
+    expect(notCancelled).toBe(false);
   });
 
   it("puts the shell into its fixed sheet state when expanded on phone", () => {

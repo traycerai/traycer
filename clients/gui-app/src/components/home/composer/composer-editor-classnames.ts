@@ -18,17 +18,21 @@ export const COMPOSER_EDITOR_CLASSNAME = cn(
 );
 
 /**
- * The landing composer's editor: the shared sizing above, plus a phone cap
- * against what is VISIBLE rather than the screen. `--spacing-safe-dvh`
- * already has the keyboard taken off it, so with the keyboard up a long
- * draft stays about six lines tall instead of filling the space above the
- * keys; with it down the 15rem ceiling is what binds. Only below `md`, and
- * only here: the chat editor caps itself tighter through its slot, and the
- * surfaces without a grabber (the new-conversation modal, the in-place
- * message edit) keep the ceilings they set. A pull on the grabber
- * (`composer-expand-handle.tsx`) lifts the cap.
+ * The phone cap for a composer that can pull open into a sheet: a bound on
+ * what is VISIBLE rather than on the screen. `--spacing-safe-dvh` already
+ * has the keyboard taken off it, so with the keyboard up a long draft stays
+ * about six lines tall instead of filling the space above the keys; with it
+ * down the 15rem ceiling is what binds. Only below `md`. The landing and chat
+ * editors take it; the surfaces without the pull gesture (the
+ * new-conversation modal, the in-place message edit) keep the ceilings they
+ * set. Once the draft outgrows this cap the grabber appears, and pulling the
+ * card open into its sheet (`composer-shell.tsx`) lifts the cap.
  */
+export const PHONE_COMPOSER_EDITOR_CAP_CLASSNAME =
+  "max-md:max-h-[min(calc(var(--spacing-safe-dvh)*0.3),15rem)]";
+
+/** The landing composer's editor: the shared sizing plus the phone cap. */
 export const LANDING_COMPOSER_EDITOR_CLASSNAME = cn(
   COMPOSER_EDITOR_CLASSNAME,
-  "max-md:max-h-[min(calc(var(--spacing-safe-dvh)*0.3),15rem)]",
+  PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
 );
