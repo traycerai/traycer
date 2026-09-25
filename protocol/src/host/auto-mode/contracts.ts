@@ -261,7 +261,7 @@ export const autoJudgeSetV10 = defineRpcContract({
 //
 // `1.1` changes the RESPONSE only; both requests are the `1.0` ones.
 //
-// FROZEN: `1.1` shipped in `host-v1.3.2-staging.5x`. Its response objects are
+// FROZEN: `1.1` shipped in `host-v1.3.2-staging.52`. Its response objects are
 // the `...V11` ones below, on the pre-effort selection; the canonical names
 // belong to the `1.2` head.
 

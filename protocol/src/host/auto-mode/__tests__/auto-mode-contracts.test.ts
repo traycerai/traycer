@@ -229,7 +229,7 @@ describe("auto-mode protocol change", () => {
 
   it("keeps the released 1.0 and 1.1 autoJudge lines installed and frozen, with 1.2 as the head", () => {
     // `1.0` shipped (`host-v1.3.2-staging.39`) and `1.1` shipped
-    // (`host-v1.3.2-staging.5x`), so both stay installed and immutable; `1.2`
+    // (`host-v1.3.2-staging.52`), so both stay installed and immutable; `1.2`
     // is the unreleased head that carries the `reasoningEffort` key.
     for (const method of ["autoJudge.get", "autoJudge.set"] as const) {
       const entry = hostRpcRegistry[method];

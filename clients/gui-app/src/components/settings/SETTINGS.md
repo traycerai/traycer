@@ -3917,10 +3917,16 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - `null` → "No judge can run here · Auto mode asks you"
       - `fallback` → "Now: the conversation's own provider · your account"
       - `default` → "Now: {model} on Traycer · uses credits", where the model
-        is the catalog label for the slug when one exists, with the stored
-        selection's reasoning effort appended in parentheses when it carries
-        one and the model still names that effort's label (`EffectiveModelLabel`,
-        e.g. "Grok 4.7 Build Fast (Low)").
+        is the catalog label for the slug when one exists, with the effort
+        the host runs it at appended in parentheses (`EffectiveModelLabel`,
+        e.g. "Grok 4.7 Build Fast (Low)"). Automatic has no stored selection,
+        so there is no picked effort: the host runs its default for the
+        model, the lowest it advertises (`effectiveJudgeReasoningEffort` with
+        `null` requested). The parenthetical is left off when the model
+        advertises no efforts, its catalog has not answered, or the host's
+        negotiated `autoJudge.get` is below `1.2` - such a host runs the
+        model's own default, and the composer's meta line follows the same
+        rule (`autoJudgeGetKnowsReasoningEffort`).
         A host too old to report `effective` gets no status line. When Copilot
         is enabled, a hint quotes Traycer's own measured rate (60–350 premium
         requests per hour of Auto mode), which cannot go stale when GitHub
@@ -3930,9 +3936,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     - **A specific model** is up to four fields: Provider, Account (drawn only
       for more than one profile), Model and Effort (drawn only once the chosen
       model advertises at least one, and only on a host whose negotiated
-      `autoJudge.set` is `1.2` or later - `useHostMethodSchemaVersion`, since a
-      `1.1` host resets the field on write anyway). Model is a searchable
-      combobox, not a menu, because a catalog can be long.
+      `autoJudge.set` is `1.2` or later - `autoJudgeSetStoresReasoningEffort`,
+      since a `1.1` host resets the field on write anyway). Model is a
+      searchable combobox, not a menu, because a catalog can be long.
       - Effort's options are sorted low-to-high by the shared
         `sortReasoningEffortOptions` (`reasoning-effort-order.ts`), not by
         whatever order the harness's own catalog lists them in - Grok's
@@ -3940,10 +3946,11 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         DEFAULT for that model - the canonical lowest - labelled with that
         effort's own name ("Default (Low)") rather than a generic word, so
         picking "the default" and picking that level explicitly read as the
-        one thing they resolve to. `null` on the wire means this default, and
-        `effectiveJudgeReasoningEffort` is the one place both this label and
-        the Automatic status line's own effort parenthetical resolve it, so
-        they cannot disagree with what the host actually runs.
+        one thing they resolve to. `null` on the wire means this default. The
+        field takes its lowest from the same `sortReasoningEffortOptions` that
+        `effectiveJudgeReasoningEffort` - the host's own rule, and the
+        Automatic status line's - picks from, so the two cannot disagree with
+        what the host actually runs.
       - Choosing a different Model resets Effort to `null` unless the newly
         chosen model still advertises the same effort id, mirroring the
         Fallback Profile card's own `ModelSelect` → `EffortControl` rule

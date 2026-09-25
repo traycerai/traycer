@@ -16,6 +16,7 @@ import {
   type TranscriptTailSlice,
 } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import {
+  autoJudgeNoticeRowId,
   projectTranscriptRows,
   type TranscriptRowProjectionInput,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -26,6 +27,7 @@ import type {
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { buildChatFindRows } from "@/components/chat/chat-find-projection";
+import { withholdUnpaintedRows } from "@/components/chat/chat-special-segment";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -36,7 +38,10 @@ import {
 } from "@/stores/chats/rendered-messages";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
-import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import {
+  transcriptListRows,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 /**
@@ -45,25 +50,30 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
  * The host no longer writes this notice at all (`AutoJudgeService` escalates
  * through `unavailable(...)` only; policy facts are WARN log lines). But a
  * chat opened before that change can still have `permission.blocked` events
- * with `metadata.autoJudge` on disk, and `autoJudgeNoticeRowSource` /
- * `AUTO_JUDGE_NOTICE_MARKERS` (protocol) keep giving them a row so the
- * ordinals around them do not renumber - a window or an anchor computed
- * against the old row count must still land on the same message.
+ * with `metadata.autoJudge` on disk, and an older host still appends them live
+ * to an open chat. `autoJudgeNoticeRowSource` / `AUTO_JUDGE_NOTICE_MARKERS`
+ * (protocol) keep giving them a row so the ordinals around them do not
+ * renumber - a window or an anchor computed against the old row count must
+ * still land on the same message.
  *
- * So this suite now proves two things about a LEGACY row: it is still
- * PROJECTED at its ordinal (`rendered-messages.ts` is unchanged), and
- * rendering it paints nothing at all - `chat-message.tsx`'s
- * `auto-judge-notice` case returns `null` from the special-segment renderer,
- * and (unlike the other special segments, which have no sender/body but no
- * `system` role or timestamp either) the row's `system` role and timestamp do
- * not fall through to the ordinary sender overline - and contributes no find
- * units (`chat-find-projection.ts`'s `segmentSearchText` returns `[]` for it).
+ * So this suite proves three things about a LEGACY row:
  *
- * The HOST half here is played by the protocol's own producers - the same
+ * - The renderer still ENUMERATES it (`useRenderedMessages`), because that
+ *   list is held to the host's projection row for row.
+ * - The LIST the tile draws holds nothing for it - no hydrated row and no
+ *   placeholder - because the tile withholds it (`withholdUnpaintedRows`) and
+ *   `transcriptListRows` then omits its ordinal. An empty `ChatMessage` would
+ *   not be enough: the timeline frames every row it draws, so a row that
+ *   renders `null` still leaves a blank band.
+ * - That holds on every path a row reaches the client by: a reopened tail, a
+ *   `loadRange`, and a live append, with and without the append's republished
+ *   snapshot.
+ *
+ * The HOST half is played by the protocol's own producers - the same
  * `buildRowSkeleton`, `sliceTranscriptTail` and `sliceTranscriptRange` the
- * live host serves a reopened chat from - over one persisted transcript. The
- * CLIENT half is the real store, the real `useRenderedMessages` and the real
- * `transcriptListRows`, which is exactly what the chat tile draws.
+ * live host serves a chat from. The CLIENT half is the real store, the real
+ * `useRenderedMessages` and the real `transcriptListRows`, joined the way the
+ * chat tile joins them.
  */
 
 const EPIC_ID = "epic-notice";
@@ -94,9 +104,9 @@ function userMessage(messageId: string, timestamp: number): Message {
 }
 
 /**
- * A notice exactly as a pre-removal host used to journal it - the shape a
- * `permission.blocked` event with an `autoJudge` marker still has when it is
- * read off disk from a chat that predates the change.
+ * A notice exactly as a pre-removal host journals it - the shape a
+ * `permission.blocked` event with an `autoJudge` marker has, read off disk
+ * from a chat that predates the change or appended live by an older host.
  */
 function noticeEvent(input: {
   readonly eventId: string;
@@ -152,11 +162,42 @@ const PERSISTED: TranscriptRowProjectionInput = {
   chatId: CHAT_ID,
 };
 
-const EXPECTED_NOTICES = [
-  { ordinal: 1, marker: "fallback", message: FALLBACK_TEXT },
-  { ordinal: 2, marker: "unavailable", message: UNAVAILABLE_TEXT },
-  { ordinal: 3, marker: "policy-not-applied", message: POLICY_TEXT },
+/** The notice rows the host numbers in {@link PERSISTED}, by ordinal. */
+const PERSISTED_NOTICE_ROW_IDS = [
+  autoJudgeNoticeRowId("e-fallback"),
+  autoJudgeNoticeRowId("e-unavailable"),
+  autoJudgeNoticeRowId("e-policy"),
 ];
+
+/** What the tile draws for {@link PERSISTED}: the two sends, and nothing else. */
+const PERSISTED_DRAWN = [
+  { kind: "hydrated", key: "u-1", ordinal: 0 },
+  { kind: "hydrated", key: "u-2", ordinal: 4 },
+];
+
+/** A chat open on one send, before the live notice arrives. */
+const OPENED: TranscriptRowProjectionInput = {
+  messages: [userMessage("u-1", 1000)],
+  events: [],
+  activeTurnId: null,
+  chatId: CHAT_ID,
+};
+
+const LIVE_NOTICE = noticeEvent({
+  eventId: "e-live-fallback",
+  marker: "fallback",
+  message: FALLBACK_TEXT,
+  timestamp: 2000,
+  turnId: "turn-1",
+});
+
+/** The same chat once the live notice is on the host's disk. */
+const AFTER_LIVE_NOTICE: TranscriptRowProjectionInput = {
+  ...OPENED,
+  events: [LIVE_NOTICE],
+};
+
+const OPENED_DRAWN = [{ kind: "hydrated", key: "u-1", ordinal: 0 }];
 
 interface Harness {
   readonly handle: ChatSessionStoreHandle;
@@ -210,9 +251,20 @@ const EMPTY_TAIL = (rowCount: number): TranscriptTailSlice => ({
   rowContext: {},
 });
 
+/** The whole transcript as one tail slice, as a host serves a short chat. */
+function wholeTail(input: TranscriptRowProjectionInput): TranscriptTailSlice {
+  return sliceTranscriptTail(
+    projectTranscriptRows(input),
+    buildTranscriptRecordLookup(input.messages, input.events),
+    1_000_000,
+    null,
+  );
+}
+
 function snapshot(input: {
   readonly rowCount: number;
   readonly tail: TranscriptTailSlice;
+  readonly indexRevision: number | null;
 }): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   const derived: ChatTranscriptDerived = {
     latestAssistantUsage: null,
@@ -261,7 +313,7 @@ function snapshot(input: {
       portForwards: [],
       transcriptEpoch: 1,
       rowCount: input.rowCount,
-      indexRevision: null,
+      indexRevision: input.indexRevision,
       tail: {
         fromOrdinal: input.tail.fromOrdinal,
         rowIds: [...input.tail.rowIds],
@@ -275,10 +327,10 @@ function snapshot(input: {
   };
 }
 
-/** The whole skeleton in one final chunk, as the host builds it. */
-function skeletonChunk(): Parameters<
-  ChatStreamCallbacks["onSkeletonChunk"]
->[0] {
+/** The whole skeleton of `input` in one final chunk, as the host builds it. */
+function skeletonChunk(
+  input: TranscriptRowProjectionInput,
+): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
   return {
     kind: "skeletonChunk",
     hasBinaryPayload: false,
@@ -287,12 +339,88 @@ function skeletonChunk(): Parameters<
     chunk: {
       epoch: 1,
       fromOrdinal: 0,
-      entries: [
-        ...buildRowSkeleton(PERSISTED, transcriptPreviewProjection, null),
-      ],
+      entries: [...buildRowSkeleton(input, transcriptPreviewProjection, null)],
       isFinal: true,
     },
   };
+}
+
+/** The shared frame an append broadcast leads with. */
+function eventAppended(
+  event: ChatEvent,
+): Parameters<ChatStreamCallbacks["onEventAppended"]>[0] {
+  return {
+    kind: "eventAppended",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    event,
+  };
+}
+
+/**
+ * The `indexChanged` delta for a one-row append that took the transcript from
+ * `before` to `after`: the new row's skeleton entry, as the host builds it.
+ */
+function appendedDelta(input: {
+  readonly after: TranscriptRowProjectionInput;
+  readonly indexRevision: number;
+}): Parameters<ChatStreamCallbacks["onIndexChanged"]>[0] {
+  const entries = buildRowSkeleton(
+    input.after,
+    transcriptPreviewProjection,
+    null,
+  );
+  const appended = entries.at(-1);
+  if (appended === undefined) throw new Error("expected an appended row");
+  return {
+    kind: "indexChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    epoch: 1,
+    rowCount: entries.length,
+    indexRevision: input.indexRevision,
+    changes: [{ type: "appended", entries: [appended] }],
+  };
+}
+
+/** Answer the harness's latest `loadRange` from `input`, as the host would. */
+function answerLatestRange(
+  harness: Harness,
+  input: TranscriptRowProjectionInput,
+): ChatLoadRangeRequest {
+  const request = harness.rangeRequests.at(-1);
+  if (request === undefined) throw new Error("expected a loadRange");
+  const slice = sliceTranscriptRange(
+    projectTranscriptRows(input),
+    buildTranscriptRecordLookup(input.messages, input.events),
+    {
+      fromOrdinal: request.fromOrdinal,
+      toOrdinal: request.toOrdinal,
+      maxBytes: request.maxBytes,
+    },
+    null,
+  );
+  harness.callbacks().onRange({
+    kind: "range",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    range: {
+      requestId: request.requestId,
+      epoch: request.epoch,
+      fromOrdinal: slice.fromOrdinal,
+      rowIds: [...slice.rowIds],
+      incompleteRowIds: [...slice.incompleteRowIds],
+      messages: [...slice.messages],
+      events: [...slice.events],
+      rowContext: { ...slice.rowContext },
+      reachedStart: slice.reachedStart,
+      reachedEnd: slice.reachedEnd,
+    },
+  });
+  return request;
 }
 
 const DISPLAY_CONTEXT: RenderedMessagesDisplayContext = {
@@ -306,8 +434,10 @@ const DISPLAY_CONTEXT: RenderedMessagesDisplayContext = {
   contentBlocksPreview: () => "",
 };
 
-/** What the chat tile draws from this store right now, the way it draws it. */
-function drawnRows(handle: ChatSessionStoreHandle) {
+/** The renderer's enumeration: every row the host numbers, notices included. */
+function renderedRows(
+  handle: ChatSessionStoreHandle,
+): ReadonlyArray<ChatMessageModel> {
   const state = handle.store.getState();
   const { result } = renderHook(() =>
     useRenderedMessages(
@@ -329,37 +459,54 @@ function drawnRows(handle: ChatSessionStoreHandle) {
       DISPLAY_CONTEXT,
     ),
   );
-  return transcriptListRows({
-    window: state.transcriptWindow,
-    rendered: result.current,
-  });
+  return result.current;
 }
 
 /**
- * The legacy notice rows the store PROJECTS - which still happens
- * unconditionally, since `rendered-messages.ts` and the protocol's row
- * ordinals are unchanged. Named `projected`, not `drawn`: whether one of
- * these actually paints anything is exactly what the tests below check
- * separately, by rendering `model` and asserting nothing appears.
+ * What the chat tile draws from this store right now, the way it draws it:
+ * `useRenderedMessages`, then the tile's `withholdUnpaintedRows`, then
+ * `transcriptListRows` (`chat-tile.tsx` → `chat-messages.tsx`).
  */
-function projectedNotices(handle: ChatSessionStoreHandle): Array<{
+function drawnRows(
+  handle: ChatSessionStoreHandle,
+): ReadonlyArray<TranscriptListRow> {
+  return transcriptListRows({
+    window: handle.store.getState().transcriptWindow,
+    rendered: withholdUnpaintedRows(renderedRows(handle)),
+  });
+}
+
+/** The drawn list reduced to what a reader could tell apart. */
+function drawnSummary(handle: ChatSessionStoreHandle): Array<{
+  readonly kind: TranscriptListRow["kind"];
+  readonly key: string;
   readonly ordinal: number | null;
+}> {
+  return drawnRows(handle).map((row) => ({
+    kind: row.kind,
+    key: row.key,
+    ordinal: row.ordinal,
+  }));
+}
+
+/** The notice rows the renderer enumerates (before the tile withholds them). */
+function enumeratedNotices(handle: ChatSessionStoreHandle): Array<{
+  readonly id: string;
   readonly marker: string;
   readonly message: string;
   readonly model: ChatMessageModel;
 }> {
-  return drawnRows(handle).flatMap((row) => {
-    if (row.kind !== "hydrated") return [];
-    const segment = row.model.segments.at(0);
+  return renderedRows(handle).flatMap((model) => {
+    const segment = model.segments.at(0);
     if (segment === undefined || segment.kind !== "auto-judge-notice") {
       return [];
     }
     return [
       {
-        ordinal: row.ordinal,
+        id: model.id,
         marker: segment.marker,
         message: segment.message,
-        model: row.model,
+        model,
       },
     ];
   });
@@ -382,14 +529,9 @@ afterEach(() => {
 });
 
 describe("auto-mode judge notices in the windowed transcript", () => {
-  it("reopen: a snapshot tail the host slices from the persisted transcript still projects every legacy notice at its ordinal, but paints and indexes nothing", () => {
+  it("reopen: a snapshot tail holding every legacy notice draws only the sends, and the notices keep their ordinals", () => {
     const rows = projectTranscriptRows(PERSISTED);
-    const tail = sliceTranscriptTail(
-      rows,
-      buildTranscriptRecordLookup(PERSISTED.messages, PERSISTED.events),
-      1_000_000,
-      null,
-    );
+    const tail = wholeTail(PERSISTED);
     // The whole chat fits, so the tail IS the transcript.
     expect(tail.fromOrdinal).toBe(0);
 
@@ -397,167 +539,209 @@ describe("auto-mode judge notices in the windowed transcript", () => {
     try {
       harness
         .callbacks()
-        .onWindowedSnapshot(snapshot({ rowCount: rows.length, tail }));
-      harness.callbacks().onSkeletonChunk(skeletonChunk());
-
-      const drawn = projectedNotices(harness.handle);
-      expect(
-        drawn.map(({ ordinal, marker, message }) => ({
-          ordinal,
-          marker,
-          message,
-        })),
-      ).toEqual(EXPECTED_NOTICES);
-      expect(harness.rangeRequests).toHaveLength(0);
-
-      const fallback = drawn.find((notice) => notice.marker === "fallback");
-      if (fallback === undefined) throw new Error("fallback notice not drawn");
-      const container = renderRow(fallback.model);
-      // But rendering it paints nothing: `chat-message.tsx`'s
-      // `auto-judge-notice` case returns `null`, and the row's `system` role
-      // and timestamp do not fall through to the sender overline either.
-      expect(container.firstChild).toBeNull();
-      expect(screen.queryByRole("note")).toBeNull();
-      expect(screen.queryByText(FALLBACK_TEXT)).toBeNull();
-      expect(screen.queryByText(/system/i)).toBeNull();
-      // And it contributes no find units either.
-      expect(
-        buildChatFindRows([fallback.model], "tile-notice", new Set())[0]?.units,
-      ).toEqual([]);
-    } finally {
-      harness.handle.dispose();
-    }
-  });
-
-  it("reopen: legacy notices outside the tail still hydrate through loadRange, answered by the host's range slicer, but paint nothing", () => {
-    const rows = projectTranscriptRows(PERSISTED);
-    const lookup = buildTranscriptRecordLookup(
-      PERSISTED.messages,
-      PERSISTED.events,
-    );
-    const harness = createHarness();
-    try {
-      harness
-        .callbacks()
         .onWindowedSnapshot(
-          snapshot({ rowCount: rows.length, tail: EMPTY_TAIL(rows.length) }),
+          snapshot({ rowCount: rows.length, tail, indexRevision: null }),
         );
-      harness.callbacks().onSkeletonChunk(skeletonChunk());
-      // Nothing drawn yet: every ordinal is a placeholder.
-      expect(projectedNotices(harness.handle)).toEqual([]);
+      harness.callbacks().onSkeletonChunk(skeletonChunk(PERSISTED));
 
-      const request = harness.rangeRequests.at(-1);
-      if (request === undefined) throw new Error("expected a loadRange");
-      const slice = sliceTranscriptRange(
-        rows,
-        lookup,
-        {
-          fromOrdinal: request.fromOrdinal,
-          toOrdinal: request.toOrdinal,
-          maxBytes: request.maxBytes,
-        },
-        null,
+      // The host still numbers the three notices at ordinals 1-3...
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.rowCount).toBe(5);
+      expect(window.skeleton.slice(1, 4).map((entry) => entry?.rowId)).toEqual(
+        PERSISTED_NOTICE_ROW_IDS,
       );
-      harness.callbacks().onRange({
-        kind: "range",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        range: {
-          requestId: request.requestId,
-          epoch: request.epoch,
-          fromOrdinal: slice.fromOrdinal,
-          rowIds: [...slice.rowIds],
-          incompleteRowIds: [...slice.incompleteRowIds],
-          messages: [...slice.messages],
-          events: [...slice.events],
-          rowContext: { ...slice.rowContext },
-          reachedStart: slice.reachedStart,
-          reachedEnd: slice.reachedEnd,
-        },
-      });
-
-      const drawn = projectedNotices(harness.handle);
+      // ...and the renderer still enumerates them, in the host's order.
       expect(
-        drawn.map(({ ordinal, marker, message }) => ({
-          ordinal,
+        enumeratedNotices(harness.handle).map(({ id, marker, message }) => ({
+          id,
           marker,
           message,
         })),
-      ).toEqual(EXPECTED_NOTICES);
+      ).toEqual([
+        {
+          id: PERSISTED_NOTICE_ROW_IDS[0],
+          marker: "fallback",
+          message: FALLBACK_TEXT,
+        },
+        {
+          id: PERSISTED_NOTICE_ROW_IDS[1],
+          marker: "unavailable",
+          message: UNAVAILABLE_TEXT,
+        },
+        {
+          id: PERSISTED_NOTICE_ROW_IDS[2],
+          marker: "policy-not-applied",
+          message: POLICY_TEXT,
+        },
+      ]);
 
-      const containers = drawn.map((notice) => renderRow(notice.model));
-      // Nothing paints for any of the three, whichever sender wrote it - not
-      // even the row's own `system` role and timestamp overline.
-      expect(screen.queryAllByRole("note")).toHaveLength(0);
-      expect(screen.queryByText(/system/i)).toBeNull();
-      for (const container of containers) {
-        expect(container.firstChild).toBeNull();
-      }
-      for (const notice of drawn) {
-        expect(screen.queryByText(notice.message)).toBeNull();
-        expect(
-          buildChatFindRows([notice.model], "tile-notice", new Set())[0]?.units,
-        ).toEqual([]);
-      }
+      // But the list the tile draws holds nothing at 1-3: no hydrated row, no
+      // placeholder, and the sends keep the ordinals the host gave them.
+      expect(drawnSummary(harness.handle)).toEqual(PERSISTED_DRAWN);
+      expect(harness.rangeRequests).toHaveLength(0);
     } finally {
       harness.handle.dispose();
     }
   });
 
-  it("live: a legacy-shaped notice event appended to an open chat is projected the moment it arrives, but paints nothing", () => {
-    const opened: TranscriptRowProjectionInput = {
-      messages: [userMessage("u-1", 1000)],
-      events: [],
-      activeTurnId: null,
-      chatId: CHAT_ID,
-    };
-    const rows = projectTranscriptRows(opened);
+  it("reopen: legacy notices outside the tail hydrate through loadRange and then draw nothing, not even a placeholder", () => {
+    const rows = projectTranscriptRows(PERSISTED);
     const harness = createHarness();
     try {
       harness.callbacks().onWindowedSnapshot(
         snapshot({
           rowCount: rows.length,
-          tail: sliceTranscriptTail(
-            rows,
-            buildTranscriptRecordLookup(opened.messages, opened.events),
-            1_000_000,
-            null,
-          ),
+          tail: EMPTY_TAIL(rows.length),
+          indexRevision: null,
         }),
       );
-      expect(projectedNotices(harness.handle)).toEqual([]);
+      harness.callbacks().onSkeletonChunk(skeletonChunk(PERSISTED));
+      // Nothing hydrated yet: every ordinal is a placeholder, the notices'
+      // included, which is what makes the viewport ask for them.
+      expect(drawnSummary(harness.handle).map((row) => row.kind)).toEqual([
+        "placeholder",
+        "placeholder",
+        "placeholder",
+        "placeholder",
+        "placeholder",
+      ]);
 
-      harness.callbacks().onEventAppended({
-        kind: "eventAppended",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        event: noticeEvent({
-          eventId: "e-live-fallback",
-          marker: "fallback",
-          message: FALLBACK_TEXT,
-          timestamp: 2000,
-          turnId: "turn-1",
-        }),
-      });
+      answerLatestRange(harness, PERSISTED);
 
-      const drawn = projectedNotices(harness.handle);
-      expect(drawn.map(({ marker, message }) => ({ marker, message }))).toEqual(
-        [{ marker: "fallback", message: FALLBACK_TEXT }],
+      // The range delivered the notices, the renderer enumerates them...
+      expect(enumeratedNotices(harness.handle).map(({ id }) => id)).toEqual(
+        PERSISTED_NOTICE_ROW_IDS,
       );
-      const live = drawn.at(0);
-      if (live === undefined) throw new Error("live notice not drawn");
-      const container = renderRow(live.model);
-      // Still paints nothing, exactly like a rehydrated legacy row - the
-      // row's `system` role and timestamp don't fall through either.
-      expect(container.firstChild).toBeNull();
-      expect(screen.queryByRole("note")).toBeNull();
-      expect(screen.queryByText(FALLBACK_TEXT)).toBeNull();
+      // ...and the placeholders that held their ordinals are gone rather than
+      // replaced by an empty row.
+      expect(drawnSummary(harness.handle)).toEqual(PERSISTED_DRAWN);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("live: an older host's appended notice draws nothing at any step of its broadcast (shared frame, republished snapshot, delta)", () => {
+    const harness = createHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: projectTranscriptRows(OPENED).length,
+          tail: wholeTail(OPENED),
+          indexRevision: 0,
+        }),
+      );
+      harness.callbacks().onSkeletonChunk(skeletonChunk(OPENED));
+      expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
+
+      // The host's append broadcast, in its real order: the shared frame...
+      harness.callbacks().onEventAppended(eventAppended(LIVE_NOTICE));
+      // (enumerated, and still withheld rather than appended to the tail)
+      expect(enumeratedNotices(harness.handle).map(({ id }) => id)).toEqual([
+        autoJudgeNoticeRowId(LIVE_NOTICE.eventId),
+      ]);
+      expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
+
+      // ...then the bounded snapshot at the post-append `rowCount` and the
+      // held revision, whose tail carries the new row...
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: projectTranscriptRows(AFTER_LIVE_NOTICE).length,
+          tail: wholeTail(AFTER_LIVE_NOTICE),
+          indexRevision: 0,
+        }),
+      );
+      expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
+
+      // ...then the delta naming it.
+      harness
+        .callbacks()
+        .onIndexChanged(
+          appendedDelta({ after: AFTER_LIVE_NOTICE, indexRevision: 1 }),
+        );
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.invalidated).toBe(false);
+      expect(window.rowCount).toBe(2);
+      expect(window.skeleton[1]?.rowId).toBe(
+        autoJudgeNoticeRowId(LIVE_NOTICE.eventId),
+      );
+      // Ordinal 1 is the notice's and nothing is drawn for it.
+      expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
+      expect(harness.rangeRequests).toHaveLength(0);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("live: when the republished snapshot is lost, the notice's placeholder asks for its row and then draws nothing", () => {
+    const harness = createHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: projectTranscriptRows(OPENED).length,
+          tail: wholeTail(OPENED),
+          indexRevision: 0,
+        }),
+      );
+      harness.callbacks().onSkeletonChunk(skeletonChunk(OPENED));
+
+      // The shared frame and the delta arrive; the snapshot between them was
+      // dropped by a flaky write, which the pump tolerates.
+      harness.callbacks().onEventAppended(eventAppended(LIVE_NOTICE));
+      harness
+        .callbacks()
+        .onIndexChanged(
+          appendedDelta({ after: AFTER_LIVE_NOTICE, indexRevision: 1 }),
+        );
+
+      // No span holds the new tail row yet, so it stands as a placeholder -
+      // and that is transient, not permanent: the eager-tail plan asks for it.
+      expect(drawnSummary(harness.handle)).toEqual([
+        ...OPENED_DRAWN,
+        {
+          kind: "placeholder",
+          key: autoJudgeNoticeRowId(LIVE_NOTICE.eventId),
+          ordinal: 1,
+        },
+      ]);
+      // `ChatLoadRangeRequest` bounds are inclusive at both ends.
+      const request = answerLatestRange(harness, AFTER_LIVE_NOTICE);
+      expect(request.fromOrdinal).toBeLessThanOrEqual(1);
+      expect(request.toOrdinal).toBeGreaterThanOrEqual(1);
+
+      // The range holds the row, the tile withholds it, and the placeholder
+      // leaves with nothing in its place.
+      expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a notice model that reaches a ChatMessage anyway paints nothing - no note, no text, no System overline - and indexes nothing for find", () => {
+    const harness = createHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: projectTranscriptRows(PERSISTED).length,
+          tail: wholeTail(PERSISTED),
+          indexRevision: null,
+        }),
+      );
+      harness.callbacks().onSkeletonChunk(skeletonChunk(PERSISTED));
+      const notices = enumeratedNotices(harness.handle);
+      expect(notices).toHaveLength(3);
+
+      const containers = notices.map((notice) => renderRow(notice.model));
+      for (const container of containers) {
+        expect(container.firstChild).toBeNull();
+      }
+      expect(screen.queryAllByRole("note")).toHaveLength(0);
       expect(screen.queryByText(/system/i)).toBeNull();
-      expect(
-        buildChatFindRows([live.model], "tile-notice", new Set())[0]?.units,
-      ).toEqual([]);
+      for (const notice of notices) {
+        expect(screen.queryByText(notice.message)).toBeNull();
+        expect(
+          buildChatFindRows([notice.model], "tile-notice", new Set())[0]?.units,
+        ).toEqual([]);
+      }
     } finally {
       harness.handle.dispose();
     }

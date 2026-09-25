@@ -489,8 +489,8 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
         ),
       ];
     case "auto-judge-notice":
-      // Painted as nothing (see `renderSpecialSegment`), so it has no
-      // text a find hit could be painted onto.
+      // Never drawn (`rowPaintsNothing`: the tile withholds the row), so it
+      // has no text a find hit could be painted onto.
       return [];
     case "setup-card":
       return [

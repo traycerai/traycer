@@ -80,12 +80,14 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     method === "autoJudge.get" ? true : null,
   useHostSupportsMethod: (_hostId: string | null, method: string) =>
     method === "autoJudge.set",
-  // `1.2`: the negotiated line this whole suite is against. The Effort
-  // field's own gating is exercised in `judge-tab.test.tsx`, which mocks it
-  // per test; here it stays fixed so the real query/mutation stack under test
-  // is what varies.
+  // `1.2` on both lines: the negotiated versions this whole suite is against.
+  // The effort gates themselves are exercised in `judge-tab.test.tsx`, which
+  // mocks them per test; here they stay fixed so the real query/mutation
+  // stack under test is what varies.
   useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
-    method === "autoJudge.set" ? { major: 1, minor: 2 } : null,
+    method === "autoJudge.get" || method === "autoJudge.set"
+      ? { major: 1, minor: 2 }
+      : null,
 }));
 const toastSpy = vi.hoisted(() =>
   vi.fn<(error: unknown, title: string) => void>(),

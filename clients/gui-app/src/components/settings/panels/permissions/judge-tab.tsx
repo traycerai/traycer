@@ -9,11 +9,9 @@ import type {
   GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import type { SchemaVersion } from "@traycer/protocol/framework/index";
-import {
-  autoJudgeSetV12,
-  type AutoJudgeGetResponse,
-  type AutoJudgeSelection,
+import type {
+  AutoJudgeGetResponse,
+  AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import {
   readableModelMatch,
@@ -63,7 +61,11 @@ import {
 } from "@/components/settings/panels/permissions/auto-mode-host-gate";
 import { JudgeModelField } from "@/components/settings/panels/permissions/judge-model-field";
 import { ProviderJudgeSwitch } from "@/components/settings/panels/permissions/provider-judge-switch";
-import { COPILOT_PREMIUM_REQUESTS_PER_HOUR } from "@/lib/auto-mode/auto-judge-billing";
+import {
+  autoJudgeGetKnowsReasoningEffort,
+  autoJudgeSetStoresReasoningEffort,
+  COPILOT_PREMIUM_REQUESTS_PER_HOUR,
+} from "@/lib/auto-mode/auto-judge-billing";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -75,20 +77,6 @@ const PREDATES_AUTO_MODE =
 const IDLE_MODELS_HARNESS_ID = providerIdToGuiHarnessId("traycer");
 
 const COPILOT_HARNESS_ID = providerIdToGuiHarnessId("copilot");
-
-/**
- * Whether the host's negotiated `autoJudge.set` line can even store a
- * reasoning effort - the `1.2` line that added the field. Below it, `set`
- * upgrades the request and resets the effort to the model's default, so an
- * Effort field would write something the host silently discards; the tab
- * hides it instead.
- */
-function judgeSetKnowsReasoningEffort(version: SchemaVersion | null): boolean {
-  if (version === null) return false;
-  const line = autoJudgeSetV12.schemaVersion;
-  if (version.major !== line.major) return false;
-  return version.minor >= line.minor;
-}
 
 /**
  * The chosen model's own advertised efforts, resolved the same way the rest
@@ -321,11 +309,20 @@ function AutoJudgeControls(props: {
   const query = useAutoJudgeQuery();
   const verdict = useAutoJudgeVerdict();
   const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
+  // Two gates on two lines, as the composer draws them: the Effort FIELD writes
+  // through `set`, so it needs a `set` line that stores the effort; the "Now:"
+  // LABEL reports what `get`'s host runs, so it needs a `get` line whose host
+  // applies one.
   const judgeSetVersion = useHostMethodSchemaVersion(
     props.hostId,
     "autoJudge.set",
   );
-  const showEffort = judgeSetKnowsReasoningEffort(judgeSetVersion);
+  const judgeGetVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "autoJudge.get",
+  );
+  const showEffort = autoJudgeSetStoresReasoningEffort(judgeSetVersion);
+  const hostRunsEffort = autoJudgeGetKnowsReasoningEffort(judgeGetVersion);
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
     subscribed: true,
@@ -391,7 +388,7 @@ function AutoJudgeControls(props: {
                 provider.providerId === "copilot" && provider.enabled,
             ) ?? false
           }
-          hostRunsEffort={showEffort}
+          hostRunsEffort={hostRunsEffort}
         />
         <SpecificOption
           open={mode === "specific"}
@@ -684,9 +681,10 @@ function AutomaticStatus(props: {
   readonly record: AutoJudgeGetResponse;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   /**
-   * Whether this host runs the judge at an effort of its own (the `1.2`
-   * line). Below it the host runs the model's default and the label must not
-   * name an effort the host does not apply - the composer's rule too.
+   * Whether this host runs the judge at an effort of its own (its
+   * `autoJudge.get` line is `1.2` or later). Below it the host runs the
+   * model's default and the label must not name an effort the host does not
+   * apply - the composer's rule too.
    */
   readonly hostRunsEffort: boolean;
 }): ReactNode {
@@ -729,7 +727,10 @@ function AutomaticStatus(props: {
           <EffectiveModelLabel
             row={row}
             slug={effective.model}
-            reasoningEffort={props.record.selection?.reasoningEffort ?? null}
+            // Always `null`: this line only renders under Automatic, which
+            // has no stored selection, so there is no picked effort - the
+            // host runs its default for the model, the lowest it advertises.
+            reasoningEffort={null}
             hostRunsEffort={props.hostRunsEffort}
           />
         )}{" "}
@@ -741,10 +742,12 @@ function AutomaticStatus(props: {
 }
 
 /**
- * The effective judge's model label, with its reasoning effort appended in
- * parentheses when the stored selection carries one - e.g. "Grok 4.7 Build
- * Fast (Low)". Silent about effort when there is none to name: the host's
- * default applies, or the model no longer offers the stored id.
+ * The effective judge's model label, with the reasoning effort the host runs
+ * it at appended in parentheses - e.g. "Grok 4.7 Build Fast (Low)". That is
+ * `reasoningEffort` while the model still advertises it, else the host's
+ * default for the model: the lowest effort it advertises. Silent about effort
+ * only when there is none to name: the model advertises no efforts, its
+ * catalog has not answered, or the host predates judge efforts.
  */
 function EffectiveModelLabel(props: {
   readonly row: GuiHarnessOption;

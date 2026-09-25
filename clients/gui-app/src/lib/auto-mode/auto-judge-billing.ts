@@ -19,7 +19,10 @@
  */
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
-import { autoJudgeGetV12 } from "@traycer/protocol/host/auto-mode/contracts";
+import {
+  autoJudgeGetV12,
+  autoJudgeSetV12,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type {
   AutoJudgeBlocked,
@@ -370,24 +373,47 @@ export function autoJudgeBillingForRun(input: {
 }
 
 /**
- * Whether the negotiated `autoJudge.get` line is one whose host runs the judge
- * at a reasoning effort of its own (`1.2`, where the selection carries one and
- * the host defaults to the model's lowest). Below it the host runs the model's
- * own default and the composer must not name an effort it does not apply.
+ * Whether a negotiated method version has reached `line`: the same major, at
+ * or past its minor.
  *
- * Pinned to the `1.x` line like every other version predicate in the tree: a
- * `2.0` line's relationship to this field is not knowable from here. `null` -
- * no handshake yet - reads as NOT knowing, the safe direction.
+ * Pinned to the major like every other version predicate in the tree: a later
+ * major's relationship to a field one minor added is not knowable from here.
+ * `null` - no handshake yet - reads as NOT reached, the safe direction.
  */
-export function autoJudgeGetKnowsReasoningEffort(
+export function negotiatedLineReaches(
   version: SchemaVersion | null,
+  line: SchemaVersion,
 ): boolean {
-  const line = autoJudgeGetV12.schemaVersion;
   return (
     version !== null &&
     version.major === line.major &&
     version.minor >= line.minor
   );
+}
+
+/**
+ * Whether the negotiated `autoJudge.get` line is one whose host runs the judge
+ * at a reasoning effort of its own (`1.2`, where the selection carries one and
+ * the host defaults to the model's lowest). Below it the host runs the model's
+ * own default, so no LABEL - the composer's Auto row or Settings' "Now:" line -
+ * may name an effort it does not apply.
+ */
+export function autoJudgeGetKnowsReasoningEffort(
+  version: SchemaVersion | null,
+): boolean {
+  return negotiatedLineReaches(version, autoJudgeGetV12.schemaVersion);
+}
+
+/**
+ * Whether the negotiated `autoJudge.set` line can STORE a reasoning effort
+ * (`1.2`, the line that added the field). Below it the request upgrade resets
+ * the effort to the model's default, so Settings' Effort FIELD would write
+ * something the host silently discards; the field is hidden instead.
+ */
+export function autoJudgeSetStoresReasoningEffort(
+  version: SchemaVersion | null,
+): boolean {
+  return negotiatedLineReaches(version, autoJudgeSetV12.schemaVersion);
 }
 
 /**

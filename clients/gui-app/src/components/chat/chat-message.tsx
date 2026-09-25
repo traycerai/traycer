@@ -10,7 +10,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
-import { singleSpecialSegment } from "./chat-special-segment";
+import { rowPaintsNothing, singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
@@ -124,10 +124,10 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 }
 
 // A synthesized row can carry a single full-width "special" segment (a
-// setup-card, a forked-chat-link or an imported-chat-marker) with no
-// sender/body. Render it directly, bypassing the role branches below - and
-// when the segment paints nothing, paint nothing: the row's `system` role and
-// timestamp must not fall through to the ordinary sender overline.
+// setup-card, a forked-chat-link, an imported-chat-marker or an unattended
+// auto-mode refusal) with no sender/body. Render it directly, bypassing the
+// role branches below. A special row that paints nothing never gets here -
+// see `rowPaintsNothing` in `ChatMessageImpl`.
 function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
   if (segment.kind === "setup-card") {
     return (
@@ -175,15 +175,6 @@ function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
         />
       </div>
     );
-  }
-  if (segment.kind === "auto-judge-notice") {
-    // A row hosts no longer write and this build no longer paints: the judge's
-    // reason lives on the approval card it escalated to, and a durable line
-    // that outlived the condition read as a present fault long after the mode
-    // was switched. Rows already on disk keep their ordinal (the projection
-    // still materialises them, so windows and anchors do not renumber) and
-    // paint nothing.
-    return null;
   }
   return null;
 }
@@ -237,6 +228,11 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 
 function ChatMessageImpl(props: ChatMessageProps) {
   const { actions, message } = props;
+  // The list withholds these rows (`withholdUnpaintedRows`); this is the same
+  // predicate for a model that reaches a `ChatMessage` some other way. It
+  // returns before the role branches below, so the row's `system` role and
+  // timestamp cannot fall through to the sender overline either.
+  if (rowPaintsNothing(message)) return null;
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
     return renderSpecialSegment(specialSegment);

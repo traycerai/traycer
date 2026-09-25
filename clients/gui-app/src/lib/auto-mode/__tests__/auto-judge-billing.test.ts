@@ -22,9 +22,11 @@ import {
   autoJudgeEffortLabel,
   autoJudgeGetKnowsReasoningEffort,
   autoJudgeMetaLine,
+  autoJudgeSetStoresReasoningEffort,
   autoJudgeTarget,
   autoModeMidTurnLock,
   harnessHasNativeAutoJudge,
+  negotiatedLineReaches,
   providerRunsItsOwnJudge,
   type AutoJudgeBilling,
   type AutoJudgeTarget,
@@ -926,6 +928,51 @@ describe("autoJudgeGetKnowsReasoningEffort", () => {
     expect(autoJudgeGetKnowsReasoningEffort({ major: 2, minor: 0 })).toBe(
       false,
     );
+  });
+});
+
+// The Effort FIELD's gate, on the `set` line, through the same comparison as
+// the label gate above (`negotiatedLineReaches`).
+describe("autoJudgeSetStoresReasoningEffort", () => {
+  it("is false for null - no handshake yet", () => {
+    expect(autoJudgeSetStoresReasoningEffort(null)).toBe(false);
+  });
+
+  it("is false for {major: 1, minor: 1} - the request upgrade resets the effort", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 1 })).toBe(
+      false,
+    );
+  });
+
+  it("is true for {major: 1, minor: 2} and later 1.x minors", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 2 })).toBe(
+      true,
+    );
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 3 })).toBe(
+      true,
+    );
+  });
+
+  it("is false for {major: 2, minor: 0} - a different major line", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 2, minor: 0 })).toBe(
+      false,
+    );
+  });
+});
+
+describe("negotiatedLineReaches", () => {
+  const LINE = { major: 3, minor: 4 } as const;
+
+  it("reaches the line at its own minor and past it, within its major", () => {
+    expect(negotiatedLineReaches({ major: 3, minor: 4 }, LINE)).toBe(true);
+    expect(negotiatedLineReaches({ major: 3, minor: 9 }, LINE)).toBe(true);
+  });
+
+  it("does not reach it from an earlier minor, another major, or no handshake", () => {
+    expect(negotiatedLineReaches({ major: 3, minor: 3 }, LINE)).toBe(false);
+    expect(negotiatedLineReaches({ major: 4, minor: 4 }, LINE)).toBe(false);
+    expect(negotiatedLineReaches({ major: 2, minor: 9 }, LINE)).toBe(false);
+    expect(negotiatedLineReaches(null, LINE)).toBe(false);
   });
 });
 

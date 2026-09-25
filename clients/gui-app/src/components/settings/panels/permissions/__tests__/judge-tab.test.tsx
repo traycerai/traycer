@@ -61,19 +61,22 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
 }));
 
 // Whether the host advertises `autoJudge.get` (tri-state, as the real hook is)
-// and `autoJudge.set`, plus the NEGOTIATED VERSION of `autoJudge.set` - the
-// Effort field's own gate, independent of whether the method exists at all.
+// and `autoJudge.set`, plus the NEGOTIATED VERSION of each: `set`'s gates the
+// Effort field, `get`'s gates the effort named on the "Now:" line - each
+// independent of whether the method exists at all.
 const support = vi.hoisted(
   (): {
     get: boolean | null;
     set: boolean;
+    getVersion: SchemaVersion | null;
     setVersion: SchemaVersion | null;
   } => ({
     get: true,
     set: true,
-    // `1.2`: the line that added `reasoningEffort`, so the Effort field
-    // shows by default and individual tests dial it back to `1.1` (or
-    // `null`, unknown) to prove it hides.
+    // `1.2`: the line that added `reasoningEffort`, so the Effort field and
+    // the effort label both show by default, and individual tests dial one
+    // line back to `1.1` (or `null`, unknown) to prove what hides.
+    getVersion: { major: 1, minor: 2 },
     setVersion: { major: 1, minor: 2 },
   }),
 );
@@ -82,8 +85,11 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     method === "autoJudge.get" ? support.get : null,
   useHostSupportsMethod: (_hostId: string | null, method: string) =>
     method === "autoJudge.set" ? support.set : false,
-  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
-    method === "autoJudge.set" ? support.setVersion : null,
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) => {
+    if (method === "autoJudge.get") return support.getVersion;
+    if (method === "autoJudge.set") return support.setVersion;
+    return null;
+  },
 }));
 
 // ---- queries --------------------------------------------------------------
@@ -282,6 +288,7 @@ const CLAUDE_STORED: AutoJudgeSelection = {
 beforeEach(() => {
   support.get = true;
   support.set = true;
+  support.getVersion = { major: 1, minor: 2 };
   support.setVersion = { major: 1, minor: 2 };
   judgeRecord.current = { selection: null };
   setJudgeMutate.mockReset();
@@ -405,7 +412,7 @@ describe("JudgeTab", () => {
     });
 
     it("appends the model's lowest effort on a 1.2 host whose default model advertises one", () => {
-      support.setVersion = { major: 1, minor: 2 };
+      support.getVersion = { major: 1, minor: 2 };
       catalog.harnesses = [harness({ id: "traycer", label: "Traycer" })];
       catalog.models = {
         traycer: [
@@ -426,8 +433,10 @@ describe("JudgeTab", () => {
       );
     });
 
-    it("names no effort on a 1.1 host, even when the default model advertises one", () => {
-      support.setVersion = { major: 1, minor: 1 };
+    it("names no effort on a host whose autoJudge.get is 1.1, even when the default model advertises one", () => {
+      // Only the `get` line is dialled back: the label reports what that
+      // host RUNS, whatever its `set` line could store.
+      support.getVersion = { major: 1, minor: 1 };
       catalog.harnesses = [harness({ id: "traycer", label: "Traycer" })];
       catalog.models = {
         traycer: [
@@ -742,6 +751,33 @@ describe("JudgeTab", () => {
       ).not.toBeNull();
       expect(screen.getByRole("option", { name: "Low" })).not.toBeNull();
       expect(screen.getByRole("option", { name: "Medium" })).not.toBeNull();
+    });
+
+    it("orders a catalog listed high-to-low (as Grok's is) low-to-high, and names its lowest as the default", () => {
+      // Every other fixture here is already low-to-high, so without this one
+      // the field's canonical sort could go and nothing would notice - while
+      // on Grok the field would then read "Default (Extra High)" for a host
+      // that runs low.
+      catalog.models = {
+        ...catalog.models,
+        claude: [
+          model("claude", "sonnet", "Claude Sonnet", [
+            effortOption("xhigh", "Extra High"),
+            effortOption("high", "High"),
+            MEDIUM,
+            LOW,
+          ]),
+        ],
+      };
+      render(<JudgeTab />);
+
+      const effortSelect = screen.getByRole("combobox", { name: "Effort" });
+      expect(effortSelect.textContent).toContain("Default (Low)");
+
+      fireEvent.click(effortSelect);
+      expect(
+        screen.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual(["Default (Low)", "Low", "Medium", "High", "Extra High"]);
     });
 
     it("shows 'Default (Low)' when the stored effort is one the model no longer advertises", () => {
