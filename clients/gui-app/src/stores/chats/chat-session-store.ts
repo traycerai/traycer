@@ -1775,7 +1775,7 @@ export interface ChatSessionState {
    * episode. The caller decides eligibility - the registry sleeps only lease-free sessions
    * with no unsettled work - because a stream closed under a turn in progress
    * or an unacknowledged action would lose the frames that settle it. A no-op
-   * once disposed, and when no stream is open.
+   * once disposed, when no stream is open, and after a fatal close.
    */
   sleep: () => void;
   /**
@@ -9445,6 +9445,11 @@ export function createChatSessionStoreWithNotificationDependencies(
       sleep: () => {
         if (disposed) return;
         if (streamClient === null) return;
+        // A fatally closed session has nothing live to release and its error
+        // is what the tile shows. Sleeping it would either erase that error or
+        // mark it asleep beside it, and a later lease would then re-dial a chat
+        // the host refused. It stays as it is until a deliberate retry.
+        if (get().fatalClose !== null) return;
         closeStreamClient();
         clearBufferedDeltas();
         // `closeStreamClient` retires the stream's generation, so its own

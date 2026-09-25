@@ -748,6 +748,26 @@ describe("ChatSessionRegistry.sleepIdleWarmSessions (app suspend)", () => {
     expect(running.handle.store.getState().asleep).toBe(false);
   });
 
+  it("leaves a fatally closed session as it is, error included", () => {
+    const registry = createRegistry();
+    const refused = createCountingHandle("epic-1", "chat-refused");
+    acquire(registry, "chat-refused", refused.handle);
+    const fatalClose = {
+      code: "UNAUTHORIZED",
+      reason: "CHAT_NOT_VISIBLE: gone",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    refused.handle.store.setState({ connectionStatus: "closed", fatalClose });
+    registry.release("epic-1", "chat-refused", HOST);
+
+    expect(registry.sleepIdleWarmSessions()).toBe(0);
+    expect(refused.closes()).toBe(0);
+    const state = refused.handle.store.getState();
+    expect(state.asleep).toBe(false);
+    expect(state.fatalClose).toEqual(fatalClose);
+  });
+
   it("reconnects a sleeping session when a tile leases it again", () => {
     const registry = createRegistry();
     const owned = createCountingHandle("epic-1", "chat-1");
