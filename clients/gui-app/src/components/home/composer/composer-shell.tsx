@@ -1,19 +1,32 @@
-import { memo, type DragEventHandler, type ReactNode } from "react";
+import {
+  memo,
+  useRef,
+  type DragEventHandler,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { FileText, Files, ImageIcon } from "lucide-react";
 
 import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
-import {
-  ComposerExpandHandle,
-  type ComposerExpansion,
-} from "@/components/home/composer/composer-expand-handle";
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
+import { useComposerEditorOverflow } from "@/components/home/composer/use-composer-editor-overflow";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
+
+/**
+ * The phone composer's two sizes: in flow under the content, or a sheet over
+ * it. The surface that owns the editor owns this too, so it can drop back to
+ * the compact size the moment a message is sent.
+ */
+export interface ComposerExpansion {
+  readonly expanded: boolean;
+  readonly onExpandedChange: (expanded: boolean) => void;
+}
 
 const FILE_DROP_OVERLAY_CONTENT = {
   images: {
@@ -61,6 +74,81 @@ export function ComposerDropOverlay({
   );
 }
 
+/** Vertical travel that reads as a deliberate pull rather than a wobble. */
+const PULL_THRESHOLD_PX = 24;
+
+/**
+ * The grabber on the card's top edge: a pull UP opens the sheet, and on the
+ * sheet's top edge a pull DOWN closes it. A tap does nothing, so a thumb
+ * landing on the edge never opens anything. Pointer capture keeps the pull on
+ * this element once it starts; `preventDefault` on the press keeps the editor
+ * focused so the keyboard does not dip mid-gesture. The bar itself is hidden
+ * from assistive technology; `ComposerExpandButton` is its accessible twin.
+ */
+function ComposerGrabber({
+  expanded,
+  onExpandedChange,
+}: ComposerExpansion): ReactNode {
+  const startY = useRef<number | null>(null);
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    startY.current = event.clientY;
+  };
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
+    if (startY.current === null) return;
+    const travel = event.clientY - startY.current;
+    if (!expanded && travel <= -PULL_THRESHOLD_PX) {
+      startY.current = null;
+      onExpandedChange(true);
+    } else if (expanded && travel >= PULL_THRESHOLD_PX) {
+      startY.current = null;
+      onExpandedChange(false);
+    }
+  };
+  const onPointerEnd = (): void => {
+    startY.current = null;
+  };
+
+  return (
+    <div
+      aria-hidden
+      data-composer-grabber=""
+      className="absolute inset-x-0 top-0 z-30 flex h-5 touch-none items-center justify-center"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+    >
+      <span className="h-1 w-9 rounded-full bg-foreground/25" />
+    </div>
+  );
+}
+
+/**
+ * The same toggle for a keyboard, a screen reader or a switch, which cannot
+ * pull. Visually hidden until it takes keyboard focus, then shown in the
+ * card's corner so the focus has a visible owner. Mounted whenever the sheet
+ * is available, not only while the grabber shows, so collapsing from it never
+ * removes the element that holds focus.
+ */
+function ComposerExpandButton({
+  expanded,
+  onExpandedChange,
+}: ComposerExpansion): ReactNode {
+  return (
+    <button
+      type="button"
+      className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:right-3 focus-visible:top-2 focus-visible:z-30 focus-visible:rounded-md focus-visible:bg-card focus-visible:px-2 focus-visible:py-1 focus-visible:text-ui-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden"
+      aria-expanded={expanded}
+      onClick={() => onExpandedChange(!expanded)}
+    >
+      {expanded ? "Collapse composer" : "Expand composer"}
+    </button>
+  );
+}
+
 export interface ComposerAreaProps {
   readonly pickerStore: ComposerPickerStore;
   readonly overlay: ReactNode;
@@ -68,7 +156,7 @@ export interface ComposerAreaProps {
   readonly attachmentsStrip: ReactNode;
   readonly editor: ReactNode;
   readonly toolbar: ReactNode | null;
-  /** The phone grabber and sheet state; `null` renders the card in flow only. */
+  /** The phone pull gesture and sheet state; `null` renders the card in flow only. */
   readonly expansion: ComposerExpansion | null;
 }
 
@@ -82,6 +170,13 @@ function ComposerAreaImpl({
   expansion,
 }: ComposerAreaProps): ReactNode {
   const expanded = expansion?.expanded === true;
+  // The grabber earns its place only once the draft has outgrown the capped
+  // box - a short draft shows no chrome at all - and stays while the sheet is
+  // open, since it is also the way back.
+  const { ref: frameRef, overflows } = useComposerEditorOverflow(
+    expansion !== null,
+  );
+  const showGrabber = expansion !== null && (expanded || overflows);
   // A BROWSER's keyboard (iOS Safari overlays it and leaves `--keyboard-inset`
   // at 0, so the surface still runs under it): the sheet's bottom is lifted
   // by the measured cover. The installed app measures the same cover but its
@@ -124,11 +219,12 @@ function ComposerAreaImpl({
           // indicator's, so the max is 0. The frame takes the scroll so the
           // toolbar stays put.
           expanded &&
-            "fixed inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)] z-40 flex flex-col bg-card shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-200",
+            "fixed inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)] z-40 flex flex-col bg-card shadow-lg animate-in slide-in-from-bottom duration-300",
         )}
       >
         {overlay}
-        {expansion === null ? null : <ComposerExpandHandle {...expansion} />}
+        {showGrabber ? <ComposerGrabber {...expansion} /> : null}
+        {expansion === null ? null : <ComposerExpandButton {...expansion} />}
         <div
           data-composer-utility-overlay=""
           className={cn(
@@ -139,6 +235,7 @@ function ComposerAreaImpl({
           {utilityRail}
         </div>
         <div
+          ref={frameRef}
           data-composer-editor-frame=""
           className={cn(
             "px-4 pt-4",
@@ -178,8 +275,9 @@ interface ComposerShellProps {
   /** Slot for the bottom toolbar (model/reasoning/permission/send). */
   readonly toolbar: ReactNode;
   /**
-   * Lets the phone layout pull the composer up into a sheet over the surface
-   * (the grabber on the card's top edge). Honoured only in the phone layout;
+   * Lets the phone layout open the composer as a sheet over the surface (a
+   * pull on the grabber that appears once the draft outgrows the card).
+   * Honoured only in the phone layout;
    * a desktop window has room for the card to grow in place. `null` for a
    * composer that already sits in an overlay of its own.
    */

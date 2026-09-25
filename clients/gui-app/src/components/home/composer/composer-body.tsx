@@ -14,7 +14,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
-import type { ComposerExpansion } from "@/components/home/composer/composer-expand-handle";
+import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
