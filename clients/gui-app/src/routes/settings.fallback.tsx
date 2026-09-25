@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/fallback")({
-  component: FallbackSettingsPanel,
+  component: settingsSectionRouteComponent("fallback"),
 });

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/usage")({
-  component: UsageSettingsPanel,
+  component: settingsSectionRouteComponent("usage"),
 });

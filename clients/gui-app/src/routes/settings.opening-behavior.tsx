@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/opening-behavior")({
-  component: OpeningBehaviorPanel,
+  component: settingsSectionRouteComponent("opening-behavior"),
 });

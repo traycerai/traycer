@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { LinkPhonePanel } from "@/components/settings/panels/link-phone-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 import { isSettingsSectionVisible } from "@/lib/settings-sections";
 
 export const Route = createFileRoute("/settings/link-phone")({
@@ -22,5 +22,5 @@ export const Route = createFileRoute("/settings/link-phone")({
     if (isSettingsSectionVisible("link-phone")) return;
     redirect({ throw: true, to: "/settings/general", replace: true });
   },
-  component: LinkPhonePanel,
+  component: settingsSectionRouteComponent("link-phone"),
 });

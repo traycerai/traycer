@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindings-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 import { isSettingsSectionVisible } from "@/lib/settings-sections";
 
 export const Route = createFileRoute("/settings/keybindings")({
@@ -22,5 +22,5 @@ export const Route = createFileRoute("/settings/keybindings")({
     if (isSettingsSectionVisible("keybindings")) return;
     redirect({ throw: true, to: "/settings/general", replace: true });
   },
-  component: KeybindingsSettingsPanel,
+  component: settingsSectionRouteComponent("keybindings"),
 });

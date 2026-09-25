@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/notifications")({
-  component: NotificationsSettingsPanel,
+  component: settingsSectionRouteComponent("notifications"),
 });

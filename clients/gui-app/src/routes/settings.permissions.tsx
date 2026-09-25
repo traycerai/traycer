@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/permissions")({
-  component: PermissionsSettingsPanel,
+  component: settingsSectionRouteComponent("permissions"),
 });

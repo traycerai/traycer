@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { DeleteAccountSettingsPanel } from "@/components/settings/panels/delete-account-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 import { isSettingsSectionVisible } from "@/lib/settings-sections";
 
 export const Route = createFileRoute("/settings/delete-account")({
@@ -24,5 +24,5 @@ export const Route = createFileRoute("/settings/delete-account")({
     if (isSettingsSectionVisible("delete-account")) return;
     redirect({ throw: true, to: "/settings/general", replace: true });
   },
-  component: DeleteAccountSettingsPanel,
+  component: settingsSectionRouteComponent("delete-account"),
 });

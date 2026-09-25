@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/appearance")({
-  component: AppearanceSettingsPanel,
+  component: settingsSectionRouteComponent("appearance"),
 });

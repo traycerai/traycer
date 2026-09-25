@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/shell")({
-  component: ShellSettingsPanel,
+  component: settingsSectionRouteComponent("shell"),
 });

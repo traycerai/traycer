@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
+import { settingsSectionRouteComponent } from "@/components/settings/settings-section-route-component";
 
 export const Route = createFileRoute("/settings/worktrees")({
-  component: WorktreesSettingsPanel,
+  component: settingsSectionRouteComponent("worktrees"),
 });
