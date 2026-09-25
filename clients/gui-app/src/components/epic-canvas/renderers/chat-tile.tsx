@@ -153,6 +153,7 @@ import {
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
+  transcriptShowsSetupCard,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
@@ -2599,6 +2600,10 @@ function useChatTileSessionViewModel(
     },
     [chatActions],
   );
+  const setupCardShown = useMemo(
+    () => transcriptShowsSetupCard(renderedMessages),
+    [renderedMessages],
+  );
   const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
     useChatMessageActions({
       dispatchUi,
@@ -2618,6 +2623,7 @@ function useChatTileSessionViewModel(
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
       messageDelivery: state.messageDelivery,
+      setupCardShown,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are
