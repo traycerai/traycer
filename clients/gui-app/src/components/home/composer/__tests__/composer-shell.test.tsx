@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useCallback, type ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -178,13 +184,15 @@ function OverflowingEditor(): ReactNode {
   );
 }
 
-function renderShellWithEditor(
+const PICKER_STORE = createComposerPickerStore();
+
+function shellWith(
   expansion: ComposerExpansion | null,
   editor: ReactNode,
-): void {
-  render(
+): ReactNode {
+  return (
     <ComposerShell
-      pickerStore={createComposerPickerStore()}
+      pickerStore={PICKER_STORE}
       onDragOver={() => undefined}
       onDrop={() => undefined}
       onDragEnter={() => undefined}
@@ -195,8 +203,15 @@ function renderShellWithEditor(
       editor={editor}
       toolbar={<div />}
       expansion={expansion}
-    />,
+    />
   );
+}
+
+function renderShellWithEditor(
+  expansion: ComposerExpansion | null,
+  editor: ReactNode,
+): void {
+  render(shellWith(expansion, editor));
 }
 
 describe("ComposerShell phone expansion", () => {
@@ -230,12 +245,43 @@ describe("ComposerShell phone expansion", () => {
     expect(grabber()).toBeNull();
   });
 
-  it("shows the grabber once the draft outgrows its box, as a bar and not a button", () => {
+  it("shows the grabber once the draft outgrows its box, as a bar with a hidden button beside it", () => {
     viewportMock.phone = true;
     renderShellWithEditor(makeExpansion(false), <OverflowingEditor />);
 
-    expect(grabber()).not.toBeNull();
-    expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
+    const bar = grabber();
+    expect(bar).not.toBeNull();
+    expect(bar?.tagName).toBe("DIV");
+    expect(bar?.getAttribute("aria-hidden")).toBe("true");
+    // The way in for a keyboard, a screen reader or a switch, which cannot
+    // pull: present in the tree, visually hidden, never under a thumb.
+    const button = screen.getByRole("button", { name: "Expand composer" });
+    expect(classTokens(button)).toContain("sr-only");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("toggles the sheet from the hidden button", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse composer" }));
+
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("notices an editor that mounts after the frame", async () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    // The prompt editor renders nothing until its deferred instance exists.
+    const view = render(shellWith(expansion, null));
+    expect(grabber()).toBeNull();
+
+    view.rerender(shellWith(expansion, <OverflowingEditor />));
+
+    await waitFor(() => {
+      expect(grabber()).not.toBeNull();
+    });
   });
 
   it("keeps the grabber while expanded, whatever the draft's size", () => {

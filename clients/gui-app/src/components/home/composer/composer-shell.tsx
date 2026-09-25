@@ -82,7 +82,9 @@ const PULL_THRESHOLD_PX = 24;
  * sheet's top edge a pull DOWN closes it. A tap does nothing, so a thumb
  * landing on the edge never opens anything. Pointer capture keeps the pull on
  * this element once it starts; `preventDefault` on the press keeps the editor
- * focused so the keyboard does not dip mid-gesture.
+ * focused so the keyboard does not dip mid-gesture. The bar itself is hidden
+ * from assistive technology; a visually hidden button beside it carries the
+ * same toggle for a keyboard, a screen reader or a switch, which cannot pull.
  */
 function ComposerGrabber({
   expanded,
@@ -111,17 +113,27 @@ function ComposerGrabber({
   };
 
   return (
-    <div
-      aria-hidden
-      data-composer-grabber=""
-      className="absolute inset-x-0 top-0 z-30 flex h-5 touch-none items-center justify-center"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerEnd}
-      onPointerCancel={onPointerEnd}
-    >
-      <span className="h-1 w-9 rounded-full bg-foreground/25" />
-    </div>
+    <>
+      <div
+        aria-hidden
+        data-composer-grabber=""
+        className="absolute inset-x-0 top-0 z-30 flex h-5 touch-none items-center justify-center"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+      >
+        <span className="h-1 w-9 rounded-full bg-foreground/25" />
+      </div>
+      <button
+        type="button"
+        className="sr-only"
+        aria-expanded={expanded}
+        onClick={() => onExpandedChange(!expanded)}
+      >
+        {expanded ? "Collapse composer" : "Expand composer"}
+      </button>
+    </>
   );
 }
 

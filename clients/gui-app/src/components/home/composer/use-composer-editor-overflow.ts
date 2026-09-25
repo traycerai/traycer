@@ -16,10 +16,14 @@ function editorIn(frame: HTMLDivElement | null): HTMLElement | null {
 /**
  * Whether the editor inside the frame holds more than its capped box shows,
  * so it scrolls. Asked through the FRAME, which is the element the shell
- * owns; the editor itself arrives as a slot. Growth up to the cap moves the
- * editor's box (a resize); growth past it does not, so content changes are
- * watched too. `enabled` false keeps every observer off, for the desktop
- * composer, which has room to grow in place and never asks.
+ * owns; the editor itself arrives as a slot, and may arrive LATE - the prompt
+ * editor renders nothing until its deferred TipTap instance exists - so the
+ * frame is watched for the editor appearing or being replaced, and the size
+ * observer follows whichever editor is current. Growth up to the cap moves
+ * the editor's box (a resize); growth past it does not, so content changes
+ * are watched too, through the same frame observer. `enabled` false keeps
+ * every observer off, for the desktop composer, which has room to grow in
+ * place and never asks.
  */
 export function useComposerEditorOverflow(enabled: boolean): {
   ref: RefCallback<HTMLDivElement>;
@@ -32,19 +36,28 @@ export function useComposerEditorOverflow(enabled: boolean): {
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
-      const editor = enabled ? editorIn(frame) : null;
-      if (editor === null) return () => {};
+      if (!enabled || frame === null) return () => {};
       const resize = new ResizeObserver(onStoreChange);
-      resize.observe(editor);
-      const mutation = new MutationObserver(onStoreChange);
-      mutation.observe(editor, {
+      let observed: HTMLElement | null = null;
+      const track = (): void => {
+        const editor = editorIn(frame);
+        if (editor !== observed) {
+          if (observed !== null) resize.unobserve(observed);
+          if (editor !== null) resize.observe(editor);
+          observed = editor;
+        }
+        onStoreChange();
+      };
+      const mutation = new MutationObserver(track);
+      mutation.observe(frame, {
         childList: true,
         subtree: true,
         characterData: true,
       });
+      track();
       return () => {
-        resize.disconnect();
         mutation.disconnect();
+        resize.disconnect();
       };
     },
     [enabled, frame],
