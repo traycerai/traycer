@@ -56,28 +56,3 @@
     padding-bottom: 1.5rem;
   }
 }
-
-/* The first-task coachmark's phone type scale, applied at every width.
- *
- * `first-task-guide.css` puts this one step up the scale behind
- * `@media (max-width: 767px)`, on the reasoning that on a phone the coachmark
- * card is the only thing the user is being asked to read. That is just as true
- * on an iPad here, because the installed app runs the phone shell at every
- * width - but a hand-written width query is not a Tailwind variant, so the
- * breakpoint sentinel in `index.css` cannot reach it and the tier simply never
- * fires above 767px. The coachmark is on the installed app's path (the welcome
- * run hands off to the first-task guide), so a tablet would read it a step
- * small.
- *
- * Here rather than in gui-app because the condition is "this bundle", and
- * mobile-only overrides are what this file is for. Values mirror that tier;
- * if it moves, move these. */
-.traycer-mobile-client .first-task-coachmark-title {
-  font-size: 1.0625rem;
-  line-height: 1.3;
-}
-
-.traycer-mobile-client .first-task-coachmark-body {
-  font-size: 0.9375rem;
-  line-height: 1.45;
-}
