@@ -37,15 +37,17 @@ import { publishedHostProcessGone, readHostPidMetadata } from "./pid-metadata";
  * destroyed the generation the host had just rotated out, and its `host.log.2`
  * went stale beside a `.1` it did not precede. Now the shift is the same as
  * the host's - `.1` moves onto `.2` (replacing it) and then `host.log` onto
- * `.1` - so a restart costs one generation at the far end, never the newest.
- * Two retained generations is the whole design: a forensic trail across the
- * previous sessions, not an archive.
+ * `.1` - so a restart costs one generation at the far end, never the newest,
+ * and a shift that cannot happen stops the rotation rather than paying with
+ * the newest (see `shiftGenerations`). Two retained generations is the whole
+ * design: a forensic trail across the previous sessions, not an archive.
  *
  * ## The cap is checked AT START, not continuously - and that is a real limit
  *
  * Be precise about what {@link MAX_HOST_LOG_BYTES} buys here: it bounds the log
  * **across restarts** at this module's threshold. Within a lifetime the host's
- * own rotator bounds it, and this module never rotates under a live host.
+ * own rotator bounds it, and the start path never rotates under a live host
+ * (the purge path runs after the host was stopped and is not pid-guarded).
  *
  * This is not laziness about the cost of a `stat` on the append path - it is a
  * correctness constraint. The supervisor hands the running host a long-lived
@@ -113,12 +115,13 @@ async function isRegularFile(filePath: string): Promise<boolean> {
  * Ordering matters: the rename is attempted FIRST, so a move that cannot
  * happen never destroys the evidence it was supposed to preserve. On POSIX that
  * single call atomically replaces the destination, so the old file is dropped
- * only once the new one is safely in place. Windows `rename` refuses an existing
- * destination, so that (and only that) case falls back to moving the previous
- * file aside and retrying - by which point we already know the destination
- * exists and the source is intact. The displaced file is restored if the
- * retry fails, so an unrelated source/permission failure cannot destroy the
- * previous generation.
+ * only once the new one is safely in place. Windows can refuse to replace an
+ * existing destination (EPERM/EACCES/EEXIST: a handle held open on it, a
+ * read-only attribute), so that (and only that) case falls back to moving the
+ * previous file aside and retrying - by which point we already know the
+ * destination exists and the source is intact. The displaced file is restored
+ * if the retry fails, so an unrelated source/permission failure cannot destroy
+ * the previous generation.
  */
 async function rotate(
   logPath: string,
@@ -154,7 +157,7 @@ async function rotate(
   } catch {
     // If rollback itself is blocked, the prior evidence still survives at the
     // displaced path rather than being deleted. A successful rollback removes
-    // that exceptional extra file and restores the normal single generation.
+    // that exceptional extra file and puts the destination back as it was.
     await verifyMutationCapability();
     try {
       await rename(displacedBackupPath, backupPath);
@@ -172,13 +175,24 @@ async function rotate(
  * The generation shift: `host.log.1` onto `host.log.2` (dropping the previous
  * `.2`), then `host.log` onto `host.log.1` - the host's own rotator's order.
  *
- * The first move is best-effort in its own right. If it cannot happen (its
- * rollback keeps the previous `.2` intact), the second move still runs and
- * replaces `.1`, which is exactly the single-generation behaviour this shift
- * replaced: the live log is what a start or a purge must clear, and a shift
- * that failed is no reason to leave it in place. A missing `.1` is not a
- * failure - there is nothing to shift, and a stale `.2` beside it is left
- * where it is rather than deleted for nothing.
+ * A shift that cannot happen stops the rotation, as the host's rotator does.
+ * The alternative - moving `host.log` onto the `.1` that would not shift -
+ * would destroy the NEWEST retained generation to clear the live log, which
+ * inverts the one promise this module makes (the far end pays, never the
+ * newest). Leaving the live log in place costs size at a start and leaves a
+ * file behind at a purge, and both are reported as `skipped`. The first
+ * move's own rollback keeps the previous `.2` intact when it fails.
+ *
+ * The order has one exposure, shared with the host's rotator: if the shift
+ * succeeds and the second move then fails (the live log held open on
+ * Windows), the previous `.2` is already gone and the old `.1` sits at `.2`.
+ * That is the generation due for deletion; the next attempt finds no `.1`,
+ * shifts nothing and moves `host.log` onto `.1`, so at most one generation
+ * is lost, and it is the oldest. The result is still `skipped`: the live log
+ * did not rotate.
+ *
+ * A missing `.1` is not a failure - there is nothing to shift, and a stale
+ * `.2` beside it is left where it is rather than deleted for nothing.
  */
 async function shiftGenerations(
   logPath: string,
@@ -187,7 +201,12 @@ async function shiftGenerations(
   verifyMutationCapability: MutationVerifier,
 ): Promise<"rotated" | "skipped"> {
   if (await isRegularFile(backupPath)) {
-    await rotate(backupPath, oldestBackupPath, verifyMutationCapability);
+    const shifted = await rotate(
+      backupPath,
+      oldestBackupPath,
+      verifyMutationCapability,
+    );
+    if (shifted === "skipped") return "skipped";
   }
   return await rotate(logPath, backupPath, verifyMutationCapability);
 }

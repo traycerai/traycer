@@ -225,22 +225,75 @@ describe("rotateHostLogIfOversized (host start)", () => {
     //   2. rename(host.log.2, <displaced>) -> ok     (displace it aside)
     //   3. rename(host.log.1, host.log.2)  -> EACCES (promote fails)
     //   4. rename(<displaced>, host.log.2) -> ok     (rollback restores it)
-    // That shift's own rotate() call returns "skipped", leaving host.log.1
-    // exactly as it was. This is the documented degradation: a failed shift
-    // must not block the live log from rotating, so the second move -
-    // host.log -> host.log.1 - still runs (call 5, no fault needed:
-    // host.log.1 exists as a regular file, and POSIX rename replaces an
-    // existing destination in one atomic call).
+    // That shift's own rotate() call returns "skipped": the rollback
+    // restores host.log.2 and host.log.1 is never touched. Because the
+    // shift did not happen, shiftGenerations stops there rather than
+    // falling through to move host.log onto host.log.1 - that fallthrough
+    // would destroy the newest retained generation just to clear the live
+    // log. The whole rotation reports "skipped" and host.log is left in
+    // place.
     renameFaults.codes.push("EPERM", null, "EACCES", null);
 
+    expect(await rotateHostLogIfOversized("dev")).toBe("skipped");
+
+    expect(await readFile(BACKUP(), "utf8")).toBe("prior evidence");
+    expect(await readFile(OLDEST(), "utf8")).toBe("older evidence");
+    expect((await stat(LOG())).size).toBe(MAX_HOST_LOG_BYTES + 1);
+    expect((await readdir(logDir)).sort()).toEqual([
+      "host.log",
+      "host.log.1",
+      "host.log.2",
+    ]);
+  });
+
+  it("leaves everything in place when host.log.2 cannot be replaced (POSIX)", async () => {
+    await writeFile(BACKUP(), "prior evidence");
+    await mkdir(OLDEST(), { recursive: true });
+    await writeFile(join(OLDEST(), "keep.txt"), "older evidence");
+    await writeFile(LOG(), "p".repeat(MAX_HOST_LOG_BYTES + 1));
+
+    // No fault injection: renaming a file onto a directory fails for real,
+    // with a code outside the replace set (EISDIR on POSIX), so the shift
+    // is skipped and the rotation stops there. This would have been RED
+    // against the previous module, which fell through and replaced
+    // host.log.1 with the live log regardless of the shift's outcome.
+    expect(await rotateHostLogIfOversized("dev")).toBe("skipped");
+
+    expect(await readFile(BACKUP(), "utf8")).toBe("prior evidence");
+    expect(await readFile(join(OLDEST(), "keep.txt"), "utf8")).toBe(
+      "older evidence",
+    );
+    expect((await stat(LOG())).size).toBe(MAX_HOST_LOG_BYTES + 1);
+  });
+
+  it("loses only the oldest generation when the live log cannot move after a successful shift", async () => {
+    await writeFile(BACKUP(), "gen one");
+    await writeFile(OLDEST(), "gen two");
+    await writeFile(LOG(), "q".repeat(MAX_HOST_LOG_BYTES + 1));
+
+    // Rename call order derived from `rotate`:
+    //   1. rename(host.log.1, host.log.2) -> ok     (real shift; no fault)
+    //   2. rename(host.log, host.log.1)   -> EACCES (second move fails)
+    // host.log.1 no longer exists after the shift, so isRegularFile(.1) is
+    // false and this rotate() call returns "skipped" without displacing
+    // anything. This is the documented exposure shared with the host's own
+    // rotator: the generation lost is the one already due for deletion.
+    renameFaults.codes.push(null, "EACCES");
+
+    expect(await rotateHostLogIfOversized("dev")).toBe("skipped");
+
+    expect((await stat(LOG())).size).toBe(MAX_HOST_LOG_BYTES + 1);
+    expect(await readFile(OLDEST(), "utf8")).toBe("gen one");
+    expect(await exists(BACKUP())).toBe(false);
+    expect((await readdir(logDir)).sort()).toEqual(["host.log", "host.log.2"]);
+
+    // A second call, with no faults, shifts nothing (host.log.1 is still
+    // missing) and moves the live log onto host.log.1 - so only the one
+    // generation is ever lost.
     expect(await rotateHostLogIfOversized("dev")).toBe("rotated");
 
-    expect(await readFile(OLDEST(), "utf8")).toBe("older evidence");
-    expect((await readFile(BACKUP(), "utf8")).startsWith("n")).toBe(true);
-    expect(await exists(LOG())).toBe(false);
-    expect(
-      (await readdir(logDir)).some((name) => name.includes("replace-")),
-    ).toBe(false);
+    expect((await readFile(BACKUP(), "utf8")).startsWith("q")).toBe(true);
+    expect(await readFile(OLDEST(), "utf8")).toBe("gen one");
   });
 
   it("shifts host.log.1 into host.log.2 via Windows-style displacement when both exist", async () => {
@@ -317,9 +370,47 @@ describe("rotateHostLogForPurge (host uninstall --all / dev teardown)", () => {
     // moves.
     expect(verifyCalls).toBe(3);
     expect(await readFile(LOG(), "utf8")).toBe("current session\n");
+    expect(await readFile(BACKUP(), "utf8")).toBe("prior session\n");
+    const dirEntries = await readdir(logDir);
+    expect(dirEntries.some((name) => name.includes("replace-"))).toBe(true);
+    const displacedName = dirEntries.find((name) => name.includes("replace-"));
+    if (displacedName === undefined) {
+      throw new Error("expected a displaced host.log.2 file on disk");
+    }
+    expect(await readFile(join(logDir, displacedName), "utf8")).toBe(
+      "older session\n",
+    );
+  });
+
+  it("consults the capability verifier before every rename and removal of both moves", async () => {
+    await writeFile(LOG(), "live\n");
+    await writeFile(BACKUP(), "one\n");
+    await writeFile(OLDEST(), "two\n");
+    renameFaults.codes.push("EPERM");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+    };
+
+    // Derived from `rotate` and `shiftGenerations`:
+    //   shift (host.log.1 -> host.log.2), displacement path:
+    //     verify #1 -> rename(host.log.1, host.log.2) -> EPERM
+    //     verify #2 -> rename(host.log.2, <displaced>) -> ok
+    //     verify #3 -> rename(host.log.1, host.log.2)  -> ok (promote)
+    //     verify #4 -> removeQuietly(<displaced>)
+    //   second move (host.log -> host.log.1), no fault left to consume:
+    //     verify #5 -> rename(host.log, host.log.1) -> ok
+    // Total: 5.
+    const result = await rotateHostLogForPurgeWithVerifier("dev", verify);
+
+    expect(result).toBe("rotated");
+    expect(verifyCalls).toBe(5);
+    expect(await readFile(BACKUP(), "utf8")).toBe("live\n");
+    expect(await readFile(OLDEST(), "utf8")).toBe("one\n");
     expect(
       (await readdir(logDir)).some((name) => name.includes("replace-")),
-    ).toBe(true);
+    ).toBe(false);
+    expect(await exists(LOG())).toBe(false);
   });
 
   it("preserves the session in host.log.1 instead of deleting it", async () => {
