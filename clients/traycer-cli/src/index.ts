@@ -960,7 +960,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--cwd <path>",
-        "Working directory for the host (defaults to the install directory)",
+        "Working directory for the host (defaults to the host home directory)",
       )
       // Identity binding for journal-authorised reclaim probes. Existing
       // registrations remain valid without these options; a probe requires

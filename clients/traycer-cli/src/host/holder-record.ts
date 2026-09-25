@@ -1,11 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  compareProcessStartIdentity,
-  isProcessStartIdentity,
-} from "@traycer/protocol/host/lifecycle";
+import { isProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import { isProcessAlive } from "../store/cli-lock";
-import { readProcessStartIdentity } from "../store/process-identity";
+import { matchLiveProcessStartIdentity } from "../store/process-identity";
 import { isReadablePid } from "./pid-value";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -125,10 +122,8 @@ export function hostHolderProcessGone(holder: HostHolderRecord): boolean {
   if (!isProcessAlive(holder.pid)) return true;
   if (!isProcessStartIdentity(holder.processStartIdentity)) return false;
   return (
-    compareProcessStartIdentity(
-      holder.processStartIdentity,
-      readProcessStartIdentity(holder.pid),
-    ) === "different"
+    matchLiveProcessStartIdentity(holder.pid, holder.processStartIdentity) ===
+    "different"
   );
 }
 

@@ -9,7 +9,6 @@ export {
   __parseElapsedSecondsForTest,
   __setAsyncProcessLivenessReaderForTest,
   __setAsyncProcessStartIdentityReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
   getPublishedProcessIdentityVerdict,

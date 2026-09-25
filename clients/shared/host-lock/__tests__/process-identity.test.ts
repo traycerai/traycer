@@ -3,7 +3,6 @@ import {
   __processStartTimeMsFromElapsedSecondsForTest,
   __setAsyncProcessLivenessReaderForTest,
   __setAsyncProcessStartIdentityReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
   getPublishedProcessIdentityVerdict,
   probeProcessExistenceWithoutSpawn,
   readLiveProcessStartTimeMs,
@@ -51,7 +50,6 @@ describe("POSIX elapsed-time validation", () => {
 afterEach(() => {
   __setAsyncProcessLivenessReaderForTest(null);
   __setAsyncProcessStartIdentityReaderForTest(null);
-  __setAsyncProcessStartTimeReaderForTest(null);
   vi.useRealTimers();
 });
 

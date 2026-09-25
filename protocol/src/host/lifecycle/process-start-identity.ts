@@ -59,10 +59,11 @@
  * Opaque, platform-tagged process creation stamp: `"<platform>:<payload>"`.
  *
  * Deliberately opaque. Consumers compare tokens with
- * {@link compareProcessStartIdentity} and never parse the payload - its shape
- * is a per-platform implementation detail that may change, and the only
- * question anyone is entitled to ask of it is whether two tokens are the same
- * process.
+ * {@link compareProcessStartIdentity} (or {@link compareObservedProcessStart})
+ * and never parse the payload - its shape is a per-platform implementation
+ * detail that may change, and the only question anyone is entitled to ask of
+ * it is whether two tokens are the same process. The one parse, of a Windows
+ * token for a denied read, lives in this module beside the format.
  */
 export type ProcessStartIdentity = string;
 
@@ -233,4 +234,227 @@ function splitToken(
   const separator = value.indexOf(":");
   const payload = normalizePayload(value.slice(separator + 1));
   return payload === null ? null : { tag: value.slice(0, separator), payload };
+}
+
+// ---- Windows: the read that was DENIED ---------------------------------------
+//
+// The Windows token above is `Process.StartTime`, which Windows PowerShell 5.1
+// (.NET Framework) reads by opening the process for
+// PROCESS_QUERY_INFORMATION. That open is DENIED for a process in another
+// security context: session 0 (a service), another user, or this user at a
+// higher integrity level - a process object's label is NO_READ_UP, so an
+// elevated `traycer host update` or installer holding a lock, read by an
+// unelevated CLI, refuses it too. A reader that stops there answers "cannot
+// compare" for as long as that process lives, so a pid the OS handed from a
+// dead holder to a service reads as a holder that might still be alive, and a
+// lock or presence that waits for positive evidence waits forever.
+//
+// So a VERIFYING reader whose exact read was denied - and only denied - asks
+// WMI instead: `Win32_Process.CreationDate`, which WMI serves for every
+// process whatever the caller's rights. That answer has to decide BOTH ways.
+// "different" is the reuse evidence the waiters need; "same" is just as
+// required, because the elevated holder above is alive and ours, and a false
+// "different" for it breaks a live lock. The comparison below is built so that
+// precision alone can produce neither wrong answer.
+//
+// A RECORDING reader never takes this path. A token is always the exact
+// round-trip string, so every value recorded today keeps comparing exactly as
+// it does now; the WMI value exists only as an observation of the moment.
+
+/**
+ * How far apart, in microseconds, a WMI creation time may be from a recorded
+ * token and still name the same process - both ways, inclusive.
+ *
+ * The recorded token keeps the FILETIME's 100 ns digit; it is truncated to
+ * microseconds from its TEXT, so no floating-point step can move it. WMI's
+ * `CreationDate` carries six fractional digits. Measured on Windows Server
+ * 2022 across every process whose exact read succeeded (167 elevated, 30 at
+ * Medium integrity) the two agreed to the microsecond every time, so WMI
+ * truncates; the 1 µs either way absorbs a WMI that rounded its last digit
+ * instead, and is the whole of what precision can contribute. It admits no
+ * stranger: a process that took the pid over was created after the recorded
+ * one had exited, never within a microsecond of that one's birth.
+ */
+export const WINDOWS_DENIED_READ_CREATION_TOLERANCE_MICROS = 1;
+
+/**
+ * The Windows PowerShell 5.1 script a verifying reader runs for `pid` after
+ * its exact read produced nothing. Prints `readable` when the exact read would
+ * have worked (so its failure was something else - a timeout, an exit), and
+ * `denied <DMTF CreationDate>` only when the exact read is refused with
+ * ERROR_ACCESS_DENIED. Anything else - no such process, any other error, a
+ * missing WMI row - exits non-zero, which a reader treats as no answer.
+ *
+ * The getter is invoked as a METHOD (`get_StartTime()`), not read as the
+ * `StartTime` property. Windows PowerShell 5.1 swallows an exception thrown
+ * by a property getter: measured at Medium integrity against eight session-0
+ * and protected pids, `$process.StartTime` yielded `$null` with nothing in
+ * `$Error`, under `$ErrorActionPreference = 'Stop'` - indistinguishable from
+ * any other failure, so the denial could not be told apart. A method call
+ * throws `MethodInvocationException` wrapping the `Win32Exception`
+ * (NativeErrorCode 5), which the catch unwraps.
+ *
+ * The literal holds only the integer pid; there is nothing to quote.
+ */
+export function buildWindowsDeniedReadFallbackScript(pid: number): string {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new RangeError("pid must be a positive integer");
+  }
+  const id = String(pid);
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$process = Get-Process -Id ${id}`,
+    "try {",
+    "  $null = $process.get_StartTime()",
+    "  'readable'",
+    "} catch {",
+    "  $reason = $_.Exception",
+    "  while ($null -ne $reason -and -not ($reason -is [System.ComponentModel.Win32Exception])) {",
+    "    $reason = $reason.InnerException",
+    "  }",
+    "  if ($null -eq $reason -or $reason.NativeErrorCode -ne 5) { throw }",
+    `  $row = Get-WmiObject Win32_Process -Filter 'ProcessId = ${id}'`,
+    "  if ($null -eq $row) { exit 3 }",
+    "  'denied ' + [string]$row.CreationDate",
+    "}",
+  ].join("\n");
+}
+
+/**
+ * The creation time in the script's `denied <DMTF>` line, as UTC epoch
+ * microseconds; `null` for `readable` or anything else.
+ */
+export function parseWindowsDeniedReadFallbackOutput(
+  stdout: string,
+): number | null {
+  const line = stdout.trim();
+  const prefix = "denied ";
+  return line.startsWith(prefix)
+    ? parseWindowsWmiCreationDate(line.slice(prefix.length))
+    : null;
+}
+
+/**
+ * A WMI DMTF datetime (`yyyymmddHHMMSS.ffffff±UUU`, offset in minutes) as UTC
+ * epoch microseconds, converted with the text's OWN offset; `null` when it is
+ * not one.
+ *
+ * WMI formats `CreationDate` from the stored FILETIME with one bias, the
+ * current one, applied to the local fields and printed as the offset, so
+ * subtracting the text's own offset recovers the exact UTC instant - across a
+ * DST change too, and whichever bias WMI chose, since the fields and the
+ * offset were produced together. A converted `DateTime` (what
+ * `Get-CimInstance` returns, and what `ToUniversalTime()` then reads) instead
+ * re-applies the DST rule in force at the fields' wall-clock time to fields
+ * built with the current bias, and lands an hour off for a process created on
+ * the other side of a change - a false "different" for a live holder. Hence
+ * the raw text from `Get-WmiObject`, and no local-time conversion on either
+ * side.
+ */
+export function parseWindowsWmiCreationDate(dmtf: string): number | null {
+  const match =
+    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/u.exec(
+      dmtf.trim(),
+    );
+  if (match === null) return null;
+  const fieldsMs = utcMsOfFields(match.slice(1, 7));
+  const micros = match[7];
+  const sign = match[8];
+  const offset = match[9];
+  if (
+    fieldsMs === null ||
+    micros === undefined ||
+    sign === undefined ||
+    offset === undefined
+  ) {
+    return null;
+  }
+  const offsetMinutes = Number(offset) * (sign === "-" ? -1 : 1);
+  const utcMicros = (fieldsMs - offsetMinutes * 60_000) * 1000 + Number(micros);
+  return Number.isSafeInteger(utcMicros) ? utcMicros : null;
+}
+
+/**
+ * A recorded Windows token's creation time as UTC epoch microseconds,
+ * truncated from its text; `null` for any other token.
+ */
+export function windowsProcessStartIdentityMicros(
+  identity: ProcessStartIdentity | null,
+): number | null {
+  if (identity === null) return null;
+  const token = splitToken(identity);
+  if (token === null || token.tag !== WIN32_PLATFORM_TAG) return null;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{7})Z$/u.exec(
+      token.payload,
+    );
+  if (match === null) return null;
+  const fieldsMs = utcMsOfFields(match.slice(1, 7));
+  const fraction = match[7];
+  if (fieldsMs === null || fraction === undefined) return null;
+  const micros = fieldsMs * 1000 + Number(fraction.slice(0, 6));
+  return Number.isSafeInteger(micros) ? micros : null;
+}
+
+/**
+ * What a VERIFYING read saw: the exact token, or - only when the exact read was
+ * denied - WMI's creation time for the process.
+ */
+export type ObservedProcessStart =
+  | { readonly kind: "identity"; readonly identity: ProcessStartIdentity }
+  | { readonly kind: "windows-denied-read"; readonly creationMicros: number };
+
+/**
+ * {@link compareProcessStartIdentity} over a verifying observation. An exact
+ * token compares exactly as it always has; a denied-read creation time
+ * compares against the recorded token truncated to microseconds, within
+ * {@link WINDOWS_DENIED_READ_CREATION_TOLERANCE_MICROS}. Anything that cannot
+ * be compared - no observation, a recorded token that is not a Windows one -
+ * is `"unknown"`.
+ */
+export function compareObservedProcessStart(
+  recorded: ProcessStartIdentity | null,
+  observed: ObservedProcessStart | null,
+): ProcessStartIdentityMatch {
+  if (observed === null) return "unknown";
+  if (observed.kind === "identity") {
+    return compareProcessStartIdentity(recorded, observed.identity);
+  }
+  const recordedMicros = windowsProcessStartIdentityMicros(recorded);
+  if (recordedMicros === null) return "unknown";
+  return Math.abs(recordedMicros - observed.creationMicros) <=
+    WINDOWS_DENIED_READ_CREATION_TOLERANCE_MICROS
+    ? "same"
+    : "different";
+}
+
+/**
+ * UTC epoch milliseconds of `[year, month, day, hour, minute, second]` digit
+ * strings, or `null` when they do not name a real instant (`Date.UTC` rolls a
+ * month 13 or a day 32 over instead of refusing it).
+ */
+function utcMsOfFields(fields: readonly string[]): number | null {
+  if (fields.length !== 6) return null;
+  const [year, month, day, hour, minute, second] = fields.map(Number);
+  if (
+    year === undefined ||
+    month === undefined ||
+    day === undefined ||
+    hour === undefined ||
+    minute === undefined ||
+    second === undefined
+  ) {
+    return null;
+  }
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  const back = new Date(ms);
+  return Number.isFinite(ms) &&
+    back.getUTCFullYear() === year &&
+    back.getUTCMonth() === month - 1 &&
+    back.getUTCDate() === day &&
+    back.getUTCHours() === hour &&
+    back.getUTCMinutes() === minute &&
+    back.getUTCSeconds() === second
+    ? ms
+    : null;
 }
