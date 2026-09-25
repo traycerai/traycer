@@ -631,6 +631,7 @@ function mountSubmit(input: MountSubmitInput): {
   }
   const pickerStore = createComposerPickerStore();
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: "chat-submit-steer-test",
     values: {
       permission,

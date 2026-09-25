@@ -47,6 +47,7 @@ function mountSubmit(args: {
 }) {
   const pickerStore = createComposerPickerStore();
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
     seedKey: `side-chat-submit-test-${args.taskId}`,
     values: {
       permission: "supervised",

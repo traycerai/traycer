@@ -606,6 +606,71 @@ describe("<ProviderAutoJudgeSection />", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
+  const CLASSIFIER_WARNING =
+    "Faster and free, but your rules don't apply to it, and it replaces Traycer's judge for this provider's conversations.";
+
+  it("shows the classifier-cost warning under the Select for a native provider", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    expect(screen.getByRole("combobox")).toBeTruthy();
+    const warning = screen.getByTestId("provider-auto-judge-warning");
+    expect(warning.textContent).toBe(CLASSIFIER_WARNING);
+  });
+
+  it("omits the classifier-cost warning on the read-only line for a non-native provider", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: false })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    expect(screen.getByTestId("provider-auto-judge-readonly")).toBeTruthy();
+    expect(screen.queryByTestId("provider-auto-judge-warning")).toBeNull();
+  });
+
+  it("omits the classifier-cost warning on the unreadable panel", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.setAutoJudge": { major: 1, minor: 0 },
+      "providers.list": { major: 9, minor: 0 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: "provider" })}
+      />,
+    );
+
+    expect(screen.getByTestId("provider-auto-judge-unreadable")).toBeTruthy();
+    expect(screen.queryByTestId("provider-auto-judge-warning")).toBeNull();
+  });
+
+  it("omits the classifier-cost warning on the unsupported panel", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.list": { major: 9, minor: 1 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    expect(screen.getByTestId("provider-auto-judge-unsupported")).toBeTruthy();
+    expect(screen.queryByTestId("provider-auto-judge-warning")).toBeNull();
+  });
+
   it("control: keeps showing the echo across a rerender when providers.list has not refetched", () => {
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: true })],
