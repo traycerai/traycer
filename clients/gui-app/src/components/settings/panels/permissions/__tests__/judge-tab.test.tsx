@@ -782,9 +782,25 @@ describe("JudgeTab", () => {
       };
       renderTab();
 
-      expect(
-        screen.getByTestId("auto-judge-picked-status").textContent,
-      ).toContain("(");
+      expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+        "Billed to your Claude Code account (work)",
+      );
+      // The chip names it under the same rule.
+      expect(face().textContent).toContain("work");
+    });
+
+    it("names no account when the provider has one", () => {
+      judgeRecord.current = {
+        selection: CLAUDE_STORED,
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(face().textContent).not.toContain("ambient");
     });
 
     it("shows the spinner alone while a pick saves", async () => {
