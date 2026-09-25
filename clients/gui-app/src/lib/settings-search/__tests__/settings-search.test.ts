@@ -136,6 +136,26 @@ describe("settings search", () => {
     expect(results[0].entry.anchor).toBe("appearance-terminal-cursor");
   });
 
+  it("lands each Permissions query on the tab or row it is about", () => {
+    // "judge" is also in Providers' keywords ("auto mode judge"), so this pins
+    // that the Permissions tab still outranks it.
+    expect(landingFor("default permission", DESKTOP)).toBe(
+      "permissions#permissions-default-permission-mode",
+    );
+    expect(landingFor("judge", DESKTOP)).toBe(
+      "permissions#permissions-tab-judge",
+    );
+    expect(landingFor("policy", DESKTOP)).toBe(
+      "permissions#permissions-tab-rules",
+    );
+    expect(landingFor("allow rule", DESKTOP)).toBe(
+      "permissions#permissions-tab-rules",
+    );
+    expect(landingFor("activity", DESKTOP)).toBe(
+      "permissions#permissions-tab-activity",
+    );
+  });
+
   it("still lets a page win on its own name", () => {
     // The kind nudge is small on purpose — it decides near-ties, it does not
     // outrank an exact match on a page's own name.
@@ -358,30 +378,32 @@ describe("settings search", () => {
       expect(labelsFor("browser", DESKTOP)).toContain("Browser");
     });
 
-    it("sends selected-host vocabulary to the Overview page", () => {
+    it("sends selected-host vocabulary to its Overview tab", () => {
       // Every group on a host-scoped page is dropped or concealed for an
-      // unresolved, connecting or vanished host, so none is a target. Their
-      // words still reach the Overview page, in any shell.
+      // unresolved, connecting or vanished host, so none of the in-body
+      // groups is a target — but each of the five tabs anchors on its own
+      // trigger, which renders in every host state, so these words now land
+      // on the TAB that answers them rather than on the bare page.
       for (const context of [DESKTOP, MOBILE]) {
+        for (const query of ["uninstall", "danger zone", "installation"]) {
+          expect(landingsFor(query, context), query).toContain(
+            "host#host-overview-tab-installation",
+          );
+        }
         for (const query of [
-          "uninstall",
           "snapshots",
           "import your work",
           "data migration",
-          "installation",
-          "danger zone",
         ]) {
-          expect(landingsFor(query, context), query).toContain("host#<top>");
+          expect(landingsFor(query, context), query).toContain(
+            "host#host-overview-tab-data",
+          );
         }
       }
-      expect(
-        searchSettings("installation danger zone", DESKTOP).filter(
-          (result) =>
-            result.entry.section === "host" && result.entry.anchor !== null,
-        ),
-      ).toEqual([]);
+      // "Installation" is deliberately not in this list: that is now the
+      // Installation TAB's own label, so a search for it correctly returns a
+      // result labeled "Installation" — the tab trigger, not an in-body row.
       for (const label of [
-        "Installation",
         "Remove Traycer from this computer",
         "Remove from account",
         "File edit snapshots",
@@ -390,6 +412,19 @@ describe("settings search", () => {
         "Data & migration",
       ]) {
         expect(labelsFor(label, DESKTOP), label).not.toContain(label);
+      }
+    });
+
+    it("finds a setting through search, landing on the tab that holds it", () => {
+      for (const [query, anchor] of [
+        ["uninstall", "host-overview-tab-installation"],
+        ["port forward", "host-overview-tab-ports"],
+        ["release candidate", "host-overview-tab-updates"],
+        ["import", "host-overview-tab-data"],
+        ["version history", "host-overview-tab-data"],
+        ["host id", "host-overview-tab-installation"],
+      ] as const) {
+        expect(landingsFor(query, DESKTOP), query).toContain(`host#${anchor}`);
       }
     });
 

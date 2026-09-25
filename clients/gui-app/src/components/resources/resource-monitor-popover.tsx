@@ -1015,7 +1015,15 @@ function ResourceMonitorHostPickerRow(props: {
           onSelect: () => {
             props.onClose();
             carryViewedHostIntoSettingsScope(scope.hostId);
-            openSettings({ section: "host", resetToGeneral: false });
+            // Named rather than left null: an Overview already open on
+            // another tab comes back to Status, as every host link does.
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: "status",
+              draft: null,
+              hostId: null,
+            });
           },
         }}
         surface="panel-header"

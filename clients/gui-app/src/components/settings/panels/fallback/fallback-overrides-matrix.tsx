@@ -1,257 +1,539 @@
-import { Fragment, type ReactNode } from "react";
-import type {
-  FallbackPolicy,
-  FallbackRungKind,
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+import {
+  REASON_ELIGIBLE_RUNGS,
+  type FallbackPolicy,
+  type FallbackRungKind,
 } from "@traycer/protocol/host/fallback-policy";
 import { FALLBACK_REASON_LABELS } from "@traycer/protocol/host/notifications/presentation";
 import type { HostNotificationStoppedReason } from "@traycer/protocol/host/notifications/payloads";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  FALLBACK_MATRIX_RUNGS,
-  FALLBACK_RUNG_COPY,
-} from "@/components/settings/panels/fallback/fallback-rung-copy";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 import {
   EXCLUDED_MATRIX_REASONS,
-  FALLBACK_OVERRIDES_DISCLOSURE,
   MATRIX_REASONS,
-  REASON_ROW_NOTES,
   RUNG_INELIGIBILITY_COPY,
-} from "@/components/settings/panels/fallback/fallback-overrides-copy";
+} from "./fallback-overrides-copy";
 import {
-  clearPolicyOverrides,
   effectiveLadderFor,
-  overrideChipState,
   policyHasOverrides,
   togglePolicyOverrideRung,
-  type OverrideChipState,
-} from "@/components/settings/panels/fallback/fallback-overrides-model";
+} from "./fallback-overrides-model";
+import {
+  describeOverride,
+  overrideActionOrder,
+  overrideRungAfterNotify,
+  OVERRIDE_ACTION_LABELS,
+  OVERRIDE_ACTION_HELP,
+  OVERRIDE_STEP_LABELS,
+} from "./fallback-overrides-presentation";
+import type { OverrideResetUndo } from "./fallback-overrides-reset";
+import { FALLBACK } from "../fallback-settings.definitions";
 import { cn } from "@/lib/utils";
-import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
 export interface FallbackOverridesMatrixProps {
   readonly policy: FallbackPolicy;
-  /** The editor's four-row order, so a step turned ON here lands in place. */
   readonly rungOrder: readonly FallbackRungKind[];
-  readonly onChange: (next: FallbackPolicy) => void;
+  readonly onChange: (
+    next: FallbackPolicy,
+    reason: HostNotificationStoppedReason,
+  ) => void;
+  readonly onReset: (reason: HostNotificationStoppedReason | null) => void;
+  readonly onUndo: () => void;
+  readonly undo: OverrideResetUndo | null;
+  readonly attentionReason: HostNotificationStoppedReason | null;
+  readonly previewUnconfirmed: boolean;
   readonly status: ReactNode;
 }
 
-/**
- * Advanced ▸ per-failure overrides.
- *
- * One row per failure, one chip per step. The row set is DERIVED from the
- * shared taxonomy rather than written out, so "covers every failure exactly"
- * stays true when a reason is added instead of being true on the day it was
- * written.
- *
- * Collapsed by default. It is the only part of this page a user never has to
- * touch: the seeded matrix is the plan's own table, and the ladder already
- * narrows itself per failure without anyone configuring anything.
- */
+const EDITABLE_REASONS = MATRIX_REASONS.filter(
+  (reason) => REASON_ELIGIBLE_RUNGS[reason].length > 0,
+);
+const FIXED_REASONS = MATRIX_REASONS.filter(
+  (reason) => REASON_ELIGIBLE_RUNGS[reason].length === 0,
+);
+
+/** Per-problem choices; the wire policy and its save lifecycle stay in the parent. */
 export function FallbackOverridesMatrix(
   props: FallbackOverridesMatrixProps,
 ): ReactNode {
-  const { policy, rungOrder, onChange, status } = props;
+  const {
+    policy,
+    rungOrder,
+    onChange,
+    onReset,
+    onUndo,
+    undo,
+    attentionReason,
+    previewUnconfirmed,
+    status,
+  } = props;
+  const [expanded, setExpanded] =
+    useState<HostNotificationStoppedReason | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const excludedNeedsAttention =
+    attentionReason !== null &&
+    EXCLUDED_MATRIX_REASONS.includes(attentionReason);
+  const customCount = Object.keys(policy.reasonOverrides ?? {}).length;
   return (
     <SettingsGroup
       group={FALLBACK.definitions.advanced}
-      // Named "Advanced" here and "Overrides" on its tab - one thing, two
-      // names, which is the defect `fallback-rung-copy` documents. The rail's
-      // name is the one that says what is inside, so it is the one kept.
       showTitle={false}
       tone="default"
       dataTestId="settings-fallback-overrides-group"
       fill={false}
     >
-      {/* No longer behind a "Per-failure overrides" collapse. That collapse
-          earned its place while this sat at the foot of one long scrolling
-          page - it kept the page short. On a tab of its own the trade inverts:
-          the rail already says Overrides, so the collapse was a second name in
-          front of a second click, guarding the one thing the tab exists for,
-          on a pane the matrix fits inside with room to spare. */}
-      <div className="px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-            {/* The "including a step that is off on Plan" clause was cut once
-                as redundant and RESTORED after a user-lens review: it is the
-                only place the page says an override can turn something ON that
-                the reader deliberately turned off elsewhere. Without it,
-                "overrides your plan" is read as narrowing - the reader assumes
-                a row can only take steps away - and the surprise arrives later,
-                as a switch they thought they had disabled. A consequence the
-                user cannot predict from the rest of the page is exactly what a
-                description is for. */}
-            Choose which steps Traycer can try for each problem. A row you
-            change replaces your choices on the Plan tab for that problem -
-            including allowing a step that is turned off there. Dashed steps
-            aren&apos;t available for that problem.
+      <div className="@container min-w-0 space-y-4 px-4 py-4 sm:px-5">
+        <div className="space-y-1.5">
+          <h3
+            ref={heading}
+            tabIndex={-1}
+            className="text-ui-base font-semibold text-foreground"
+          >
+            When a problem happens
+          </h3>
+          <p className="text-ui-sm text-muted-foreground">
+            Use your main plan, or choose different actions for a specific
+            problem.
+          </p>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
+          <span className="font-medium">Your main plan</span>
+          <span className="min-w-0 text-muted-foreground">
+            {policy.ladder.length === 0
+              ? "No recovery actions configured"
+              : policy.ladder
+                  .map((rung) => OVERRIDE_STEP_LABELS[rung])
+                  .join(" → ")}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <p className="text-ui-xs text-muted-foreground">
+            {EDITABLE_REASONS.length} problems ·{" "}
+            {customCount === 0
+              ? "All follow main plan"
+              : `${customCount} custom`}
           </p>
           <Button
-            size="inline"
-            type="button"
+            size="touch"
             variant="link"
+            type="button"
             disabled={!policyHasOverrides(policy)}
-            onClick={() => {
-              onChange(clearPolicyOverrides(policy));
-            }}
+            onClick={() => onReset(null)}
           >
-            Reset overrides only
+            Reset all to main plan
           </Button>
         </div>
-        <p className="mt-3 text-ui-sm text-muted-foreground">
-          {FALLBACK_OVERRIDES_DISCLOSURE}
-        </p>
-        {/* ONE grid for the whole table, not a stack of flex rows: the chip
-            columns then align by construction rather than by a fixed label
-            width, which is also what keeps this off a px/rem layout size. The
-            label column is `minmax(0,1fr)` so it absorbs the slack and its
-            contents can wrap; each chip column sizes to its own widest cell. */}
+        {/* Save failures remain visible when the edited row is collapsed. */}
+        {status}
+        {undo === null ? null : (
+          <div
+            className="flex flex-wrap items-center gap-x-3 rounded-md border border-border px-3 text-ui-xs"
+            role="status"
+          >
+            <span>{undo.message}</span>
+            <Button
+              type="button"
+              variant="link"
+              size="touch"
+              disabled={undo.disabled}
+              onClick={() => {
+                onUndo();
+                heading.current?.focus();
+              }}
+            >
+              Undo
+            </Button>
+          </div>
+        )}
         <div
-          className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-3 gap-y-2"
-          data-testid="fallback-overrides-grid"
+          className="min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border"
+          data-testid="fallback-overrides-list"
         >
-          {MATRIX_REASONS.map((reason) => (
+          {EDITABLE_REASONS.map((reason) => (
             <OverrideRow
               key={reason}
               policy={policy}
               reason={reason}
               rungOrder={rungOrder}
+              open={expanded === reason}
+              onOpenChange={(open) => setExpanded(open ? reason : null)}
               onChange={onChange}
+              onReset={onReset}
+              needsAttention={attentionReason === reason}
+              previewUnconfirmed={previewUnconfirmed}
             />
           ))}
         </div>
-        <ExcludedReasonsRow />
-        {status}
+        <div className="space-y-2">
+          <h4 className="text-ui-xs font-medium text-muted-foreground">
+            No actions to choose
+          </h4>
+          <div className="space-y-3 rounded-lg border border-border px-4 py-3">
+            {FIXED_REASONS.map((reason) => (
+              <FixedReason
+                key={reason}
+                policy={policy}
+                reason={reason}
+                onReset={onReset}
+                needsAttention={attentionReason === reason}
+                previewUnconfirmed={previewUnconfirmed}
+              />
+            ))}
+            <details
+              className="border-t border-border pt-1"
+              data-testid="fallback-override-excluded-row"
+            >
+              <summary className="min-h-11 cursor-pointer content-center text-ui-xs text-muted-foreground">
+                {EXCLUDED_MATRIX_REASONS.length} other problems need your
+                attention
+                {excludedNeedsAttention ? (
+                  <Badge variant="warning" className="ml-2">
+                    Check save
+                  </Badge>
+                ) : null}
+              </summary>
+              <p className="mb-2 text-ui-xs text-muted-foreground">
+                Traycer won’t switch or wait for these problems because
+                automatic routing cannot resolve them.
+              </p>
+              <ul className="space-y-2">
+                {EXCLUDED_MATRIX_REASONS.map((reason) => (
+                  <li key={reason}>
+                    <FixedReason
+                      policy={policy}
+                      reason={reason}
+                      onReset={onReset}
+                      needsAttention={attentionReason === reason}
+                      previewUnconfirmed={previewUnconfirmed}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </div>
+        </div>
       </div>
     </SettingsGroup>
   );
 }
 
-/** Exactly four grid cells - the label and the three chip columns. */
 function OverrideRow(props: {
   readonly policy: FallbackPolicy;
   readonly reason: HostNotificationStoppedReason;
   readonly rungOrder: readonly FallbackRungKind[];
-  readonly onChange: (next: FallbackPolicy) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onChange: (
+    next: FallbackPolicy,
+    reason: HostNotificationStoppedReason,
+  ) => void;
+  readonly onReset: (reason: HostNotificationStoppedReason | null) => void;
+  readonly needsAttention: boolean;
+  readonly previewUnconfirmed: boolean;
 }): ReactNode {
-  const { policy, reason, rungOrder, onChange } = props;
-  const note = REASON_ROW_NOTES[reason];
+  const {
+    policy,
+    reason,
+    rungOrder,
+    open,
+    onOpenChange,
+    onChange,
+    onReset,
+    needsAttention,
+    previewUnconfirmed,
+  } = props;
+  const id = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const content = panel.current;
+    if (!open || content === null) return;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onOpenChange(false);
+      trigger.current?.focus();
+    };
+    content.addEventListener("keydown", closeOnEscape);
+    return () => content.removeEventListener("keydown", closeOnEscape);
+  }, [open, onOpenChange]);
+  let previewLead = "May try available steps in this order:";
+  if (!policy.enabled) previewLead = "If automatic routing is turned on:";
+  if (previewUnconfirmed)
+    previewLead = "Preview of these choices — save not confirmed.";
+  const label = FALLBACK_REASON_LABELS[reason];
+  const custom = policy.reasonOverrides?.[reason] !== undefined;
   const ladder = effectiveLadderFor(policy, reason);
+  const description = describeOverride(policy, reason);
+  const eligibleRungs = new Set(REASON_ELIGIBLE_RUNGS[reason]);
+  const hasSwitch =
+    ladder !== "off" &&
+    ladder.some(
+      (rung) =>
+        (rung === "profile" || rung === "tier") &&
+        !overrideRungAfterNotify(policy, reason, rung) &&
+        eligibleRungs.has(rung),
+    );
   return (
-    <Fragment>
-      <div className="min-w-0" data-testid={`fallback-override-row-${reason}`}>
-        <span className="text-ui-sm text-foreground">
-          {FALLBACK_REASON_LABELS[reason]}
-        </span>
-        {note === null ? null : (
-          <span className="ml-1.5 text-ui-xs text-muted-foreground">
-            {note}
+    <section
+      className="min-w-0"
+      data-testid={`fallback-override-row-${reason}`}
+    >
+      <h4>
+        <Button
+          ref={trigger}
+          type="button"
+          variant="ghost"
+          size="disclosure-row"
+          className="w-full"
+          id={`${id}-trigger`}
+          aria-expanded={open}
+          aria-controls={`${id}-content`}
+          onClick={() => onOpenChange(!open)}
+        >
+          <span className="min-w-0 flex-1 space-y-1 text-left">
+            <span className="flex flex-wrap items-center gap-2">
+              <span>{label}</span>
+              <Badge variant={custom ? "info" : "muted"}>
+                {custom ? "Custom" : "Main plan"}
+              </Badge>
+              {needsAttention ? (
+                <Badge variant="warning">Check save</Badge>
+              ) : null}
+            </span>
+            <span className="block text-ui-xs font-normal text-muted-foreground">
+              {ladder === "off"
+                ? "Recovery disabled for this problem · "
+                : null}
+              {!policy.enabled ? "When routing is on: " : null}
+              {description.steps.join(" → ")}
+            </span>
           </span>
-        )}
-        {ladder === "off" ? (
-          // Only a programmatic writer can produce this; the matrix has no
-          // control that writes it. Saying so beats rendering three ordinary
-          // grey chips, which would read as a preference the user set - and
-          // would be restored wholesale by turning any one of them back on.
-          <span className="ml-1.5 text-ui-xs text-muted-foreground">
-            Nothing runs for this failure.
-          </span>
-        ) : null}
+          <ChevronDown
+            className={cn(
+              "mt-1 size-4 shrink-0 text-muted-foreground",
+              open && "rotate-180",
+            )}
+            aria-hidden
+          />
+        </Button>
+      </h4>
+      <div
+        ref={panel}
+        id={`${id}-content`}
+        hidden={!open}
+        role="region"
+        aria-labelledby={`${id}-trigger`}
+        className="space-y-3 border-t border-border px-4 py-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <p className="text-ui-sm font-medium">Choose recovery actions</p>
+          {custom ? (
+            <Button
+              type="button"
+              variant="link"
+              size="touch"
+              onClick={() => {
+                onReset(reason);
+                trigger.current?.focus();
+              }}
+            >
+              Use main plan
+            </Button>
+          ) : null}
+        </div>
+        <p className="text-ui-xs text-muted-foreground">
+          {custom
+            ? "These choices replace the main plan for this problem."
+            : "Changing a choice customizes this problem. Everything else keeps using the main plan."}
+        </p>
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 @2xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-2">
+            <fieldset className="min-w-0 divide-y divide-border overflow-hidden rounded-md border border-border">
+              <legend className="sr-only">Recovery actions for {label}</legend>
+              {overrideActionOrder(policy, reason, rungOrder).map((rung) => (
+                <OverrideAction
+                  key={rung}
+                  policy={policy}
+                  reason={reason}
+                  rung={rung}
+                  onToggle={() =>
+                    onChange(
+                      togglePolicyOverrideRung({
+                        policy,
+                        reason,
+                        rung,
+                        rungOrder,
+                      }),
+                      reason,
+                    )
+                  }
+                />
+              ))}
+            </fieldset>
+            {hasSwitch ? (
+              <p className="text-ui-xs text-muted-foreground">
+                {FRESH_SESSION_HELPER}
+              </p>
+            ) : null}
+          </div>
+          <aside
+            className="min-w-0 space-y-2 rounded-md border border-border bg-foreground/3 p-3"
+            aria-label={`Outcome preview for ${label}`}
+          >
+            <h5 className="text-ui-xs font-medium">What happens</h5>
+            <p className="text-ui-xs text-muted-foreground">{previewLead}</p>
+            <ol className="list-inside list-decimal space-y-2 text-ui-xs">
+              {description.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            {description.note === null ? null : (
+              <p className="border-t border-border pt-2 text-ui-xs text-muted-foreground">
+                {description.note}
+              </p>
+            )}
+          </aside>
+        </div>
+        <UnavailableActions reason={reason} />
       </div>
-      {FALLBACK_MATRIX_RUNGS.map((rung) => (
-        <OverrideChip
-          key={rung}
-          reason={reason}
-          rung={rung}
-          state={overrideChipState(policy, reason, rung)}
-          onToggle={() => {
-            onChange(
-              togglePolicyOverrideRung({ policy, reason, rung, rungOrder }),
-            );
-          }}
-        />
-      ))}
-    </Fragment>
+    </section>
   );
 }
 
-const CHIP_BASE =
-  "justify-self-start rounded-full border px-2.5 py-0.5 text-ui-xs transition-colors";
-
-const CHIP_STATE_CLASS: Record<OverrideChipState, string> = {
-  runs: "border-emerald-600/60 text-emerald-700 hover:bg-emerald-600/10 dark:text-emerald-400",
-  off: "border-border text-muted-foreground hover:bg-foreground/5",
-  impossible: "border-dashed border-border/70 text-muted-foreground/60",
-};
-
-function OverrideChip(props: {
+function OverrideAction(props: {
+  readonly policy: FallbackPolicy;
   readonly reason: HostNotificationStoppedReason;
   readonly rung: FallbackRungKind;
-  readonly state: OverrideChipState;
   readonly onToggle: () => void;
 }): ReactNode {
-  const { reason, rung, state, onToggle } = props;
-  const label = FALLBACK_RUNG_COPY[rung].chipLabel;
-  const why = RUNG_INELIGIBILITY_COPY[reason][rung];
-
-  if (state === "impossible") {
-    // A `<span>`, not a disabled `<button>`. A disabled control says "not right
-    // now"; this is "never, for this failure". It must not sit in the tab order
-    // offering an action that does not exist. The why is part of the chip's own
-    // text rather than a `title`, so a screen reader gets it with the label
-    // instead of from an attribute it may never announce.
-    return (
-      <span className={cn(CHIP_BASE, CHIP_STATE_CLASS.impossible)}>
-        {label}
-        {why === null ? null : <span> - {why}</span>}
-      </span>
-    );
-  }
-
+  const { policy, reason, rung, onToggle } = props;
+  const id = useId();
+  const ladder = effectiveLadderFor(policy, reason);
+  const checked = ladder !== "off" && ladder.includes(rung);
+  const afterNotify = overrideRungAfterNotify(policy, reason, rung);
+  const offInPlan = !policy.ladder.includes(rung);
+  const descriptionIds = [
+    `${id}-description`,
+    ...(offInPlan ? [`${id}-source`] : []),
+    ...(afterNotify ? [`${id}-after-notify`] : []),
+  ].join(" ");
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={state === "runs"}
-      // Six rows carry a chip reading "other profile"; without this they are
-      // six identically-named buttons to anyone not looking at the grid. The
-      // visible text stays the START of the accessible name, so a voice-control
-      // user saying what they can see still matches.
-      aria-label={`${label} for ${FALLBACK_REASON_LABELS[reason]}`}
-      className={cn(CHIP_BASE, CHIP_STATE_CLASS[state])}
-    >
-      {label}
-      {state === "runs" ? <span aria-hidden> ✓</span> : null}
-    </button>
+    <div className="px-2 py-1">
+      <Label variant="row" className="min-h-11 items-start" htmlFor={id}>
+        <Checkbox
+          id={id}
+          checked={checked}
+          onCheckedChange={onToggle}
+          className="mt-0.5"
+          aria-label={`${OVERRIDE_ACTION_LABELS[rung]} for ${FALLBACK_REASON_LABELS[reason]}`}
+          aria-describedby={descriptionIds}
+        />
+        <span className="min-w-0 flex-1 space-y-1 leading-normal">
+          <span className="flex flex-wrap items-center gap-2">
+            <span>{OVERRIDE_ACTION_LABELS[rung]}</span>
+            {offInPlan ? (
+              <Badge id={`${id}-source`} variant="muted">
+                {checked ? "On here · off in plan" : "Off in main plan"}
+              </Badge>
+            ) : null}
+          </span>
+          <span
+            className="block text-ui-xs text-muted-foreground"
+            id={`${id}-description`}
+          >
+            {OVERRIDE_ACTION_HELP[rung]}
+          </span>
+          {afterNotify ? (
+            <span
+              id={`${id}-after-notify`}
+              className="block text-ui-xs text-warning-foreground"
+            >
+              After notification · won’t run
+            </span>
+          ) : null}
+        </span>
+      </Label>
+    </div>
   );
 }
 
-/**
- * The five failures no step can ever help, as one read-only line.
- *
- * Read-only by design: exclusion is not a preference. Two different arguments
- * put a reason here - the same request reproduces the failure on any provider
- * (a context limit, a refused request), or the failure is this host's own view
- * of a run that stopped rather than the provider's capacity - and neither is
- * something a switch could change. A control here would invite someone to turn
- * on a step that cannot run and then wonder why it never does.
- */
-function ExcludedReasonsRow(): ReactNode {
-  const labels = EXCLUDED_MATRIX_REASONS.map(
-    (reason) => FALLBACK_REASON_LABELS[reason],
+function UnavailableActions({
+  reason,
+}: {
+  readonly reason: HostNotificationStoppedReason;
+}): ReactNode {
+  const unavailable = (["profile", "tier", "wait"] as const).filter(
+    (rung) => !REASON_ELIGIBLE_RUNGS[reason].includes(rung),
   );
+  if (unavailable.length === 0) return null;
   return (
-    <p
-      className="mt-3 max-w-[68ch] text-ui-xs text-muted-foreground"
-      data-testid="fallback-override-excluded-row"
-    >
-      {/* The old second sentence gave BOTH reasons for a mixed list and left
-          the reader to work out which applied to which failure - an either/or
-          about causes, to explain an absence. One reason that covers every row
-          is more useful than two that each cover some. */}
-      {labels.length} more - {labels.join(", ")} - never switch or wait, because
-      routing somewhere else would not help them.
-    </p>
+    <details className="text-ui-xs text-muted-foreground">
+      <summary className="min-h-11 cursor-pointer content-center">
+        Why aren’t other actions available?
+      </summary>
+      <ul className="list-inside list-disc space-y-1">
+        {unavailable.map((rung) => (
+          <li key={rung}>
+            {OVERRIDE_ACTION_LABELS[rung]}:{" "}
+            {RUNG_INELIGIBILITY_COPY[reason][rung]}.
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function FixedReason(props: {
+  readonly policy: FallbackPolicy;
+  readonly reason: HostNotificationStoppedReason;
+  readonly onReset: (reason: HostNotificationStoppedReason | null) => void;
+  readonly needsAttention: boolean;
+  readonly previewUnconfirmed: boolean;
+}): ReactNode {
+  const { policy, reason, onReset, needsAttention, previewUnconfirmed } = props;
+  const label = useRef<HTMLSpanElement>(null);
+  const custom = policy.reasonOverrides?.[reason] !== undefined;
+  const ladder = effectiveLadderFor(policy, reason);
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs">
+        <span ref={label} tabIndex={-1} className="font-medium">
+          {FALLBACK_REASON_LABELS[reason]}
+        </span>
+        {custom ? (
+          <>
+            <Badge variant="info">Custom</Badge>
+            <Button
+              type="button"
+              size="touch"
+              variant="link"
+              onClick={() => {
+                onReset(reason);
+                label.current?.focus();
+              }}
+            >
+              Use main plan
+            </Button>
+          </>
+        ) : null}
+        {needsAttention ? <Badge variant="warning">Check save</Badge> : null}
+      </div>
+      {REASON_ELIGIBLE_RUNGS[reason].length === 0 &&
+      MATRIX_REASONS.includes(reason) ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {previewUnconfirmed ? "Save not confirmed · " : null}
+          {ladder === "off" ? "Recovery disabled for this problem · " : null}
+          {!policy.enabled ? "When routing is on: " : null}
+          {describeOverride(policy, reason).steps.join(" → ")}
+        </p>
+      ) : null}
+    </div>
   );
 }

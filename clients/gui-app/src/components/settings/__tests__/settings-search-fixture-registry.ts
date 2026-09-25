@@ -31,6 +31,13 @@ export interface SettingsSearchFixtureShell {
 
 export interface SettingsSearchFixture {
   readonly section: SettingsSectionId;
+  /**
+   * The host-scope state the executor mounts a host-scoped section under.
+   * `"connecting"` is the state where `HostScopeGate` withholds a page's body,
+   * so only an element OUTSIDE the gate can be asserted to land; `null` means
+   * the section is not host-scoped, or its panel needs no scope to render.
+   */
+  readonly hostScope: "connecting" | null;
   readonly shells: ReadonlyArray<SettingsSearchFixtureShell>;
 }
 
@@ -92,6 +99,7 @@ export const SETTINGS_SEARCH_FIXTURES = [
   // without a runner host, which is what these two shells assert.
   {
     section: "getting-started",
+    hostScope: null,
     shells: [
       { name: "no runner host", context: NO_BRIDGES },
       {
@@ -102,6 +110,7 @@ export const SETTINGS_SEARCH_FIXTURES = [
   },
   {
     section: "general",
+    hostScope: null,
     shells: [
       { name: "every bridge absent", context: NO_BRIDGES },
       {
@@ -116,6 +125,7 @@ export const SETTINGS_SEARCH_FIXTURES = [
   },
   {
     section: "appearance",
+    hostScope: null,
     shells: [
       { name: "no runner host", context: NO_BRIDGES },
       {
@@ -140,6 +150,7 @@ export const SETTINGS_SEARCH_FIXTURES = [
   // asserted rather than two of them being inferred from the third.
   {
     section: "layout",
+    hostScope: null,
     // Every shell carries a runner host: the page's host-scoped provider list
     // reads one to resolve the watched host, and no Layout gate turns on it.
     shells: [
@@ -168,6 +179,7 @@ export const SETTINGS_SEARCH_FIXTURES = [
   },
   {
     section: "opening-behavior",
+    hostScope: null,
     shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
   },
   // Every anchored entry on this page (search, browser placement,
@@ -176,10 +188,12 @@ export const SETTINGS_SEARCH_FIXTURES = [
   // they carry no anchor of their own and need no separate shell to prove.
   {
     section: "browser",
+    hostScope: null,
     shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
   },
   {
     section: "app-notifications",
+    hostScope: null,
     shells: [
       {
         name: "every bridge absent",
@@ -201,9 +215,33 @@ export const SETTINGS_SEARCH_FIXTURES = [
   },
   {
     section: "app-diagnostics",
+    hostScope: null,
     shells: [
       {
         name: "a runner host with no desktop bridges",
+        context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
+      },
+    ],
+  },
+  // Permissions is host-scoped, but its tab bar and the Modes tab's app-scoped
+  // rows sit outside `HostScopeGate`, so they land while the host is still
+  // connecting - the one state where the gated tabs' bodies are withheld.
+  {
+    section: "permissions",
+    hostScope: "connecting",
+    shells: [{ name: "a host still connecting", context: NO_BRIDGES }],
+  },
+  // The Overview is host-scoped too, and its header and tab bar render for
+  // every host in every state: each tab body decides for itself what it can
+  // show, so the five triggers land while the host is still connecting - the
+  // state where no body can read anything. The page reads the runner host for
+  // its local-only doctor repairs, hence the one it is mounted with.
+  {
+    section: "host",
+    hostScope: "connecting",
+    shells: [
+      {
+        name: "a host still connecting",
         context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
       },
     ],

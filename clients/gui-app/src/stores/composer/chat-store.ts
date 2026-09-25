@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
+import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type {
   ChatQueueSteerMode,
   ChatRunSettings,
@@ -472,6 +473,18 @@ export type MessageSegment =
     }
   | {
       id: string;
+      kind: "auto-judge-notice";
+      /**
+       * Synthesized in `rendered-messages` from the `permission.blocked` event
+       * a host journals for an auto-mode judge notice - the event itself is
+       * the record. `message` is the host's notice, drawn verbatim; `marker`
+       * says which of the three it is.
+       */
+      marker: AutoJudgeNoticeMarker;
+      message: string;
+    }
+  | {
+      id: string;
       kind: "imported-chat-marker";
       /**
        * Synthesized in `rendered-messages` from the chat's `chat.imported`
@@ -770,6 +783,15 @@ export interface ChatMessage {
    */
   pausedSinceMs?: number | null;
   persistentMessageId: string | null;
+  /**
+   * Every persisted record this assistant row's turn folds, in fold order,
+   * when there is more than one. A turn split across several records
+   * (subagent flows, legacy and migrated snapshots) renders under ONE
+   * `persistentMessageId` - the last record's - so a reference that starts
+   * from an earlier record (a History hit, a find index hit) resolves here.
+   * Absent on a single-record turn and on every other row.
+   */
+  turnMessageIds?: ReadonlyArray<string>;
   senderLabel: string | null;
   assistantMeta: AssistantTurnMeta | null;
   statusLabel: string | null;

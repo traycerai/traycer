@@ -350,7 +350,13 @@ function CustomizeStartPageButton() {
           size="icon"
           aria-label="Customize start page"
           onClick={() => {
-            openSettings({ section: "appearance", resetToGeneral: false });
+            openSettings({
+              section: "appearance",
+              resetToGeneral: false,
+              tab: null,
+              draft: null,
+              hostId: null,
+            });
           }}
         >
           <Palette className="size-3.5" />

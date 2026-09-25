@@ -235,13 +235,15 @@ predicates; it never imports the assembled index or the search consumer.
 | Every rendered anchor is an indexed anchor of that section                                                                                                               | reverse membership inside `assertSettingsSearchTargets`                                                                                                                                                                                                                                                               |
 | Every contributor's words reach an entry                                                                                                                                 | the coverage test: its label and keywords appear in its target entry's document; no dangling, self or contributor target                                                                                                                                                                                              |
 | Every member has exactly one placement                                                                                                                                   | `CheckedSectionInput` rejects a `search` with both; the index test checks the input member by member                                                                                                                                                                                                                  |
-| Host-scoped sections index no anchor                                                                                                                                     | an exhaustive index test                                                                                                                                                                                                                                                                                              |
+| No host-GATED element carries an anchor                                                                                                                                  | an exhaustive index test: an anchor on a host-scoped section is legal only when that section is registered with `hostScope: "connecting"`, so the executor proves every anchor it indexes lands while the host has no usable client (today: Permissions' tab bar and its Modes row, and the host Overview's tab bar)  |
 
 **Not guaranteed:**
 
 - A bespoke `<div>` that uses no primitive and writes no anchor is invisible to
-  all of this. Providers, Worktrees and the Host overview's own cards are
-  indexed at page and region level for that reason.
+  all of this. Providers and Worktrees are indexed at page and region level
+  for that reason, and the host Overview at page and TAB level: its tab
+  triggers are destinations, and every card inside a tab body folds into the
+  page.
 - TypeScript is structural: the types enforce a definition's SHAPE; the
   collection, reference and DOM tests establish COVERAGE. Types are not
   provenance — nothing stops a panel rendering another section's definition.
@@ -318,7 +320,13 @@ different answers:
   in a narrow window, because no predicate can see a width. Placement was
   anchored until it started hiding below `md`; searching it in a narrow
   desktop window then landed on an empty page. A row whose drawing condition
-  mentions the viewport at all belongs here.
+  mentions the viewport at all belongs here. Tab triggers - Permissions' and
+  the host Overview's - are the one anchored element a viewport redraws, and
+  they stay indexed because the landing never depends on the width: on a
+  phone viewport the tab bar becomes one Select whose trigger carries the
+  ACTIVE tab's anchor, and the panel switches to the landed tab (during
+  render, from `pendingReveal`) before the reveal's first poll, so the anchor
+  asked for is always the one drawn.
   A subgroup IS indexed, anchored on its inset card, so a result for one of
   its rows lands on the switch that reveals the row.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
@@ -357,19 +365,33 @@ different answers:
   stream and a negotiated import capability; host Diagnostics' Log detail and
   both Shell cards, Terminal shell · New terminals and Host environment ·
   After restart, which a host too old for the config RPC replaces with a
-  notice; Permissions' Auto mode group, which a host advertising
-  neither `autoJudge.get` nor `autoPolicy.get` has no notion of at all; and
-  the Overview's Installation and Danger zone cards themselves,
-  which the page drops for an unresolved or vanished host) — not indexed. A
+  notice; the bodies of Permissions' Judge, Rules and Activity tabs, which a
+  host that predates `autoJudge.get` / `autoPolicy.get` /
+  `autoJudge.listRecent` has no notion of at all; and
+  every card inside the Overview's tab bodies - Installation and Danger zone
+  among them - which come and go with the host's state and which the page
+  drops for an unresolved or vanished host) — not indexed. A
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
   second, wrong model of the panel. The rule is **stable destinations**: index
-  the PAGE, which renders whatever state the selected host is in, and let
-  every definition on it `contributesTo: "page"` — its label folds into the
-  page entry's keywords beside the page's own vocabulary — so
-  "uninstall", "snapshots", "import", "installation", "log level", "startup
-  flags", "wsl" and "auto mode policy" still land on the right page. The
-  invariant that follows: **no host-scoped section indexes an anchor.**
+  an element that renders whatever state the selected host is in — the PAGE,
+  or an element the page draws OUTSIDE its `HostScopeGate` — and let every
+  definition inside the gate contribute to it, so its label folds into that
+  entry's keywords. "log level", "startup flags" and "wsl" land on their
+  page; "judge", "policy", "allow rule" and "activity" land on the
+  Permissions tab trigger that opens them; "uninstall", "snapshots",
+  "import", "installation" and "port forward" land on the Overview tab
+  trigger that opens them. The invariant that follows: **no host-GATED
+  element carries an anchor.** Two host-scoped pages anchor anything, and
+  only what sits outside their gates. Permissions: the tab bar (a trigger is
+  never gated — `HostScopeGate` wraps the three host-backed tab BODIES) and
+  the Modes row, which is application-scoped. The Overview: its tab bar,
+  which renders for every host in every state above bodies that each gate
+  themselves; everything inside a body folds into the PAGE, whose own
+  vocabulary is split across the five triggers. The index test enforces it mechanically: an
+  anchored entry on a `group: "host"` section is legal only when that section
+  is registered with `hostScope: "connecting"`, so the executor has proved the
+  anchor lands while the host has no usable client.
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
@@ -400,8 +422,13 @@ fully bridged mount and fails only the shell whose gate is off. The index test
 closes the registry from the other side: every section with an anchored entry
 must be registered, and every anchored entry must be available in at least one
 of its shells — otherwise it is only ever asserted absent, which a row that
-never renders passes too. No host-scoped section indexes an anchor, so the
-host panels are not registered.
+never renders passes too. A fixture's `hostScope` is `null` for an
+application page and `"connecting"` for a host-scoped one: the executor mocks
+`useHostScope` to a connecting scope for it, so every body behind
+`HostScopeGate` is concealed and only the anchors outside the gate can be
+found. Permissions and the host Overview are the host-scoped pages
+registered; every other host page anchors nothing, so it has nothing to
+prove.
 
 **Reveal.** A click arms the store, then navigates through
 `lib/settings-navigation.ts` (surface-agnostic — the modal deliberately uses no
@@ -733,8 +760,9 @@ load-bearing rather than cosmetic.
 - **Application** - General, Appearance, Keybindings, Diagnostics.
 - **Account** - Sessions, Usage.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
-  Everything under it - Overview, Providers, Worktrees, Notifications, Agent
-  selection, Shell, Diagnostics - is scoped by that one selection.
+  Everything under it - Overview, Providers, Worktrees, Notifications,
+  Permissions, Agent selection, Fallback, Shell, Diagnostics - is scoped by
+  that one selection, with ONE named exception: Permissions ▸ Modes (below).
 
 **Two sections are both called "Diagnostics"**, one per group, and the group
 heading above each is what distinguishes them - the same way the rail already
@@ -910,6 +938,23 @@ exception rather than working around it. Both re-provide `HostRuntimeContext`
 for an explicit pick through `useScopedHostBinding` - the same
 `status === "ready"` guard Providers uses, so no hook beneath them can resolve
 to the ambient host.
+
+**Permissions is the one host page with an application-scoped region.** Three
+of its four tabs are per machine - the judge is stored on the host, the
+account's rules are read through it, and the decision log is the host's own -
+so the page sits in the Host group and `HostScopeGate` wraps those three tab
+BODIES. The Modes tab is not per machine: "New conversations start in" is one
+preference for this app (`settingsStore.defaultPermission`), so it renders
+outside the gate, works with no host in scope at all, and says so twice - an
+"All machines" badge on the row and the line "The machine picker above doesn't
+change anything on this tab." The tab bar sits above the gate too, which is
+what lets each tab trigger carry a search anchor (see Search, "Gated on the
+SELECTED HOST"). This amends, rather than contradicts, the rule above: the row
+used to live on General precisely because it is application scope, and the
+move onto a host page was a user decision (permissions redesign, 2026-09-23),
+so the scope distinction the sidebar group can no longer carry is carried by
+the badge and the note instead.
+
 Overview does the same (`host-settings-panel.tsx`), and it mixes the two gate
 styles on purpose because its regions sit on three different capability planes:
 
@@ -917,13 +962,14 @@ styles on purpose because its regions sit on three different capability planes:
   `vanished`. The reason is the one that motivates the gate at all: a `null`
   scoped host that defaulted to "local" once put this computer's service
   console under a host that no longer exists.
-- **Installation** is pure host RPC, so it mounts the gate itself and the gate
-  says why it is missing. The status card's ACTIONS (Restart / Run doctor / Use
+- the **install record and OS service** (Installation tab) are pure host RPC,
+  so without a route they are withheld and one line says they need a
+  connection. The status card's ACTIONS (Restart / Run doctor / Use
   in this window), the rename pencil, and the host's own update check are
   withheld outright without a route rather than rendered disabled - "disabled"
   would read as a capability verdict when the fact is connectivity.
-- the **account-backed** half - update policy, drain-gate force, and Remove
-  from account - needs no route and keeps rendering for a host that cannot be
+- the **account-backed** half - update policy, drain-gate force, About this
+  host, and Remove from account - needs no route and keeps rendering for a host that cannot be
   reached, which is a common moment to want exactly those. The danger zone
   gates its own rows for the same reason. The version PIN used to sit here and
   no longer does: picking a version means picking one the host listed, so it
@@ -994,28 +1040,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     for rebinding). `Pin context usage breakdown` used to sit here and now
     lives in **Layout › Chat** - it places a panel rather than changing what
     the composer does.
-    - **Default permission mode** is the only writer of
-      `settingsStore.defaultPermission`, which until this row existed was
-      initialized and never written. It renders the composer's own
-      `PermissionsPicker` with `supportedPermissionModes={null}` and
-      `harnessLabel={null}` (no harness scope, so every mode stays enabled -
-      that null case was documented on the picker for this row before the row
-      existed) and `closeFocus="trigger"`. That last prop is new and exists for
-      this caller: the picker's composer-focus return is app-global and its
-      inactive fallback can name an editor on a canvas BEHIND Settings, so
-      closing the menu here would pull focus, and the tab it lives in, out from
-      under the panel.
-      It is APPLICATION scope, not host scope, which is why it is here rather
-      than beside the Auto-mode judge it pairs with (see "Scope: the
-      organising idea"): it is one preference for this app. It is also not the
-      only input to a new chat - a composer prefers the last mode that HOST ran
-      with (`composer-run-settings-store`, bucketed per host) - so the copy
-      says "what a fresh one opens on". Session import reads the same ladder
-      (`newChatPermissionModeFor`), which is what makes this row the thing that
-      can put `auto` into an import; see `session-import-wizard.tsx`'s note on
-      why the gate now reads `sessionImport.run`'s own negotiated line rather
-      than a catalog row, so an import no longer silently demotes on a remote
-      host.
+    - **Default permission mode** is no longer here: the row moved to
+      Permissions ▸ Modes; its search vocabulary moved with it. General keeps
+      no alias for it (nothing stores an anchor token, so there is nothing an
+      alias would redirect).
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions") is the only row left. The two
@@ -2872,48 +2900,58 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     with `null` so the host resolves the current saved value itself.
   - **Who reviews &lt;provider&gt;'s commands**
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
-    tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
-    never on the wire enum), sits right after Env, and is drawn for EVERY
-    provider once the selected host's negotiated
-    `agent.gui.listHarnesses` line can spell `auto` (`catalogLineKnowsAutoMode`)
-    - a host that predates auto mode has no judge to name, so it shows no tab.
-      Two earlier gates were retired here: `autoJudge.get`, which names the
-      HOST-WIDE judge rather than this tab's per-provider classifier, and the
-      catalog's mode UNION, which an unconstrained row contributes nothing to. After Env
-      rather than after CLI & Args so it cannot become a provider's default tab:
-      amp and cursor advertise `env` without `general`, and a tab every provider
-      gets must not displace the one the provider asked for. Inside, a provider
-      whose GUI harness catalog row
-      reports `nativeAutoJudge` gets the two-option select; every other provider
-      gets a read-only line naming Traycer's judge and pointing at Settings ▸
-      Permissions - "nothing to choose" is still the answer to the question the
-      tab is named for. Nothing renders until the catalog has answered, so the
-      line never flashes at a provider about to get the select. It used to be a
-      section at the bottom of CLI & Args, drawn for Claude Code alone, where
-      nobody looking for "permissions" would open. Labelled by provider rather
-      than "Auto mode judge" because the row
-      under Permissions carries that name too and THIS is the one that wins
-      (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
-      so both rows now name whose judge they are about; the provider name is
-      interpolated, which renders "Who reviews Claude Code's commands" today and
-      does not lie if a second provider ever reports `nativeAutoJudge`. Its
-      description ends with the precedence sentence - choosing the provider's
-      classifier means chats on this provider skip Traycer's judge AND the Auto
-      mode policy entirely - because this control is where that is decided and
-      a user who has written a policy under Permissions has no other way to
-      learn it.
-      A two-option `Select` - Traycer's judge, or this
-      provider's own classifier - written through `providers.setAutoJudge` and
-      persisted as `autoJudge` in `provider-overrides.json`, beside
-      `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
-      (`providers.list` only; a judge choice cannot change availability).
-      Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
-      `nativeAutoJudge: true` - a switch with one option is not a switch, and
-      every other provider runs Traycer's judge with nothing to choose. **Claude
-      Code is the only provider that reports it**, so it is the only select
-      drawn; the flag also stands in for a method gate, because it rides the
-      same catalog minor as the setter, so a host too old to accept the write
-      reports it `false`. Drawing the select is not the same as the provider judging: the
+    tab (icon `ShieldCheck`, since the Account tab already uses `KeyRound`,
+    which is also the sidebar's Permissions icon). The tab is client-derived
+    like `account` (`provider-settings-tabs.ts`: never on the wire enum), sits
+    right after Env, and is drawn for EVERY provider once the selected host's
+    negotiated `agent.gui.listHarnesses` line can spell `auto`
+    (`catalogLineKnowsAutoMode`). A host that predates auto mode has no judge
+    to name, so it shows no tab.
+    Two earlier gates were retired here: `autoJudge.get`, which names the
+    HOST-WIDE judge rather than this tab's per-provider classifier, and the
+    catalog's mode UNION, which an unconstrained row contributes nothing to. After Env
+    rather than after CLI & Args so it cannot become a provider's default tab:
+    amp and cursor advertise `env` without `general`, and a tab every provider
+    gets must not displace the one the provider asked for.
+    The body is one card: the heading "Who reviews {provider}'s commands", then
+    `ProviderJudgeSwitch` (`panels/permissions/provider-judge-switch.tsx`),
+    then an "All permission settings" link to Permissions ▸ Judge. The link
+    passes `hostId: null` because Settings is already scoped to the machine
+    this tab shows. The switch is the SAME component Permissions ▸ Judge lists
+    under "Providers with a built-in reviewer", so the two surfaces cannot
+    disagree. Only the switch is per provider. Which model Traycer's judge
+    runs on, and the rules it follows, belong to one machine and one account,
+    so they live on the Permissions page and this card only links there.
+    Labelled by provider because THIS is the choice that wins
+    (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone);
+    the provider name is interpolated, which renders "Who reviews Claude
+    Code's commands" today and does not lie if a second provider ever reports
+    `nativeAutoJudge`. That choosing the classifier skips Traycer's judge AND
+    your rules is said once, in the Judge tab's "Providers with a built-in
+    reviewer" description, where both reviewers are in view.
+    The switch has four renderings, each a line of its own:
+    - A provider whose `useGuiHarnessesQuery` row does not report
+      `nativeAutoJudge` gets "Reviewed by Traycer's judge. Change it under
+      Permissions." A switch with one option is not a switch. **Claude Code is
+      the only provider that reports it**, so it is the only switch drawn. The
+      flag also stands in for a method gate, because it rides the same catalog
+      minor as the setter.
+    - `providers.list` older than the line that reports `autoJudge` gets the
+      unreadable line. Such a host answers `"traycer"` for every provider
+      whatever is stored, and printing that would state a guess as the
+      current setting.
+    - A host that answers the catalog but not `providers.setAutoJudge`
+      (registered `degrade: unsupported`) gets "{current}. This machine's host
+      can't change it; update it to choose." This avoids a live-looking
+      selector whose every write fails.
+    - Otherwise, a two-option `Select`: Traycer's judge, or this provider's
+      classifier. It is written through `providers.setAutoJudge` and persisted
+      as `autoJudge` in `provider-overrides.json`, beside `terminalAgentArgs`,
+      so it takes that neighbour's scoping and invalidation (`providers.list`
+      only; a judge choice cannot change availability).
+      Nothing renders until the catalog and the setter's handshake have
+      answered, so a read-only line never flashes at a provider about to get the
+      switch. Drawing the switch is not the same as the provider judging: the
       host's own store answers `traycer` for a provider nobody has switched, and
       `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
       to Traycer's judge.
@@ -2924,12 +2962,17 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       (`lib/providers/provider-auto-judge.ts`) is the one place that spells the
       `?? "traycer"` fallback - "never chosen" and "host too old to say" landing
       on Traycer's judge alike, the same direction every failure mode in the
-      host's own reader takes. The section also holds a local echo of a fresh pick
-      so the control does not snap back for the width of the `providers.list`
-      round-trip (nor permanently, on a host that never reports the field); the
-      echo clears itself the moment the read agrees, which is what lets another
-      window's edit through, and the row is keyed by `providerId` so switching
-      providers discards it.
+      host's own reader takes.
+      The switch holds a local echo of a fresh pick, so the control does not
+      snap back for the width of the `providers.list` round-trip (nor
+      permanently, on a host that never reports the field). The echo expires by
+      derivation, never by an effect: as soon as the stored value moves, or the
+      authoritative read completes a fetch, the host wins, which is what lets
+      another window's edit through. The Select is disabled through that
+      refresh, not just the write: a second pick while the first write's read
+      is in flight would let that read retire the second echo and present the
+      superseded choice as current. This is a two-value switch whose value is
+      moving. The Judge tab's model controls hold no echo and never lock.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
     Save/Clear) when `state.apiKey.supported` — **as the whole body of the
@@ -3750,158 +3793,383 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     any one test is in flight (the mutation is global, not per-row) - worth
     knowing if this ever reads as a bug report.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
-  `panels/permissions-settings-panel.tsx`) Who reviews what an agent does on
-  the selected host under the `auto` permission mode. Its own page, not rows
-  on Agent selection: that page is about which agent gets CHOSEN for a task,
-  and permissions are a different question, asked at a different time (a user
-  decision, 2026-09-12, after the rows first shipped above the guide). The
-  mode's app-wide DEFAULT is not here; it is a General row (see "Scope: the
-  organising idea"). The per-provider switch between Traycer's judge and a
-  provider's own classifier is not here either - it is a fact about one
-  provider's CLI and lives on that provider's own Permissions tab under
-  Providers, which is the switch that wins.
-  One `SettingsGroup`, **Auto mode** (`auto-mode-settings-section.tsx`): the
-  judge row, the policy row and, under it, a read-only view of the rules that
-  apply before either - all host RPCs, all scoped by the sidebar picker. The
-  group and its rows are defined in `permissions-settings.definitions.ts`,
-  every one `contributesTo: "page"`, because the group is dropped whole on a
-  host that has no notion of auto mode (see § Search, "Gated on the SELECTED
-  HOST").
-  - **The section is the whole page, so it never renders nothing.** Two
-    states replace the rows with one sentence: the scope is
-    connecting/unreachable/vanished (`isHostScopeUsable` - checked so the rows
-    are not MOUNTED, since a hidden query still fires against the ambient
-    host), or the host does not advertise `autoJudge.get` / `autoPolicy.get`
-    (optional capabilities with an `unsupported` degrade - so this is every
-    host until it updates, and `useHostSupportsMethod` fails closed, hiding on
-    "not yet known" too), in which case the sentence says the host predates
-    Auto mode and asks for an update. A sentence rather than a hidden
-    `<Activity>` keeping the rows mounted: the cost is that a transient
-    same-host disconnect closes an open policy dialog and drops its draft;
-    accepted, because the judge row holds no draft and the policy dialog is an
-    explicit, explicitly-saved editing session rather than the always-open
-    editor Activity was introduced for.
-  - **Traycer's auto mode judge** reuses the composer's `HarnessModelPicker`
-    (`auto-judge-picker.tsx`) with BOTH footers off - `withServiceTier={false}`
-    and the new `withReasoning={false}` - because the stored record is
-    `(harnessId, model, profileId)` and the judge request carries no effort or
-    tier, so either footer would take a choice and silently drop it. It is
-    wired to its own `createComposerToolbarStore` rather than through
-    `useComposerToolbarStore`, deliberately: that hook records every commit
-    into `composer-harness-memory-store`, and pinning a cheap judge model
-    would then quietly become the model the next chat on that provider offers.
-    (One memory write survives from inside the picker's own `commitSelection` -
-    the last profile browsed for a provider - which is a fact about which
-    credential the user pointed at.) Backed by `autoJudge.get` / `autoJudge.set`
-    over `~/.traycer/host/config/auto-judge.json`; the read is updated in place
-    from the write's response, since the picker commits on every click.
-    `selection: null` means unset. Both responses optionally report `effective`
-    (`harnessId`, `model`, `source`) and `blocked` from the host's shared judge
-    selection rule and provider enablement read, without probing availability.
-    The row says "Using Traycer's default judge · <model>" from that effective
-    slug, using its catalog label when available and the slug otherwise. The
-    picker also seeds its selected mark from `effective` when nothing is stored;
-    it never substitutes the catalog's ordinary chat default for the host's
-    reported judge. A disabled provider gets an amber explanation and a
-    Providers action; no default model or unsupported harness asks the user to
-    pick another judge. Returning from Providers refreshes this read even when
-    cached. Hosts that omit both fields retain the existing default-judge copy.
-    These are optional additions to unreleased 1.0, matching `autoPolicy.get`'s
-    `readState` precedent. A stored `harnessId` this build has no
-    adapter for (a newer host, an older app - the protocol keeps that field a
-    checked string precisely so it decodes) is named in an amber line instead of
-    being presented as some other provider.
-  - **The self-billing warning** sits beside those amber lines, on one rule:
-    `harnessId !== "traycer"`. `traycer` is the only harness metered against
-    Traycer credits; every other one routes through that vendor's CLI on the
-    user's own credential, so no catalog field and no protocol minor are
-    needed - `autoJudgeSelfBillingWarning` (`lib/auto-mode/auto-judge-billing.ts`)
-    is the one place that decides. What VARIES is the severity: Copilot gets a
-    number, because it is the only harness whose billing unit is a fixed
-    monthly allotment of premium requests, and the sentence quotes TRAYCER'S
-    OWN allowance ("an hour of Auto mode can use
-    60-350 of your monthly allowance") rather than GitHub's allotment - the
-    rate is a fact about our behaviour that we control and that cannot go stale
-    when GitHub reprices. Every other non-`traycer` harness gets the generic
-    line, whose "on top of your chat replies" clause is the load-bearing half:
-    the sharpest case is a user picking the SAME harness for chat and judge,
-    which is the natural thing to reach for and doubles the spend on one
-    account. It reads the STORED selection, not the presented one - the host
-    bills what it has stored, and the composer's own meta line reads the same
-    record, so the two surfaces cannot disagree about which pocket is spent.
-  - **Auto mode policy** is a summary plus a button that opens
-    `auto-policy-editor-dialog.tsx`, over `autoPolicy.get` / `autoPolicy.set`.
-    A dialog rather than an inline editor because the panel's height is already
-    spent, and a policy is a document. An empty policy prefills the four
-    headings the judge's prompt builder reads (`Environment`, `Allow`, `Soft
-deny`, `Hard deny`) and nothing else - the guidance about what belongs under
-    each is the dialog's copy, because every byte of the document is prose the
-    judge will read. Save is explicit (no debounced auto-save like the guide's):
-    the record is ACCOUNT-wide and last-write-wins, so every keystroke
-    auto-saved is a keystroke racing another device. Two subtleties:
-    `updatedAt: null` means "cannot tell" - the protocol sends it both for a
-    policy never saved AND for one the host is serving from a cache it could
-    not refresh - so the stale-edit banner fires on a
-    null-to-real transition as well as on two different non-null stamps (a
-    policy CREATED elsewhere while the editor was open is the case the
-    symmetric check swallowed), and the summary says "Set" rather than
-    inventing a date - except on a `stale` read with an empty body, where it
-    says it could not check rather than claiming "Not set" about an absence the
-    host merely had cached; and the
-    64 KiB cap is checked in UTF-8 BYTES as a courtesy pre-flight only, the
-    server being the enforcement (the authoritative constant lives in the
-    closed-source service and reaches no client contract).
-  - **The row reads `readState`, not `body`, first.** `autoPolicy.get` answers
-    `readState: "fresh" | "stale" | "unreadable"` alongside the body, because
-    `body: null` was doing two jobs: "never saved" and "the host could not
-    read it". On `unreadable` the summary says "Couldn't read your policy",
-    the button stays "Edit policy" and is DISABLED, and the editor - the only
-    route to Save - is therefore unreachable; Save is additionally disabled
-    inside the dialog for the case where the read fails while the dialog is
-    already open, with a banner saying why. The clobber this closes is narrow
-    and real: a read that fails while the WRITE path is healthy (an expired
-    lease on the GET, a 5xx from a read replica), where "Not set / Write a
-    policy" invited the user to overwrite a policy they could not see. The
-    property is `.optional()` on the wire and rode into `1.0` in place, so a
-    host that predates the resolver half sends nothing and
-    `autoPolicyReadStateFor` (`auto-policy-document.ts`) resolves that to
-    `fresh` - the behaviour this row had before the field existed - in the one
-    place the fallback is spelled.
-  - **Opening the editor asks the server again, and Save waits for the
-    answer.** The stale-edit banner compares the stamp the editor opened on
-    against the live one, and both used to be read off the same cache entry -
-    equal by construction, so the banner could never fire. Opening now fires a
-    refetch; the dialog still appears on the click, but Save is disabled with
-    the usual inline spinner until that read settles, and stays disabled with
-    its own banner if it FAILS. The cost is one round trip at a moment when
-    Save is unreachable anyway (it needs a typed edit), and what it buys is
-    that "nobody else has saved since you opened this" is an answer rather than
-    an assumption. A close-and-reopen is generation-guarded so the first read's
-    late answer cannot unlock Save while the second is in flight.
-  - **The policy cache is partitioned by SIGNED-IN USER.** The record is
-    account-owned while the query is host-shaped, and an auth transition marks
-    host queries stale WITHOUT dropping their data - so a host-only key served
-    the previous user's policy, synchronously, to whoever signed in next, with
-    Edit live. `useAutoPolicyQuery` puts the viewer id in `cacheKeyIdentity`
-    and the save's write-through addresses that one partition
-    (`hostQueryKeys.autoPolicyForViewer`) rather than the method-scope prefix,
-    which would land the new body in every viewer's entry and re-open the same
-    leak from the write side. `autoJudge.get` deliberately takes neither: it
-    answers from a file only this GUI writes on that machine, so the host key
-    already names its owner.
-  - **What the judge already blocks** (`auto-policy-shipped-dialog.tsx`) is a
-    read-only view of the rules the judge applies before any policy of the
-    user's, rendered from `shippedDefaults` - the host's whole bundled
-    `auto-judge/defaults.md`, also `.optional()` on the same response. The row
-    is drawn only when that document arrives AND this build can find a tier in
-    it (`auto-policy-shipped-document.ts`), which is what keeps the view
-    invisible on a host that does not send it rather than showing a card with
-    three empty headings. The bullets are the host's document verbatim, so the
-    view can never describe rules that host is not running; only the HEADINGS
-    are replaced, because the document's own are prompt text addressed to the
-    judge and "non-overridable" over-promises to a person, who can always
-    approve the action on the card. The out-of-scope note is the one piece of
-    prose written here rather than taken from the document.
+  `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
+  and who reviews the rest. Its own page, not rows on Agent selection: that
+  page is about which agent gets CHOSEN for a task, and permissions are a
+  different question, asked at a different time (a user decision, 2026-09-12).
+  Four tabs, one per question, in this order: **Modes**, **Judge**, **Rules**,
+  **Activity** (`panels/permissions/*-tab.tsx`). The definitions live in
+  `permissions-settings.definitions.ts`: one group per tab, which anchors on
+  that tab's TRIGGER, plus contributor groups for everything inside a tab (see
+  § Search, "Gated on the SELECTED HOST").
+  - **The page is laid out for the scope rule.** Modes is application-scoped and
+    renders with no host at all. Judge, Rules and Activity are per machine, and
+    `HostScopeGate` wraps each of their BODIES, never the page, so the tab bar
+    is always drawn (see "Scope: the organising idea"). Inside the gate, each
+    body sits behind `AutoModeHostGate` (`permissions/auto-mode-host-gate.tsx`),
+    which asks about that tab's OWN method: `autoJudge.get`, `autoPolicy.get` or
+    `autoJudge.listRecent`. They are negotiated independently, so one answering
+    is not evidence about another.
+    - Support is the tri-state `useHostMethodSupport`. `null` (no handshake
+      yet) renders nothing rather than the "predates" line, because the
+      unsupported verdict parks the very RPCs whose handshake would overturn
+      it. `useHostCapabilityProbe` keeps a `false` refutable, re-asking when
+      the host's version or dialability changes.
+    - **A body is never unmounted because its scope stopped serving.** The
+      gate first mounts a body only under a usable scope
+      (`isHostScopeUsable`). Once mounted, it keeps rendering the body while
+      the scope is `connecting` or `unreachable`, against the LAST usable
+      binding (`useHeldBinding`).
+      - The old rule unmounted it instead. Every blip cost the unsaved Rules
+        text and any draft it had already taken, and a return to the same
+        machine could not bring them back.
+      - That rule guarded against a hidden body querying the wrong host.
+        `HostScopeGate` removes that risk by holding the body in a hidden
+        `<Activity>`, which tears down its effects and subscriptions, so the
+        held binding serves no reads.
+      - The held entry is the binding PLUS the machine the scope named when
+        it was captured, and it is reused only while the scope still names
+        that machine. The binding's own `hostId` cannot answer that: a
+        `following` binding names no host (`hostId: null`), so the subtree
+        tracks the effective host, and `following` is the default. A
+        re-handshake, where support is briefly unknown again, holds the body
+        the same way.
+      - When the same host comes back, the body resumes as it was, whether
+        Settings is pinned (`ready`) or `following`.
+      - A `vanished` scope, or no host at all, still unmounts it.
+        That is `HostScopeGate`'s own rule.
+    - It re-provides the scoped binding, and keys the body by viewer AND host,
+      so an in-flight judge pick never carries across an account switch or a
+      host switch. The Rules edit is the exception by design: Settings holds
+      it outside the page (`rules-edit-store.ts`, see Rules), because the
+      policy belongs to the account, not the machine.
+    - A tab whose host lacks the method says so in one line: "This machine's
+      host predates Auto mode. Update it to choose a judge and write a policy."
+      for Judge and Rules, and "This machine's host doesn't record Auto mode
+      decisions yet. Update it to see them." for Activity.
+  - **The open intent** (`stores/tabs/settings-open-intent-store.ts`) carries
+    `tab`, `draft` and `hostId`. The panel applies it during render, so the
+    first frame shows the requested tab. A `draft` always means Rules. The
+    draft itself is queued in the layout effect that acknowledges the intent,
+    before paint, through `enqueueIntentDraft`, which takes one draft per
+    intent id. It cannot be queued during render: the edit lives in a store
+    the page does not own, and a render may only adjust its own component's
+    state. A
+    `hostId` names the machine the caller had in mind: the composer's
+    "Permission settings…" passes its run-target host
+    (`useOpenPermissionSettings(hostId)`), and an approval card passes its
+    tab's host, bound once in `chat-tile.tsx`. That is why the card's
+    `onOpenSettings` takes `TabHostSettingsOpts`, the options without
+    `hostId`. The page writes the host into the Settings scope
+    (`carryViewedHostIntoSettingsScope`) in a LAYOUT effect before
+    acknowledging the intent, and the gated bodies are held until the scope
+    agrees. "Agrees" means the scope RESOLVES to that host (`scope.hostId`),
+    not that the raw pin names it. An intent naming the machine Settings
+    already follows therefore holds nothing and remounts nothing, so an
+    unsaved edit there stays put. So "Permission settings…" from a chat on
+    host B always lands on host B's judge, and never paints a frame of the
+    machine it is leaving.
+    Every other `openSettings` caller passes `hostId: null`: it opens on
+    whatever Settings is already scoped to.
+  - **Modes** (`modes-tab.tsx`) holds the row **New conversations start in**,
+    which moved here from General (anchor
+    `permissions-default-permission-mode`; General's search vocabulary came
+    with it and General keeps no alias). It is the only writer of
+    `settingsStore.defaultPermission`.
+    - It renders the composer's own `PermissionsPicker` with
+      `supportedPermissionModes={null}` and `harnessLabel={null}` (no harness
+      scope, so every mode stays enabled), `hostKnowsAutoMode={null}` (no host
+      was asked, which is not "a host that cannot spell `auto`"),
+      `onOpenPermissionSettings={null}` (a Settings surface must not open
+      Settings) and `closeFocus="trigger"`. That last prop exists because the
+      picker's composer-focus return is app-global and can name an editor on a
+      canvas BEHIND Settings.
+    - The row carries an "All machines" badge, and the tab opens with the line
+      "The machine picker above doesn't change anything on this tab."
+    - A new chat does not read only this row: a composer prefers the last mode
+      that HOST ran with (`composer-run-settings-store`, bucketed per host),
+      and session import reads the same ladder (`newChatPermissionModeFor`).
+      See `session-import-wizard.tsx` for why its gate reads
+      `sessionImport.run`'s own negotiated line.
+    - Below the row, one card per mode lists what it runs without asking, from
+      `PERMISSION_MODE_DETAILS`, the same data as the picker's descriptions.
+  - **Judge** (`judge-tab.tsx`, `judge-model-field.tsx`) - **Auto mode judge**:
+    Automatic, or A specific model, over `autoJudge.get` / `autoJudge.set`
+    (`~/.traycer/host/config/auto-judge.json`, `selection: null` = Automatic).
+    Two readers share one cache entry with the composer's meta line, and the
+    harness catalog invalidates it when the Traycer row's enabled / available
+    / auth facts change (see `auto-judge-billing.ts`). The save invalidates it
+    too, after writing its echo.
+    - The SELECTION comes from `useAutoJudgeQuery`, at Settings' 60 s
+      `staleTime`. It seeds the controls and is what a pick hands off to, so
+      an aged or invalidated copy still shows what is stored.
+    - The VERDICT (`effective`, `blocked`) comes from `useAutoJudgeVerdict`,
+      the composer's own rule (`useAutoJudgeVerdictForClient`, which
+      `use-auto-judge-billing.ts` reads too). A
+      record the host has invalidated, or one never answered, is withheld
+      until a CURRENT read succeeds, and a failed re-read keeps it withheld.
+      `staleTime: Infinity`, so age alone hides nothing. An availability
+      transition, or a save whose echo the next read replaces, therefore
+      shows no Automatic status line and no warning line until the host has
+      answered again. Neither ever claims a verdict the host has since
+      withdrawn.
+    - **Automatic** shows what it resolves to NOW, from the host's `effective`:
+      - `null` → "No judge can run here · Auto mode asks you"
+      - `fallback` → "Now: the conversation's own provider · your account"
+      - `default` → "Now: {model} on Traycer · uses credits", where the model
+        is the catalog label for the slug when one exists
+        A host too old to report `effective` gets no status line. When Copilot
+        is enabled, a hint quotes Traycer's own measured rate (60–350 premium
+        requests per hour of Auto mode), which cannot go stale when GitHub
+        reprices. The figure is `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
+        (`lib/auto-mode/auto-judge-billing.ts`). The composer's meta line
+        quotes the same constant, so the two cannot drift.
+    - **A specific model** is three fields: Provider, Account (drawn only for
+      more than one profile) and Model. Model is a searchable combobox, not a
+      menu, because a catalog can be long.
+      - A provider that cannot judge is listed as a disabled option with its
+        reason ("Turned off", "Signed out", "Not installed", "Not available").
+        A listbox holds options and nothing else, so no control sits inside
+        it.
+      - While the DISPLAYED provider is a blocked one, a single "Open
+        Providers" link under the Provider field focuses that provider's
+        page. It is left out when the warning line below already carries a
+        Providers link (a stored blocked provider), so the fix is never
+        offered twice.
+      - A blocked provider that is not chosen offers no fix link of its own.
+        Providers is one click away in the sidebar.
+      - An account is disabled with "Turned off" or "No API key".
+      - Choosing a provider commits its `judgeDefaultModel`, else its first
+        catalog model.
+      - If only the catalog knows, the pick waits on screen UNCOMMITTED (model
+        `""`) until the catalog answers.
+        - It is never sent: the contract refuses an empty model.
+        - Choosing an account for it keeps it uncommitted.
+        - One line under the fields says why it is stuck. An empty catalog
+          gives "{Provider} offers no models on this machine. Pick another
+          provider." A failed read gives "Couldn't load {Provider}'s models.
+          Reopen Settings to try again, or pick another provider." Reopening
+          works because an errored query refetches on its next mount.
+      - The Model list says the same two things. It shows "Loading models…"
+        only while the read is pending, and "No matching models." only for a
+        search that matches nothing in a non-empty catalog.
+      - Its rows are labelled with `modelDisplayLabel`, the composer picker's
+        own label.
+      - The description states the billing: "Billed to that provider's
+        account, on top of the conversation itself." Copilot also gets the
+        rate.
+    - **Nothing is disabled while a write is in flight.** `autoJudgeWriteScope`
+      orders the writes. What the old disable stood in for is that the controls
+      must not re-seed from the record mid-write, and they do not: they present
+      the latest pick until ITS write settles, and TanStack runs per-call
+      callbacks only for the latest `mutate`, so an earlier write landing
+      cannot snap them back. A refused write clears the pick, and that is the
+      rollback. Only an unloaded record, or a host that cannot store a
+      selection (`autoJudge.set` unsupported, stated in one line), disables the
+      controls.
+    - **A failed read says so, one line each**, above the options: "Couldn't
+      read this machine's judge. Reopen Settings to try again." for the
+      record, and "Couldn't load this machine's providers. Reopen Settings to
+      try again." for the harness catalog. Without the catalog the Provider
+      field stays disabled, and the warning line below waits on it; an
+      errored query refetches on its next mount.
+    - **At most one warning line** under the fields: the first thing wrong
+      with the STORED record, one sentence, one fix. The checks run in this
+      order:
+      - `blocked.reason`
+      - a harness this build does not know
+      - an unusable provider (one sentence per blocker, with a Providers link)
+      - a model no longer offered
+      - a removed account
+        `judgeWarningCause` (`auto-judge-selection.ts`) decides and returns
+        the cause; the tab only picks the sentence. Nothing past the host's
+        own `blocked` verdict is reported until the harness catalog answers:
+        an unanswered read is never evidence that something is gone. The line
+        also waits for a CURRENT verdict (see above), since `blocked` is
+        checked first. The line
+        is silent while a pick is on screen, since the record is about to
+        change or is not what the controls show. An uncommitted pick's own
+        line (above) is the one shown then. The line is also silent under
+        Automatic, whose status line speaks for it.
+    - **Providers with a built-in reviewer** has one row per catalog row that
+      reports `nativeAutoJudge`: "Reviews with {provider}'s classifier, inside
+      the conversation." beside the same `ProviderJudgeSwitch` the provider's
+      own Permissions tab renders (see Providers). The group's description is
+      where the precedence is said: the built-in reviewer wins over the judge
+      above, and your rules don't apply to it. The group is omitted when no such
+      provider exists here.
+  - **Rules** (`rules-tab.tsx`) edits the ACCOUNT's Auto mode policy in place,
+    over `autoPolicy.get` / `autoPolicy.set`. It shows four sections in
+    Traycer's order (Environment, Always allow, Ask first, Never allow), plus
+    **Notes** for text under none of them. Each section has its tagline,
+    description, a monospace textarea, and the built-in rules it extends.
+    - **One document, split and joined.** `auto-policy-document.ts` splits the
+      stored body with a line-for-line mirror of the host's
+      `parseAutoPolicyDocument`: canonical heading synonyms; a deeper
+      subheading stays in its section; any other heading at the same depth or
+      shallower falls to notes. The join is canonical:
+      - an all-empty document is `""`
+      - Notes come first, then `## Environment` / `## Allow` / `## Soft deny` /
+        `## Hard deny`, each followed by its body when it has one
+      - one trailing newline
+      - every marker escalates to `#` when any section body carries a heading
+        of depth ≤2, so that heading stays inside its section on the host's
+        next read
+        A shared fixture pins the agreement in both repos:
+        `panels/__tests__/__fixtures__/auto-policy-canonical-documents.json`,
+        byte-identical to the host's copy under
+        `domain/chat/auto-judge/__tests__/__fixtures__/`.
+    - **A line the split would move is refused, never rewritten.**
+      `unrepresentableSectionLine(section, text)`, beside the split and
+      sharing its title map, finds the first such line. There are two causes:
+      - a `#` heading in a section body, which no escalation keeps inside
+        its section
+      - in any body, a heading of any depth whose title normalises to a
+        section name or alias, which opens that section
+    - It reads the body as Save WRITES it. The join trims each body whole,
+      which takes the indentation off the first non-blank line, so
+      `   # Production` typed first becomes a heading on save although the
+      textarea never showed one. Only the ends are trimmed: an indented `#`
+      further down stays indented and is no heading to either parser, so it
+      is accepted. The line number is still counted in the text as typed,
+      blank leading lines included.
+    - The section names the line and the fix in one sentence, for example
+      "Line 3 starts a new section: use ## for a heading inside this
+      section, and don't name it after a section." Its textarea is
+      `aria-invalid` and described by that sentence, and Save stays off while
+      any section holds such a line.
+    - Notes are written first, so an unknown `#` heading there round-trips
+      and is accepted: a stored document that opens with `# Title` stays
+      saveable. The refused inputs are not in the shared fixture, because
+      they are the GUI's refusal, not a document either side stores.
+    - A stored body that is not already canonical shows "Saved in Traycer's
+      section order." Saving writes the canonical form, which moves text but
+      never drops it.
+    - Save is explicit, never debounced. The record is ACCOUNT-wide and
+      last-write-wins, so an auto-saved keystroke races another device.
+    - The footer is sticky and carries three things:
+      - the record summary: "Saved {relative}", "Set" (a cached copy invents
+        no date), "Not set", or the warning lines for unreadable and stale
+        copies
+      - a UTF-8 byte pre-flight against the 64 KiB cap, a courtesy only,
+        since the server enforces the cap
+      - Discard and "Save rules"
+    - **Save is held off** while the record is not `fresh`, while the host
+      cannot write (`autoPolicy.set`), and until the opening read has settled.
+      One banner joins the sentences that apply. It is also held off while a
+      section holds a line the split would move. That section's own line says
+      so (above).
+      - `readState` is consulted before `body`: an unreadable read's
+        `null` body is evidence of nothing, so the editor shows no text rather
+        than an empty policy it could save over.
+      - A host that predates the field resolves to `fresh`
+        (`autoPolicyReadStateFor`).
+    - **Every showing re-reads the record.** Becoming active fires a refetch.
+      The stale-edit warning compares the `updatedAt` the edit started from
+      against that answer. This includes null to a real stamp: a policy
+      CREATED elsewhere while the editor was open. A generation guard stops an
+      older read's late answer from unlocking Save.
+    - **The tab mounts on its first visit** (`rulesVisited`). Opening
+      Permissions on another tab starts no Rules read. A draft handed to
+      Rules counts as a visit. From then on the tab stays force-mounted,
+      hidden while another tab shows, so a save in flight, whose answer
+      re-seeds the editor, survives a look elsewhere.
+    - **The edit belongs to the account, and lives as long as this window's
+      Settings.** A per-window store, not persisted
+      (`panels/permissions/rules-edit-store.ts`), holds the editor's last
+      committed state (text, drafted markers, the last draft taken) and the
+      drafts not yet taken. The page reads it through `useRulesEdit`, and
+      nothing outside Settings reads it. It is keyed by the signed-in viewer
+      only: the partition applies on every read, so no frame shows one account
+      another's edit, and on every write.
+      - Settings is one instance per window, the modal or the Settings tab
+        and never both. No component lives as long as it does, which is why
+        the edit is a store. Everything below replaces the page and keeps the
+        edit and the drafts already taken:
+        - leaving Permissions for another section, as Judge's own "Open
+          Providers" link does
+        - the theme editor (Appearance ▸ Create theme), which flips the
+          modal to non-modal, and Radix remounts the modal's content
+        - "Open as tab", which replaces the modal's body with the tab's
+        - the strip evicting a hidden Settings tab and rebuilding it
+          (`durableState: reconstruct`)
+      - Only an actual close resets it. `SystemTabModalHost`, always mounted,
+        observes "Settings open": the modal shows Settings, or the Settings
+        tab exists. The reset fires on the transition to closed
+        (`useRulesEditLifetime`), so closing the modal, closing the tab, and
+        switching the modal to History all reset it.
+      - A promotion is not a close. The Settings overlay's
+        `prepareForPromotion` sets a handoff flag, and no reset fires while
+        it is set, even for a frame between the modal closing and the tab
+        arriving. The flag clears when Settings next reads as open, in
+        particular when the tab appears. Discard resets the text as before.
+      - A switch of machine re-keys the editor under the gate. The new mount
+        resumes from the stored copy and re-takes its opening read on the
+        machine now showing. The unreadable and stale banners then govern
+        Save exactly as for a fresh edit.
+      - There is no warning dialog: the switch changes the reader, not the
+        document.
+      - A switch of ACCOUNT drops the edit. A viewer id resolving from
+        unknown keeps it, and so does signing out and back in as the same
+        account.
+      - A resumed editor does not scroll again to a draft it already showed.
+      - A save in flight when the machine switches loses the editor that
+        would have taken its answer. When the new machine's read returns a
+        newer record whose text equals the edit, it re-seeds the editor
+        anyway, so the user's own save never reads as a change made
+        elsewhere. The re-seed covers any newer FRESH record equal to the
+        edit, since nothing is left to save. A `stale` copy equal to the edit
+        does not count: it would mark the edit clean, and the next fresh
+        record, the text the edit was changing, would replace it silently.
+      - The editor stays authoritative while mounted and reports each
+        committed state upward. If the store owned the state and the editor
+        wrote it back from an effect, a queued write could overwrite fresh
+        keystrokes or append a draft twice.
+    - **Drafts.** A prepared rule, from an approval card's "Allow from now on…"
+      or from Activity, reaches the store as a queued draft with an id that
+      counts up for the life of the edit. The editor appends it to its section in render, whether or not the
+      edit is already dirty, marks that section with "Applies to every
+      repository on your account. Keep it specific.", scrolls to it, and
+      reports the id consumed. So a remounted editor never applies a draft
+      twice. A draft waits while a save is in flight (the save's own re-seed
+      would swallow it) and while the record is unreadable.
+    - **Built-in rules**: a "Built-in: N rules" disclosure per tier, from the
+      host's `shippedDefaults`. It is open by default for Never allow, where it
+      reads "Built-in: N rules, always on". Each rule is a chip that expands to
+      its text (`parseShippedAutoPolicyRules`). Built-in rules come with each
+      machine's Traycer version, and the tab says so once.
+    - **The policy cache is partitioned by SIGNED-IN USER.** The record is
+      account-owned while the query is host-shaped. `useAutoPolicyQuery` puts
+      the viewer id in `cacheKeyIdentity`, and the save's write-through
+      addresses that one partition (`hostQueryKeys.autoPolicyForViewer`), not
+      the method-scope prefix. `autoJudge.get` takes neither: it answers from a
+      file only this GUI writes on that machine.
+  - **Activity** (`activity-tab.tsx`) is the host's recent judge decisions,
+    newest first, from `autoJudge.listRecent` (the whole 200-entry ring,
+    refetched on every mount).
+    - **Five filters over four families:** All · Allowed · Asked you · Refused ·
+      Couldn't decide.
+      - A `block` that asked nobody (`unattended`) is **Refused**, not "Asked
+        you".
+      - Refused uses the warning recipe, and its Why adds the card's unattended
+        sentence.
+      - A filter that matches no row replaces the table with one line: "No
+        decisions match this filter."
+    - **Why** is the rule's display name plus the judge's reason. A Couldn't
+      decide row gets the card's own human line for an `auto: ` reason, else
+      its `failureKind` family. The kinds a Judge setting fixes
+      (`no-judge-configured`, `judge-unavailable`, `adapter-failed`,
+      `selection-unreadable`) add "Fix in Judge", which switches tabs.
+    - **"Allow from now on…"** appears on an Asked you or Refused row with tier
+      `soft` and a rule, the card's own rule. It drafts the same narrow text as
+      the card (`autoModeRuleDraftText`, narrowed by the chat's workspace when
+      this window holds the chat open) and hands it to Rules. A draft must
+      name the action (`autoModeRuleDraftAction`), so an entry offers no draft
+      when it has no input and no tool name, or only a generic tool name such
+      as `Bash`, which would allow every command of that tool.
+    - A conversation is named by its LIVE title when this window has it open
+      (`hooks/chats/use-visible-chats.ts`), else by the title the host
+      recorded, else "Untitled conversation".
   - **What the card says when the judge does not decide** is the other end of
     this page, and lives in the chat rather than in Settings
     (`chat/segments/approval-card-disclosure.ts`, rendered by
@@ -3909,20 +4177,28 @@ deny`, `Hard deny`) and nothing else - the guidance about what belongs under
     verbatim and in mono - a screenshot of one is a diagnosis - with a human
     sentence BESIDE it, never in its place. There are three sentences, because
     the constants describe three situations and one sentence is false for two
-    of them: **did not run** (`auto: no judge configured`, `auto: judge
-unavailable (…)`, `auto: judge failed`) says "Traycer couldn't run the
-    judge, so it's asking you instead."; **ran without deciding** (`auto: judge
-returned no verdict`, `auto: unparseable verdict`) says "The judge reviewed
-    this but didn't reach a verdict, so it's asking you instead."; **ran out of
-    time** (`auto: judge timed out`, `auto: judge exceeded <n> min`) says "The
-    judge didn't finish in time, so it's asking you instead." The second family
-    is the one the single sentence got wrong: the judge's own reasoning about
-    the action sits directly above that line. The wire carries `{ rule, text }`
-    and no outcome, so the family is read off the STRING; an `auto: ` constant
-    this build does not know - including the four the host emits outside the
-    three families (`turn stopped`, `judge preflight timed out`, `judge tools
-unavailable`, `account policy could not be read`, all of which the first
-    sentence describes truthfully) - falls back to the "couldn't run" line.
+    of them:
+    - **did not run** (`auto: no judge configured`, `auto: judge unavailable
+(…)`, `auto: judge failed`): `judgeCouldNotRunSentence` says "The judge
+      couldn't run." or, when the machine string carries a cause in its
+      parentheses, "The judge couldn't run: {cause}.", followed by the "Fix in
+      Permissions ▸ Judge" link.
+    - **ran without deciding** (`auto: judge returned no verdict`,
+      `auto: unparseable verdict`): "The judge reviewed this but didn't reach a
+      verdict, so it's asking you instead."
+    - **ran out of time** (`auto: judge timed out`, `auto: judge exceeded <n>
+min`): "The judge didn't finish in time, so it's asking you instead."
+
+    The second family is the one a single sentence got wrong: the judge's own
+    reasoning about the action sits directly above that line. The wire carries
+    `{ rule, text }` and no outcome, so the family is read off the STRING. An
+    `auto: ` constant this build does not know falls back to the "couldn't run"
+    sentence. That includes the four the host emits outside the three families
+    (`turn stopped`, `judge preflight timed out`, `judge tools unavailable`,
+    `account policy could not be read`), all of which that sentence describes
+    truthfully. Activity's Couldn't decide rows use the same three sentences:
+    the card's own line for a recorded `auto: ` reason, otherwise the family its
+    `failureKind` names; "Fix in Judge" there keys on the kind.
 
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide
@@ -4064,39 +4340,39 @@ unavailable`, `account policy could not be read`, all of which the first
     buttons are disabled at that boundary so a refused move is never offered as
     an active control. Neither can fire on a ladder this panel wrote, where
     `notify` is last and every movable row is above it.
-  - **The Advanced per-failure matrix is collapsed by default and derived, not
-    written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
-    `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
-    is added rather than silently missing one. Each row has three chips
-    (`notify` has no column - it is eligible everywhere, so the column would
-    carry no information) in three states: **runs**, **off**, and
-    **impossible**, the last rendered as a non-interactive `<span>` carrying
-    its own reason inline. That third state is why the eligibility table
-    `REASON_ELIGIBLE_RUNGS` had to move into `@traycer/protocol` (it was
-    host-private): the matrix must distinguish "you turned this off" from
-    "this cannot help that failure", and a second copy GUI-side would have
-    drawn a policy the engine does not execute the first time a row moved.
-    A write from this matrix carries `notify` through explicitly and takes its
-    order from the editor's four-row display order, never from the chips on
-    screen; an override that ends up equal to the base ladder is **removed**
-    rather than stored, so a later change to the main order keeps applying to
-    that failure. The excluded reasons collapse into one read-only line -
-    exclusion is not a preference - and `Reset overrides only` clears
-    `reasonOverrides` alone, leaving the ladder and Behavior untouched.
-    **What the matrix cannot express, disclosed rather than left to be
-    discovered (RF5, D142/D146).** Turning every override chip off leaves the
-    brief retry that outages and connection failures start with, and the
-    notification at the end - but **no cancellation window**: the all-off shape
-    arms no grace hold, so there is no countdown to cancel. Settings does not
-    author the wire's per-reason `off` value, and Notify stays last. That is
-    `FALLBACK_OVERRIDES_DISCLOSURE`'s promise in substance, and the two are
-    meant to stay in step. The
-    wire schema permits both - `reasonOverrides` accepts the literal `"off"`,
-    and `fallbackLadderSchema` checks length and uniqueness only, so an early
-    `notify` is a valid stored ladder - and the panel deliberately writes
-    neither. D142 and D146 settled that (the user fixed both); the sentence
-    above is the disclosure obligation those decisions carry, and it lives in
-    the panel's own help copy as well as here.
+  - **Overrides is a responsive list of problems with one inline editor open
+    at a time.** Every row starts collapsed and shows its configured behavior
+    and whether it follows the main plan or has a saved custom rule. Expansion
+    is local UI state, never a policy write. Eligible actions are checkboxes;
+    unavailable actions are explained in a disclosure, never disabled controls.
+    Rows and eligibility are derived from the protocol taxonomy. Connection
+    failures and excluded reasons have read-only summaries, with a per-reason
+    reset when a stored override exists.
+    The preview respects the stored order and stops at the first `notify`;
+    selected actions after it are marked as unreachable. A transient retry is
+    shown only when the narrowed sequence is nonempty. Explicit `"off"`, empty
+    sequences and sequences with only ineligible actions do not promise retries.
+    With automatic routing off, summaries describe what the settings would do
+    when it is enabled. Billing's notification and confirmed-sign-out gating
+    remain disclosed, and switch choices explain the fresh session.
+    Writes still use the existing four-row display order, carry terminal
+    `notify` through, and remove an override only when its FULL sequence equals
+    the base plan. Disabled checkboxes keep their place when that order agrees
+    with the saved sequence; viewing an older custom sequence never rewrites it.
+    **Use main plan** removes one override; **Reset all to main plan** removes
+    all overrides without touching other policy fields. Undo is an inverse of
+    that reset, held by the parent editor so it survives a tab change. It waits
+    for a confirmed current view, is unavailable for unknown/refused saves,
+    preserves unrelated fields, and expires on the next policy edit, full reset,
+    group restore, or device/editor remount.
+    Save feedback sits above the collapsible list. Unknown request IDs retain
+    their originating row so a collapsed row can say **Check save** without
+    treating the most recently edited row as the failed request. Existing
+    tab-level attention and the parent reducer's save/reconciliation rules
+    remain authoritative. Quiet save confirmation requires the submitted policy
+    to match the current confirmed view; a read-back that restores older values
+    cannot claim the change was saved. Undo and read-only reset restore focus to
+    stable labels. No new policy storage or recovery engine behavior.
   - **Equivalent models** is the user's statement about which models are
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
@@ -5111,6 +5387,237 @@ set-state-in-effect` forbids the effect form, and an effect would also
   sidebar switcher is the collection, and every lifecycle verb lives on the
   Overview of the host it describes.
 
+  **A pinned host header over five tabs** (`host-overview-tabs.tsx`; core
+  flows: the `host-overview-tabs` epic artifact). The header is the identity
+  part of `HostIdentityCard` - name and rename, the Local/Remote tag,
+  Activate, the `⋯` menu, the health line, the working chip - and it never
+  moves, so switching tabs never hides Restart or Activate. Under it, in this
+  order, most used first and destructive last: **Status · Updates · Ports ·
+  Data · Installation**, a `TabsList variant="line"`.
+  - **Frame.** The header, the tab bar and the active body share one card.
+    On desktop the page takes `SettingsPanelShell`'s `fillHeight` (the
+    Providers model) with a transparent body card: the header and the bar
+    are pinned, only the active tab's body scrolls, and the card is only as
+    tall as its content up to the pane. The `md:` classes on the tab frame
+    are that whole model. On a phone (`useIsMobileViewport`) nothing is a
+    scroll container and the page scrolls as one, header included; the bar
+    becomes a section `Select` (built like `PermissionsTabSelect`) whose
+    trigger carries the ACTIVE tab's search anchor, and Activate moves into
+    the `⋯` menu as its first item (with its reason written under it). The
+    phone's name row never wraps (`HostIdentityCard`'s `nameRowWraps`): the
+    name truncates, and the pencil, the tag and the `⋯` keep their space.
+  - **Every tab, every state.** All five render for every host in every
+    state - connecting, restarting to finish an update, unreachable,
+    stopped, not installed, update required - so the header and the bar sit
+    outside anything that withholds a body, and each body decides what it
+    can show (the per-region `usable` gates it carried before the split).
+    While the host connects, Status shows the loading shape
+    (`HostScopeConnecting`) where the version card goes - unless an update is
+    retained, which then shows with the version card under it. The header's own states are unchanged: this computer's host down gets
+    Run doctor (and Reinstall Traycer after a removal), an unreachable host
+    gets no Activate or `⋯`. The two page states with NO header and no tabs
+    are unchanged too - a host removed from the account while you look at
+    it, and an account with no host but Traycer installed
+    (`LocalRecoveryDangerZone`).
+  - **Tab state.** The page opens on Status. `OpenSettingsModalOpts.tab`
+    opens the named tab (read through `useSettingsOpenIntent("host")`,
+    acknowledged with `acknowledgeSettingsOpenIntent`, and its `hostId`
+    carried into the Settings scope before paint, as Permissions does); a
+    tab this page does not have is ignored. The four links into
+    `section: "host"` (the resource monitor's and the rate-limit popover's
+    Manage hosts, the composer's host section, the chat tile's host update)
+    name `tab: "status"`, so an Overview already open on another tab comes
+    back to Status, on the same host or a new one - a link with no tab arms
+    no intent and would leave the tab where it was. A
+    settings-search landing on a tab's anchor switches to it during render
+    (`hostOverviewTabForAnchor`); a page result moves nothing. Nothing
+    switches tabs by itself. The selected tab is held by `HostSettingsPanel`
+    (`useHostOverviewTabSelection`, in `host-overview-tab-state.ts` beside
+    the components' `host-overview-tabs.tsx`, so both keep Fast Refresh)
+    ABOVE its per-host remount (`key={scopeKey}`), so a switch of host in
+    the sidebar picker keeps the tab while the remount still closes an open
+    confirmation, the rename field and the Doctor panel of the previous
+    host. A VISITED tab stays mounted, hidden while inactive (the Rules-tab
+    rule), so a half-typed retention limit survives a look at Status; an
+    unvisited one is never mounted, and visited tabs reset when the page
+    closes or the host changes.
+  - **Selecting a tab from inside the page** goes through ONE seam:
+    `useHostOverviewSelectTab()` (`host-overview-tab-state.ts`), provided
+    by the panel through `HostOverviewSelectTabProvider`, `null` outside it.
+    The header's update pill and the "Change in Updates" / "Pick it in
+    Updates" links use it.
+  - **Status, top to bottom, drawing only what applies**
+    (`host-overview-status-tab.tsx`; its decisions are in
+    `host-overview-status-model.ts`, and the panel resolves each piece):
+    1. **The offline notice**, while the host can't be reached for a reason
+       other than a restart (`!usable`, not connecting, the health word not
+       "Restarting…"): "Can't reach build-box — last seen 3h ago, while
+       downloading update to v1.5.1. Auto-update settings still apply at its
+       next check-in; everything else here needs a connection."
+       (`describeHostOfflineNotice`). The phase clause comes from
+       `describeLastSeenUpdateClause` and drops when no update was in flight;
+       the last-seen half drops when the account holds no check-in; the
+       auto-update half drops for a host the account does not know. It is the
+       tab's ONLY unreachable wording, so the update card is withheld under it
+       and its retained "Last seen: …" rides in the clause instead.
+    2. **The update card** (`HostOverviewOperationCard`), the host's own
+       report: progress with measured bytes, the restart phases, a wait on
+       work, failure, success. Info while it runs, warning while it waits on
+       someone, destructive on failure, success when done, neutral for a view
+       the page can no longer vouch for (a retained failure stays red). Its one
+       control is Restart, Force update… or Force restart…. Success reads
+       "Updated to v1.5.1" and collapses after 8 s or on dismiss.
+    3. **The account's wait** (`HostUpdateDrainGateRow`: "Waiting for 2
+       agents", Apply now — ends 2 agents), a warning callout. **One wait on
+       screen**: it is withheld once the host's update view is
+       `waiting-for-work` (retained phase included), where the update card
+       says it with Force update…, and while the host can't be reached,
+       because it names live work. Its confirm and its refusal when the work
+       changes under the open dialog are unchanged.
+    4. **The version card** (`HostOverviewVersionCard`), always - except while
+       the scope connects with no update retained. The running version at the
+       name's size (`text-title-sm`), one tag (Latest · Update available ·
+       Checking… · Updating… · Waiting on work · Restart to finish · Needs newer
+       CLI tools · Last reported; `deriveHostOverviewVersionTag`), the answer
+       in today's words, and Update now (only when installable) / Check now.
+       - **In flight, no buttons.** While an update runs, waits or restarts
+         (`inFlightUpdateKind`, retained phase included) the card is its version
+         and tag - no tag when the page can no longer vouch for the phase
+         (retained, or `qualified`), since the pill and the update card already
+         say "Last seen", though a command-line-tools floor keeps "Needs newer
+         CLI tools": Update now and Check now are HIDDEN, not disabled, and come
+         back when the update finishes or fails. The answer goes with them -
+         the catalog's "v1.5.1 is available." mid-download contradicts the card
+         above - except activation debt's "v1.5.1 is installed — restart host
+         to finish." and the command-line-tools fix's sentence.
+       - **The command-line-tools fix** (Copy command, Show installation help,
+         or the Desktop steps) replaces Update now here and nowhere else, and is
+         NOT held to the in-flight rule: it is a fix for the tools rather than a
+         control over the update, a work park can be waiting on exactly it (the
+         update card's floor sentence points at its Show installation help), and
+         the page's 30 s floor recheck runs for as long as a floor applies,
+         which is only honest while the fix it is for is on screen.
+       - **A refused or failed attempt** is ONE line under the answer
+         (`failureDescription`), clearing on the next try. It is no longer the
+         answer too: `describeCheckState` lost its failure-first arm, so the
+         answer beside it is what the catalog still says. It is not held to
+         the in-flight rule: a refused Force update… is answered during the
+         very park that counts as in flight, and its dialog closes on the
+         refusal expecting this line to say why.
+       - **A check that settled with no catalog** (the host's CLI failed, or
+         answered in a format this app can't read) answers "Couldn't check for
+         updates on build-box." with no tag and Check now, and the line under
+         it carries the reason. It never falls through to "Checking for
+         updates…", which is the first load's alone: that sentence and its
+         Checking… tag would stay with nothing running.
+       - **The stranded answer** ends "…Pick it in Updates to move."
+         (`PICK_IN_UPDATES`), and those words are a link that selects Updates.
+       - **Not manageable here** (too old, no Traycer CLI, managed outside
+         Traycer): one sentence in place of the buttons, no tag, no caption.
+       - **The caption**, when the account knows the host: "Auto-update is on —
+         applied at this host's next check-in, only when no sessions are
+         running. Change in Updates" or "Auto-update is off. Change in
+         Updates"; the link selects Updates. It stays while the host can't be
+         reached, and is withheld while an update is in flight on a reachable
+         host and when updates are not manageable here.
+  - **The destructive rule.** Force update…, Force restart… and Apply now end
+    running work, so they are destructive-styled wherever they appear: the
+    update card, the drain-gate row, and the busy dialogs
+    (`HostBusyForceDeferDialog`'s required `forceDestructive`, true at every
+    caller but the bound activation offer, whose button is "Restart host").
+    Restart and Update now stay ordinary buttons. Every confirmation still
+    names the count.
+  - **The live update pill** (`host-overview-update-pill-model.ts`, drawn by
+    `host-overview-update-pill.tsx`), last on the header's health line
+    (`HostIdentityCard`'s `updatePill` slot), on every tab but Status - Status
+    draws the update card itself. Clicking it selects Status through
+    `useHostOverviewSelectTab()`; it never performs an action. An exhaustive
+    `Record<FleetUpdateViewKind, …>` (the `LIVE_BADGE_WORD` construct), so a
+    new kind is a type error:
+
+    | Update view                                                        | Pill                                                                                              | Tone        |
+    | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------- |
+    | `updating`                                                         | "Updating…"                                                                                       | info        |
+    | `downloading`                                                      | "Downloading 45%" with a measured percentage, else "Downloading…"                                 | info        |
+    | `preparing` / `applying` / `verifying`                             | "Preparing…" / "Installing…" / "Verifying…"                                                       | info        |
+    | `waiting-to-activate`                                              | "Restart to finish update"                                                                        | warning     |
+    | `waiting-for-work`                                                 | "Update waiting on work" (no count); "Update waiting on CLI tools" when `cliFloorBlocked`         | warning     |
+    | `failed`                                                           | "Update failed"                                                                                   | destructive |
+    | `complete`                                                         | "Updated to v1.5.1", until the success card's 8 s or its dismissal                                | success     |
+    | `restarting`, `reconnecting`                                       | none - the health word reads "Restarting…"                                                        | -           |
+    | `finalizing-record`, `verification-refused`, `unavailable`, `idle` | none - Status explains the first three                                                            | -           |
+    | `unknown` with a retained phase, or any `qualified` view           | the picker's retained words: "Last seen: updating" / "Last seen: update failed"; none without one | muted       |
+    - **Hidden** on Status, and whenever the health word reads "Restarting…",
+      whatever the view says.
+    - **One acknowledgement.** `useHostUpdateCompletion` runs at PANEL level
+      and feeds both the success card and the pill, so "Updated to vX" leaves
+      after 8 s or a dismissal even if Status was never visited.
+    - **Phone.** The header draws no pill. When a section other than Status is
+      selected and the pill would show, it becomes a slim full-width strip
+      directly above the section dropdown (`HostOverviewTabs`' `phoneStrip`);
+      tapping it selects Status, and it scrolls with the page.
+
+  - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
+    stays at panel level, so it opens over whichever tab is showing.
+  - **One component per tab**, each drawing what the panel hands it; the
+    queries, the mutations and every dialog stay in `host-overview-panel.tsx`,
+    so the update answer on Status and the version list on Updates are still
+    one `useHostOverviewUpdates` instance. The dialogs open over whichever
+    tab is showing: the restart confirm, the three "Host is busy"
+    force-or-defer dialogs (restart, staged-update force, bound dispatch),
+    the restart offer that opens by itself after an update started here has
+    installed, and the Doctor sheet. The trigger and phone-`Select` badges
+    (the Ports count, the Installation dot) hang on `HostOverviewTabs`'
+    `badges`.
+
+    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+    | ------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Status       | `host-overview-status-tab.tsx`       | The offline notice, the update card (`host-overview-operation-card.tsx`), the account's wait (`HostUpdateDrainGateRow`), and the version card (`host-overview-updates.tsx`: version and tag, the update answer, Update now / Check now or the command-line-tools fix, the failed-attempt line, the auto-update caption)                                                                                                                                         |
+    | Updates      | `host-overview-updates-tab.tsx`      | A single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with its release-candidate choice, version list and inline refusal; the Advanced disclosure is gone                                                                                                                                                                                                                                    |
+    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                               |
+    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                              |
+    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last |
+
+  - **Ports is on every host, in every state.** There used to be a card that
+    was absent whenever nothing was forwarded and on hosts without port
+    forwarding. That rule is gone: the tab always has a body, and it says what
+    it can't show. `useHostPortForwards` (`host-port-forwards-state.ts`)
+    resolves one view in this order: the scope is connecting or the host is
+    restarting → the loading shape (`HostScopeConnecting`); the host can't be
+    reached → "Port forwards run on build-box, so they need a connection to
+    it."; the handshake lacks `portForward.listForHost` → the page's standard
+    `describeOverviewDegrade("unsupported")` sentence; the last settled read
+    failed → "Couldn't read build-box's port forwards." with Refresh below it;
+    nothing is forwarded or held → "Nothing is forwarded through build-box.
+    When an agent forwards a port on this host, or another machine holds one
+    of its ports, it shows up here so you can stop or cut it."; otherwise two
+    groups. **Forwards on this host** (`owned`) lists description, port, state
+    and route with the counters: Forwarding or Binding → Stop, Interrupted or
+    Stopped → Clear. **Ports other machines hold here** (`held`) shows
+    "Listening for laptop" or "Reached by laptop", the open connections and
+    Cut, confirmed with the same dialog as before. A group with no rows isn't
+    drawn. **Refresh** sits below the lists and re-reads them at once. The
+    Stop and Cut mutations and the Cut confirm stay in the card, where they
+    were before: the Cut confirm is modal, so no tab switch can happen under
+    it.
+    - **The count.** The Ports trigger and the phone dropdown's Ports item
+      carry owned plus held (`HostOverviewPortsCount`) when there is at least
+      one. There is no count at zero, on a host too old for port forwarding,
+      or while the list can't be read (connecting, restarting, unreachable, a
+      failed read).
+    - **One read, re-read every 15 seconds.** The panel reads
+      `portForward.listForHost` ONCE, for both the body and the count, so the
+      read starts with the page rather than at the tab's first visit. The read
+      keeps today's gates: nothing while the host is unusable or before its
+      handshake names the method. The host has no change signal for port
+      forwards, so the count would go stale without polling. The cadence is
+      the method's `HOST_METHOD_POLL_TABLE` entry (`fixed`, 15 s; the user's
+      call), which `usePortForwardListFor`'s required `poll` opts into. It
+      runs only while the window is visible, never in the background. A
+      forward that stops therefore drops out of the count within 15 seconds.
+      Window focus, Refresh and a Stop, Clear or Cut still re-read it
+      immediately.
+
   **The page reads the scoped host's OWN RPC** (`host-overview-panel.tsx`):
   `host.status` for what it is running, `host.identity.get` for what it is
   called, `host.getInstallationInfo` for how it was installed; buttons are
@@ -5195,10 +5702,24 @@ set-state-in-effect` forbids the effect form, and an effect would also
     lost ack idempotent instead of a busy refusal. `{outcome:"busy"}` is NOT an
     error: the host closed session admission, found work in flight and reopened
     it, so it renders as an amber notice with a Try again, never a red toast.
-  - **Updates**: one card, both halves. The host's own "Check now" and the
-    VERSION LIST it reveals (`host.update.*`) sit above the account registry's
-    auto-update policy and drain-gate force (`HostRegistryUpdates`, keyed by
-    `hostId`, controls capture their target when armed).
+  - **Updates**: one hook, two tabs. The host's own answer and "Check now"
+    (`host.update.*`) and the drain-gate force sit on Status; the VERSION LIST
+    and the account registry's auto-update policy sit on Updates
+    (`HostAutoUpdateRow`, keyed by `hostId`, controls capture their target when
+    armed). The auto-update switch is a single-row group with no group label:
+    its row title says Auto-update, and the Updates search entry remains on the
+    tab trigger. Its pending tag says only "Update pending", with no version.
+    The row works while the host is unreachable because it writes the account,
+    and says the setting is applied at the host's next check-in (within about
+    10 minutes, when no sessions are running).
+    - **Pick a different version** is a separate group. Its introduction says
+      it can install a release candidate, hotfix or earlier release; the
+      Include release candidates checkbox re-asks the host and explains when
+      the host chose inclusion from its installed release-candidate line.
+      Above older rows that cannot open newer chat stores, it warns about the
+      access lost until this host updates again. The list can say it is asking,
+      say no versions are available, or say the host returned no list; the
+      last state offers Check now through the same action as Status.
     - **The version list replaced a free-text pin.** `host.update.check` returns
       the whole manifest, not just `latest`, so the Overview renders the same
       per-row-Install list the local recovery console has always had - for a
@@ -5235,9 +5756,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
       pinned; the auto-update policy beside it still works without a route.
       `isValidHostVersion` (the client mirror of authn-v3's server-side regex)
       went with the input it validated.
-    - Check stays a MUTATION, not a query: it spawns a process on the host and
-      reaches the registry, so it runs when someone asks and not because a
-      settings pane mounted.
+    - Check is one shared query for the Status answer and Updates list. It
+      populates on its own; Check now in either place forces a refetch.
     - The RPC half degrades away WHOLE - Check-now and the list with it,
       leaving the auto-update policy as the only update control, plus one line
       saying why - without the methods, without a
@@ -5249,7 +5769,17 @@ set-state-in-effect` forbids the effect form, and an effect would also
       the one action the host has just said can never lead anywhere.
       `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
       going wrong with the mechanism intact - so the controls stay and an inline
-      `host-overview-update-attempt-failed` notice clears on the next try.
+      `host-overview-update-attempt-failed` notice clears on the next try. A
+      transient refused Install appears under the list in Updates and under
+      the answer on Status from that one failure state; the version rows
+      unfreeze and the page stays on Updates. A structural refusal (for
+      example, a CLI that disappeared after the list was read) replaces the
+      list with its not-manageable reason and the inline refusal goes with it.
+      Connecting or restarting shows a loading shape in the list's place.
+      An unreachable host keeps the auto-update row and says "Connect to
+      <host name> to choose a version." A structurally unmanageable host
+      (too old, no CLI, or managed outside Traycer) also keeps the auto-update
+      row and shows its reason in the list's place.
       Progress after an accepted install comes from `host.status.updateProgress`,
       not from the install response, because the swap is detached and outlives
       it.
@@ -5616,10 +6146,16 @@ set-state-in-effect` forbids the effect form, and an effect would also
       (`host-settings-package-manager-upgrade-hint.tsx`) pins the version
       Desktop bundles, the answer to "your npm CLI is older than Desktop's";
       this remedy pins the host's required floor, the answer to "this host
-      refuses the CLI it has". Advanced rows retain their reasons.
-      Sentence precedence preserves the record-derived parks: **failure →
-      activation debt → CLI remedy → checking → unreachable → no manifest →
-      stranded on its release line / up to date → unavailable / available**.
+      refuses the CLI it has". Version rows on Updates retain their reasons.
+      Sentence precedence preserves the record-derived parks: **activation
+      debt → CLI remedy → checking → unreachable → check failed → no
+      manifest → stranded on its release line / up to date → unavailable /
+      available**. A failed or refused attempt is not in this chain: it is the
+      one line under the answer (`failureDescription`), so the answer beside
+      it stays what the catalog says instead of repeating the failure. "Check
+      failed" is the chain's one step about a failure, and only as a fact
+      about the catalog: the check settled with none, so the step says so and
+      leaves the reason to that line.
       A failed catalog read drops the remedy along with the actionable catalog.
 
     - **Repair rechecks while the Overview is open.** The Overview re-asks
@@ -5662,11 +6198,49 @@ set-state-in-effect` forbids the effect form, and an effect would also
       than disabled, since the card reports the park and the header's menu
       item carries the reason - and an open confirm closes when its method
       is withdrawn or its region retires.
-  - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
-    state, not an error - a host run from a checkout has no install record - and
-    it says so rather than claiming nothing is installed.
-  - **Data & migration** (`panels/host-import-migration-section.tsx`), between
-    Installation and the danger zone: **Import your work** (opens the session
+  - **Installation**, top to bottom: About this host, Install record, OS
+    service, Command-line tools, Danger zone.
+    - **About this host** (`host-overview-about-this-host.tsx`) reads the
+      ACCOUNT's host record - the `HostListItem` the panel already holds
+      (`scope.host.item`), never a host RPC - so it reads the same while the
+      host connects or cannot be reached, which is when people come for the
+      host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
+      `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
+      version (`status.appVersion`) and Platform (`formatPlatform` plus the
+      architecture, as the header words it). Last seen reads "Online now"
+      while the header's live evidence holds (`health.live`); otherwise
+      `status.lastSeenAt` on the header's own ladder and clock
+      (`formatElapsed`, `scope.nowMs`), so the two never disagree on one
+      screen. A host the account has no record of gets no group, as it gets
+      no Danger zone.
+    - **Install record** (`host-settings-installation-details.tsx`) is shown
+      open - it was a collapsed "Installation details" disclosure - and reads
+      `host.getInstallationInfo`: Version, Build (only when it differs),
+      Source, Installed, Verification, SHA-256 (shortened, with copy),
+      Platform. `unmanaged` is a real state, not an error - a host run from a
+      checkout has no install record - and it says so rather than claiming
+      nothing is installed; a failed read and an unsupported host each keep
+      their own sentence.
+    - **OS service** (`host-overview-os-service-section.tsx`) is its own
+      group: the registration sentence and manifest line, Re-register and
+      Deregister with their confirms. A host that cannot report its service
+      gets the standard unsupported sentence in place of the group's
+      contents, under its label.
+    - Those two are the tab's host reads. While the host connects they are
+      the loading shape; when it cannot be reached one line replaces both -
+      "The install record and OS service are read from <host>, so they need
+      a connection." - and About this host, Command-line tools and the Danger
+      zone stay.
+    - **Command-line tools** (this computer only, behind the panel's
+      `hasLocalBridge`) is the package-manager upgrade hint with its command
+      and a copy button. The tab trigger and the phone Select's Installation
+      item carry a warning dot (`LocalPackageManagerUpgradeDot`, hung on
+      `badges`) that reads the SAME query as the hint -
+      `useRunnerHostCliManifestQuery` (`runnerQueryKeys.hostCliManifest`) -
+      under the same gate, so the dot and the group appear together and clear
+      together, on the read that finds the tools current.
+  - **Import & migration** (`panels/host-import-migration-section.tsx`), on the
+    Data tab above Version history: **Import your work** (opens the session
     import wizard for the sessions on THIS host's disk) and **Data migration**
     (retry moving this host's local SQLite tasks and epics to cloud). Both came
     off General for the reason that section now states - they move one
@@ -5689,6 +6263,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
       context, so the row cannot offer an import host A negotiated and submit
       it to host B. An empty titled card reads as a page that failed to load,
       which is why the whole group goes rather than its contents.
+  - **File edit snapshots** (`panels/host-file-edit-snapshots-section.tsx`) is
+    the single-row group after Version history, without a repeated group
+    label. Its host RPC reads the stored size and clears snapshots behind the
+    existing confirmation. While the host connects or restarts, Data shows
+    `HostScopeConnecting`; if it cannot be reached, the tab replaces all three
+    groups with "These live on <host name>'s disk, so they need a connection to
+    it."
   - **Doctor** (`host-doctor-rpc-card.tsx`) has the host shell its own CLI. Two
     things make the report trustworthy over a connection, and both come from the
     host: the structured failure arms (`cli-unavailable` / `cli-failed` /
@@ -5706,12 +6287,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
     to the copy-command affordance for a remote host. That is not a missing RPC:
     they repair a host that is typically not answering RPCs at all, so remote
     verbs for them were dropped from the plan on purpose.
-  - **Danger zone** (`host-scope/host-danger-zone.tsx`), three planes, each
-    gating itself: File edit snapshots (host RPC, behind the scope gate), Remove
-    Traycer (local CLI bridge, local host only, never gated on reachability), and
-    **Remove from account** (an account write, remote + registered only). That
-    last one is NEVER called "deregister" in copy - this app already uses that
-    word for OS-SERVICE deregistration in the Advanced disclosure one card away,
+  - **Danger zone** (`host-scope/host-danger-zone.tsx`) contains only removal:
+    Remove Traycer (local CLI bridge, local host only, never gated on
+    reachability), or **Remove from account** (an account write, remote +
+    registered only). Without an available removal action, the group is absent.
+    The account removal action is NEVER called "deregister" in copy - this app
+    already uses that word for OS-SERVICE deregistration on the same tab,
     and two destructive controls sharing a verb is how someone reaches for the
     wrong one. Its confirmation is written against what the route actually does:
     `POST /api/v3/hosts/:id/deregister` stamps `deregisteredAt` and clears the

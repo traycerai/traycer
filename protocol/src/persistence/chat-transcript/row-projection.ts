@@ -1,6 +1,7 @@
 import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
+  AssistantMessage,
   Message,
   UserMessage,
 } from "@traycer/protocol/persistence/epic/messages";
@@ -12,22 +13,66 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 import {
+  checkpointChangePaths,
   checkpointEventTurnKey,
   latestCheckpointPerTurn,
-  overlappingCheckpointIds,
+  overlappingCheckpointKeys,
   turnCheckpointManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
-  compareCanonicalRowOrder,
+  eventMaterializesTranscriptRow,
   forkedChatLinkRowSource,
   importedChatMarkerRowSource,
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
-import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
-import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
+import {
+  partitionSetupCardWindows,
+  SETUP_DERIVATION_EVENT_TYPES,
+} from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
+import {
+  applySteerLifecycleEvent,
+  STEER_LIFECYCLE_EVENT_TYPES,
+  type SteerLifecycleFold,
+} from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
+import {
+  canonicalFoldJson,
+  compareTranscriptRowOrder,
+  EMPTY_TRANSCRIPT_FOLD_STATE,
+  eventRowUnitKey,
+  isSetupCardUnitKey,
+  setupCardUnitKey,
+  TRANSCRIPT_FOLD_STATE_VERSION,
+  TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION,
+  TRANSCRIPT_ROW_PASS,
+  TRANSCRIPT_ROW_SECTION,
+  TRANSCRIPT_ROW_SLOT,
+  transcriptMessageFoldFactsEqual,
+  turnRowUnitKey,
+  userRowUnitKey,
+  type CheckpointPathChange,
+  type CheckpointTurnPaths,
+  type PositionedEvent,
+  type PositionedMessage,
+  type PositionedMessageFacts,
+  type PositionedTurnEvent,
+  type StoredCheckpointTurn,
+  type StoredTranscriptRow,
+  type TranscriptFoldChange,
+  type TranscriptFoldLoad,
+  type TranscriptFoldLoadResult,
+  type TranscriptFoldResult,
+  type TranscriptFoldRow,
+  type TranscriptFoldState,
+  type TranscriptFoldUnit,
+  type TranscriptMessageFoldFacts,
+  type TranscriptRowOrder,
+  type TranscriptTurnUnitState,
+  type TranscriptWalkRegion,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection-fold-state";
 
 /**
  * # The transcript row projection
@@ -195,8 +240,8 @@ export type TranscriptRowSource =
        * suppresses its ordinal rather than leaving a placeholder.
        *
        * Never null: the row is synthesized only for a stop whose `messageId` is
-       * both set and retained (see `stoppedTurnsWithoutRecords`), which is the
-       * same condition the renderer re-checks.
+       * both set and retained (the stopped-turn branch of `foldTranscriptRows`),
+       * which is the same condition the renderer re-checks.
        */
       readonly triggeringMessageId: string;
     }
@@ -207,6 +252,7 @@ export type TranscriptRowSource =
       readonly kind: "auto-judge-unattended-denial";
       readonly eventId: string;
     }
+  | { readonly kind: "auto-judge-notice"; readonly eventId: string }
   | {
       readonly kind: "setup-card";
       readonly windowIndex: number;
@@ -311,6 +357,10 @@ export function importedChatMarkerRowId(eventId: string): string {
 
 export function autoJudgeUnattendedDenialRowId(eventId: string): string {
   return `auto-judge-unattended-denial:${eventId}`;
+}
+
+export function autoJudgeNoticeRowId(eventId: string): string {
+  return `auto-judge-notice:${eventId}`;
 }
 
 export function setupCardRowId(
@@ -789,6 +839,16 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
  *
  * Only each turn's last checkpoint counts (`latestCheckpointPerTurn`). A turn
  * whose checkpoint was rewritten must not be flagged by its own rewrite.
+ *
+ * Keyed by turn all the way through: the rule runs over each turn's changed
+ * paths (`overlappingCheckpointKeys`), not over checkpoint ids mapped back to
+ * turns. Two turns whose checkpoints share an id are still two checkpoints, and
+ * the mapping would flag both whenever either overlapped. This is also the
+ * form the row fold can keep in a store - see `CheckpointOverlapLoads`.
+ *
+ * This is the whole-history rule. The row fold answers the same question from
+ * the store's path table without loading every checkpoint, and its parity test
+ * holds it to this function.
  */
 export function turnKeysWithLaterOverlappingChanges(
   events: readonly ChatEvent[],
@@ -804,24 +864,33 @@ export function turnKeysWithLaterOverlappingChanges(
     checkpointEventTurnKey,
   );
   const current = retained.flatMap((event) => {
-    if (event.turnId === null || event.metadata === null) return [];
-    const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
-    // A manifest this reader cannot parse is one whose overlap it cannot judge.
-    // Dropping it is the same answer the restore path gives a version mismatch
-    // ("cannot restore"), and it keeps an unreadable entry from silently
-    // reading as "touches nothing" and clearing a warning it should have kept.
-    if (!manifest.success) return [];
-    return [{ turnId: event.turnId, manifest: manifest.data }];
+    if (event.turnId === null) return [];
+    const paths = retainedCheckpointChangePaths(event);
+    return paths === null ? [] : [{ key: event.turnId, paths }];
   });
   if (current.length === 0) return EMPTY_TURN_KEYS;
-  const overlapping = overlappingCheckpointIds(
-    current.map((entry) => entry.manifest),
-  );
-  return new Set(
-    current.flatMap((entry) =>
-      overlapping.has(entry.manifest.checkpointId) ? [entry.turnId] : [],
-    ),
-  );
+  return overlappingCheckpointKeys(current);
+}
+
+/**
+ * The changed paths of a turn's retained `checkpoint.captured`, or `null` when
+ * the manifest cannot be judged: no metadata, or a manifest this reader cannot
+ * parse.
+ *
+ * An unjudgeable manifest is DROPPED rather than read, the same answer the
+ * restore path gives a version mismatch ("cannot restore"). It is still the
+ * turn's retained checkpoint - it supersedes the turn's earlier ones - which is
+ * why this runs after `latestCheckpointPerTurn` and never before.
+ *
+ * For the overlap answer, a dropped checkpoint and one that changed no path are
+ * the same: neither is ever overlapped, and neither overlaps another. The row
+ * fold relies on that when it records an unjudgeable checkpoint as changing no
+ * path.
+ */
+function retainedCheckpointChangePaths(event: ChatEvent): string[] | null {
+  if (event.metadata === null) return null;
+  const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
+  return manifest.success ? checkpointChangePaths(manifest.data) : null;
 }
 
 const EMPTY_TURN_KEYS: ReadonlySet<string> = new Set<string>();
@@ -897,41 +966,6 @@ export function turnStoppedInfoByTurnKey(
   return out;
 }
 
-/**
- * Turn keys whose Stop landed before any assistant record existed, and which
- * therefore render as a synthesized completed row.
- *
- * The guard is retention-based: a turn whose records were branched away stops
- * producing a folded row and starts producing a synthetic one, and both must
- * land on the same ordinal count.
- */
-function stoppedTurnsWithoutRecords(input: {
-  readonly stoppedByTurnKey: ReadonlyMap<string, TurnStoppedInfo>;
-  readonly retainedTurnKeys: ReadonlySet<string>;
-  readonly retainedUserMessageIds: ReadonlySet<string>;
-  readonly activeTurnId: string | null;
-}): readonly {
-  readonly turnKey: string;
-  readonly stopped: TurnStoppedInfo;
-  /** `stopped.messageId`, narrowed by the guards below. */
-  readonly triggeringMessageId: string;
-}[] {
-  const out: {
-    turnKey: string;
-    stopped: TurnStoppedInfo;
-    triggeringMessageId: string;
-  }[] = [];
-  for (const [turnKey, stopped] of input.stoppedByTurnKey) {
-    if (turnKey === input.activeTurnId) continue;
-    if (input.retainedTurnKeys.has(turnKey)) continue;
-    const triggeringMessageId = stopped.messageId;
-    if (triggeringMessageId === null) continue;
-    if (!input.retainedUserMessageIds.has(triggeringMessageId)) continue;
-    out.push({ turnKey, stopped, triggeringMessageId });
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // The projection
 // ---------------------------------------------------------------------------
@@ -939,161 +973,1865 @@ function stoppedTurnsWithoutRecords(input: {
 /**
  * Enumerates a chat's durable transcript rows, in the order they are drawn.
  *
- * The returned array's indices ARE the ordinals. Assembly mirrors the
- * renderer's `baseRows` concatenation exactly, because a stable sort keeps
- * input order for ties and every row of a turn shares one key - so the
- * concatenation order is not incidental, it is part of the answer.
+ * The returned array's indices ARE the ordinals. The order is the renderer's:
+ * its `baseRows` concatenation stably sorted by `createdAt`, setup cards woven
+ * above their anchor, the imported-chat marker and the genesis card pinned
+ * above everything. Every one of those decisions is expressed as a component of
+ * the row's {@link TranscriptRowOrder}, so this is the {@link foldTranscriptRows}
+ * fold run from the empty state over every record, sorted by that key - the
+ * same code path a store runs incrementally, not a second implementation of it.
  */
 export function projectTranscriptRows(
   input: TranscriptRowProjectionInput,
 ): readonly TranscriptRowDescriptor[] {
-  const turns = accumulateDurableTurns(input.messages);
-  const usersById = userMessagesById(input.messages);
-  const nestedSteered = nestedSteeredMessageIds(turns.values(), usersById);
-  const stoppedByTurnKey = turnStoppedInfoByTurnKey(input.events);
-  const decoratingEventIdsByTurnKey = decoratingEventIdsByTurn(input.events);
-  const overlappingTurnKeys = turnKeysWithLaterOverlappingChanges(input.events);
-  // Whole-history fold: a `queue.fallback` arbitrarily later than the request
-  // retracts the badge, so this cannot be re-derived from a row's own records.
-  // See `TranscriptRowContext.completedSteer`.
-  const completedSteerMessageIds = steeredMessageIdsFromEvents(input.events);
-  // Whole-history fold as well: whether a turn shares its user row with another
-  // attempt is not decidable from the turn's own records. See
-  // `turnKeysWithUnprovableProfileWalk`.
-  const unprovableProfileWalkTurnKeys = turnKeysWithUnprovableProfileWalk(
-    input.messages,
-  );
+  const folded = foldTranscriptRowsInMemory({
+    chatId: input.chatId,
+    activeTurnId: input.activeTurnId,
+    messages: input.messages.map((message, position) => ({
+      position,
+      message,
+    })),
+    events: input.events.map((event, position) => ({ position, event })),
+  });
+  return sortedTranscriptFoldRows(folded.units).map((row) => row.descriptor);
+}
 
-  const base: TranscriptRowDescriptor[] = [];
-  const emittedTurns = new Set<string>();
-  // The most recent NON-suppressed user record in walk order - the legacy
-  // anchor fallback for a record persisted before `startedAt` existed. It is
-  // walk-order dependent, not `createdAt`-order dependent, which is why this
-  // module fixes the walk order rather than sorting first.
-  let lastUserTimestamp: number | null = null;
-  // The session anchor in effect at this point of the walk. Updated from EVERY
-  // user record - including a nested-steered one, which the ordinal walk below
-  // skips entirely. The renderer's `profileLabelsByTurnKeyFromMessages` does
-  // not skip it either, and an anchor that disagreed with the renderer's would
-  // be worse than none.
-  let currentSessionAnchor: ChatSessionAnchor | null = null;
+/** Every row of `units`, in ordinal order. */
+export function sortedTranscriptFoldRows(
+  units: readonly TranscriptFoldUnit[],
+): readonly TranscriptFoldRow[] {
+  const rows: TranscriptFoldRow[] = [];
+  for (const unit of units) rows.push(...unit.rows);
+  return rows.sort((a, b) => compareTranscriptRowOrder(a.order, b.order));
+}
 
-  for (const message of input.messages) {
-    if (message.role === "user") {
-      if (message.sessionAnchor !== null) {
-        currentSessionAnchor = message.sessionAnchor;
+/** A whole chat's records, positioned - what a full fold runs over. */
+export interface TranscriptFoldFullInput {
+  readonly chatId: string;
+  readonly activeTurnId: string | null;
+  /** In position order. */
+  readonly messages: readonly PositionedMessage[];
+  /** In position order. */
+  readonly events: readonly PositionedEvent[];
+}
+
+/**
+ * The fold from the empty state over every record, driven in memory.
+ *
+ * Every record is part of the change, so the only loads the fold makes are
+ * answered from the input itself: nothing was persisted before it, and no
+ * index row exists yet. This is what `projectTranscriptRows` runs, and what a
+ * store runs to backfill a chat or when an increment declines.
+ */
+export function foldTranscriptRowsInMemory(
+  input: TranscriptFoldFullInput,
+): Extract<TranscriptFoldResult, { readonly continued: true }> {
+  const messagesByTurnKey = new Map<string, PositionedMessage[]>();
+  const messagesById = new Map<string, PositionedMessage>();
+  for (const positioned of input.messages) {
+    messagesById.set(positioned.message.messageId, positioned);
+    if (positioned.message.role !== "assistant") continue;
+    const turnKey = assistantTurnKey(positioned.message);
+    const held = messagesByTurnKey.get(turnKey);
+    if (held === undefined) {
+      messagesByTurnKey.set(turnKey, [positioned]);
+      continue;
+    }
+    held.push(positioned);
+  }
+  const factsByPosition = new Map<number, PositionedMessageFacts>();
+  const factsOf = (positioned: PositionedMessage): PositionedMessageFacts => {
+    const held = factsByPosition.get(positioned.position);
+    if (held !== undefined) return held;
+    const facts: PositionedMessageFacts = {
+      position: positioned.position,
+      messageId: positioned.message.messageId,
+      facts: transcriptMessageFoldFacts(positioned.message),
+    };
+    factsByPosition.set(positioned.position, facts);
+    return facts;
+  };
+  const answer = (load: TranscriptFoldLoad): TranscriptFoldLoadResult => {
+    switch (load.kind) {
+      case "facts-from": {
+        const from = load.position;
+        return {
+          kind: "facts",
+          facts: input.messages.flatMap((positioned) =>
+            from === null || positioned.position >= from
+              ? [factsOf(positioned)]
+              : [],
+          ),
+        };
       }
-      // A steered user record is a mid-turn interjection rendered inside its
-      // turn. Updating the anchor here would mis-anchor a LATER turn on the
-      // steer instant, so it is skipped entirely, not merely un-emitted.
-      if (nestedSteered.has(message.messageId)) continue;
-      lastUserTimestamp = message.timestamp;
-      base.push({
-        rowId: message.messageId,
-        createdAt: message.timestamp,
-        source: { kind: "user", messageId: message.messageId },
-        context: completedSteerMessageIds.has(message.messageId)
-          ? COMPLETED_STEER_CONTEXT
-          : EMPTY_ROW_CONTEXT,
+      case "facts-of-turns":
+        return {
+          kind: "facts",
+          facts: load.turnKeys
+            .flatMap((turnKey) => messagesByTurnKey.get(turnKey) ?? [])
+            .sort((a, b) => a.position - b.position)
+            .map(factsOf),
+        };
+      case "messages-of-turns":
+        return {
+          kind: "messages",
+          messages: load.turnKeys
+            .flatMap((turnKey) => messagesByTurnKey.get(turnKey) ?? [])
+            .sort((a, b) => a.position - b.position),
+        };
+      case "messages-by-id":
+        return {
+          kind: "messages",
+          messages: load.messageIds
+            .flatMap((messageId) => {
+              const positioned = messagesById.get(messageId);
+              return positioned === undefined ? [] : [positioned];
+            })
+            .sort((a, b) => a.position - b.position),
+        };
+      case "events-of-turns":
+        // Nothing was persisted before a change that holds every event.
+        return { kind: "turn-events", events: [] };
+      case "events-by-type": {
+        const types = new Set(load.types);
+        return {
+          kind: "events",
+          events: input.events.filter((positioned) =>
+            types.has(positioned.event.type),
+          ),
+        };
+      }
+      case "pause-open":
+        return { kind: "pause-open", turnId: null };
+      // Nothing is stored before a change that holds every record: each turn's
+      // checkpoint position and paths come from the change itself.
+      case "checkpoint-turns":
+        return { kind: "checkpoint-turns", turns: [] };
+      case "checkpoint-last-changes":
+        return { kind: "checkpoint-last-changes", changes: [] };
+      case "unit-rows":
+      case "rows-by-id":
+        return { kind: "rows", rows: [] };
+    }
+  };
+
+  const steps = foldTranscriptRows(EMPTY_TRANSCRIPT_FOLD_STATE, {
+    chatId: input.chatId,
+    activeTurnId: input.activeTurnId,
+    upsertedMessages: input.messages.map((positioned) => ({
+      position: positioned.position,
+      message: positioned.message,
+      previous: null,
+    })),
+    removedMessages: [],
+    appendedEvents: input.events.map((positioned) => ({
+      position: positioned.position,
+      event: positioned.event,
+      previous: null,
+    })),
+  });
+  let step = steps.next();
+  while (step.done !== true) {
+    step = steps.next(answer(step.value));
+  }
+  const result = step.value;
+  if (!result.continued) {
+    // From the empty state with every record in hand there is nothing the
+    // fold cannot see; declining here is a bug in the fold, not an input.
+    throw new Error(
+      `row-projection: the full fold declined (${result.reason})`,
+    );
+  }
+  return result;
+}
+
+/**
+ * The fold facts of one message - what the whole-history walk reads from it.
+ * See {@link TranscriptMessageFoldFacts}.
+ */
+export function transcriptMessageFoldFacts(
+  message: Message,
+): TranscriptMessageFoldFacts {
+  if (message.role === "user") {
+    return {
+      v: TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION,
+      role: "user",
+      timestamp: message.timestamp,
+      sessionAnchor: message.sessionAnchor,
+    };
+  }
+  return {
+    v: TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION,
+    role: "assistant",
+    turnKey: assistantTurnKey(message),
+    hasBlocks: message.blocks.length > 0,
+    opensAutonomous: turnOpensWithAutonomousResume(message.blocks),
+    hasTurnProfile: message.turnProfile !== undefined,
+    steerTargets: message.blocks.flatMap((block) =>
+      block.type === "steer" ? [block.messageId] : [],
+    ),
+  };
+}
+
+/**
+ * The pause correlation key a pause event is paired on, or `null` when it has
+ * none - see {@link decoratingEventIdsByTurn}. A store keeps it as a column so
+ * the fold's "latest open with this key" is one indexed read.
+ */
+export function transcriptPauseCorrelationKey(event: ChatEvent): string | null {
+  if (
+    !PAUSE_OPEN_EVENT_TYPES.has(event.type) &&
+    !PAUSE_CLOSE_EVENT_TYPES.has(event.type)
+  ) {
+    return null;
+  }
+  return pauseCorrelationKey(event);
+}
+
+export function isTranscriptPauseOpenEvent(event: ChatEvent): boolean {
+  return PAUSE_OPEN_EVENT_TYPES.has(event.type);
+}
+
+const TERMINAL_TURN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+  "turn.completed",
+  "turn.stopped",
+  "turn.interrupted",
+]);
+
+/**
+ * The events a setup card's window partition reads: the setup lifecycle, the
+ * boundary between lifecycles, and the fork that decides whether window 0 is
+ * the genesis card. `partitionSetupCardWindows` skips every other type, so it
+ * returns the same windows over this subset as over the whole log.
+ *
+ * The partition's own list, not a copy of it: a setup type added there and
+ * missing here would leave the fold reading a different event set than the
+ * partition, and let a rewrite of that type slip past the in-place-rewrite
+ * decline.
+ */
+export const SETUP_CARD_INPUT_EVENT_TYPES: readonly ChatEvent["type"][] =
+  SETUP_DERIVATION_EVENT_TYPES;
+
+const SETUP_CARD_INPUT_EVENT_TYPE_SET: ReadonlySet<ChatEvent["type"]> = new Set(
+  SETUP_CARD_INPUT_EVENT_TYPES,
+);
+
+/**
+ * Every event type any row, row context or row digest of the projection reads.
+ * An event of any other type can be rewritten in place without moving a row.
+ */
+const ROW_RELEVANT_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+  ...TURN_DECORATING_EVENT_TYPES,
+  ...PAUSE_OPEN_EVENT_TYPES,
+  ...PAUSE_CLOSE_EVENT_TYPES,
+  ...STEER_LIFECYCLE_EVENT_TYPES,
+  ...SETUP_CARD_INPUT_EVENT_TYPES,
+  "send.failed",
+  "chat.imported",
+  // The auto-mode judge notice row (`autoJudgeNoticeRowSource`): a rewrite
+  // that adds or drops its marker or its text adds or drops the row.
+  "permission.blocked",
+]);
+
+/**
+ * How many turns may start after a turn that never reached a terminal event
+ * before it stops holding the walk region open. An abandoned turn must not pin
+ * the region forever; releasing one only means a later record of it widens
+ * one walk to the whole chat.
+ */
+const MAX_TURNS_AFTER_OPEN_TURN = 32;
+
+/**
+ * How many turns may start after the last user record for the region to still
+ * reach back to it. A provider fallback re-dispatches the last user message and
+ * then rewrites that record's session anchor, so the region covers it while the
+ * chat is still answering it - but an agent chat whose last user message was
+ * followed by many autonomous turns would otherwise re-walk all of them on
+ * every change.
+ */
+const MAX_TURNS_AFTER_LAST_USER = 8;
+
+/** What the walk reads of one turn, folded from its records' fold facts. */
+interface FoldTurnFacts {
+  readonly firstPosition: number;
+  readonly lastPosition: number;
+  /** Classified from the turn's first block-bearing record, as the profile walk does. */
+  readonly autonomous: boolean;
+  /** Whether any record of the turn states its own profile. */
+  readonly recorded: boolean;
+  /** Every user message a steer block of the turn names. */
+  readonly steerTargets: ReadonlySet<string>;
+}
+
+function foldTurnFacts(
+  records: readonly PositionedMessageFacts[],
+): FoldTurnFacts | null {
+  const ordered = [...records].sort((a, b) => a.position - b.position);
+  let firstPosition: number | null = null;
+  let lastPosition = 0;
+  let autonomous: boolean | null = null;
+  let recorded = false;
+  const steerTargets = new Set<string>();
+  for (const positioned of ordered) {
+    const facts = positioned.facts;
+    if (facts.role !== "assistant") continue;
+    if (firstPosition === null) firstPosition = positioned.position;
+    lastPosition = positioned.position;
+    if (facts.hasTurnProfile) recorded = true;
+    if (autonomous === null && facts.hasBlocks) {
+      autonomous = facts.opensAutonomous;
+    }
+    for (const messageId of facts.steerTargets) steerTargets.add(messageId);
+  }
+  if (firstPosition === null) return null;
+  return {
+    firstPosition,
+    lastPosition,
+    autonomous: autonomous ?? false,
+    recorded,
+    steerTargets,
+  };
+}
+
+function* loadMessages(
+  load: TranscriptFoldLoad,
+): Generator<
+  TranscriptFoldLoad,
+  readonly PositionedMessage[],
+  TranscriptFoldLoadResult
+> {
+  const result = yield load;
+  if (result.kind !== "messages") {
+    throw new Error(`row fold: ${load.kind} answered with ${result.kind}`);
+  }
+  return result.messages;
+}
+
+function* loadFacts(
+  load: TranscriptFoldLoad,
+): Generator<
+  TranscriptFoldLoad,
+  readonly PositionedMessageFacts[],
+  TranscriptFoldLoadResult
+> {
+  const result = yield load;
+  if (result.kind !== "facts") {
+    throw new Error(`row fold: ${load.kind} answered with ${result.kind}`);
+  }
+  return result.facts;
+}
+
+function* loadEvents(
+  load: TranscriptFoldLoad,
+): Generator<
+  TranscriptFoldLoad,
+  readonly PositionedEvent[],
+  TranscriptFoldLoadResult
+> {
+  const result = yield load;
+  if (result.kind !== "events") {
+    throw new Error(`row fold: ${load.kind} answered with ${result.kind}`);
+  }
+  return result.events;
+}
+
+function* loadTurnEvents(
+  turnKeys: readonly string[],
+): Generator<
+  TranscriptFoldLoad,
+  readonly PositionedTurnEvent[],
+  TranscriptFoldLoadResult
+> {
+  const result = yield { kind: "events-of-turns", turnKeys };
+  if (result.kind !== "turn-events") {
+    throw new Error(`row fold: events-of-turns answered with ${result.kind}`);
+  }
+  return result.events;
+}
+
+function* loadRows(
+  load: TranscriptFoldLoad,
+): Generator<
+  TranscriptFoldLoad,
+  readonly StoredTranscriptRow[],
+  TranscriptFoldLoadResult
+> {
+  const result = yield load;
+  if (result.kind !== "rows") {
+    throw new Error(`row fold: ${load.kind} answered with ${result.kind}`);
+  }
+  return result.rows;
+}
+
+function* loadPauseOpen(
+  pauseKey: string,
+  beforePosition: number,
+): Generator<TranscriptFoldLoad, string | null, TranscriptFoldLoadResult> {
+  const result = yield { kind: "pause-open", pauseKey, beforePosition };
+  if (result.kind !== "pause-open") {
+    throw new Error(`row fold: pause-open answered with ${result.kind}`);
+  }
+  return result.turnId;
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint overlap
+// ---------------------------------------------------------------------------
+
+/** A turn whose retained checkpoint this change replaced. */
+interface ReplacedCheckpoint {
+  /** The turn's first checkpoint position, which the replacement keeps. */
+  readonly position: number;
+  /** Its changed paths as the store held them before this change. */
+  readonly before: readonly string[];
+  /** Its changed paths after it. */
+  readonly after: readonly string[];
+}
+
+type CheckpointWorld = "before" | "after";
+
+/**
+ * # Checkpoint overlap, judged from the store's path table
+ *
+ * `turnKeysWithLaterOverlappingChanges` is the whole-history rule, and it
+ * needs every checkpoint in the chat. Running it at every turn end made each
+ * one read and parse the chat's whole checkpoint history, and keeping its
+ * answer in the fold state made that state grow with the turn count. So the
+ * store keeps each turn's retained changed paths instead (the fold reports
+ * them in `checkpointPaths`), and the fold judges only the turns it has to.
+ * It judges them with `overlappingCheckpointKeys`, the same rule, over the
+ * subset that rule's doc names as sufficient: the judged turns, plus the last
+ * changer of each of their paths, in position order.
+ *
+ * ## Which turns can change their answer
+ *
+ * Suppose a change replaces turn U's retained checkpoint: old paths O, new
+ * paths N, same position. Only a turn that is the LAST changer (U aside) of
+ * some path in O Δ N can change its answer. A turn that changed such a path
+ * before that last changer overlaps through it both before and after. A path
+ * in O ∩ N moved nobody. So the candidates are U and one last changer per
+ * path in the symmetric difference, and each is judged in both worlds.
+ *
+ * ## The loads
+ *
+ * Both loads are narrow. `checkpoint-turns` reads the named turns' stored
+ * paths. `checkpoint-last-changes` reads one row per path, with the replaced
+ * turns excluded because the fold holds their paths itself. Nothing reads
+ * every checkpoint.
+ */
+class CheckpointOverlapLoads {
+  readonly stored = new Map<string, StoredCheckpointTurn | null>();
+  readonly lastChanges = new Map<string, CheckpointPathChange | null>();
+
+  constructor(
+    private readonly replaced: ReadonlyMap<string, ReplacedCheckpoint>,
+    private readonly excluded: readonly string[],
+  ) {}
+
+  *loadTurns(
+    turnKeys: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(turnKeys)].filter(
+      (turnKey) => !this.stored.has(turnKey),
+    );
+    if (missing.length === 0) return;
+    const result = yield { kind: "checkpoint-turns", turnKeys: missing };
+    if (result.kind !== "checkpoint-turns") {
+      throw new Error(
+        `row fold: checkpoint-turns answered with ${result.kind}`,
+      );
+    }
+    for (const turnKey of missing) this.stored.set(turnKey, null);
+    for (const turn of result.turns) this.stored.set(turn.turnKey, turn);
+  }
+
+  /** Loads the last changer of every path the named turns have in `world`. */
+  *loadLastChangesOf(
+    turnKeys: Iterable<string>,
+    world: CheckpointWorld,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const paths = new Set<string>();
+    for (const turnKey of turnKeys) {
+      for (const path of this.pathsOf(turnKey, world)) paths.add(path);
+    }
+    yield* this.loadLastChanges(paths);
+  }
+
+  *loadLastChanges(
+    paths: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(paths)].filter(
+      (path) => !this.lastChanges.has(path),
+    );
+    if (missing.length === 0) return;
+    const result = yield {
+      kind: "checkpoint-last-changes",
+      filePaths: missing,
+      excludeTurnKeys: this.excluded,
+    };
+    if (result.kind !== "checkpoint-last-changes") {
+      throw new Error(
+        `row fold: checkpoint-last-changes answered with ${result.kind}`,
+      );
+    }
+    for (const path of missing) this.lastChanges.set(path, null);
+    for (const change of result.changes) {
+      this.lastChanges.set(change.filePath, change);
+    }
+  }
+
+  /** A turn's changed paths in `world`; empty for a turn not yet loaded. */
+  pathsOf(turnKey: string, world: CheckpointWorld): readonly string[] {
+    const replaced = this.replaced.get(turnKey);
+    if (replaced !== undefined) return replaced[world];
+    return this.stored.get(turnKey)?.paths ?? [];
+  }
+
+  /**
+   * Which of `turnKeys` overlap in `world`. Every non-replaced turn must have
+   * been loaded, and the last changer of every path of every judged turn.
+   */
+  overlapping(
+    turnKeys: Iterable<string>,
+    world: CheckpointWorld,
+  ): ReadonlySet<string> {
+    const checkpoints = new Map<
+      string,
+      { readonly position: number; readonly paths: Set<string> }
+    >();
+    const note = (
+      turnKey: string,
+      position: number,
+      paths: readonly string[],
+    ): void => {
+      const held = checkpoints.get(turnKey);
+      if (held === undefined) {
+        checkpoints.set(turnKey, { position, paths: new Set(paths) });
+        return;
+      }
+      for (const path of paths) held.paths.add(path);
+    };
+    // Every replaced turn is a possible later changer of a judged path, and
+    // `checkpoint-last-changes` excluded them, so they enter here, in the
+    // world being judged.
+    for (const [turnKey, replaced] of this.replaced) {
+      note(turnKey, replaced.position, replaced[world]);
+    }
+    const judged: string[] = [];
+    const judgedPaths = new Set<string>();
+    for (const turnKey of new Set(turnKeys)) {
+      const replaced = this.replaced.get(turnKey);
+      if (replaced !== undefined) {
+        judged.push(turnKey);
+        for (const path of replaced[world]) judgedPaths.add(path);
+        continue;
+      }
+      const stored = this.stored.get(turnKey);
+      if (stored === undefined) {
+        throw new Error("row fold: a checkpoint turn was judged unloaded");
+      }
+      // A turn with no checkpoint changed nothing and overlaps nothing.
+      if (stored === null || stored.position === null) continue;
+      note(turnKey, stored.position, stored.paths);
+      judged.push(turnKey);
+      for (const path of stored.paths) judgedPaths.add(path);
+    }
+    for (const path of judgedPaths) {
+      const last = this.lastChanges.get(path);
+      if (last === undefined) {
+        throw new Error("row fold: a checkpoint path was judged unloaded");
+      }
+      if (last !== null) note(last.turnKey, last.position, [path]);
+    }
+    const overlapping = overlappingCheckpointKeys(
+      [...checkpoints.entries()]
+        .sort((a, b) => a[1].position - b[1].position)
+        .map(([key, held]) => ({ key, paths: [...held.paths] })),
+    );
+    return new Set(judged.filter((turnKey) => overlapping.has(turnKey)));
+  }
+}
+
+/** The changed paths `after` has and `before` lacks, and the reverse. */
+function symmetricDifference(
+  before: readonly string[],
+  after: readonly string[],
+): string[] {
+  const inBefore = new Set(before);
+  const inAfter = new Set(after);
+  return [
+    ...before.filter((path) => !inAfter.has(path)),
+    ...after.filter((path) => !inBefore.has(path)),
+  ];
+}
+
+function addToList(
+  lists: Map<string, string[]>,
+  key: string,
+  value: string,
+): void {
+  const held = lists.get(key);
+  if (held === undefined) {
+    lists.set(key, [value]);
+    return;
+  }
+  if (!held.includes(value)) held.push(value);
+}
+
+function removeFromList(
+  lists: Map<string, string[]>,
+  key: string,
+  value: string,
+): void {
+  const held = lists.get(key);
+  if (held === undefined) return;
+  const next = held.filter((entry) => entry !== value);
+  if (next.length === 0) {
+    lists.delete(key);
+    return;
+  }
+  lists.set(key, next);
+}
+
+function listsFrom(
+  record: Readonly<Record<string, readonly string[]>>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [key, values] of Object.entries(record)) {
+    if (values.length > 0) out.set(key, [...values]);
+  }
+  return out;
+}
+
+function recordFrom<T>(map: ReadonlyMap<string, T>): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [key, value] of map) out[key] = value;
+  return out;
+}
+
+function maxPosition(held: number | null, position: number): number {
+  return held === null ? position : Math.max(held, position);
+}
+
+function wovenOrder(input: {
+  readonly createdAt: number;
+  readonly pass: number;
+  readonly position: number;
+  readonly entry: number;
+}): TranscriptRowOrder {
+  return {
+    section: TRANSCRIPT_ROW_SECTION.woven,
+    createdAt: input.createdAt,
+    pass: input.pass,
+    position: input.position,
+    entry: input.entry,
+    slot: TRANSCRIPT_ROW_SLOT.row,
+    card: 0,
+  };
+}
+
+function assistantTurnKeysOf(
+  facts: readonly PositionedMessageFacts[],
+): ReadonlySet<string> {
+  const turnKeys = new Set<string>();
+  for (const positioned of facts) {
+    if (positioned.facts.role === "assistant") {
+      turnKeys.add(positioned.facts.turnKey);
+    }
+  }
+  return turnKeys;
+}
+
+interface WalkEntry {
+  readonly sessionAnchor: ChatSessionAnchor | null;
+  readonly lastUserTimestamp: number | null;
+}
+
+/**
+ * The projection as a fold that can continue from a persisted state.
+ *
+ * Given the state the previous fold left and one change, it re-describes every
+ * UNIT whose rows the change can move - and only those - and returns their new
+ * rows with their order keys, plus the state to persist beside them. It never
+ * guesses which rows a whole-history fold can reach: it re-runs each fold from
+ * its persisted running value, so a `queue.fallback` retracting an old steer
+ * badge reaches that row because the retracted set is state, not because
+ * anything searched for it.
+ *
+ * The record walk - session anchor, legacy anchor timestamp, the profile
+ * walk's attempt spans - runs over fold facts from the state's
+ * {@link TranscriptWalkRegion}, and widens to the whole chat (facts only)
+ * when a change reaches before it. Only the turns whose walked state then
+ * differs from what their rows were projected with are re-described.
+ *
+ * Sans-IO: records it does not hold it asks for by yielding a
+ * {@link TranscriptFoldLoad}, and the driver resumes it with the answer. The
+ * in-memory driver ({@link foldTranscriptRowsInMemory}) answers from arrays; a
+ * store answers from its tables.
+ *
+ * It DECLINES (`continued: false`) - and the caller runs the full fold - only
+ * on what no running value can absorb: a record inserted below the positions
+ * already folded or moved in place, a row-relevant event rewritten in place,
+ * state or fold facts written by another version, and a turn with rows but no
+ * stored walk state (a corrupt index).
+ */
+export function* foldTranscriptRows(
+  prior: TranscriptFoldState,
+  change: TranscriptFoldChange,
+): Generator<
+  TranscriptFoldLoad,
+  TranscriptFoldResult,
+  TranscriptFoldLoadResult
+> {
+  const notContinued = (reason: string): TranscriptFoldResult => ({
+    continued: false,
+    reason,
+  });
+  if (
+    prior.version !== TRANSCRIPT_FOLD_STATE_VERSION ||
+    prior.factsVersion !== TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION
+  ) {
+    return notContinued("fold state written by another version");
+  }
+
+  const region = prior.region;
+  const regionFrom = region.from;
+  const beforeRegion = (position: number): boolean =>
+    regionFrom !== null && position < regionFrom;
+
+  // Units whose rows this change re-describes.
+  const touchedTurns = new Set<string>();
+  const touchedUsers = new Set<string>();
+  // Turns whose records this change wrote - live activity, which holds the
+  // walk region open as `turn.started` does.
+  const recordTouchedTurns = new Set<string>();
+  let walkNeeded = false;
+  // Whether the walk has to start before the region.
+  let widen = false;
+  let messagesThrough = prior.messagesThrough;
+
+  const noteFacts = (
+    facts: TranscriptMessageFoldFacts,
+    messageId: string,
+  ): void => {
+    if (facts.role === "user") {
+      touchedUsers.add(messageId);
+      return;
+    }
+    touchedTurns.add(facts.turnKey);
+    recordTouchedTurns.add(facts.turnKey);
+  };
+
+  for (const touch of change.upsertedMessages) {
+    const facts = transcriptMessageFoldFacts(touch.message);
+    if (touch.previous === null) {
+      if (
+        prior.messagesThrough !== null &&
+        touch.position <= prior.messagesThrough
+      ) {
+        return notContinued(
+          "a message was inserted below the folded positions",
+        );
+      }
+      walkNeeded = true;
+    } else {
+      if (touch.previous.facts.v !== TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION) {
+        return notContinued(
+          "a message's stored fold facts are another version",
+        );
+      }
+      if (touch.previous.position !== touch.position) {
+        return notContinued("a message changed position in place");
+      }
+      if (!transcriptMessageFoldFactsEqual(touch.previous.facts, facts)) {
+        walkNeeded = true;
+        if (beforeRegion(touch.position)) widen = true;
+        noteFacts(touch.previous.facts, touch.message.messageId);
+      }
+    }
+    noteFacts(facts, touch.message.messageId);
+    messagesThrough = maxPosition(messagesThrough, touch.position);
+  }
+  for (const removal of change.removedMessages) {
+    if (removal.facts.v !== TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION) {
+      return notContinued("a message's stored fold facts are another version");
+    }
+    walkNeeded = true;
+    if (beforeRegion(removal.position)) widen = true;
+    noteFacts(removal.facts, removal.messageId);
+  }
+
+  // --- Events: every event-side fold continues from its persisted value. ---
+  const steerLifecycle: SteerLifecycleFold = {
+    steeredMessageIds: new Set(prior.completedSteer.messageIds),
+    steerRequestMessageIdsByQueueItemId: new Map(
+      Object.entries(prior.completedSteer.requestMessageIdByQueueItemId),
+    ),
+  };
+  const openTurns = new Set(prior.openTurnKeys);
+  const stopTriggers = listsFrom(prior.stopTriggers);
+  const pauseTurnsInChange = new Map<string, string>();
+  const eventRowTurnKeys = new Map<string, string>();
+  const changeEventsByTurn = new Map<string, PositionedEvent[]>();
+  const eventUnits = new Map<string, PositionedEvent>();
+  let eventsThrough = prior.eventsThrough;
+  // Per turn, the first and the last checkpoint this change appended. An
+  // event-keyed checkpoint (no `turnId`) never enters the overlap rule.
+  const changedCheckpoints = new Map<
+    string,
+    { readonly firstPosition: number; readonly last: ChatEvent }
+  >();
+  let setupChanged = false;
+
+  for (const touch of change.appendedEvents) {
+    if (touch.previous !== null) {
+      if (
+        canonicalFoldJson(touch.previous) === canonicalFoldJson(touch.event)
+      ) {
+        continue;
+      }
+      if (
+        !ROW_RELEVANT_EVENT_TYPES.has(touch.previous.type) &&
+        !ROW_RELEVANT_EVENT_TYPES.has(touch.event.type)
+      ) {
+        continue;
+      }
+      return notContinued("a row-relevant event was rewritten in place");
+    }
+    if (prior.eventsThrough !== null && touch.position <= prior.eventsThrough) {
+      return notContinued("an event was inserted below the folded positions");
+    }
+    eventsThrough = maxPosition(eventsThrough, touch.position);
+    const event = touch.event;
+
+    applySteerLifecycleEvent(steerLifecycle, event);
+
+    if (event.turnId !== null) {
+      if (event.type === "turn.started") {
+        // Re-inserted so the set keeps start order.
+        openTurns.delete(event.turnId);
+        openTurns.add(event.turnId);
+      } else if (TERMINAL_TURN_EVENT_TYPES.has(event.type)) {
+        openTurns.delete(event.turnId);
+      }
+    }
+
+    // The turn this event decorates - `decoratingEventIdsByTurn`, one event
+    // at a time. A pause close is attributed to its OPEN's turn.
+    let rowTurnKey: string | null = null;
+    if (PAUSE_OPEN_EVENT_TYPES.has(event.type)) {
+      const key = pauseCorrelationKey(event);
+      if (key !== null && event.turnId !== null) {
+        pauseTurnsInChange.set(key, event.turnId);
+        rowTurnKey = event.turnId;
+      }
+    } else if (PAUSE_CLOSE_EVENT_TYPES.has(event.type)) {
+      const key = pauseCorrelationKey(event);
+      if (key !== null) {
+        const openTurn =
+          pauseTurnsInChange.get(key) ??
+          (yield* loadPauseOpen(key, touch.position));
+        rowTurnKey = openTurn ?? event.turnId;
+      }
+    } else if (
+      event.turnId !== null &&
+      TURN_DECORATING_EVENT_TYPES.has(event.type)
+    ) {
+      rowTurnKey = event.turnId;
+    }
+    if (rowTurnKey !== null) {
+      touchedTurns.add(rowTurnKey);
+      eventRowTurnKeys.set(event.eventId, rowTurnKey);
+      const held = changeEventsByTurn.get(rowTurnKey);
+      if (held === undefined) {
+        changeEventsByTurn.set(rowTurnKey, [touch]);
+      } else {
+        held.push(touch);
+      }
+    }
+
+    if (
+      event.type === "turn.stopped" &&
+      event.turnId !== null &&
+      event.messageId !== null
+    ) {
+      addToList(stopTriggers, event.messageId, event.turnId);
+    }
+    if (event.type === "checkpoint.captured" && event.turnId !== null) {
+      changedCheckpoints.set(event.turnId, {
+        firstPosition:
+          changedCheckpoints.get(event.turnId)?.firstPosition ?? touch.position,
+        last: event,
+      });
+    }
+    if (SETUP_CARD_INPUT_EVENT_TYPE_SET.has(event.type)) setupChanged = true;
+    if (eventMaterializesTranscriptRow(event)) {
+      eventUnits.set(event.eventId, touch);
+    }
+  }
+
+  // A completed-steer badge that appeared or was retracted moves exactly the
+  // user row it names.
+  const priorSteered = new Set(prior.completedSteer.messageIds);
+  for (const messageId of steerLifecycle.steeredMessageIds) {
+    if (!priorSteered.has(messageId)) touchedUsers.add(messageId);
+  }
+  for (const messageId of priorSteered) {
+    if (!steerLifecycle.steeredMessageIds.has(messageId)) {
+      touchedUsers.add(messageId);
+    }
+  }
+
+  // --- Checkpoint overlap: the turns whose answer this change moved. ---
+  const replacedCheckpoints = new Map<string, ReplacedCheckpoint>();
+  const checkpointLoads = new CheckpointOverlapLoads(replacedCheckpoints, [
+    ...changedCheckpoints.keys(),
+  ]);
+  if (changedCheckpoints.size > 0) {
+    yield* checkpointLoads.loadTurns(changedCheckpoints.keys());
+    for (const [turnKey, changed] of changedCheckpoints) {
+      const stored = checkpointLoads.stored.get(turnKey) ?? null;
+      const storedPosition = stored?.position ?? null;
+      replacedCheckpoints.set(turnKey, {
+        position:
+          storedPosition === null
+            ? changed.firstPosition
+            : Math.min(storedPosition, changed.firstPosition),
+        before: stored?.paths ?? [],
+        // Unjudgeable reads as changing no path: the same answer for every
+        // turn, see `retainedCheckpointChangePaths`.
+        after: retainedCheckpointChangePaths(changed.last) ?? [],
+      });
+    }
+    const movedPaths = new Set<string>();
+    for (const replaced of replacedCheckpoints.values()) {
+      for (const path of symmetricDifference(replaced.before, replaced.after)) {
+        movedPaths.add(path);
+      }
+    }
+    yield* checkpointLoads.loadLastChanges(movedPaths);
+    const candidates = new Set(replacedCheckpoints.keys());
+    for (const path of movedPaths) {
+      const last = checkpointLoads.lastChanges.get(path) ?? null;
+      if (last !== null) candidates.add(last.turnKey);
+    }
+    yield* checkpointLoads.loadTurns(candidates);
+    yield* checkpointLoads.loadLastChangesOf(candidates, "before");
+    yield* checkpointLoads.loadLastChangesOf(candidates, "after");
+    const before = checkpointLoads.overlapping(candidates, "before");
+    const after = checkpointLoads.overlapping(candidates, "after");
+    for (const turnKey of candidates) {
+      if (before.has(turnKey) !== after.has(turnKey)) touchedTurns.add(turnKey);
+    }
+  }
+
+  if (prior.activeTurnId !== change.activeTurnId) {
+    if (prior.activeTurnId !== null) touchedTurns.add(prior.activeTurnId);
+    if (change.activeTurnId !== null) touchedTurns.add(change.activeTurnId);
+  }
+
+  // --- Turn facts, and the steer targets they name. ---
+  const turnFacts = new Map<string, FoldTurnFacts | null>();
+  const loadTurnFacts = function* (
+    turnKeys: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(turnKeys)].filter(
+      (turnKey) => !turnFacts.has(turnKey),
+    );
+    if (missing.length === 0) return;
+    const byTurn = new Map<string, PositionedMessageFacts[]>();
+    for (const turnKey of missing) byTurn.set(turnKey, []);
+    const loaded = yield* loadFacts({
+      kind: "facts-of-turns",
+      turnKeys: missing,
+    });
+    for (const positioned of loaded) {
+      if (positioned.facts.role !== "assistant") continue;
+      byTurn.get(positioned.facts.turnKey)?.push(positioned);
+    }
+    for (const [turnKey, records] of byTurn) {
+      turnFacts.set(turnKey, foldTurnFacts(records));
+    }
+  };
+
+  // Steer targets move with the turns whose records moved, and every turn a
+  // touched user is steered into or stopped by is re-described with it -
+  // those rows render the user record. Expanding one can expand the other, so
+  // run to a fixpoint. A turn whose records did not move keeps its targets.
+  const steerTargets = listsFrom(prior.steerTargets);
+  const targetsByTurn = new Map<string, ReadonlySet<string>>();
+  for (const [messageId, turnKeys] of steerTargets) {
+    for (const turnKey of turnKeys) {
+      targetsByTurn.set(
+        turnKey,
+        new Set([...(targetsByTurn.get(turnKey) ?? []), messageId]),
+      );
+    }
+  }
+  const isNested = (messageId: string): boolean =>
+    (steerTargets.get(messageId)?.length ?? 0) > 0;
+  const wasNested = (messageId: string): boolean =>
+    (prior.steerTargets[messageId]?.length ?? 0) > 0;
+  const retargeted = new Set<string>();
+  const nestingCandidates = new Set<string>();
+  const expandedUsers = new Set<string>();
+  for (;;) {
+    yield* loadTurnFacts(touchedTurns);
+    for (const turnKey of touchedTurns) {
+      if (retargeted.has(turnKey)) continue;
+      retargeted.add(turnKey);
+      const next = turnFacts.get(turnKey)?.steerTargets ?? new Set<string>();
+      const before = targetsByTurn.get(turnKey) ?? new Set<string>();
+      for (const messageId of before) {
+        if (next.has(messageId)) continue;
+        removeFromList(steerTargets, messageId, turnKey);
+        nestingCandidates.add(messageId);
+      }
+      for (const messageId of next) {
+        if (before.has(messageId)) continue;
+        addToList(steerTargets, messageId, turnKey);
+        nestingCandidates.add(messageId);
+      }
+      targetsByTurn.set(turnKey, next);
+    }
+    // A user record that became, or stopped being, a nested steer gains or
+    // loses its own row.
+    for (const messageId of nestingCandidates) {
+      if (wasNested(messageId) !== isNested(messageId)) {
+        touchedUsers.add(messageId);
+      }
+    }
+    let grew = false;
+    for (const messageId of touchedUsers) {
+      if (expandedUsers.has(messageId)) continue;
+      expandedUsers.add(messageId);
+      const related = [
+        ...(prior.steerTargets[messageId] ?? []),
+        ...(steerTargets.get(messageId) ?? []),
+        ...(stopTriggers.get(messageId) ?? []),
+      ];
+      for (const turnKey of related) {
+        if (touchedTurns.has(turnKey)) continue;
+        touchedTurns.add(turnKey);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+
+  // --- User records. ---
+  const liveUsers = new Map<string, PositionedMessage>();
+  const absentUsers = new Set<string>();
+  const loadUsers = function* (
+    messageIds: Iterable<string>,
+  ): Generator<TranscriptFoldLoad, void, TranscriptFoldLoadResult> {
+    const missing = [...new Set(messageIds)].filter(
+      (messageId) => !liveUsers.has(messageId) && !absentUsers.has(messageId),
+    );
+    if (missing.length === 0) return;
+    const loaded = yield* loadMessages({
+      kind: "messages-by-id",
+      messageIds: missing,
+    });
+    for (const positioned of loaded) {
+      if (positioned.message.role !== "user") continue;
+      liveUsers.set(positioned.message.messageId, positioned);
+    }
+    for (const messageId of missing) {
+      if (!liveUsers.has(messageId)) absentUsers.add(messageId);
+    }
+  };
+  yield* loadUsers(touchedUsers);
+
+  // A user record whose nesting flipped moves the running `lastUserTimestamp`
+  // from its position on.
+  for (const messageId of nestingCandidates) {
+    if (wasNested(messageId) === isNested(messageId)) continue;
+    const record = liveUsers.get(messageId);
+    if (record === undefined) continue;
+    walkNeeded = true;
+    if (beforeRegion(record.position)) widen = true;
+  }
+
+  // --- The walk, over fold facts. ---
+  const walkedEntries = new Map<string, WalkEntry>();
+  const walkedUnprovable = new Map<string, boolean>();
+  let nextRegion: TranscriptWalkRegion = region;
+  let nextOpenTurns: readonly string[] = [...openTurns];
+  if (walkNeeded) {
+    let walkRegion: TranscriptWalkRegion = widen
+      ? EMPTY_TRANSCRIPT_FOLD_STATE.region
+      : region;
+    let walkFacts = yield* loadFacts({
+      kind: "facts-from",
+      position: walkRegion.from,
+    });
+    let walkTurnKeys = assistantTurnKeysOf(walkFacts);
+    yield* loadTurnFacts([
+      ...walkTurnKeys,
+      ...walkRegion.spanKeysBefore,
+      ...openTurns,
+    ]);
+    const walkFrom = walkRegion.from;
+    if (
+      walkFrom !== null &&
+      [...walkTurnKeys].some(
+        (turnKey) =>
+          (turnFacts.get(turnKey)?.firstPosition ?? walkFrom) < walkFrom,
+      )
+    ) {
+      // A turn that started before the region gained a record there.
+      walkRegion = EMPTY_TRANSCRIPT_FOLD_STATE.region;
+      walkFacts = yield* loadFacts({ kind: "facts-from", position: null });
+      walkTurnKeys = assistantTurnKeysOf(walkFacts);
+      yield* loadTurnFacts(walkTurnKeys);
+    }
+
+    // Where the next region starts: as late as the tail allows, and never
+    // inside a turn.
+    const turnsByFirst = [...walkTurnKeys]
+      .flatMap((turnKey) => {
+        const folded = turnFacts.get(turnKey) ?? null;
+        return folded === null ? [] : [{ turnKey, folded }];
+      })
+      .sort((a, b) => a.folded.firstPosition - b.folded.firstPosition);
+    const turnsStartingAfter = (position: number): number =>
+      turnsByFirst.filter((turn) => turn.folded.firstPosition > position)
+        .length;
+    let seat = Number.POSITIVE_INFINITY;
+    // The last two turns, so a retry or a late record of either stays inside.
+    const keptTurn = turnsByFirst.at(-2) ?? turnsByFirst.at(-1);
+    if (keptTurn !== undefined) {
+      seat = Math.min(seat, keptTurn.folded.firstPosition);
+    }
+    let lastUserPosition: number | null = null;
+    for (const positioned of walkFacts) {
+      if (positioned.facts.role === "user") {
+        lastUserPosition = positioned.position;
+      }
+    }
+    if (
+      lastUserPosition !== null &&
+      turnsStartingAfter(lastUserPosition) <= MAX_TURNS_AFTER_LAST_USER
+    ) {
+      seat = Math.min(seat, lastUserPosition);
+    }
+    const releasedTurns = new Set<string>();
+    for (const turnKey of new Set([...openTurns, ...recordTouchedTurns])) {
+      const folded = turnFacts.get(turnKey) ?? null;
+      if (folded === null || !walkTurnKeys.has(turnKey)) continue;
+      if (
+        openTurns.has(turnKey) &&
+        turnsStartingAfter(folded.firstPosition) > MAX_TURNS_AFTER_OPEN_TURN
+      ) {
+        releasedTurns.add(turnKey);
+        continue;
+      }
+      seat = Math.min(seat, folded.firstPosition);
+    }
+    for (let moved = true; moved;) {
+      moved = false;
+      for (const { folded } of turnsByFirst) {
+        if (folded.firstPosition < seat && folded.lastPosition >= seat) {
+          seat = folded.firstPosition;
+          moved = true;
+        }
+      }
+    }
+
+    let sessionAnchor = walkRegion.anchorBefore;
+    let lastUserTimestamp = walkRegion.lastUserTimestampBefore;
+    // Attempt turn keys per span; the first continues the region's span.
+    const spans: string[][] = [[...walkRegion.spanKeysBefore]];
+    let seated: {
+      readonly entry: WalkEntry;
+      readonly spanIndex: number;
+      readonly keysBefore: number;
+    } | null = null;
+    for (const positioned of walkFacts) {
+      const facts = positioned.facts;
+      const span = spans[spans.length - 1];
+      if (positioned.position === seat) {
+        seated = {
+          entry: { sessionAnchor, lastUserTimestamp },
+          spanIndex: spans.length - 1,
+          keysBefore: span.length,
+        };
+      }
+      if (facts.role === "user") {
+        if (facts.sessionAnchor !== null) sessionAnchor = facts.sessionAnchor;
+        // A nested steer does not move the legacy anchor - see the renderer
+        // walk in `turnKeysWithUnprovableProfileWalk`'s callers.
+        if (!isNested(positioned.messageId)) {
+          lastUserTimestamp = facts.timestamp;
+        }
+        // Every user record closes a span, nested or not.
+        spans.push([]);
+        continue;
+      }
+      const folded = turnFacts.get(facts.turnKey) ?? null;
+      if (folded === null) continue;
+      if (folded.firstPosition === positioned.position) {
+        walkedEntries.set(facts.turnKey, { sessionAnchor, lastUserTimestamp });
+      }
+      if (!facts.hasBlocks || folded.autonomous) continue;
+      if (!span.includes(facts.turnKey)) span.push(facts.turnKey);
+    }
+
+    const markingSpans = new Map<string, number[]>();
+    spans.forEach((keys, index) => {
+      if (keys.length < 2) return;
+      for (const turnKey of keys) {
+        markingSpans.set(turnKey, [
+          ...(markingSpans.get(turnKey) ?? []),
+          index,
+        ]);
+      }
+    });
+    const markedElsewhere = new Set(walkRegion.spanKeysMarkedElsewhere);
+    for (const turnKey of walkTurnKeys) {
+      const folded = turnFacts.get(turnKey) ?? null;
+      if (folded === null) continue;
+      walkedUnprovable.set(
+        turnKey,
+        (folded.autonomous || markingSpans.has(turnKey)) && !folded.recorded,
+      );
+    }
+    // The turns before the region in the span it continues: only that span's
+    // mark can have moved for them.
+    for (const turnKey of walkRegion.spanKeysBefore) {
+      const folded = turnFacts.get(turnKey) ?? null;
+      if (folded === null) continue;
+      walkedUnprovable.set(
+        turnKey,
+        (markingSpans.has(turnKey) || markedElsewhere.has(turnKey)) &&
+          !folded.recorded,
+      );
+    }
+
+    nextRegion = walkRegion;
+    if (
+      seated !== null &&
+      (walkRegion.from === null || seat > walkRegion.from)
+    ) {
+      const spanIndex = seated.spanIndex;
+      const keysBefore = spans[spanIndex].slice(0, seated.keysBefore);
+      nextRegion = {
+        from: seat,
+        anchorBefore: seated.entry.sessionAnchor,
+        lastUserTimestampBefore: seated.entry.lastUserTimestamp,
+        spanKeysBefore: keysBefore,
+        spanKeysMarkedElsewhere: keysBefore.filter(
+          (turnKey) =>
+            markedElsewhere.has(turnKey) ||
+            (markingSpans.get(turnKey) ?? []).some(
+              (index) => index !== spanIndex,
+            ),
+        ),
+      };
+    }
+    // A turn the region no longer covers cannot hold it open. One with no
+    // record yet is kept: its first record lands after every seat.
+    const nextFrom = nextRegion.from;
+    nextOpenTurns = [...openTurns].filter((turnKey) => {
+      if (releasedTurns.has(turnKey)) return false;
+      const folded = turnFacts.get(turnKey) ?? null;
+      return (
+        folded === null || nextFrom === null || folded.firstPosition >= nextFrom
+      );
+    });
+  }
+
+  // --- Stored rows of every unit that may be re-described. ---
+  const storedRows = new Map<string, StoredTranscriptRow[]>();
+  const unitStates = new Map<string, TranscriptTurnUnitState>();
+  {
+    const turnByUnitKey = new Map<string, string>();
+    for (const turnKey of [...touchedTurns, ...walkedUnprovable.keys()]) {
+      turnByUnitKey.set(turnRowUnitKey(turnKey), turnKey);
+    }
+    const unitKeys = [
+      ...turnByUnitKey.keys(),
+      ...[...touchedUsers].map(userRowUnitKey),
+      ...[...eventUnits.keys()].map(eventRowUnitKey),
+    ];
+    if (unitKeys.length > 0) {
+      for (const row of yield* loadRows({ kind: "unit-rows", unitKeys })) {
+        const held = storedRows.get(row.unitKey);
+        if (held === undefined) {
+          storedRows.set(row.unitKey, [row]);
+        } else {
+          held.push(row);
+        }
+        const turnKey = turnByUnitKey.get(row.unitKey);
+        if (turnKey !== undefined && row.unitState !== null) {
+          unitStates.set(turnKey, row.unitState);
+        }
+      }
+    }
+  }
+  const unitStateOf = (turnKey: string): TranscriptTurnUnitState | null => {
+    const stored = unitStates.get(turnKey);
+    const entry = walkedEntries.get(turnKey) ?? stored;
+    const profileWalkUnprovable =
+      walkedUnprovable.get(turnKey) ?? stored?.profileWalkUnprovable;
+    if (entry === undefined || profileWalkUnprovable === undefined) {
+      return null;
+    }
+    return {
+      lastUserTimestamp: entry.lastUserTimestamp,
+      sessionAnchor: entry.sessionAnchor,
+      profileWalkUnprovable,
+    };
+  };
+  // A walked turn whose state moved is re-described with it.
+  for (const turnKey of walkedUnprovable.keys()) {
+    const stored = unitStates.get(turnKey);
+    const next = unitStateOf(turnKey);
+    if (
+      stored === undefined ||
+      next === null ||
+      canonicalFoldJson(stored) !== canonicalFoldJson(next)
+    ) {
+      touchedTurns.add(turnKey);
+    }
+  }
+
+  // Every re-described turn carries its overlap answer. The turns this change
+  // could move were judged above; any other is judged the same way, from its
+  // stored paths and their last changers.
+  yield* checkpointLoads.loadTurns(touchedTurns);
+  yield* checkpointLoads.loadLastChangesOf(touchedTurns, "after");
+  const overlapping = checkpointLoads.overlapping(touchedTurns, "after");
+
+  // --- Bodies of what is re-described. ---
+  const turnBodies = new Map<string, PositionedMessage[]>();
+  if (touchedTurns.size > 0) {
+    for (const turnKey of touchedTurns) turnBodies.set(turnKey, []);
+    const loaded = yield* loadMessages({
+      kind: "messages-of-turns",
+      turnKeys: [...touchedTurns],
+    });
+    for (const positioned of loaded) {
+      if (positioned.message.role !== "assistant") continue;
+      turnBodies.get(assistantTurnKey(positioned.message))?.push(positioned);
+    }
+  }
+
+  // The events decorating every re-described turn: those persisted before
+  // this change, under the turn the store recorded them as decorating, plus
+  // the ones this change appended, in event order.
+  const decoratingByTurn = new Map<string, PositionedEvent[]>();
+  if (touchedTurns.size > 0) {
+    const placed = new Set<string>();
+    const place = (turnKey: string, positioned: PositionedEvent): void => {
+      const identity = `${turnKey}\u0000${positioned.event.eventId}`;
+      if (placed.has(identity)) return;
+      placed.add(identity);
+      const held = decoratingByTurn.get(turnKey);
+      if (held === undefined) {
+        decoratingByTurn.set(turnKey, [positioned]);
+        return;
+      }
+      held.push(positioned);
+    };
+    // The change's own events first, and a stored row for an event the change
+    // rewrote is skipped whatever turn it names: a store may answer with the
+    // row as it stood before this change or as it was just written, and the
+    // change's copy is the current one either way.
+    const changedEventIds = new Set(
+      change.appendedEvents.map((touch) => touch.event.eventId),
+    );
+    for (const [turnKey, events] of changeEventsByTurn) {
+      for (const positioned of events) place(turnKey, positioned);
+    }
+    for (const stored of yield* loadTurnEvents([...touchedTurns])) {
+      if (changedEventIds.has(stored.event.eventId)) continue;
+      place(stored.rowTurnKey, {
+        position: stored.position,
+        event: stored.event,
+      });
+    }
+    for (const events of decoratingByTurn.values()) {
+      events.sort((a, b) => a.position - b.position);
+    }
+  }
+  const stopsOf = (turnKey: string): readonly PositionedEvent[] =>
+    (decoratingByTurn.get(turnKey) ?? []).filter(
+      (positioned) => positioned.event.type === "turn.stopped",
+    );
+
+  // Every other user record a re-described row reads: the targets of
+  // re-described turns' steer blocks, and the message their last stop names.
+  {
+    const neededUsers: string[] = [];
+    for (const turnKey of touchedTurns) {
+      neededUsers.push(...(targetsByTurn.get(turnKey) ?? []));
+      const lastStop = stopsOf(turnKey).at(-1);
+      if (lastStop !== undefined && lastStop.event.messageId !== null) {
+        neededUsers.push(lastStop.event.messageId);
+      }
+    }
+    yield* loadUsers(neededUsers);
+  }
+
+  // --- Re-describe every touched unit. ---
+  const units: TranscriptFoldUnit[] = [];
+  for (const turnKey of touchedTurns) {
+    const unitKey = turnRowUnitKey(turnKey);
+    const records = turnBodies.get(turnKey) ?? [];
+    const decorating = decoratingByTurn.get(turnKey) ?? [];
+    const stops = stopsOf(turnKey);
+    const firstStop = stops.at(0);
+    const lastStop = stops.at(-1);
+    const stopped: TurnStoppedInfo | null =
+      lastStop === undefined
+        ? null
+        : {
+            stoppedAt: lastStop.event.timestamp,
+            reason: lastStop.event.message,
+            messageId: lastStop.event.messageId,
+            eventId: lastStop.event.eventId,
+          };
+    const assistants: AssistantMessage[] = [];
+    for (const positioned of records) {
+      if (positioned.message.role === "assistant") {
+        assistants.push(positioned.message);
+      }
+    }
+    const turn = accumulateDurableTurns(assistants).get(turnKey);
+    const firstRecord = records.at(0);
+    if (turn !== undefined && firstRecord !== undefined) {
+      const unitState = unitStateOf(turnKey);
+      if (unitState === null) {
+        return notContinued("an assistant turn has no stored walk state");
+      }
+      const usersById = new Map<string, UserMessage>();
+      for (const messageId of targetsByTurn.get(turnKey) ?? []) {
+        const record = liveUsers.get(messageId);
+        if (record !== undefined && record.message.role === "user") {
+          usersById.set(messageId, record.message);
+        }
+      }
+      const descriptors = describeTurnRows({
+        turn,
+        usersById,
+        lastUserTimestamp: unitState.lastUserTimestamp,
+        activeTurnId: change.activeTurnId,
+        stopped,
+        decoratingEventIdsByTurnKey: new Map([
+          [turnKey, decorating.map((positioned) => positioned.event.eventId)],
+        ]),
+        profileWalkUnprovable: unitState.profileWalkUnprovable,
+        sessionAnchor: unitState.profileWalkUnprovable
+          ? null
+          : unitState.sessionAnchor,
+        hasLaterOverlappingChanges: overlapping.has(turnKey),
+      });
+      units.push({
+        unitKey,
+        rows: descriptors.map((descriptor, index) => ({
+          order: wovenOrder({
+            createdAt: descriptor.createdAt,
+            pass: TRANSCRIPT_ROW_PASS.walk,
+            position: firstRecord.position,
+            entry: index,
+          }),
+          descriptor,
+          unitState,
+        })),
+        messages: [...assistants, ...usersById.values()],
+        events: decorating.map((positioned) => positioned.event),
       });
       continue;
     }
-    const turnKey = assistantTurnKey(message);
-    if (emittedTurns.has(turnKey)) continue;
-    const turn = turns.get(turnKey);
-    if (turn === undefined) continue;
-    emittedTurns.add(turnKey);
-    base.push(
-      ...describeTurnRows({
-        turn,
-        usersById,
-        lastUserTimestamp,
-        activeTurnId: input.activeTurnId,
-        stopped: stoppedByTurnKey.get(turnKey) ?? null,
-        decoratingEventIdsByTurnKey,
-        profileWalkUnprovable: unprovableProfileWalkTurnKeys.has(turnKey),
-        sessionAnchor: unprovableProfileWalkTurnKeys.has(turnKey)
-          ? null
-          : currentSessionAnchor,
-        hasLaterOverlappingChanges: overlappingTurnKeys.has(turnKey),
-      }),
+    const trigger =
+      stopped === null || stopped.messageId === null
+        ? undefined
+        : liveUsers.get(stopped.messageId);
+    if (
+      stopped !== null &&
+      lastStop !== undefined &&
+      firstStop !== undefined &&
+      trigger !== undefined &&
+      turnKey !== change.activeTurnId
+    ) {
+      units.push({
+        unitKey,
+        rows: [
+          {
+            order: wovenOrder({
+              createdAt: stopped.stoppedAt,
+              pass: TRANSCRIPT_ROW_PASS.stoppedTurn,
+              position: firstStop.position,
+              entry: 0,
+            }),
+            descriptor: {
+              rowId: assistantRowId(turnKey),
+              createdAt: stopped.stoppedAt,
+              source: {
+                kind: "stopped-turn",
+                turnKey,
+                eventId: stopped.eventId,
+                triggeringMessageId: trigger.message.messageId,
+              },
+              context: EMPTY_ROW_CONTEXT,
+            },
+            unitState: null,
+          },
+        ],
+        messages: [trigger.message],
+        events: [lastStop.event],
+      });
+      continue;
+    }
+    units.push({ unitKey, rows: [], messages: [], events: [] });
+  }
+
+  for (const messageId of touchedUsers) {
+    const unitKey = userRowUnitKey(messageId);
+    const record = liveUsers.get(messageId);
+    if (
+      record === undefined ||
+      record.message.role !== "user" ||
+      isNested(messageId)
+    ) {
+      units.push({ unitKey, rows: [], messages: [], events: [] });
+      continue;
+    }
+    units.push({
+      unitKey,
+      rows: [
+        {
+          order: wovenOrder({
+            createdAt: record.message.timestamp,
+            pass: TRANSCRIPT_ROW_PASS.walk,
+            position: record.position,
+            entry: 0,
+          }),
+          descriptor: {
+            rowId: messageId,
+            createdAt: record.message.timestamp,
+            source: { kind: "user", messageId },
+            context: steerLifecycle.steeredMessageIds.has(messageId)
+              ? COMPLETED_STEER_CONTEXT
+              : EMPTY_ROW_CONTEXT,
+          },
+          unitState: null,
+        },
+      ],
+      messages: [record.message],
+      events: [],
+    });
+  }
+
+  for (const [eventId, positioned] of eventUnits) {
+    const row = eventUnitRow(positioned);
+    units.push({
+      unitKey: eventRowUnitKey(eventId),
+      rows: row === null ? [] : [row],
+      messages: [],
+      events: [positioned.event],
+    });
+  }
+
+  const previousRows: StoredTranscriptRow[] = [];
+  for (const unit of units) {
+    previousRows.push(...(storedRows.get(unit.unitKey) ?? []));
+  }
+
+  // --- Setup cards. ---
+  const cardAnchors = new Set(prior.setup.cardAnchors);
+  if (!setupChanged && cardAnchors.size > 0) {
+    // A card is woven above its anchor row BY ID, so any re-described row
+    // that is, or was, an anchor moves its card.
+    setupChanged =
+      previousRows.some((row) => cardAnchors.has(row.rowId)) ||
+      units.some((unit) =>
+        unit.rows.some((row) => cardAnchors.has(row.descriptor.rowId)),
+      );
+  }
+  let setupState = prior.setup;
+  if (setupChanged) {
+    const setupEvents = yield* loadEvents({
+      kind: "events-by-type",
+      types: SETUP_CARD_INPUT_EVENT_TYPES,
+    });
+    const windows = partitionSetupCardWindows(
+      setupEvents.map((positioned) => positioned.event),
     );
+    const cardUnitKeys: string[] = [];
+    for (
+      let index = 0;
+      index < Math.max(windows.length, prior.setup.windowCount);
+      index += 1
+    ) {
+      cardUnitKeys.push(setupCardUnitKey(index));
+    }
+    if (cardUnitKeys.length > 0) {
+      previousRows.push(
+        ...(yield* loadRows({ kind: "unit-rows", unitKeys: cardUnitKeys })),
+      );
+    }
+    const pinGenesis = windows.at(0)?.isGenesisPin ?? false;
+    const anchorIds = [
+      ...new Set(
+        windows.flatMap((window, windowIndex) =>
+          (pinGenesis && windowIndex === 0) ||
+          window.triggeringMessageId === null
+            ? []
+            : [window.triggeringMessageId],
+        ),
+      ),
+    ];
+    // The anchor rows: base rows (never a card, never a pinned row) with that
+    // id - this change's own, then the store's rows of units it did not touch.
+    const anchorOrders = new Map<string, TranscriptRowOrder[]>();
+    const noteAnchor = (rowId: string, order: TranscriptRowOrder): void => {
+      const held = anchorOrders.get(rowId);
+      if (held === undefined) {
+        anchorOrders.set(rowId, [order]);
+        return;
+      }
+      held.push(order);
+    };
+    if (anchorIds.length > 0) {
+      const wanted = new Set(anchorIds);
+      const describedUnitKeys = new Set(units.map((unit) => unit.unitKey));
+      for (const unit of units) {
+        for (const row of unit.rows) {
+          if (
+            wanted.has(row.descriptor.rowId) &&
+            row.order.section === TRANSCRIPT_ROW_SECTION.woven
+          ) {
+            noteAnchor(row.descriptor.rowId, row.order);
+          }
+        }
+      }
+      const stored = yield* loadRows({ kind: "rows-by-id", rowIds: anchorIds });
+      for (const row of stored) {
+        if (
+          describedUnitKeys.has(row.unitKey) ||
+          isSetupCardUnitKey(row.unitKey) ||
+          row.order.section !== TRANSCRIPT_ROW_SECTION.woven ||
+          !wanted.has(row.rowId)
+        ) {
+          continue;
+        }
+        noteAnchor(row.rowId, row.order);
+      }
+      for (const orders of anchorOrders.values()) {
+        orders.sort(compareTranscriptRowOrder);
+      }
+    }
+    windows.forEach((window, windowIndex) => {
+      const descriptor: TranscriptRowDescriptor = {
+        rowId: setupCardRowId(change.chatId, windowIndex, window.createdAt),
+        createdAt: window.createdAt,
+        source: {
+          kind: "setup-card",
+          windowIndex,
+          eventIds: window.events.map((event) => event.eventId),
+        },
+        // Both facts come from a partition over the WHOLE log. A client
+        // re-running it on this window's events alone renumbers the card to 0
+        // - which changes its generated row id, so the skeleton stops matching
+        // and the ordinal is suppressed - and can revive a closed window as
+        // active.
+        context: {
+          setupWindowIndex: windowIndex,
+          setupWindowIsActive: window.isActive,
+        },
+      };
+      const anchored =
+        window.triggeringMessageId === null
+          ? undefined
+          : anchorOrders.get(window.triggeringMessageId);
+      const orders: readonly TranscriptRowOrder[] =
+        pinGenesis && windowIndex === 0
+          ? [
+              {
+                section: TRANSCRIPT_ROW_SECTION.genesisCard,
+                createdAt: 0,
+                pass: 0,
+                position: 0,
+                entry: 0,
+                slot: TRANSCRIPT_ROW_SLOT.row,
+                card: 0,
+              },
+            ]
+          : anchored !== undefined && anchored.length > 0
+            ? anchored.map((order) => ({
+                ...order,
+                slot: TRANSCRIPT_ROW_SLOT.anchoredCard,
+                card: windowIndex,
+              }))
+            : [
+                wovenOrder({
+                  createdAt: window.createdAt,
+                  pass: TRANSCRIPT_ROW_PASS.floatingSetupCard,
+                  position: windowIndex,
+                  entry: 0,
+                }),
+              ];
+      units.push({
+        unitKey: setupCardUnitKey(windowIndex),
+        rows: orders.map((order) => ({ order, descriptor, unitState: null })),
+        messages: [],
+        events: window.events,
+      });
+    });
+    for (
+      let index = windows.length;
+      index < prior.setup.windowCount;
+      index += 1
+    ) {
+      units.push({
+        unitKey: setupCardUnitKey(index),
+        rows: [],
+        messages: [],
+        events: [],
+      });
+    }
+    setupState = {
+      windowCount: windows.length,
+      openWindow: windows.at(-1)?.isActive ?? false,
+      cardAnchors: anchorIds,
+    };
   }
 
-  const retainedUserMessageIds = new Set(usersById.keys());
-  for (const entry of stoppedTurnsWithoutRecords({
-    stoppedByTurnKey,
-    retainedTurnKeys: new Set(turns.keys()),
-    retainedUserMessageIds,
-    activeTurnId: input.activeTurnId,
-  })) {
-    base.push({
-      rowId: assistantRowId(entry.turnKey),
-      createdAt: entry.stopped.stoppedAt,
-      source: {
-        kind: "stopped-turn",
-        turnKey: entry.turnKey,
-        eventId: entry.stopped.eventId,
-        triggeringMessageId: entry.triggeringMessageId,
+  return {
+    continued: true,
+    state: {
+      version: TRANSCRIPT_FOLD_STATE_VERSION,
+      factsVersion: TRANSCRIPT_MESSAGE_FOLD_FACTS_VERSION,
+      activeTurnId: change.activeTurnId,
+      messagesThrough,
+      eventsThrough,
+      region: nextRegion,
+      openTurnKeys: [...nextOpenTurns],
+      steerTargets: recordFrom(steerTargets),
+      completedSteer: {
+        messageIds: [...steerLifecycle.steeredMessageIds],
+        requestMessageIdByQueueItemId: recordFrom(
+          steerLifecycle.steerRequestMessageIdsByQueueItemId,
+        ),
       },
-      context: EMPTY_ROW_CONTEXT,
-    });
-  }
+      stopTriggers: recordFrom(stopTriggers),
+      setup: setupState,
+    },
+    units,
+    previousRows,
+    eventRowTurnKeys,
+    checkpointPaths: new Map<string, CheckpointTurnPaths>(
+      [...replacedCheckpoints].map(([turnKey, replaced]) => [
+        turnKey,
+        { position: replaced.position, paths: replaced.after },
+      ]),
+    ),
+  };
+}
 
-  // Event rows are appended in passes - all fork links, then all notification
-  // anchors, then all unattended-refusal lines - because that is the
-  // renderer's `baseRows` order. For two events sharing a timestamp the
-  // resulting tie order differs from the event log's own order; matching that
-  // exactly is the point, so a pass added here must be added there in the same
-  // position.
-  for (const event of input.events) {
-    if (forkedChatLinkRowSource(event) === null) continue;
-    base.push({
-      rowId: forkedChatLinkRowId(event.eventId),
-      createdAt: event.timestamp,
-      source: { kind: "forked-chat-link", eventId: event.eventId },
-      context: EMPTY_ROW_CONTEXT,
-    });
-  }
-  for (const event of input.events) {
-    if (notificationAnchorRowSource(event) === null) continue;
-    base.push({
-      rowId: chatTranscriptEventRowId(event.eventId),
-      createdAt: event.timestamp,
-      source: { kind: "notification-anchor", eventId: event.eventId },
-      context: EMPTY_ROW_CONTEXT,
-    });
-  }
-  for (const event of input.events) {
-    if (autoJudgeUnattendedDenialRowSource(event) === null) continue;
-    base.push({
-      rowId: autoJudgeUnattendedDenialRowId(event.eventId),
-      createdAt: event.timestamp,
-      source: {
-        kind: "auto-judge-unattended-denial",
-        eventId: event.eventId,
+/** The row a row-materializing event draws, or `null` when it draws none. */
+function eventUnitRow(positioned: PositionedEvent): TranscriptFoldRow | null {
+  const { event, position } = positioned;
+  if (forkedChatLinkRowSource(event) !== null) {
+    return {
+      order: wovenOrder({
+        createdAt: event.timestamp,
+        pass: TRANSCRIPT_ROW_PASS.forkedChatLink,
+        position,
+        entry: 0,
+      }),
+      descriptor: {
+        rowId: forkedChatLinkRowId(event.eventId),
+        createdAt: event.timestamp,
+        source: { kind: "forked-chat-link", eventId: event.eventId },
+        context: EMPTY_ROW_CONTEXT,
       },
-      context: EMPTY_ROW_CONTEXT,
-    });
+      unitState: null,
+    };
   }
-
-  // The provenance marker sits above EVERYTHING, the pinned genesis setup card
-  // included. Its timestamp is the import time - later than every message it
-  // introduces, so a `createdAt` sort would file it at the bottom - and what
-  // it says ("Imported from Claude Code") is about the whole chat's origin:
-  // the workspace a genesis card describes was bound to this chat after the
-  // transcript already existed elsewhere. Event-log order between two markers.
-  const markers: TranscriptRowDescriptor[] = [];
-  for (const event of input.events) {
-    if (importedChatMarkerRowSource(event) === null) continue;
-    markers.push({
-      rowId: importedChatMarkerRowId(event.eventId),
-      createdAt: event.timestamp,
-      source: { kind: "imported-chat-marker", eventId: event.eventId },
-      context: EMPTY_ROW_CONTEXT,
-    });
+  if (notificationAnchorRowSource(event) !== null) {
+    return {
+      order: wovenOrder({
+        createdAt: event.timestamp,
+        pass: TRANSCRIPT_ROW_PASS.notificationAnchor,
+        position,
+        entry: 0,
+      }),
+      descriptor: {
+        rowId: chatTranscriptEventRowId(event.eventId),
+        createdAt: event.timestamp,
+        source: { kind: "notification-anchor", eventId: event.eventId },
+        context: EMPTY_ROW_CONTEXT,
+      },
+      unitState: null,
+    };
   }
-  return [...markers, ...placeSetupCards(base, input)];
+  if (autoJudgeUnattendedDenialRowSource(event) !== null) {
+    return {
+      order: wovenOrder({
+        createdAt: event.timestamp,
+        pass: TRANSCRIPT_ROW_PASS.autoJudgeUnattendedDenial,
+        position,
+        entry: 0,
+      }),
+      descriptor: {
+        rowId: autoJudgeUnattendedDenialRowId(event.eventId),
+        createdAt: event.timestamp,
+        source: {
+          kind: "auto-judge-unattended-denial",
+          eventId: event.eventId,
+        },
+        context: EMPTY_ROW_CONTEXT,
+      },
+      unitState: null,
+    };
+  }
+  if (autoJudgeNoticeRowSource(event) !== null) {
+    return {
+      order: wovenOrder({
+        createdAt: event.timestamp,
+        pass: TRANSCRIPT_ROW_PASS.autoJudgeNotice,
+        position,
+        entry: 0,
+      }),
+      descriptor: {
+        rowId: autoJudgeNoticeRowId(event.eventId),
+        createdAt: event.timestamp,
+        source: { kind: "auto-judge-notice", eventId: event.eventId },
+        context: EMPTY_ROW_CONTEXT,
+      },
+      unitState: null,
+    };
+  }
+  if (importedChatMarkerRowSource(event) !== null) {
+    // The provenance marker sits above EVERYTHING, the pinned genesis setup
+    // card included. Its timestamp is the import time - later than every
+    // message it introduces, so a `createdAt` sort would file it at the
+    // bottom - and what it says ("Imported from Claude Code") is about the
+    // whole chat's origin. Event-log order between two markers.
+    return {
+      order: {
+        section: TRANSCRIPT_ROW_SECTION.importedMarker,
+        createdAt: 0,
+        pass: 0,
+        position,
+        entry: 0,
+        slot: TRANSCRIPT_ROW_SLOT.row,
+        card: 0,
+      },
+      descriptor: {
+        rowId: importedChatMarkerRowId(event.eventId),
+        createdAt: event.timestamp,
+        source: { kind: "imported-chat-marker", eventId: event.eventId },
+        context: EMPTY_ROW_CONTEXT,
+      },
+      unitState: null,
+    };
+  }
+  return null;
 }
 
 /**
@@ -1256,79 +2994,4 @@ function describeTurnRows(input: {
     });
   }
   return rows;
-}
-
-/**
- * Sorts the base rows and weaves the setup cards in.
- *
- * Three placements, and only one of them is a sort:
- *
- * - the GENESIS card (window 0 with no `setup.creating` or preceding fork event) pins to ordinal
- *   0, because its stamp is back-filled and can land after the first message;
- * - a card whose `triggeringMessageId` names a row that exists is woven
- *   immediately ABOVE that row, by id - the card is announced before the slow
- *   `git worktree add` while its message persists only after, so a timestamp
- *   sort would place it below and then jump it above;
- * - anything else floats by `createdAt`, including a card whose anchor was
- *   branched away, so it still renders instead of vanishing.
- *
- * Ordinals are therefore assigned AFTER the weave. This is the structural
- * reason a shared comparator was never going to be enough.
- */
-function placeSetupCards(
-  base: readonly TranscriptRowDescriptor[],
-  input: TranscriptRowProjectionInput,
-): readonly TranscriptRowDescriptor[] {
-  const windows = partitionSetupCardWindows(input.events);
-  if (windows.length === 0) {
-    return [...base].sort(compareCanonicalRowOrder);
-  }
-
-  const cards = windows.map((window, windowIndex) => ({
-    descriptor: {
-      rowId: setupCardRowId(input.chatId, windowIndex, window.createdAt),
-      createdAt: window.createdAt,
-      source: {
-        kind: "setup-card" as const,
-        windowIndex,
-        eventIds: window.events.map((event) => event.eventId),
-      },
-      // Both facts come from a partition over the WHOLE log. A client re-running
-      // it on this window's events alone renumbers the card to 0 - which changes
-      // its generated row id, so the skeleton stops matching and the ordinal is
-      // suppressed - and can revive a closed window as active.
-      context: {
-        setupWindowIndex: windowIndex,
-        setupWindowIsActive: window.isActive,
-      },
-    },
-    anchorId: window.triggeringMessageId,
-  }));
-
-  const pinGenesis = windows[0].isGenesisPin;
-  const baseIds = new Set(base.map((row) => row.rowId));
-  const cardsByAnchor = new Map<string, TranscriptRowDescriptor[]>();
-  const floating: TranscriptRowDescriptor[] = [];
-  cards.forEach((card, index) => {
-    if (pinGenesis && index === 0) return;
-    if (card.anchorId !== null && baseIds.has(card.anchorId)) {
-      const held = cardsByAnchor.get(card.anchorId);
-      if (held === undefined) {
-        cardsByAnchor.set(card.anchorId, [card.descriptor]);
-        return;
-      }
-      held.push(card.descriptor);
-      return;
-    }
-    floating.push(card.descriptor);
-  });
-
-  const sorted = [...base, ...floating].sort(compareCanonicalRowOrder);
-  const woven: TranscriptRowDescriptor[] = [];
-  for (const row of sorted) {
-    const anchored = cardsByAnchor.get(row.rowId);
-    if (anchored !== undefined) woven.push(...anchored);
-    woven.push(row);
-  }
-  return pinGenesis ? [cards[0].descriptor, ...woven] : woven;
 }

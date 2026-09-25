@@ -308,6 +308,7 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     sender: { type: "user", userId: "user-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,
@@ -379,6 +380,8 @@ function surfacesProps(patch: {
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
       highlightedApprovalId: null,
+      ruleDraftWorkspace: { remote: null, branch: null },
+      onOpenSettings: () => undefined,
     },
     queue: {
       editingItem: null,

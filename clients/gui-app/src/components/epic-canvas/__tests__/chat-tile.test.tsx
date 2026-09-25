@@ -976,6 +976,40 @@ function nextStepsAssistantMessage(): Message {
   };
 }
 
+/** One of several records one assistant turn folds together. */
+function foldedTurnRecord(messageId: string, timestamp: number): Message {
+  return {
+    role: "assistant",
+    messageId,
+    startedAt: timestamp,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: `text-${messageId}`,
+        text: `Output of ${messageId}`,
+        status: "completed",
+        timestamp,
+        providerNotice: null,
+      },
+    ],
+    timestamp,
+    turnId: "turn-folded",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
 function planAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -2987,6 +3021,7 @@ describe("<ChatTile />", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: AUTO_SESSION_SETTINGS,
           accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "fallback",
           targetTurnId: null,
@@ -3082,6 +3117,7 @@ describe("<ChatTile />", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: AUTO_SESSION_SETTINGS,
           accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "fallback",
           targetTurnId: null,
@@ -3171,6 +3207,7 @@ describe("<ChatTile />", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: AUTO_SESSION_SETTINGS,
           accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "fallback",
           targetTurnId: null,
@@ -3812,6 +3849,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "same_turn",
         status: "pending",
         targetTurnId: "turn-1",
@@ -3832,6 +3870,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "fallback",
         targetTurnId: null,
@@ -3923,6 +3962,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn" as const,
         status: "pending" as const,
         targetTurnId: null,
@@ -3958,6 +3998,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -3993,6 +4034,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4068,6 +4110,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4124,6 +4167,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4182,6 +4226,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4202,6 +4247,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4326,6 +4372,51 @@ describe("<ChatTile />", () => {
     });
   });
 
+  /**
+   * Find in one tile navigates THAT tile to an older hit through this same
+   * jump. The chat can be open in a second tile (`duplicateTab`), which must
+   * neither move nor swallow a jump addressed to the other.
+   */
+  it("leaves a jump addressed to another tile of the same chat to that tile", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    // Parked by find in the chat's other tile.
+    act(() => {
+      useChatTranscriptJumpStore.setState({
+        requestsByChatId: {
+          [key]: {
+            target: { kind: "end" },
+            requestId: 1_000,
+            tileInstanceId: "inst-chat-2",
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).not.toBeUndefined();
+
+    // The same wait is enough for this tile to act on its own jump.
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestTileJump(HOST_ID, CHAT_ARTIFACT.id, CHAT_ARTIFACT.instanceId, {
+          kind: "end",
+        });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
   it("resolves a durable assistant message id to its projected transcript row", async () => {
     renderChatTile();
     await waitForChatTileLoaded();
@@ -4362,6 +4453,50 @@ describe("<ChatTile />", () => {
     });
     expect(
       document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  /**
+   * History's own case: a hit names the record it matched, and a turn folded
+   * from several records renders under the LAST one's id. A hit on an earlier
+   * record named no row, so the jump stayed parked until its TTL dropped it.
+   */
+  it("resolves an earlier record of a turn folded from several records", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          messageId: "folded-first",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [
+          hostUserMessage(),
+          foldedTurnRecord("folded-first", 2),
+          foldedTurnRecord("folded-last", 3),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-folded"]'),
     ).not.toBeNull();
   });
 
@@ -5006,6 +5141,104 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     expect(retryFromUser).toHaveBeenCalledTimes(1);
+  });
+
+  describe("turn-completed announcement title", () => {
+    const REF_NAME = "Untitled agent";
+
+    function seedDocWithChatTitle(title: string) {
+      return (doc: Y.Doc): void => {
+        seedDocWithChat(doc);
+        const chat = doc.getMap("epic").get("chats");
+        if (!(chat instanceof Y.Map)) throw new Error("expected chats map");
+        const record: unknown = chat.get(CHAT_ARTIFACT.id);
+        if (!(record instanceof Y.Map)) throw new Error("expected chat record");
+        record.set("title", title);
+      };
+    }
+
+    function liveRegionText(): string {
+      const region = document.querySelector(
+        '[role="status"][aria-live="polite"][aria-atomic="true"]',
+      );
+      return region === null ? "" : region.textContent;
+    }
+
+    async function announcedAfterCompletedTurn(input: {
+      readonly liveTitle: string;
+      readonly stateTitle: string;
+    }): Promise<string> {
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seedDocWithChatTitle(input.liveTitle), "editor");
+      chatHarness.install("owner", []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      // The tile ref keeps its opening-name snapshot, as a chat opened before
+      // its title was generated does.
+      render(
+        chatTileTestTree(queryClient, true, {
+          ...CHAT_ARTIFACT,
+          name: REF_NAME,
+        }),
+      );
+      await waitForChatTileLoaded();
+
+      const callbacks = chatHarness.callbacks();
+      const withStateTitle: ChatStreamCallbacks = {
+        ...callbacks,
+        onSnapshot: (frame) => {
+          callbacks.onSnapshot({
+            ...frame,
+            snapshot: {
+              ...frame.snapshot,
+              chat: { ...frame.snapshot.chat, title: input.stateTitle },
+            },
+          });
+        },
+      };
+      const assistant = nextStepsAssistantMessage();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: withStateTitle,
+          access: "owner",
+          queueItems: [],
+          settings: null,
+          messages: [hostUserMessage(), assistant],
+          activeTurn: null,
+        });
+      });
+      await settleLegendList();
+      return liveRegionText();
+    }
+
+    it("announces the projected live title, not the ref's opening-name snapshot", async () => {
+      // Restoring `taskTitle={props.node.name}` announces "Untitled agent
+      // finished responding." here: the ref name is REF_NAME while the store
+      // holds "Real Title", so the exact-text assertion goes red.
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "Real Title",
+        stateTitle: "State Title",
+      });
+      expect(text).toBe("Real Title finished responding.");
+    });
+
+    it("falls back to the chat state title when the live title is empty", async () => {
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "",
+        stateTitle: "State Title",
+      });
+      expect(text).toBe("State Title finished responding.");
+    });
+
+    it("falls back to the ref name when both titles are empty", async () => {
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "",
+        stateTitle: "",
+      });
+      expect(text).toBe("Untitled agent finished responding.");
+    });
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

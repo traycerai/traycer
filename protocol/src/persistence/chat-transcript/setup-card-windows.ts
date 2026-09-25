@@ -34,6 +34,20 @@ const SETUP_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
 ]);
 
 /**
+ * Every event type {@link partitionSetupCardWindows} and
+ * `selectRestorableSetupInterruption` read: the setup events, the lifecycle
+ * boundary `worktree.missing`, and `chat.forked` for the genesis pin. Both
+ * skip every other type, so either answers the same over the chat's events of
+ * these types, in order, as over all of them - which is what lets a store
+ * read them by type rather than walk the event log.
+ */
+export const SETUP_DERIVATION_EVENT_TYPES: readonly ChatEvent["type"][] = [
+  ...SETUP_EVENT_TYPES,
+  "worktree.missing",
+  "chat.forked",
+];
+
+/**
  * One setup lifecycle: the events that formed it, plus the three facts the
  * transcript needs to place its row.
  */

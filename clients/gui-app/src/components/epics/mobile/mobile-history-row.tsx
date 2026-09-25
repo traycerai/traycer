@@ -1,3 +1,8 @@
+import { HistoryOrganizationDropdown } from "@/components/organization/task-organization-menu";
+import {
+  OrganizationMetadata,
+  TaskPersonalDecoration,
+} from "@/components/organization/organization-metadata";
 import {
   memo,
   useCallback,
@@ -321,14 +326,15 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             isRenaming={isRenaming}
             onActivate={handleActivate}
           />
-          {/* Everything the row paints is inert, so the overlay is the only
-              thing a touch can land on and activation has exactly one path.
-              The pointer handlers above still see the gesture - pointer events
-              reach the card by bubbling, which is not where the problem was. */}
+          {/* Text stays inert so row activation has one path. Organization
+              controls sit above that overlay and receive their own taps. */}
           <span className="pointer-events-none flex shrink-0 items-center">
             <HistoryRowLeadingIcon item={item} />
           </span>
           <RowTitleBlock
+            item={item}
+            canEdit={canRename}
+            organizationVisible={!selectionMode}
             displayTitle={displayTitle}
             updatedLabel={item.updatedLabel}
             isPinned={item.isPinned}
@@ -336,6 +342,11 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             isRenaming={isRenaming}
             renameInputProps={renameInputProps}
           />
+          {!selectionMode ? (
+            <span className="relative z-10 shrink-0">
+              <HistoryOrganizationDropdown item={item} canEdit={canRename} />
+            </span>
+          ) : null}
         </div>
       </div>
     </li>
@@ -381,6 +392,9 @@ function mobileRowCardClassName(args: {
  * be reachable only by a screen reader.
  */
 function RowTitleBlock(props: {
+  readonly item: HistoryItem;
+  readonly canEdit: boolean;
+  readonly organizationVisible: boolean;
   readonly displayTitle: string;
   readonly updatedLabel: string;
   readonly isPinned: boolean;
@@ -400,7 +414,7 @@ function RowTitleBlock(props: {
     );
   }
   return (
-    <span className="pointer-events-none flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
+    <span className="pointer-events-none relative z-10 flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
       <span className="flex min-w-0 items-center gap-1.5">
         {props.isPinned ? (
           // State, not an action: pinning is a tray action, and without this
@@ -412,6 +426,10 @@ function RowTitleBlock(props: {
             aria-label="Pinned"
           />
         ) : null}
+        <TaskPersonalDecoration
+          taskId={props.item.epicId}
+          fallback={props.item.organization}
+        />
         <span className="truncate font-medium text-foreground">
           {props.displayTitle}
         </span>
@@ -420,6 +438,13 @@ function RowTitleBlock(props: {
           is the part that must not, so it is a non-shrinking sibling rather
           than a tail on the same truncating text. */}
       <span className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
+        {props.organizationVisible ? (
+          <OrganizationMetadata
+            taskId={props.item.epicId}
+            canEdit={props.canEdit}
+            fallback={props.item.organization}
+          />
+        ) : null}
         <span className="truncate">updated {props.updatedLabel}</span>
         {props.provenance === null ? null : (
           <span
@@ -441,9 +466,8 @@ function RowTitleBlock(props: {
  * The focusable, addressable surface over the row.
  *
  * A link rather than a bare click target so the row has a real destination -
- * focus ring, assistive-technology role, and a URL. It is also the ONLY thing
- * in the row a touch can land on: the card's contents are inert, so there is
- * one activation path rather than a race between this and an ancestor. In
+ * focus ring, assistive-technology role, and a URL. The inert text lets taps
+ * reach this one activation path; organization controls sit above it. In
  * selection mode it is a button instead, because a link that never goes
  * anywhere would announce a destination the tap does not take.
  */

@@ -2,6 +2,9 @@
 # Install once:  pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg
 # Run on demand: pre-commit run --all-files
 default_stages: [pre-commit]
+# Service emitter goldens are byte-for-byte emitter OUTPUT (a CRLF VBS, a
+# non-executable launcher script body): no hook may rewrite or lint them.
+exclude: ^clients/traycer-cli/src/service/platforms/__tests__/emitter-goldens/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -42,12 +45,13 @@ repos:
         language: script
         stages: [commit-msg]
 
-  # Project checks — build / compile / lint / format (nx affected for speed).
+  # Project checks — lint / format / compile locally, plus build in CI
+  # (nx affected for speed).
   # Tests run in their own workflow (.github/workflows/test.yml).
   - repo: local
     hooks:
       - id: workspace-checks
-        name: build · compile · lint · format (nx affected)
+        name: lint · format · compile (nx affected; CI also builds)
         entry: scripts/pre_commit_workspace_checks.sh
         language: script
         pass_filenames: false

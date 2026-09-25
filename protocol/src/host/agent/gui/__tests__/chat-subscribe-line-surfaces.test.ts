@@ -23,7 +23,13 @@
  *   `messageDeliveryRestored` client acknowledgement and the
  *   `messageDeliveryChanged` push. Its own shape/freeze coverage lives in
  *   `chat-subscribe-message-delivery-v115.test.ts`; it is listed here only so
- *   the line-count and ceiling assertions below stay truthful.
+ *   the line-count and ceiling assertions below stay truthful;
+ * - `1.16` is the approval-tier surface, minted above `1.15`: the optional
+ *   `tier` on the approval card's judge reason. It is tolerance, not
+ *   projection (written at every minor, dropped by an older decoder), so no
+ *   needle can pin a boundary for it; its shape coverage lives in
+ *   `chat-subscribe-approval-tier-v116.test.ts` and it is listed here for the
+ *   same line-count and ceiling reason as `1.15`.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -50,8 +56,10 @@ const SHELL_HOST_MINOR = 11;
 const DRAFT_IMAGE_CAUSE_MINOR = 12;
 const AUTO_MINOR = 13;
 const PORT_FORWARD_MINOR = 14;
-const MESSAGE_DELIVERY_MINOR = 15;
-const LIVE_MINOR = MESSAGE_DELIVERY_MINOR;
+// `1.15` (message delivery), `1.16` (approval tier) and `1.17` (sender host)
+// mint no boundary a needle below can pin, so only the ceiling names them.
+const SENT_FROM_HOST_MINOR = 17;
+const LIVE_MINOR = SENT_FROM_HOST_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -178,12 +186,12 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.15 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.17 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });

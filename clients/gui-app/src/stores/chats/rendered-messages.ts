@@ -27,6 +27,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
 import {
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
@@ -48,6 +49,7 @@ import {
   assistantRowTurnKey,
   assistantSliceRowId,
   assistantTurnNeedsTrailingRow,
+  autoJudgeNoticeRowId,
   autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
@@ -1242,6 +1244,11 @@ export function useRenderedMessages(
     [input.events],
   );
 
+  const autoJudgeNoticeMessages = useMemo(
+    () => buildAutoJudgeNoticeMessages(input.events),
+    [input.events],
+  );
+
   const importedChatMarkerMessages = useMemo(
     () => buildImportedChatMarkerMessages(input.events),
     [input.events],
@@ -1559,8 +1566,9 @@ export function useRenderedMessages(
       ...notificationAnchorMessages,
       // After the anchors, because `projectTranscriptRows` appends its passes
       // in this same order and a tie between two events sharing a timestamp is
-      // resolved by that order alone. Moving either list moves ordinals.
+      // resolved by that order alone. Moving any of these lists moves ordinals.
       ...autoJudgeUnattendedDenialMessages,
+      ...autoJudgeNoticeMessages,
       ...trailing,
     ];
 
@@ -1640,6 +1648,7 @@ export function useRenderedMessages(
     importedChatMarkerMessages,
     notificationAnchorMessages,
     autoJudgeUnattendedDenialMessages,
+    autoJudgeNoticeMessages,
     setupCardRows,
     setupCardEntries,
     queuedPromptMessageIds,
@@ -1965,6 +1974,57 @@ function buildAutoJudgeUnattendedDenialMessages(
 }
 
 /**
+ * Project an auto-mode judge notice: the line the host owes the user when the
+ * judge could not run, a policy file is not the one deciding, or Automatic
+ * moved the judge's billing to the conversation's own provider.
+ *
+ * The host journals each as a `permission.blocked` event and nothing else, so
+ * without this row the notice reached the chat store and was drawn nowhere.
+ * Filtered and identified THROUGH the projection's own helper, like the
+ * refusal row above - the host numbers this row's ordinal from
+ * `autoJudgeNoticeRowSource`.
+ */
+function buildAutoJudgeNoticeMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    const notice = autoJudgeNoticeRowSource(event);
+    if (notice === null) return [];
+    const id = autoJudgeNoticeRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:notice`,
+            kind: "auto-judge-notice",
+            marker: notice.marker,
+            message: notice.message,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
  * Build the run-metadata for the pre-turn pending indicator from the active
  * turn's primitive fields, mirroring what `renderAssistantTurnSlice` derives
  * for the live/persisted row so the provider icon + hover tooltip are present
@@ -2010,6 +2070,12 @@ function pendingTurnMeta(
 
 interface AssistantTurnAccumulator {
   messageId: string;
+  /**
+   * Every contributing record's id once a second record folds in, `null`
+   * while the turn has one: the common turn allocates nothing for it. See
+   * `ChatMessage.turnMessageIds`.
+   */
+  turnMessageIds: string[] | null;
   /**
    * The record's OWN `turnId`, not this turn's accumulator key.
    *
@@ -2670,11 +2736,16 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    existing.turnMessageIds = [
+      ...(existing.turnMessageIds ?? [existing.messageId]),
+      message.messageId,
+    ];
     existing.messageId = message.messageId;
     return;
   }
   const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
+    turnMessageIds: null,
     turnId: message.turnId,
     sender: message.sender,
     startedAt: message.startedAt,
@@ -3324,6 +3395,9 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    ...(input.acc.turnMessageIds === null
+      ? {}
+      : { turnMessageIds: input.acc.turnMessageIds }),
     // Spread rather than set: `turnId` is absent when the record carries none,
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
@@ -3635,6 +3709,7 @@ function renderLiveAssistant(
   }
   const acc: AssistantTurnAccumulator = {
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    turnMessageIds: null,
     // The live row always has a real turn id - it is what the host is
     // streaming against - so no `ts:` synthetic can reach here.
     turnId: liveAssistant.turnId,

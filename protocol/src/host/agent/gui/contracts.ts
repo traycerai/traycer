@@ -22,6 +22,7 @@ import {
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchemaV90,
+  listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV70,
   guiHarnessOptionSchemaV10,
   guiHarnessOptionSchemaV21,
@@ -50,6 +51,8 @@ import {
   chatSubscribeV113,
   chatSubscribeV114,
   chatSubscribeV115,
+  chatSubscribeV116,
+  chatSubscribeV117,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -559,8 +562,9 @@ export const agentGuiListHarnessesUpgradeV71ToV80 = defineUpgradePath<
 
 /**
  * `agent.gui.listHarnesses@9.1` - the `auto` permission mode and the
- * `nativeAutoJudge` row field. The unreleased head also carries the typed
- * `unavailableReason`; older rows never grow it through a live leaf.
+ * `nativeAutoJudge` row field. It also carries the typed `unavailableReason`;
+ * older rows never grow it through a live leaf. Released, and frozen at
+ * `guiHarnessOptionSchemaV91` since 9.2 opened.
  *
  * A MINOR rather than a major, for the reason 7.1 was: both changes are
  * additive to the row, and `versioned-rpc.ts` rejects a major bump that carries
@@ -580,7 +584,10 @@ export const agentGuiListHarnessesV91 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 9, minor: 1 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  responseSchema: listGuiHarnessesResponseSchema,
+  // Frozen when 9.2 opened: 9.1 is released (`host-v1.3.2-staging.39`), so it
+  // serves the row those peers negotiate rather than the live one. See
+  // `guiHarnessOptionSchemaV91`.
+  responseSchema: listGuiHarnessesResponseSchemaV91,
 });
 
 export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
@@ -607,12 +614,47 @@ export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
 });
 
 /**
- * Strip everything 9.1 added from one catalog row, for the cross-major
+ * `agent.gui.listHarnesses@9.2` - the row's `judgeDefaultModel`, the model
+ * Traycer's judge runs on when Automatic falls back to that harness.
+ *
+ * A MINOR, and with no `responseGrowthProjectionGated`: `judgeDefaultModel` is
+ * a new KEY, which the within-major re-parse strips for a 9.0 or 9.1 peer. That
+ * is the `providers.list@9.2` precedent. Only a new ENUM MEMBER needs the
+ * emission-gated annotation, which is why 9.1 carries one and this does not.
+ *
+ * Its own minor rather than a widening of 9.1, because 9.1 is released: a
+ * client and a staging host both negotiating 9.1 skip the response parse by
+ * cast, so a key added in place would be one the declared type promises and the
+ * wire does not keep.
+ */
+export const agentGuiListHarnessesV92 = defineRpcContract({
+  method: "agent.gui.listHarnesses",
+  schemaVersion: { major: 9, minor: 2 } as const,
+  requestSchema: listGuiHarnessesRequestSchema,
+  responseSchema: listGuiHarnessesResponseSchema,
+});
+
+export const agentGuiListHarnessesUpgradeV91ToV92 = defineUpgradePath<
+  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92
+>({
+  from: { major: 9, minor: 1 },
+  to: { major: 9, minor: 2 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: `judgeDefaultModel` is optional on 9.2, and a 9.1 host
+  // names no judge model. Absent stays absent, which readers already take as
+  // "use the row's default model".
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * Strip everything 9.1 and 9.2 added from one catalog row, for the cross-major
  * downgrade bridges below.
  *
- * The two additions degrade differently and only one of them degrades on its
- * own. Dropping `nativeAutoJudge` is what the older lines' schemas would do
- * anyway; removing `auto` from `supportedPermissionModes` is NOT, because the
+ * The additions degrade differently and only some of them degrade on their
+ * own. Dropping `nativeAutoJudge`, `unavailableReason` and 9.2's
+ * `judgeDefaultModel` is what the older lines' schemas would do anyway;
+ * removing `auto` from `supportedPermissionModes` is NOT, because the
  * bridges below filter by `safeParse().success` and an `auto` member would make
  * every row fail that check - so a fleet-wide "no harnesses at all" picker,
  * rather than the one dropped mode. The mode is removed rather than mapped:
@@ -626,6 +668,7 @@ function projectHarnessRowPreAuto(
   const {
     nativeAutoJudge: _nativeAutoJudge,
     unavailableReason: _unavailableReason,
+    judgeDefaultModel: _judgeDefaultModel,
     ...rest
   } = harness;
   return {
@@ -794,10 +837,10 @@ export const agentGuiListHarnessesUpgradeV80ToV90 = defineUpgradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV8 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV80
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Antigravity so an already-shipped major-8 client's strict decode
@@ -815,10 +858,10 @@ export const agentGuiListHarnessesDowngradeV9ToV8 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV7 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV71
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   // Lands on 7.1, major 7's latest installed minor; a frozen-7.0 caller's own
   // contract parse then strips the 7.1-only `authStatus` key.
   to: { major: 7, minor: 1 },
@@ -836,10 +879,10 @@ export const agentGuiListHarnessesDowngradeV9ToV7 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV6 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV60
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -855,10 +898,10 @@ export const agentGuiListHarnessesDowngradeV9ToV6 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV5 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV50
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -874,10 +917,10 @@ export const agentGuiListHarnessesDowngradeV9ToV5 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV4 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV40
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -893,10 +936,10 @@ export const agentGuiListHarnessesDowngradeV9ToV4 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV3 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV30
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -912,10 +955,10 @@ export const agentGuiListHarnessesDowngradeV9ToV3 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV2 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV21
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   // Lands on 2.1, major 2's latest installed minor; a frozen-2.0 caller's
   // contract parse then strips the 2.1-only `enabled` field.
   to: { major: 2, minor: 1 },
@@ -933,10 +976,10 @@ export const agentGuiListHarnessesDowngradeV9ToV2 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV1 = defineDowngradePath<
-  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV92,
   typeof agentGuiListHarnessesV10
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1116,4 +1159,6 @@ export {
   chatSubscribeV113,
   chatSubscribeV114,
   chatSubscribeV115,
+  chatSubscribeV116,
+  chatSubscribeV117,
 };

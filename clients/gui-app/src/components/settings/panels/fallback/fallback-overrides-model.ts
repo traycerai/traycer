@@ -140,6 +140,29 @@ export function clearPolicyOverrides(policy: FallbackPolicy): FallbackPolicy {
   return withOverrides(policy, {});
 }
 
+export function clearPolicyOverride(
+  policy: FallbackPolicy,
+  reason: HostNotificationStoppedReason,
+): FallbackPolicy {
+  return withOverrides(policy, withoutReason(policy.reasonOverrides, reason));
+}
+
+/** Undo only the override reset, preserving the rest of the current policy. */
+export function restorePolicyOverrides(
+  policy: FallbackPolicy,
+  previous: FallbackPolicy,
+  reason: HostNotificationStoppedReason | null,
+): FallbackPolicy {
+  if (reason === null)
+    return withOverrides(policy, previous.reasonOverrides ?? {});
+  const value = previous.reasonOverrides?.[reason];
+  const rest = withoutReason(policy.reasonOverrides, reason);
+  return withOverrides(
+    policy,
+    value === undefined ? rest : { ...rest, [reason]: value },
+  );
+}
+
 export function policyHasOverrides(policy: FallbackPolicy): boolean {
   return Object.keys(policy.reasonOverrides ?? {}).length > 0;
 }

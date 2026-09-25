@@ -47,6 +47,21 @@ vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
   },
 }));
 
+// This suite exercises the tab context menu's pin and keybinding guards. The
+// appearance submenu now composes the organization task-context query, but no
+// case here supplies an organization host or asserts that submenu's data.
+// Keep that unrelated presentation branch inert at its host-query boundary so
+// these tests continue to cover the real menu guards without fabricating a
+// runtime provider for an unconnected host.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(),
+    localHomedTaskIds: new Set(),
+    isFetching: false,
+    error: null,
+  }),
+}));
+
 const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   kind: "epic",
   id: "epic-orphan",

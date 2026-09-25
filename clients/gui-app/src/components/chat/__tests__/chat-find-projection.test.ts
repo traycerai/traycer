@@ -256,6 +256,74 @@ describe("chat find projection", () => {
     expect(text).not.toContain("[Traycer docs]");
   });
 
+  it("indexes every occurrence in a wireframe fence's raw source", () => {
+    const text = markdownToChatSearchText(
+      [
+        "```wireframe",
+        '<button class="primary">Save</button><script>track("Save")</script>',
+        "```",
+      ].join("\n"),
+    );
+
+    expect(text).toContain("Save");
+    expect(text.match(/Save/g)).toHaveLength(2);
+    expect(text).toContain('<button class="primary">');
+    expect(text).toContain('<script>track("Save")</script>');
+  });
+
+  it("keeps a wireframe fence's source when its info string carries metadata", () => {
+    const text = markdownToChatSearchText(
+      [
+        '```wireframe title="Checkout"',
+        '<button class="primary">Save</button><script>track("Save")</script>',
+        "```",
+      ].join("\n"),
+    );
+
+    expect(text).toContain("Save");
+    expect(text.match(/Save/g)).toHaveLength(2);
+    expect(text).toContain('<button class="primary">');
+    expect(text).toContain('<script>track("Save")</script>');
+  });
+
+  it("keeps a wireframes or wireframe-json fence's raw body, not promoted to a wireframe", () => {
+    const pluralText = markdownToChatSearchText(
+      ["```wireframes", '<div class="card">Save</div>', "```"].join("\n"),
+    );
+    const jsonText = markdownToChatSearchText(
+      ["```wireframe-json", '<div class="card">Save</div>', "```"].join("\n"),
+    );
+
+    expect(pluralText).toContain('<div class="card">');
+    expect(jsonText).toContain('<div class="card">');
+  });
+
+  it("keeps a capitalised Wireframe fence's raw body, since the match is case-sensitive", () => {
+    const text = markdownToChatSearchText(
+      ["```Wireframe", '<div class="card">Save</div>', "```"].join("\n"),
+    );
+
+    expect(text).toContain('<div class="card">');
+  });
+
+  it("keeps a mermaid fence's full source, including labels", () => {
+    const text = markdownToChatSearchText(
+      ["```mermaid", "graph TD", "  A[Save] --> B[Save]", "```"].join("\n"),
+    );
+
+    expect(text).toContain("graph TD");
+    expect(text).toContain("A[Save] --> B[Save]");
+    expect(text.match(/Save/g)).toHaveLength(2);
+  });
+
+  it("keeps a plain fence's body as-is", () => {
+    const text = markdownToChatSearchText(
+      ["```ts", 'const label = "Save";', "```"].join("\n"),
+    );
+
+    expect(text).toContain('const label = "Save";');
+  });
+
   it("indexes user structured text, assistant prose, and excludes next-step controls", () => {
     const structuredContent: JsonContent = {
       type: "doc",
@@ -1249,6 +1317,36 @@ describe("chat find projection", () => {
       `Imported from Claude Code · ${formatAbsoluteDateTime(1700000000000)}`,
     );
     expect(text).not.toContain("/repo/work");
+  });
+
+  // The notice row paints the host's text and nothing else, so that text is
+  // exactly what find indexes - under the segment's own anchor.
+  it("indexes an auto-mode judge notice by the host's text", () => {
+    const message =
+      "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.";
+    const synthesized: ChatMessageModel = {
+      ...makeMessage(35, "system"),
+      content: "",
+      segments: [
+        {
+          id: "notice-1",
+          kind: "auto-judge-notice",
+          marker: "fallback",
+          message,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows(
+      [synthesized],
+      TILE_INSTANCE_ID,
+      new Set(),
+    )[0];
+
+    expect(row.units.map((unit) => unit.unitId)).toEqual([
+      chatFindSegmentUnitId("notice-1"),
+    ]);
+    expect(rowSearchText(row)).toBe(message);
   });
 });
 

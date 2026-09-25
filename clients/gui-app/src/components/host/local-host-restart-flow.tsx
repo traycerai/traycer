@@ -521,6 +521,7 @@ function CooperativeFirstRestartFlow(
         message={forceOffer?.message ?? ""}
         isForcing={forceRestart.isPending || respawnInFlight}
         forceLabel="Force restart"
+        forceDestructive
         onForce={() => {
           const liveHostId = liveHostIdNow();
           if (liveHostId !== null && isOfferStale(forceOffer, liveHostId)) {

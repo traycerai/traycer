@@ -61,8 +61,8 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -201,7 +201,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
@@ -236,7 +236,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
@@ -276,7 +276,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
@@ -600,7 +600,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     const view = render(makeUi());
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
     await waitFor(() => {
       expect(armedHostCalls).toBe(0); // still parked on the gate

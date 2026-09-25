@@ -822,7 +822,13 @@ function RateLimitPopoverScopedBody({
     focus.setFocusHarnessId("opencode");
     focus.setFocusTab("modelProviders");
     carryViewedHostIntoSettingsScope(displayedHostId);
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   }, [displayedHostId, onClose, openSettings]);
   // "Manage provider", beside each provider's name. Same deep link the model
   // picker and the reauth banner use, so the viewed host travels with it and
@@ -838,7 +844,13 @@ function RateLimitPopoverScopedBody({
       // and this link, which names no tab, would then land on it.
       focus.clearFocusTab();
       carryViewedHostIntoSettingsScope(displayedHostId);
-      openSettings({ section: "providers", resetToGeneral: false });
+      openSettings({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
     },
     [displayedHostId, onClose, openSettings],
   );
@@ -998,7 +1010,15 @@ function RateLimitHostPickerRow({
             // The displayed host travels with the jump - one rule, one
             // implementation, shared with the provider CTAs.
             carryViewedHostIntoSettingsScope(scope.hostId);
-            openSettings({ section: "host", resetToGeneral: false });
+            // Named rather than left null: an Overview already open on
+            // another tab comes back to Status, as every host link does.
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: "status",
+              draft: null,
+              hostId: null,
+            });
           },
         }}
         surface="panel-header"
@@ -1140,7 +1160,13 @@ function RateLimitRail({
     useSettingsSearchStore
       .getState()
       .requestReveal("layout", LAYOUT.definitions.statusBar.anchor);
-    openSettings({ section: "layout", resetToGeneral: false });
+    openSettings({
+      section: "layout",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   };
   return (
     <div className="flex min-h-0 flex-col items-center border-r bg-foreground/3 p-1.5">
@@ -3021,7 +3047,13 @@ function RateLimitZeroState({
   const openProviderSettings = (): void => {
     onClose();
     carryViewedHostIntoSettingsScope(displayedHostId);
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   };
   return (
     <div className="flex h-full flex-col items-start gap-3">

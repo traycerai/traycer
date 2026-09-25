@@ -94,6 +94,10 @@ export function messageIdForBlock(
  * notifications describe the terminal edge of that persisted assistant
  * record, and the completion marker is stamped on the final assistant slice
  * in the current transcript projection.
+ *
+ * A turn folded from several records carries only its LAST record as
+ * `persistentMessageId`; an earlier one resolves through the row's
+ * `turnMessageIds`, onto the turn's first row.
  */
 export function messageIdForTranscriptTarget(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -106,7 +110,13 @@ export function messageIdForTranscriptTarget(
     const message = messages[index];
     if (message.persistentMessageId === messageId) return message.id;
   }
-  return null;
+  // An earlier record of a turn folded from several: the turn renders under
+  // its last record's id, and a History or find hit names the record it
+  // matched. The turn's first row, which is where its text starts.
+  const folded = messages.find(
+    (message) => message.turnMessageIds?.includes(messageId) === true,
+  );
+  return folded?.id ?? null;
 }
 
 /**

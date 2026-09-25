@@ -66,7 +66,13 @@ export function routerAdapterFor(
     navigateSettings: () => {
       const api = getSystemTabModalApi();
       if (api === null) return;
-      api.openSettings({ section: null, resetToGeneral: true });
+      api.openSettings({
+        section: null,
+        resetToGeneral: true,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
     },
     navigateToEpic: (epicId) => {
       navigateToTabIntent(

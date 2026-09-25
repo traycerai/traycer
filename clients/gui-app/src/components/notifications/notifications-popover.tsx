@@ -520,7 +520,13 @@ export function NotificationsPopover(
 
   const handleOpenSettings = useCallback(() => {
     onNavigate();
-    openSettings({ section: "notifications", resetToGeneral: false });
+    openSettings({
+      section: "notifications",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   }, [onNavigate, openSettings]);
 
   const isFiltered =

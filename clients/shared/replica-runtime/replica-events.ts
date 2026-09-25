@@ -436,13 +436,36 @@ export interface DocUnavailableEvent {
   readonly reason: string;
 }
 
+/**
+ * Where a SERVED body stands against the authority's own upstream.
+ *
+ * Not an availability state, and deliberately not folded into one: a
+ * `"syncing"` body is ready, editable and durable where it is served - the
+ * authority is serving it from its local copy while it reconciles that copy
+ * upstream. Folding it into `doc-unavailable / retrying` is exactly what
+ * made a body the authority already held read as "reconnecting".
+ *
+ * Describes the body the latest `doc-snapshot` seeded and is forgotten with
+ * it: a consumer clears it on every snapshot and every `doc-unavailable`,
+ * and the authority re-states it after the next snapshot. An authority that
+ * has nothing to say about it (an older wire, a body with no upstream) never
+ * emits it, so ABSENCE is "nothing to show", never a claim of either state.
+ */
+export interface DocBodySyncEvent {
+  readonly kind: "doc-body-sync";
+  readonly authorityEpoch: string;
+  readonly docId: string;
+  readonly state: "syncing" | "synced";
+}
+
 export type DocReplicaEvent =
   | DocSnapshotEvent
   | DocUpdateEvent
   | DocCoverageAckEvent
   | DocAwarenessEvent
   | DocReadyEvent
-  | DocUnavailableEvent;
+  | DocUnavailableEvent
+  | DocBodySyncEvent;
 
 // ─── Ephemera ─────────────────────────────────────────────────────────────
 

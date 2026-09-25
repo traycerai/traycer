@@ -228,6 +228,7 @@ type IpcAuthSessionChangeListener = (
 export interface IpcDesktopAuthSession {
   get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
+  setLocal(snapshot: DesktopAuthSessionSnapshot, generation: number): boolean;
   /**
    * Begins a deferred (verified) set; the generation it returns fences that
    * set's commit against any set begun after it. See
@@ -734,9 +735,8 @@ export class RunnerIpcBridge {
   }
 
   /**
-   * Relays a renderer-owned notification to the focused renderer when the
-   * emitter lives in another window. The originating renderer already drew
-   * its own toast, so same-window focus needs no duplicate delivery.
+   * Structured feeds wait for main's delivery decision, including when the
+   * sender is focused. Legacy callers already drew their own toast.
    */
   deliverForegroundNotificationDisplay(
     senderWebContentsId: number | null,
@@ -744,7 +744,12 @@ export class RunnerIpcBridge {
   ): boolean {
     const focused = this.findFocusedLiveRecord();
     if (focused === null) return false;
-    if (focused.webContentsId === senderWebContentsId) return true;
+    if (
+      focused.webContentsId === senderWebContentsId &&
+      display.feedOccurrences === undefined
+    ) {
+      return true;
+    }
     const delivered = this.safeSendToWindow(
       focused.windowId,
       RunnerHostEvent.notificationForegroundDisplay,

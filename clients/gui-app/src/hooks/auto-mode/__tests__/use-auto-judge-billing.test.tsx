@@ -17,15 +17,6 @@ import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 
 const CLAUDE_HARNESS_ID = providerIdToGuiHarnessId("claude-code");
 
-/**
- * The banned app-wide hook. Its own doc says a tab must never call it
- * (root AGENTS.md: "Tabs bind a `hostId` for life… Never use
- * `useAddressableHostId()` inside a tab"), and this hook is mounted by the
- * chat tab's composer toolbar - so the spy below is not a restatement of
- * production logic, it asserts a dependency this hook must never reach for
- * again. It used to fall back to exactly this hook for the `null`-target
- * case.
- */
 const useAddressableHostIdMock = vi.hoisted(() =>
   vi.fn((): string | null => "app-wide-host-should-never-be-read"),
 );
@@ -33,12 +24,6 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => useAddressableHostIdMock(),
 }));
 
-/**
- * A client is opaque here - only its identity matters, since
- * `useReactiveHostReadiness` below is the one thing that turns it back into a
- * host id. Carrying the requested `hostId` on the object is what lets the
- * readiness mock answer truthfully without a real `HostClient`.
- */
 type FakeClient = { readonly requestedHostId: string | null };
 
 const useHostClientForHostIdMock = vi.hoisted(() =>
@@ -49,14 +34,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     useHostClientForHostIdMock(hostId),
 }));
 
-/**
- * The FOLLOWING client's own host, modelled the way the real one behaves: a
- * client resolved for `null` is the app's following requester, and asking IT
- * which host it addresses answers a concrete id rather than `null`. That is
- * the whole substitution this hook made - the name used to come from
- * `useAddressableHostId()`, which reads the app-wide SELECTION, and now comes
- * from the client the query is already running on.
- */
 const FOLLOWING_HOST_ID = "following-host";
 
 const useReactiveHostReadinessMock = vi.hoisted(() =>
@@ -77,20 +54,9 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 const useHostSupportsMethodMock = vi.hoisted(() =>
   vi.fn((_hostId: string | null, _method: string): boolean => true),
 );
-// The negotiated `providers.list` line, which decides whether the stored
-// per-provider judge is READABLE at all (`autoJudge` rides `9.1`). `9.1` is the
-// default here so every pre-existing case keeps meaning what it did - they are
-// about the two settled reads, not about the version - and the case that is
-// about it sets its own.
 const providersListVersion = vi.hoisted(() => ({
   current: { major: 9, minor: 1 } as { major: number; minor: number } | null,
 }));
-
-// The negotiated `agent.gui.listHarnesses` line - the JOB 3 proof that lets
-// the catalog reads run without `autoJudge.get`. Defaulted to the 9.1 line
-// (the one `catalogLineKnowsAutoMode` requires) so every pre-existing case
-// keeps meaning what it did: they are about the two settled reads and the
-// getter's own support flag, not about this line.
 const listHarnessesVersion = vi.hoisted(() => ({
   current: { major: 9, minor: 1 } as { major: number; minor: number } | null,
 }));
@@ -134,16 +100,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   ) => useProvidersListForClientMock(client, activity),
 }));
 
-// The native-judge CAPABILITY half. The hook now gates `provider-native` on the
-// catalog row's `nativeAutoJudge` as well as the persisted override, because
-// the override is a preference that outlives the capability. Defaulted to
-// capable and settled so the cases below still turn on what they are about.
 let harnessesData: { harnesses: GuiHarnessOption[] } | undefined;
 let harnessesSettled = true;
-// Forwards its ARGUMENTS, like the `providers.list` mock beside it. The hook
-// decides which enablement to ask each catalog for, and a stub that swallows
-// that argument cannot tell "the gate moved" from "the mock answers whatever
-// happens" - which is exactly the hole the `autoModeHost` case below closes.
 const useGuiHarnessesQueryForClientMock = vi.hoisted(() =>
   vi.fn<
     (
@@ -161,24 +119,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     client: FakeClient | null,
     activity: { readonly enabled: boolean; readonly subscribed: boolean },
   ) => useGuiHarnessesQueryForClientMock(client, activity),
-  // The judge harness's model list. Declared EXPLICITLY rather than left off:
-  // a partial module mock throws on the first access, so every case in this
-  // file died at import when the hook grew this read.
-  //
-  // The default is a SETTLED, successful read of a catalog containing the
-  // model the stored-judge fixtures name. It used to be `data: undefined` -
-  // "the catalog has not answered" - on the reasoning that existing cases
-  // would then keep the billing answer they were written for. That reasoning
-  // was the defect in miniature: the answer they were written for was one
-  // published BEFORE the model read settled, which is exactly what the
-  // readiness gate now withholds. A case that wants an unsettled read overrides
-  // with `{ data: undefined, isSuccess: false }` - which is BOTH pending and
-  // failed, since an errored query keeps `data` undefined forever. That is why
-  // the gate reads `isSuccess` and not `data`.
   useGuiHarnessModelsQueryForClient: () => judgeModelsQueryMock(),
 }));
 
-/** The model every stored-judge fixture below names. */
+/** The model every stored-judge fixture below names, unless it says otherwise. */
 const JUDGE_MODEL_SLUG = "claude-sonnet";
 
 function judgeModelRow(
@@ -205,7 +149,6 @@ interface JudgeModelsQueryResult {
   readonly isSuccess: boolean;
 }
 
-/** A catalog that ANSWERED, listing exactly these rows. */
 function judgeModelsAnswered(
   models: ReadonlyArray<GuiAgentModelOption>,
 ): JudgeModelsQueryResult {
@@ -216,7 +159,10 @@ const judgeModelsQueryMock = vi.fn<() => JudgeModelsQueryResult>(() =>
   judgeModelsAnswered([judgeModelRow(JUDGE_MODEL_SLUG, null)]),
 );
 
-function harnessRow(nativeAutoJudge: boolean): GuiHarnessOption {
+function harnessRow(
+  nativeAutoJudge: boolean,
+  judgeDefaultModel: string | null,
+): GuiHarnessOption {
   return guiHarnessOptionSchema.parse({
     id: CLAUDE_HARNESS_ID,
     label: "Claude Code",
@@ -225,6 +171,7 @@ function harnessRow(nativeAutoJudge: boolean): GuiHarnessOption {
     modes: ["gui"],
     requiresApiKey: false,
     nativeAutoJudge,
+    judgeDefaultModel,
   });
 }
 
@@ -257,7 +204,6 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   };
 }
 
-/** A minimal `ProviderProfile` fixture for the FIX 3 profile-availability case below. */
 function providerProfile(profileId: string): ProviderProfile {
   return {
     profileId,
@@ -285,14 +231,10 @@ afterEach(() => {
   vi.clearAllMocks();
   providersListVersion.current = { major: 9, minor: 1 };
   listHarnessesVersion.current = { major: 9, minor: 1 };
-  // `clearAllMocks` drops call history and KEEPS implementations, so the two
-  // cases that pin this to `false` would otherwise hand `false` to every test
-  // after them. The rest of this block restates each mock implementation for
-  // the same reason; this one was the omission.
   useHostSupportsMethodMock.mockImplementation(() => true);
   autoJudgeGetData = undefined;
   providersListData = undefined;
-  harnessesData = { harnesses: [harnessRow(true)] };
+  harnessesData = { harnesses: [harnessRow(true, null)] };
   harnessesSettled = true;
   useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
     data: harnessesData,
@@ -302,16 +244,9 @@ afterEach(() => {
   useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
   useProvidersListForClientMock.mockImplementation(() => ({
     data: providersListData,
-    // The hook now waits for this read to SETTLE, not merely to have data:
-    // classifying on an unanswered catalog is what made the mobile row publish
-    // Traycer-credits copy that later flipped. Every existing case here models
-    // a catalog that has already answered.
     isSuccess: true,
     isError: false,
   }));
-  // Re-established every test, like its three siblings above: a case that
-  // opts into a concrete judge-model catalog via `.mockReturnValue` must not
-  // leak that catalog into the next test's default settled read.
   judgeModelsQueryMock.mockReturnValue(
     judgeModelsAnswered([judgeModelRow(JUDGE_MODEL_SLUG, null)]),
   );
@@ -323,7 +258,7 @@ useProvidersListForClientMock.mockImplementation(() => ({
   isSuccess: true,
   isError: false,
 }));
-harnessesData = { harnesses: [harnessRow(true)] };
+harnessesData = { harnesses: [harnessRow(true, null)] };
 useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
   data: harnessesData,
   isSuccess: harnessesSettled,
@@ -335,7 +270,7 @@ describe("useAutoJudgeBilling", () => {
     autoJudgeGetData = { selection: null };
     providersListData = { providers: [] };
 
-    renderHook(() => useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID));
+    renderHook(() => useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""));
 
     expect(useAddressableHostIdMock).not.toHaveBeenCalled();
   });
@@ -344,14 +279,8 @@ describe("useAutoJudgeBilling", () => {
     autoJudgeGetData = { selection: null };
     providersListData = { providers: [] };
 
-    renderHook(() => useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID));
+    renderHook(() => useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""));
 
-    // The client was resolved for "host-b", and the gate must be asked about
-    // exactly that id - never the id `useHostClientForHostId` was CALLED
-    // with in isolation, and never a second, independently-read host name.
-    // This is the assertion that would have caught the two-sources defect:
-    // before the fix, the gate could be asked about the app-wide selection
-    // while the query still ran on this client.
     expect(useHostSupportsMethodMock).toHaveBeenCalledWith(
       "host-b",
       "autoJudge.get",
@@ -362,19 +291,11 @@ describe("useAutoJudgeBilling", () => {
     expect(askedHosts).not.toContain("app-wide-host-should-never-be-read");
   });
 
-  // The branch that actually changed, and the only one where the fallback's
-  // VALUE is observable. The two cases above pass a concrete `host-b`, which
-  // short-circuits the fallback entirely - they would pass against the old code
-  // too, on the gate assertion alone. With a `null` target the old code asked
-  // the gate about `useAddressableHostId()`'s answer (the app-wide selection);
-  // the new code asks the client this hook already resolved. So this is the
-  // positive half of the ban: not "the banned hook wasn't called", but "the
-  // right host was named instead".
   it("names the FOLLOWING client's own host for a null target, never the app-wide selection", () => {
     autoJudgeGetData = { selection: null };
     providersListData = { providers: [] };
 
-    renderHook(() => useAutoJudgeBilling(null, CLAUDE_HARNESS_ID));
+    renderHook(() => useAutoJudgeBilling(null, CLAUDE_HARNESS_ID, ""));
 
     expect(useHostSupportsMethodMock).toHaveBeenCalledWith(
       FOLLOWING_HOST_ID,
@@ -391,25 +312,20 @@ describe("useAutoJudgeBilling", () => {
     providersListData = { providers: [] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toBeNull();
   });
 
-  // The end-to-end shape of the JOB 3 defect: the host-wide selection is
-  // Traycer's judge (unset, which `autoJudgeBillingFor` folds into
-  // "traycer"), but the RUN harness's own provider row says it reviews its
-  // own commands - so the composer must disclose "provider-native", not
-  // "Uses your Traycer credits." for a call that will never be made.
-  it("resolves to provider-native when the host-wide selection is Traycer but the run harness's provider reviews its own commands", () => {
+  it("resolves to provider-native when the run harness's provider reviews its own commands, whatever the target names", () => {
     autoJudgeGetData = { selection: null };
     providersListData = {
       providers: [providerState({ autoJudge: "provider" })],
     };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toEqual({
@@ -419,31 +335,30 @@ describe("useAutoJudgeBilling", () => {
     });
   });
 
-  // JOB 4, end-to-end: the persisted override says "provider", but the
-  // harness catalog row for this run's harness is not capable
-  // (`nativeAutoJudge: false`) - a preference outliving the capability (a
-  // host downgrade, or the provider losing the feature). The hook must fall
-  // back to the host-wide (Traycer) reading rather than disclosing a
-  // classifier that no longer exists.
-  it("falls back to the traycer reading when the provider override says 'provider' but the catalog row is not capable", () => {
-    autoJudgeGetData = { selection: null };
+  it("falls back to the traycer reading (with its model label) when the provider override says 'provider' but the catalog row is not capable", () => {
+    autoJudgeGetData = {
+      selection: null,
+      effective: {
+        harnessId: "traycer",
+        model: JUDGE_MODEL_SLUG,
+        source: "default",
+      },
+    };
     providersListData = {
       providers: [providerState({ autoJudge: "provider" })],
     };
-    harnessesData = { harnesses: [harnessRow(false)] };
+    harnessesData = { harnesses: [harnessRow(false, null)] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
-    expect(result.current).toEqual({ kind: "traycer" });
+    expect(result.current).toEqual({
+      kind: "traycer",
+      modelLabel: JUDGE_MODEL_SLUG,
+    });
   });
 
-  // JOB 3, end-to-end: `autoJudge.get` reports both a stored selection AND a
-  // blocker on it. The hook must fold that into `{ kind: "blocked" }` rather
-  // than billing the stored (but unrunnable) provider selection - the same
-  // precedence `autoJudgeBillingForRun` encodes, exercised through the real
-  // read path this composer surface actually uses.
   it("resolves to blocked when autoJudge.get reports a selection together with a blocker", () => {
     autoJudgeGetData = {
       selection: {
@@ -456,19 +371,31 @@ describe("useAutoJudgeBilling", () => {
     providersListData = { providers: [] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
   });
 
-  // FIX 3 (P2): the stored judge names an explicit profile its provider no
-  // longer offers. The host's `blocked` field has no member for this - it is
-  // a purely client-side comparison against the LIVE `providers.list` read -
-  // so before this fix the row kept claiming the provider account would be
-  // charged for a judge call that was never going to happen (every command
-  // escalates to the human instead, exactly like the host-blocked case
-  // above).
+  it("resolves to blocked when effective is explicitly null, whatever blocked says", () => {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: "claude",
+        model: "claude-sonnet",
+        profileId: null,
+      },
+      effective: null,
+      blocked: undefined,
+    };
+    providersListData = { providers: [] };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+    );
+
+    expect(result.current).toEqual({ kind: "blocked" });
+  });
+
   it("resolves to blocked when the stored judge names a profile the provider no longer offers", () => {
     autoJudgeGetData = {
       selection: {
@@ -484,17 +411,13 @@ describe("useAutoJudgeBilling", () => {
     };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
   });
 
-  // Control: the same stored judge, with the SAME profile still present in
-  // the provider's offered list - proves the case above fires on the
-  // profile comparison and not merely on having an external (non-traycer)
-  // judge harness stored.
-  it("still bills the provider account when the stored judge's profile is still offered", () => {
+  it("still bills the provider account (with its model label) when the stored judge's profile is still offered", () => {
     autoJudgeGetData = {
       selection: {
         harnessId: "claude",
@@ -509,22 +432,17 @@ describe("useAutoJudgeBilling", () => {
     };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toEqual({
       kind: "provider",
       harnessId: "claude",
       harnessLabel: "Claude Code",
+      modelLabel: "claude-sonnet",
     });
   });
 
-  // FIX 2 (P2): the sibling of the profile-unavailable case above, one field
-  // over - the stored judge's MODEL has left its harness's own catalog rather
-  // than its provider's profile list. `judgeModelUnavailable` has no display
-  // fallback to compare against (unlike the picker's store), so the hook asks
-  // the harness's model catalog directly - the read this module mock declares
-  // explicitly above so a partial-mock throw doesn't kill every case here.
   it("resolves to blocked when the stored judge names a model its harness no longer lists", () => {
     autoJudgeGetData = {
       selection: {
@@ -541,15 +459,12 @@ describe("useAutoJudgeBilling", () => {
     );
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
   });
 
-  // Control: the same stored judge, with the SAME model still present in its
-  // harness's catalog - proves the case above fires on the model comparison
-  // and not merely on having an external (non-traycer) judge harness stored.
   it("still bills the provider account when the stored judge's model is still offered", () => {
     autoJudgeGetData = {
       selection: {
@@ -566,39 +481,60 @@ describe("useAutoJudgeBilling", () => {
     );
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
     );
 
     expect(result.current).toEqual({
       kind: "provider",
       harnessId: "claude",
       harnessLabel: "Claude Code",
+      modelLabel: "kept-model",
     });
   });
 
-  // JOB 2: the ordering defect itself. `autoJudge.get` has already resolved,
-  // but the `providers.list` read - cold on the mobile toolbar, since no
-  // picker there has warmed it - has not. Classifying on data alone here is
-  // exactly what published "Uses your Traycer credits" and then flipped it
-  // once the providers rows landed; the hook must wait instead.
   describe("waits for providers.list to settle before publishing billing copy", () => {
-    it("returns null while autoJudge.get has data but providers.list is still in flight", () => {
-      autoJudgeGetData = { selection: null };
+    // A CONCRETE effective default judge, so the readiness guard is the only
+    // thing standing between an unsettled read and a real billing verdict -
+    // the old fixture (`{ selection: null }` with no `effective`) resolves to
+    // an 'unknown' target regardless of these guards, so removing a guard
+    // could never have reddened it.
+    const EFFECTIVE_DEFAULT_JUDGE: AutoJudgeGetResponse = {
+      selection: null,
+      effective: {
+        source: "default",
+        harnessId: "traycer",
+        model: JUDGE_MODEL_SLUG,
+      },
+      blocked: null,
+    };
+
+    it("returns null while autoJudge.get has data but providers.list is still in flight, then publishes billing once providers.list settles", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
       useProvidersListForClientMock.mockImplementation(() => ({
         data: undefined,
         isSuccess: false,
         isError: false,
       }));
 
-      const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      const { result, rerender } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: { providers: [providerState({})] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
 
-    // Same inputs as above, settled: proves the `null` case is the WAIT and
-    // not a permanent refusal once the provider read actually lands.
     it("resolves to provider-native once the providers read succeeds with a provider-native row", () => {
       autoJudgeGetData = { selection: null };
       useProvidersListForClientMock.mockImplementation(() => ({
@@ -608,7 +544,7 @@ describe("useAutoJudgeBilling", () => {
       }));
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toEqual({
@@ -618,47 +554,48 @@ describe("useAutoJudgeBilling", () => {
       });
     });
 
-    // A FAILED read is not settled. This case previously asserted the
-    // opposite - "an error still counts as settled, because a host that cannot
-    // answer is what the `false` default is for" - and that rationale
-    // conflated two hosts. The `false` (non-native) default exists for a host
-    // that ANSWERS without the data: one predating `providers.list@9.1`, whose
-    // successful response simply omits `autoJudge`. A transport failure says
-    // nothing about the provider's classifier, and turning it into `false`
-    // publishes "Uses your Traycer credits" for a run the host may well review
-    // natively at no cost - a claim about the user's money, made from a read
-    // that failed.
-    //
-    // "Hanging" was the wrong worry: the disclosure is ADDITIVE, so withholding
-    // it renders the row exactly as it rendered before auto mode existed. There
-    // is no spinner to hang and nothing is blocked - the honest answer to a
-    // question we could not ask is to say nothing.
-    it("keeps the disclosure hidden when the providers read fails", () => {
-      autoJudgeGetData = { selection: null };
+    it("keeps the disclosure hidden when the providers read fails, then publishes billing once providers.list succeeds", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
       useProvidersListForClientMock.mockImplementation(() => ({
         data: undefined,
         isSuccess: false,
         isError: true,
       }));
 
-      const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      const { result, rerender } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: { providers: [providerState({})] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
   });
 
-  // JOB 4: the harness catalog is the SECOND half of the native-judge
-  // question, folded into the same settled gate as `providers.list` for the
-  // same reason - classifying on an unanswered catalog is what published
-  // stale billing copy that later flipped once the rows landed.
   describe("waits for the harness catalog to settle before publishing billing copy", () => {
-    it("returns null while autoJudge.get has data but the harness catalog is still in flight", () => {
-      autoJudgeGetData = { selection: null };
-      providersListData = {
-        providers: [providerState({ autoJudge: "provider" })],
-      };
+    const EFFECTIVE_DEFAULT_JUDGE: AutoJudgeGetResponse = {
+      selection: null,
+      effective: {
+        source: "default",
+        harnessId: "traycer",
+        model: JUDGE_MODEL_SLUG,
+      },
+      blocked: null,
+    };
+
+    it("returns null while autoJudge.get has data but the harness catalog is still in flight, then publishes billing once the harness catalog settles", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
+      providersListData = { providers: [providerState({})] };
       harnessesData = undefined;
       harnessesSettled = false;
       useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
@@ -667,27 +604,28 @@ describe("useAutoJudgeBilling", () => {
         isError: false,
       }));
 
-      const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      const { result, rerender } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+        data: { harnesses: [harnessRow(true, null)] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
 
-    // JOB 4 (Codex, P1): the sibling of the `providers.list` failure case
-    // above, and the SAME reasoning applies one field over. The `false`
-    // (non-native) default `providerRunsItsOwnJudge` falls back to exists for
-    // a host that ANSWERS without the data (one predating a catalog field),
-    // not for a transport failure - so treating a failed harness-catalog read
-    // as settled would publish "Uses your Traycer credits" for a run the host
-    // may review natively at no cost, a claim about the user's money made
-    // from a read that failed. `autoJudge.get` and `providers.list` both
-    // succeed here, isolating the harness catalog as the one read that failed.
-    it("keeps the disclosure hidden when the harness-catalog read fails, even though autoJudge.get and providers.list both succeeded", () => {
-      autoJudgeGetData = { selection: null };
-      providersListData = {
-        providers: [providerState({ autoJudge: "provider" })],
-      };
+    it("keeps the disclosure hidden when the harness-catalog read fails, even though autoJudge.get and providers.list both succeeded, then publishes billing once the harness catalog settles", () => {
+      autoJudgeGetData = EFFECTIVE_DEFAULT_JUDGE;
+      providersListData = { providers: [providerState({})] };
       harnessesData = undefined;
       harnessesSettled = false;
       useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
@@ -696,73 +634,94 @@ describe("useAutoJudgeBilling", () => {
         isError: true,
       }));
 
-      const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      const { result, rerender } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
+
+      useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+        data: { harnesses: [harnessRow(true, null)] },
+        isSuccess: true,
+        isError: false,
+      }));
+      rerender();
+
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
   });
 
-  // JOB 4: the THIRD unknown, `providerJudgeUnknown` - a version rather than a
-  // read status. The catalog says this harness has a native judge to delegate
-  // to, but `providers.list` is stuck at 9.0, which never carries `autoJudge`
-  // back - so `providerAutoJudgeFor`'s `?? "traycer"` would answer for every
-  // provider whatever the host actually has stored. The hook must publish
-  // nothing rather than a possibly-wrong billing claim.
+  // Kept for compatibility: a pre-1.1 host answers with no `effective` key at
+  // all. `autoJudgeTarget` reads that as 'unknown' (there is no stored
+  // selection either), so this stays null however settled the other two
+  // reads are - unrelated to the readiness guards above, which is exactly why
+  // it must not be the ONLY case exercising them.
+  it("returns null for a pre-1.1 host answer with no effective key, even though providers.list and the harness catalog are both settled", () => {
+    autoJudgeGetData = { selection: null };
+    providersListData = { providers: [providerState({})] };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+    );
+
+    expect(result.current).toBeNull();
+  });
+
   describe("the writable-but-unreadable provider judge (providers.list stuck at 9.0)", () => {
     it("returns null when the harness has a native judge but providers.list cannot report it", () => {
       autoJudgeGetData = { selection: null };
       providersListData = {
         providers: [providerState({ autoJudge: "provider" })],
       };
-      harnessesData = { harnesses: [harnessRow(true)] };
+      harnessesData = { harnesses: [harnessRow(true, null)] };
       providersListVersion.current = { major: 9, minor: 0 };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
     });
 
-    // Proves the gate is the PAIR ({nativeAutoJudge, list-version}), not the
-    // list version alone: the same stuck-at-9.0 line is irrelevant when this
-    // harness has no native judge to delegate to in the first place, since
-    // `providerRunsItsOwnJudge` never consults `providerAutoJudgeFor` for it.
     it("is unaffected by the same stuck providers.list when the harness has no native judge", () => {
-      autoJudgeGetData = { selection: null };
+      autoJudgeGetData = {
+        selection: null,
+        effective: {
+          harnessId: "traycer",
+          model: JUDGE_MODEL_SLUG,
+          source: "default",
+        },
+      };
       providersListData = {
         providers: [providerState({ autoJudge: "provider" })],
       };
-      harnessesData = { harnesses: [harnessRow(false)] };
+      harnessesData = { harnesses: [harnessRow(false, null)] };
       providersListVersion.current = { major: 9, minor: 0 };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
-      expect(result.current).toEqual({ kind: "traycer" });
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
   });
 
-  // JOB 3: the catalog reads must not wait on `autoJudge.get` at all - they
-  // are gated on the host having Auto mode AT ALL, proven either by the
-  // getter's own support flag OR the negotiated `agent.gui.listHarnesses`
-  // line. A host with `providers.list@9.1`, a native classifier and
-  // `providers.setAutoJudge` but no `autoJudge.get` used to resolve `null`
-  // here and omit the "no extra cost" disclosure for the one path that
-  // bypasses the host-wide judge entirely.
   describe("resolves the provider-native path from the catalog alone, without autoJudge.get", () => {
     it("resolves provider-native when autoJudge.get is unsupported but the negotiated listHarnesses line proves Auto mode", () => {
       useHostSupportsMethodMock.mockImplementation(() => false);
       providersListData = {
         providers: [providerState({ autoJudge: "provider" })],
       };
-      harnessesData = { harnesses: [harnessRow(true)] };
+      harnessesData = { harnesses: [harnessRow(true, null)] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toEqual({
@@ -770,12 +729,6 @@ describe("useAutoJudgeBilling", () => {
         harnessId: CLAUDE_HARNESS_ID,
         harnessLabel: "Claude Code",
       });
-      // And the reads were actually ASKED for. The assertion above passes on a
-      // mocked query whatever `enabled` the hook requested, so it alone cannot
-      // tell "the gate moved off `autoJudge.get`" from "the mock answers
-      // regardless" - re-gating the catalogs on the getter alone leaves it
-      // green. This observes the request the hook makes, which is the decision
-      // under test.
       expect(useProvidersListForClientMock).toHaveBeenCalledWith(
         expect.anything(),
         { enabled: true, subscribed: true },
@@ -786,24 +739,18 @@ describe("useAutoJudgeBilling", () => {
       );
     });
 
-    // The control: the same host, but the run harness has no native judge to
-    // delegate to - this answer genuinely needs the host-wide selection,
-    // which the host cannot report without `autoJudge.get`. Must stay null
-    // rather than guessing.
     it("still answers null for a non-native harness when autoJudge.get is unsupported", () => {
       useHostSupportsMethodMock.mockImplementation(() => false);
       providersListData = {
         providers: [providerState({ autoJudge: "provider" })],
       };
-      harnessesData = { harnesses: [harnessRow(false)] };
+      harnessesData = { harnesses: [harnessRow(false, null)] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
-      // Null for the RIGHT reason: the catalogs were still read (this host has
-      // Auto mode), and what is missing is only the host-wide selection.
       expect(useProvidersListForClientMock).toHaveBeenCalledWith(
         expect.anything(),
         { enabled: true, subscribed: true },
@@ -811,13 +758,7 @@ describe("useAutoJudgeBilling", () => {
     });
   });
 
-  // Round 16, group A: `billingInputsSettled` gained `judgeModelsSettled` so a
-  // stored judge's billing waits on the judge harness's own model-catalog read
-  // and not merely on `autoJudge.get` having answered.
   describe("waits for the judge harness's model catalog to settle before publishing billing copy", () => {
-    // A1: a stored judge whose model read has not settled - neither succeeded
-    // nor failed - must withhold the disclosure entirely rather than publish a
-    // stale one.
     it("returns null for a stored judge while the judge model read is unsettled", () => {
       autoJudgeGetData = {
         selection: {
@@ -833,15 +774,12 @@ describe("useAutoJudgeBilling", () => {
       });
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toBeNull();
     });
 
-    // A2: the same stored judge, once the judge harness's model read SUCCEEDS
-    // and lists the stored model - proves A1 is about settledness, not about
-    // having a judge at all.
     it("publishes billing for a stored judge once the judge model read succeeds listing the stored model", () => {
       autoJudgeGetData = {
         selection: {
@@ -856,22 +794,17 @@ describe("useAutoJudgeBilling", () => {
       );
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toEqual({
         kind: "provider",
         harnessId: "claude",
         harnessLabel: "Claude Code",
+        modelLabel: JUDGE_MODEL_SLUG,
       });
     });
 
-    // A3: a PROVIDER-NATIVE run must not wait on the judge model read at all -
-    // that arm never consults the stored record, so gating it on
-    // `judgeModelsSettled` would withhold the one disclosure that is always
-    // safe to publish. A stored judge is present here specifically so the
-    // model read is unsettled (applicable, not just skipped) and the
-    // provider-native arm still has to win.
     it("still publishes provider-native when the judge model read is unsettled", () => {
       autoJudgeGetData = {
         selection: {
@@ -883,14 +816,14 @@ describe("useAutoJudgeBilling", () => {
       providersListData = {
         providers: [providerState({ autoJudge: "provider" })],
       };
-      harnessesData = { harnesses: [harnessRow(true)] };
+      harnessesData = { harnesses: [harnessRow(true, null)] };
       judgeModelsQueryMock.mockReturnValue({
         data: undefined,
         isSuccess: false,
       });
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toEqual({
@@ -900,34 +833,29 @@ describe("useAutoJudgeBilling", () => {
       });
     });
 
-    // A4: no stored judge at all - the model query is never even enabled, so
-    // an `isSuccess` gate that does not special-case "nothing to wait for"
-    // would withhold the disclosure forever. A disabled query never succeeds.
-    it("still publishes billing with no stored judge, even though the model query is never enabled", () => {
-      autoJudgeGetData = { selection: null };
+    it("still publishes billing with no stored selection, resolved against the default judge's own model catalog", () => {
+      autoJudgeGetData = {
+        selection: null,
+        effective: {
+          harnessId: "traycer",
+          model: JUDGE_MODEL_SLUG,
+          source: "default",
+        },
+      };
       providersListData = { providers: [] };
-      judgeModelsQueryMock.mockReturnValue({
-        data: undefined,
-        isSuccess: false,
-      });
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
-      expect(result.current).toEqual({ kind: "traycer" });
+      expect(result.current).toEqual({
+        kind: "traycer",
+        modelLabel: JUDGE_MODEL_SLUG,
+      });
     });
   });
 
-  // Round 16, group C: `judgeModelsQueryTarget` turns off the model query for
-  // a stored judge harness id outside `guiHarnessIdSchema` (a newer host, an
-  // older app) rather than falling back to comparing the stored slug against
-  // TRAYCER's own catalog.
   describe("an unrecognized judge harness does not consult a stand-in catalog", () => {
-    // C1: the stored harness is outside the union and its model does not
-    // appear in TRAYCER's catalog either - the old fallback compared against
-    // that catalog anyway and reported almost any such judge as gone. The
-    // fix must publish the judge's own billing rather than "blocked".
     it("does not report the judge unrunnable for an unrecognized harness, even though the traycer catalog omits its model", () => {
       autoJudgeGetData = {
         selection: {
@@ -937,26 +865,19 @@ describe("useAutoJudgeBilling", () => {
         },
       };
       providersListData = { providers: [] };
-      // Default judge-model catalog only lists JUDGE_MODEL_SLUG
-      // ("claude-sonnet"), never "some-future-model" - left unset so a
-      // regression to the "traycer" stand-in fallback is exactly what this
-      // catches.
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toEqual({
         kind: "provider",
         harnessId: "some-future-harness",
         harnessLabel: "some-future-harness",
+        modelLabel: "some-future-model",
       });
     });
 
-    // C2, the paired control: the SAME stored model slug, but on a
-    // RECOGNIZED harness ("claude") whose own catalog genuinely omits it.
-    // Without this, C1 would pass against a predicate that never reports
-    // anything unrunnable.
     it("does report the judge unrunnable when a recognized harness's own catalog omits the stored model", () => {
       autoJudgeGetData = {
         selection: {
@@ -966,14 +887,79 @@ describe("useAutoJudgeBilling", () => {
         },
       };
       providersListData = { providers: [] };
-      // Default judge-model catalog only lists JUDGE_MODEL_SLUG
-      // ("claude-sonnet"), so "some-future-model" is genuinely absent.
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
       );
 
       expect(result.current).toEqual({ kind: "blocked" });
+    });
+  });
+
+  // The `source: "fallback"` arm: Automatic falls back to the RUN harness's
+  // own model, not to Traycer. Which model it names depends on whether that
+  // harness's catalog row advertises its own `judgeDefaultModel`.
+  describe("effective.source === 'fallback' names the run harness's own model", () => {
+    it("names the run harness's judgeDefaultModel when its catalog row has one", () => {
+      autoJudgeGetData = {
+        selection: null,
+        effective: { source: "fallback" },
+      };
+      providersListData = { providers: [] };
+      harnessesData = {
+        harnesses: [harnessRow(false, "claude-fallback-default")],
+      };
+      judgeModelsQueryMock.mockReturnValue(
+        judgeModelsAnswered([judgeModelRow("claude-fallback-default", null)]),
+      );
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "composer-model"),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+        modelLabel: "claude-fallback-default",
+      });
+    });
+
+    it("falls back to the composer's own selected model when the run harness names no judge default", () => {
+      autoJudgeGetData = {
+        selection: null,
+        effective: { source: "fallback" },
+      };
+      providersListData = { providers: [] };
+      harnessesData = { harnesses: [harnessRow(false, null)] };
+      judgeModelsQueryMock.mockReturnValue(
+        judgeModelsAnswered([judgeModelRow("composer-model", null)]),
+      );
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "composer-model"),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+        modelLabel: "composer-model",
+      });
+    });
+
+    it("returns null under fallback when there is no run harness to name", () => {
+      autoJudgeGetData = {
+        selection: null,
+        effective: { source: "fallback" },
+      };
+      providersListData = { providers: [] };
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", null, "composer-model"),
+      );
+
+      expect(result.current).toBeNull();
     });
   });
 });

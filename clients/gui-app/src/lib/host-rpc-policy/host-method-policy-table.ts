@@ -354,6 +354,26 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
+  "organization.read": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.refresh": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.history": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.command": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Settings > Browser's saved-logins list. A bounded read that can coalesce,
   // and no cadence: the list changes only when the person on this screen
   // clears a row or a site writes a cookie, and the group refetches on the
@@ -886,7 +906,6 @@ export const HOST_METHOD_POLL_TABLE = {
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
-  "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
   "host.fileCopy.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -942,7 +961,17 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // The host-level forwards listing: only the newest answer means anything.
-  "portForward.listForHost": { ...LATEST_SCHEDULING, poll: null },
+  //
+  // Opt-in polling (`poll: true`), for one caller: Settings ▸ Overview ▸ Ports,
+  // whose tab trigger carries a count of these rows. The host has no change
+  // signal for port forwards - nothing is pushed when a forward stops, binds or
+  // is cut from another machine - so with no cadence the count kept whatever
+  // the page read on open. Every 15 seconds while the page is open and the
+  // window is visible (never in the background) was the user's call.
+  "portForward.listForHost": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
   // Stopping a forward and cutting a lease both tear down live sockets.
   "portForward.stop": {
     mode: "fifo",
@@ -2134,6 +2163,10 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bounded read of the host's recent-decisions log (Permissions ▸ Activity).
+  // The tab refetches on mount and on its own refresh; a cadence here would
+  // wake the host for a log that grows only while an Auto mode turn runs.
+  "autoJudge.listRecent": { ...LATEST_SCHEDULING, poll: null },
   "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
   // Last-write-wins on the server, so ordering is the client's job: rapid
   // saves must reach the host in the order the user made them. `fifo` is not

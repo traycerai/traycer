@@ -6,6 +6,11 @@ import type {
   ListTasksResponse,
   ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
+import type {
+  TaskLabel,
+  TaskOrganization,
+} from "@traycer/protocol/host/organization/schemas";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import {
@@ -21,6 +26,16 @@ const testState = vi.hoisted(() => {
   const response: ListTasksResponse = {
     tasks,
     hasMore: false,
+  };
+  const organizationView: OrganizationView = {
+    catalog: [],
+    groups: { version: "0", groups: [], memberships: [] },
+    appearances: [],
+    taskLabels: {},
+    ready: true,
+    authenticationRequired: false,
+    pending: [],
+    failures: [],
   };
   return {
     tasks,
@@ -69,6 +84,8 @@ const testState = vi.hoisted(() => {
     // RESULT would pass whether or not `useHistoryQuery` gated the spend on
     // the cloud-authorization verdict - only capturing the argument proves it.
     taskContextsEnabledCalls: [] as boolean[],
+    organizationRefresh: vi.fn(() => Promise.resolve()),
+    organizationView,
   };
 });
 
@@ -169,6 +186,20 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/organization/organization-context")
+    >();
+  return {
+    ...actual,
+    useOrganizationTasks: () => ({
+      view: testState.organizationView,
+      refresh: testState.organizationRefresh,
+    }),
+  };
+});
+
 describe("useHistoryQuery", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(
@@ -200,6 +231,17 @@ describe("useHistoryQuery", () => {
     testState.initialLegRefused = false;
     testState.queryIsPending = false;
     testState.taskContextsEnabledCalls = [];
+    testState.organizationRefresh.mockReset();
+    testState.organizationView = {
+      catalog: [],
+      groups: { version: "0", groups: [], memberships: [] },
+      appearances: [],
+      taskLabels: {},
+      ready: true,
+      authenticationRequired: false,
+      pending: [],
+      failures: [],
+    };
     // `useEpicGetTaskContexts` is gated on `authorizesCloudCapability`, read
     // off the REAL store (not mocked in this file) - default to `signed-in`
     // so every pre-existing test here keeps exercising the id-fetched union
@@ -227,6 +269,66 @@ describe("useHistoryQuery", () => {
 
     expect(testState.refetch).toHaveBeenCalledTimes(1);
     expect(testState.rawRefetch).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the active organization view together with cloud history", () => {
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(testState.refetch).toHaveBeenCalledTimes(1);
+    expect(testState.organizationRefresh).toHaveBeenCalledTimes(1);
+    expect(testState.rawRefetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending host organization state over the confirmed cloud row", () => {
+    const cloudTask = taskLightWithOrganization(
+      "epic-alpha",
+      "Alpha workbench",
+      "traycer/gui-app",
+      {
+        labels: [taskLabel("cloud-label", "Cloud label")],
+        appearance: {
+          taskId: "epic-alpha",
+          version: "1",
+          color: null,
+          icon: "CL",
+        },
+        group: null,
+      },
+    );
+    testState.tasks = [cloudTask];
+    testState.response = { tasks: [cloudTask], hasMore: false };
+    testState.organizationView = {
+      ...testState.organizationView,
+      appearances: [
+        {
+          taskId: "epic-alpha",
+          version: "2",
+          color: null,
+          icon: "PN",
+        },
+      ],
+      taskLabels: {
+        "epic-alpha": {
+          labels: [taskLabel("pending-label", "Pending label")],
+          removed: [],
+        },
+      },
+      pending: [
+        {
+          commandIds: ["pending-command"],
+          scope: "labels:epic-alpha",
+          status: "queued",
+        },
+      ],
+    };
+
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(screen.getByTestId("organization-state").textContent).toBe(
+      "epic-alpha:Pending label:PN",
+    );
   });
 
   it("locally narrows existing rows while a new search query is debouncing", () => {
@@ -1057,6 +1159,15 @@ function HistoryQueryHarness(props: {
         {String(result.data?.hostRequiresCloudToList ?? false)}
       </div>
       <div data-testid="error">{result.error?.message ?? ""}</div>
+      <div data-testid="organization-state">
+        {joined(
+          result.data?.items.map(
+            (item) =>
+              `${item.epicId}:${item.organization?.labels.map((label) => label.name).join(",") ?? ""}:${item.organization?.appearance.icon ?? ""}`,
+          ),
+          "",
+        )}
+      </div>
       <div data-testid="has-next-page">{String(result.hasNextPage)}</div>
       <div role="status" aria-label="History titles">
         {joined(
@@ -1165,6 +1276,28 @@ function taskLight(id: string, title: string, repo: string): ListTaskLight {
       roomInfo: null,
     },
     pinned: false,
+  };
+}
+
+function taskLightWithOrganization(
+  id: string,
+  title: string,
+  repo: string,
+  organization: TaskOrganization,
+): ListTaskLight & { readonly organization: TaskOrganization } {
+  return { ...taskLight(id, title, repo), organization };
+}
+
+function taskLabel(labelId: string, name: string): TaskLabel {
+  return {
+    ownerId: "user-1",
+    labelId,
+    kind: "custom",
+    systemKey: null,
+    name,
+    color: "#112233",
+    version: "1",
+    assignmentId: `${labelId}-assignment`,
   };
 }
 

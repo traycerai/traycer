@@ -73,9 +73,10 @@ export function runCommand(
         // runner killed carries a signal, and one that overflowed `maxBuffer`
         // carries a string code but DID start - the pid keeps it a run error.
         const spawnFailed = !spawned && typeof err.code === "string" && !killed;
+        const timedOut = !spawnFailed && killed && signal !== null;
         const summary = spawnFailed
           ? `could not be spawned (${err.code})`
-          : killed && signal !== null
+          : timedOut
             ? `timed out after ${options.timeoutMs}ms (killed via ${signal})`
             : `exited with code ${exitCode}`;
         const message = `${command} ${args.join(" ")} ${summary}: ${stderrStr.trim() || stdoutStr.trim()}`;
@@ -89,14 +90,24 @@ export function runCommand(
                 stdoutStr,
                 stderrStr,
               )
-            : new ProcessRunError(
-                message,
-                command,
-                args,
-                exitCode,
-                stdoutStr,
-                stderrStr,
-              ),
+            : timedOut
+              ? new ProcessTimeoutError(
+                  message,
+                  command,
+                  args,
+                  exitCode,
+                  stdoutStr,
+                  stderrStr,
+                  options.timeoutMs,
+                )
+              : new ProcessRunError(
+                  message,
+                  command,
+                  args,
+                  exitCode,
+                  stdoutStr,
+                  stderrStr,
+                ),
         );
       },
     );
@@ -156,5 +167,37 @@ export class ProcessSpawnError extends ProcessRunError {
   ) {
     super(message, command, args, exitCode, stdout, stderr);
     this.name = "ProcessSpawnError";
+  }
+}
+
+/**
+ * The child ran past `timeoutMs` and this runner killed it. Still a
+ * {@link ProcessRunError} for every caller that only asks "did it fail", and a
+ * distinct class for the callers whose command outlives the process that
+ * issued it: killing `launchctl kickstart -k` or `systemctl restart` does not
+ * withdraw a request the service manager has already accepted - it finishes
+ * the job regardless - so such a caller must report a timeout as unconfirmed,
+ * never as the operation having failed.
+ *
+ * The discriminator is that the child died BY the runner's timeout signal
+ * (`killed` with a `signal`). A child that traps SIGTERM and exits with a code
+ * of its own reads as an ordinary {@link ProcessRunError}, a genuine failure.
+ * That is right for `launchctl` and `systemctl`, which do not trap it, and is
+ * why this is not a general-purpose timeout class for any binary.
+ */
+export class ProcessTimeoutError extends ProcessRunError {
+  public readonly timeoutMs: number;
+  constructor(
+    message: string,
+    command: string,
+    args: readonly string[],
+    exitCode: number,
+    stdout: string,
+    stderr: string,
+    timeoutMs: number,
+  ) {
+    super(message, command, args, exitCode, stdout, stderr);
+    this.name = "ProcessTimeoutError";
+    this.timeoutMs = timeoutMs;
   }
 }

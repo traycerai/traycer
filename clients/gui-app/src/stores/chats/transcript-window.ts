@@ -16,6 +16,7 @@ import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/
 import {
   assistantRowId,
   assistantRowTurnKey,
+  autoJudgeNoticeRowId,
   autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
@@ -1076,7 +1077,8 @@ export function spanChargeBytes(
  * Fold one record set's BACKABLE identities into `into` - the derived id
  * shapes every tier produces the same way: a message backs the row carrying
  * its id, an event backs its transcript row, its forked-chat-link row, its
- * imported-chat-marker row and its unattended-auto-denial row, and a stopped
+ * imported-chat-marker row, its unattended-auto-denial row and its auto-judge
+ * notice row, and a stopped
  * turn's event backs that turn's assistant row.
  *
  * Every SHAPE is added for every event, unconditionally: this is the set of
@@ -1100,6 +1102,7 @@ export function addRecordBackedRowIds(
     into.add(forkedChatLinkRowId(event.eventId));
     into.add(importedChatMarkerRowId(event.eventId));
     into.add(autoJudgeUnattendedDenialRowId(event.eventId));
+    into.add(autoJudgeNoticeRowId(event.eventId));
     if (event.type === "turn.stopped" && event.turnId !== null) {
       into.add(assistantRowId(event.turnId));
     }

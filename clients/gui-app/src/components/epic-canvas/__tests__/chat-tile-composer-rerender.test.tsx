@@ -194,6 +194,8 @@ const APPROVALS: ChatLowerApprovalsState = {
   onFileEditDecision: () => undefined,
   onApprovalDecision: () => undefined,
   highlightedApprovalId: null,
+  ruleDraftWorkspace: { remote: null, branch: null },
+  onOpenSettings: () => undefined,
 };
 const QUEUE: ChatLowerQueueState = {
   editingItem: null,

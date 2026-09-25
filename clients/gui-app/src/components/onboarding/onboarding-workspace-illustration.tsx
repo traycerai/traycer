@@ -38,11 +38,11 @@ import {
   MousePointer2,
   Plus,
   Search,
+  ShieldOff,
   Split,
   SplitSquareHorizontal,
   SquareStack,
   Terminal,
-  UnlockKeyhole,
   UserCircle,
   X,
   type LucideIcon,
@@ -1326,7 +1326,7 @@ function DioramaComposer() {
                 <ImagePlus className="size-4" />
               </span>
               <span className="inline-flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1">
-                <UnlockKeyhole className="size-4 shrink-0" />
+                <ShieldOff className="size-4 shrink-0" />
                 <span className="truncate whitespace-nowrap @max-lg:hidden">
                   Full access
                 </span>

@@ -91,6 +91,60 @@ export function hasShippedAutoPolicySections(
   );
 }
 
+/** One named rule of a shipped tier: `- **Force Push** - git push --force…`. */
+export type ShippedAutoPolicyRule = {
+  /** The rule's name exactly as the document spells it (the judge's category). */
+  readonly name: string;
+  /** The rule's text, paragraphs separated by a blank line. */
+  readonly text: string;
+};
+
+const RULE_BULLET = /^[-*][ \t]+\*\*(.+?)\*\*[ \t]*(?:[-–—:][ \t]*)?(.*)$/u;
+
+/**
+ * The named rules of one tier's body, in document order.
+ *
+ * A rule opens at a bullet whose text starts with a bold name and runs until
+ * the next such bullet, so its wrapped lines and any paragraph it carries (the
+ * toolchain carve-out under Running Untrusted Downloaded Code) stay with it.
+ * The tier's introduction, before the first rule, is not a rule and is
+ * dropped. Wrapped lines are rejoined, because the document is wrapped for its
+ * source file and the chip that shows a rule is not that width.
+ */
+export function parseShippedAutoPolicyRules(
+  tierBody: string,
+): readonly ShippedAutoPolicyRule[] {
+  const rules: { name: string; paragraphs: string[][] }[] = [];
+  for (const line of tierBody.split("\n")) {
+    const bullet = RULE_BULLET.exec(line);
+    if (bullet !== null) {
+      const first = bullet[2].trim();
+      rules.push({
+        name: bullet[1].trim(),
+        paragraphs: [first.length > 0 ? [first] : []],
+      });
+      continue;
+    }
+    const rule = rules.at(-1);
+    if (rule === undefined) continue;
+    const text = line.trim();
+    if (text.length === 0) {
+      if ((rule.paragraphs.at(-1) ?? []).length > 0) rule.paragraphs.push([]);
+      continue;
+    }
+    const paragraph = rule.paragraphs.at(-1);
+    if (paragraph === undefined) rule.paragraphs.push([text]);
+    else paragraph.push(text);
+  }
+  return rules.map((rule) => ({
+    name: rule.name,
+    text: rule.paragraphs
+      .filter((paragraph) => paragraph.length > 0)
+      .map((paragraph) => paragraph.join(" "))
+      .join("\n\n"),
+  }));
+}
+
 function collectHeadings(lines: readonly string[]): readonly Heading[] {
   const headings: Heading[] = [];
   // A `#` at the start of a line inside a fenced block is a comment in whatever

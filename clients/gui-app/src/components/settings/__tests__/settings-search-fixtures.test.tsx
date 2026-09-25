@@ -14,8 +14,10 @@ import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
+import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
+import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
@@ -35,12 +37,49 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostClient: () => null,
 }));
 
+// The host Overview re-provides a scoped STREAM binding for its import and
+// migration rows, and the real hook reads the auth service of a host runtime
+// this executor does not stand up. Under a connecting scope there is nothing
+// to bind anyway - `null` is what the real hook answers there too - and the
+// rows that ride the stream are withheld until the host is usable.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
   useRateLimitResolveHostScope: () => ({
     scope: hostScopeFixture({}),
     hasExplicitPick: false,
   }),
 }));
+
+// Permissions and the host Overview are the executor panels that read a host
+// scope: Permissions' tab bar and Modes row sit outside `HostScopeGate`, and
+// the Overview's header and tab bar render in every host state, so the
+// contract mounts both under a `connecting` scope - the state where every
+// host-backed body is withheld - and the fixture's `hostScope` says which
+// state to serve. The ref is set per test.
+const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
+  current: null,
+}));
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const { hostScopeFixture: fixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      ...(await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >()),
+      useHostScope: () =>
+        fixture(
+          hostScopeState.current === "connecting"
+            ? { status: "connecting" }
+            : {},
+        ),
+    };
+  },
+);
 
 // General's replay button and Sounds' host link navigate; nothing here clicks
 // them, but both hooks need a router to be CALLED.
@@ -68,15 +107,18 @@ const MOUNTS: {
   appearance: <AppearanceSettingsPanel />,
   layout: <LayoutSettingsPanel />,
   "opening-behavior": <OpeningBehaviorPanel />,
+  permissions: <PermissionsSettingsPanel />,
   browser: <BrowserSettingsPanel />,
   "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
+  host: <HostSettingsPanel />,
 };
 
 const executed = new Set<string>();
 
 afterEach(() => {
   cleanup();
+  hostScopeState.current = null;
   setMobileApp(false);
   setFeatureSettingsBridge(null);
   setMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
@@ -86,6 +128,7 @@ describe("settings search fixtures", () => {
   for (const fixture of SETTINGS_SEARCH_FIXTURES) {
     for (const shell of fixture.shells) {
       it(`${fixture.section} lands every result with ${shell.name}`, () => {
+        hostScopeState.current = fixture.hostScope;
         let mounted: SettingsAvailabilityContext | null = null;
         const container = mountInShell(
           shell.context,
