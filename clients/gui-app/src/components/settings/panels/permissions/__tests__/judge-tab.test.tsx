@@ -318,6 +318,37 @@ function picked(): void {
   judgeRecord.current = { selection: CLAUDE_STORED, lastSelection: null };
 }
 
+/** Re-renders the tab after the test moved the mocked record or catalog. */
+function nudge(): void {
+  act(() => {
+    setModels("claude", {
+      kind: "ready",
+      models: [
+        model("claude", "sonnet", "Claude Sonnet"),
+        model("claude", "opus", "Claude Opus"),
+      ],
+    });
+  });
+}
+
+async function closePicker(user: UserEvent): Promise<void> {
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(pickerPanel()).toBeNull());
+}
+
+async function switchToCodexAndClose(user: UserEvent): Promise<void> {
+  await user.click(face());
+  await user.click(await screen.findByRole("tab", { name: /Codex/ }));
+  expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+  await closePicker(user);
+}
+
+async function flushTicks(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
 describe("JudgeTab", () => {
   describe("the tile-state table", () => {
     it("loading: neither tile is checked, both are inert, and no picker is drawn", () => {
@@ -1241,37 +1272,6 @@ describe("JudgeTab", () => {
       profileId: null,
     };
 
-    /** Re-renders the tab after the test moved the mocked record or catalog. */
-    function nudge(): void {
-      act(() => {
-        setModels("claude", {
-          kind: "ready",
-          models: [
-            model("claude", "sonnet", "Claude Sonnet"),
-            model("claude", "opus", "Claude Opus"),
-          ],
-        });
-      });
-    }
-
-    async function closePicker(user: UserEvent): Promise<void> {
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(pickerPanel()).toBeNull());
-    }
-
-    async function switchToCodexAndClose(user: UserEvent): Promise<void> {
-      await user.click(face());
-      await user.click(await screen.findByRole("tab", { name: /Codex/ }));
-      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
-      await closePicker(user);
-    }
-
-    async function flushTicks(): Promise<void> {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-    }
-
     describe("R1: a choice made on the card ends a pending switch", () => {
       beforeEach(() => {
         setModels("codex", { kind: "pending" });
@@ -1614,37 +1614,6 @@ describe("JudgeTab", () => {
       model: "gpt-mini",
       profileId: null,
     };
-
-    /** Re-renders the tab after the test moved the mocked record or catalog. */
-    function nudge(): void {
-      act(() => {
-        setModels("claude", {
-          kind: "ready",
-          models: [
-            model("claude", "sonnet", "Claude Sonnet"),
-            model("claude", "opus", "Claude Opus"),
-          ],
-        });
-      });
-    }
-
-    async function closePicker(user: UserEvent): Promise<void> {
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(pickerPanel()).toBeNull());
-    }
-
-    async function switchToCodexAndClose(user: UserEvent): Promise<void> {
-      await user.click(face());
-      await user.click(await screen.findByRole("tab", { name: /Codex/ }));
-      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
-      await closePicker(user);
-    }
-
-    async function flushTicks(): Promise<void> {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-    }
 
     describe("N1: re-clicking a provider keeps its model only while the catalog lists it", () => {
       it("P5: last-broken on a delisted Codex model, re-clicking Codex saves the recommended model, never the delisted one", async () => {
