@@ -12,6 +12,7 @@ import {
   isFoundTaskContext,
   type GetTaskContextsResponse,
   type TaskContextResolution,
+  type TaskContextUnknownReason,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -676,10 +677,8 @@ export function taskPinReadingChunks(
  * `found` over one of these would leave a live Pin control on a task the
  * account can no longer write, so they replace it like `confirmed-absent`.
  */
-const ACCESS_ANSWER_REASONS: ReadonlySet<string> = new Set([
-  "denied",
-  "not-found-or-not-permitted",
-]);
+const ACCESS_ANSWER_REASONS: ReadonlySet<TaskContextUnknownReason> =
+  new Set<TaskContextUnknownReason>(["denied", "not-found-or-not-permitted"]);
 
 /** See the `structuralSharing` note in {@link useEpicTaskPinnedStates}. */
 export function keepAnsweredOverTransientUnknown(

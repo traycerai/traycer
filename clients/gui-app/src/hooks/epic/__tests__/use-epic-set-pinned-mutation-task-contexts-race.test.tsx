@@ -20,7 +20,8 @@ import { hostQueryKeys } from "@/lib/query-keys";
  * pre-write bit back, forever (`staleTime: Infinity` means nothing asks
  * again). `onMutate` and `onSuccess` in `use-epic-set-pinned-mutation.ts` now
  * cancel any in-flight `epic.getTaskContexts` refetch for the written epic
- * (`revert: false`, keeping its last-good data) and `onSuccess` re-applies the
+ * (`revert: true`, reverting to its last-good data rather than surfacing the
+ * cancellation as a query error) and `onSuccess` re-applies the
  * committed bit directly - this drives the REAL mutation (not the
  * `useHostMutation`-mocking harness `use-epic-set-pinned-mutation.test.tsx`
  * uses) against a REAL `QueryClient` so the cancellation is actually
@@ -673,6 +674,90 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
         .row,
     ).toEqual({ status: "found", task: listTaskLight("epic-b", false) });
     expect(statuses).not.toContain("error");
+
+    stop();
+  });
+
+  /**
+   * Cold-review gap in the "onMutate's cancel ... never errors" test above:
+   * its own end-state assertions (data, `isInvalidated`) pass even under
+   * `revert: false`, because the optimistic patch's `setQueryData` a few
+   * lines later resets the query back to `status: "success"` regardless -
+   * that test only goes red through its TRANSIENT `statuses` recording. This
+   * proves the same claim on the END STATE, with no `statuses` array to lean
+   * on: a FAILED write never reaches `onSuccess` (no patch follows to paper
+   * over a stuck error), and the in-flight query being cancelled here is on
+   * host-2 - a host `onError`'s own rollback (`applyPinnedPatch`, scoped to
+   * the DISPATCH host) never touches - so nothing downstream of the cancel
+   * can repair a wrong outcome. Ported from the reviewer's own probe
+   * (`sticky-probe.test.tsx`, "PROBE sticky: failed write, other-host
+   * refetch in flight"), which is why the shape matches it rather than this
+   * file's other tests.
+   */
+  it("leaves a second host's in-flight refetch settled as `success`, not stuck in error, after the write fails", async () => {
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const otherHostKey = hostQueryKeys.epicTaskContexts("host-2", USER_ID, [
+      "epic-b",
+    ]);
+    let fetchCount = 0;
+    const observer = new QueryObserver<GetTaskContextsResponse>(queryClient, {
+      queryKey: otherHostKey,
+      staleTime: Infinity,
+      queryFn: () => {
+        fetchCount += 1;
+        // The first fetch settles, giving the query DATA. The second - the
+        // in-flight refetch below - never settles on its own for the rest of
+        // the test, so only a CANCEL (never a real response) can move it out
+        // of "fetching".
+        return fetchCount === 1
+          ? Promise.resolve(foundResponse("epic-b", true))
+          : new Promise<GetTaskContextsResponse>(() => undefined);
+      },
+    });
+    const stop = observer.subscribe(() => undefined);
+    await waitFor(() => {
+      expect(observer.getCurrentResult().data).toBeDefined();
+    });
+
+    // A refetch on host-2's OWN query, in flight when the failed write below
+    // dispatches. `cancelInFlightTaskContextsReads` is scoped
+    // `{ hostId: null, userId }` - every host for this user, not only the
+    // dispatch host - so `onMutate`'s cancel reaches this one even though
+    // the write itself dispatches to HOST_ID (host-1).
+    void observer.refetch();
+    await waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(true);
+    });
+
+    failNextRequest.value = true;
+    const { result } = renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        epicId: "epic-b",
+        pinned: false,
+        isLocalHome: false,
+        hostId: null,
+      }),
+    ).rejects.toThrow();
+    // Flush whatever microtask chain the cancel/revert still runs.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const queryState = queryClient
+      .getQueryCache()
+      .find({ queryKey: otherHostKey })?.state;
+    expect(queryState?.status).toBe("success");
+    expect(queryState?.isInvalidated).toBe(false);
+    expect(queryState?.data).toEqual(foundResponse("epic-b", true));
 
     stop();
   });
