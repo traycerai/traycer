@@ -25,7 +25,10 @@ import {
   type JudgeWarningCause,
 } from "@/components/settings/panels/auto-judge-selection";
 import { judgePickAccount } from "@/components/settings/panels/permissions/judge-tile-state";
-import type { JudgePendingSwitch } from "@/components/settings/panels/permissions/use-judge-toolbar-store";
+import type {
+  JudgeDroppedSwitch,
+  JudgePendingSwitch,
+} from "@/components/settings/panels/permissions/use-judge-toolbar-store";
 import { COPILOT_PREMIUM_REQUESTS_PER_HOUR } from "@/lib/auto-mode/auto-judge-billing";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
@@ -235,6 +238,29 @@ export function PendingSwitchLine(props: {
         </StatusLine>
       );
   }
+}
+
+/**
+ * The line a provider switch dropped for having no models, or failing to load
+ * them, leaves on the second tile: the same sentence the waiting switch
+ * showed, kept until the picker next opens or a tile is chosen, so the tile
+ * still says why nothing was saved. The switch itself is gone.
+ */
+export function DroppedSwitchLine(props: {
+  readonly dropped: JudgeDroppedSwitch;
+  readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
+}): ReactNode {
+  const { dropped } = props;
+  const label =
+    props.harnesses?.find((row) => row.id === dropped.harnessId)?.label ??
+    dropped.harnessId;
+  return (
+    <StatusLine tone="warning" testId="auto-judge-switch-dropped">
+      {dropped.models === "empty"
+        ? judgeNoModelsLine(label)
+        : judgeModelsFailedLine(label)}
+    </StatusLine>
+  );
 }
 
 /**

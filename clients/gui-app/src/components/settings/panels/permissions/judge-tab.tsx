@@ -69,6 +69,7 @@ import {
 } from "@/components/settings/panels/permissions/judge-model-face";
 import {
   AutomaticStatus,
+  DroppedSwitchLine,
   JudgeSavingLine,
   JudgeWarning,
   PendingSwitchLine,
@@ -372,19 +373,24 @@ function JudgeTiles(props: JudgeTilesProps): ReactNode {
   const opensPicker = judgeTileOpensPicker(state);
   const inert = state.row === "loading" || state.readOnly;
 
-  // Every choice made on the card itself first ends a provider switch still
-  // waiting for its models: the latest click wins, and that switch must not
-  // land after it. Choosing Automatic ends one even when Automatic is already
-  // on - it is an explicit "Automatic".
+  // A choice that changes the outcome ends a provider switch still waiting
+  // for its models: the latest click wins, and that switch must not land
+  // after it. Choosing Automatic ends one even when Automatic is already on
+  // - it is an explicit "Automatic", whichever part of the tile it lands on
+  // (the radio's own click, below, covers the checked circle and Space).
   const chooseAutomatic = (): void => {
     picker.toolbar.dropPending();
     if (pick.displayed !== null) pick.request(null);
   };
   // What choosing the second tile does in each row: nothing when it is
   // already chosen, bring the last pick back when it can run, and open the
-  // picker when there is none or it cannot. Opening the picker is not a
-  // choice, so a switch still waiting there survives it.
+  // picker when there is none or it cannot. In Picked, a switch still
+  // waiting is itself this tile's choice (flow 1: it lands even if the panel
+  // closed meanwhile), and clicking the tile again is not a new one, so it
+  // survives; so it does opening the picker. Any tile choice clears the line
+  // a dropped switch left behind.
   const choosePick = (): void => {
+    picker.toolbar.clearDroppedSwitch();
     if (state.row === "last-runs" && state.shown !== null) {
       picker.toolbar.dropPending();
       pick.request(state.shown);
@@ -416,7 +422,16 @@ function JudgeTiles(props: JudgeTilesProps): ReactNode {
             chooseAutomatic();
           }}
         >
-          <AutomaticTileContent {...props} />
+          <AutomaticTileContent
+            {...props}
+            // Radix answers a click on an already-checked radio with no
+            // `onValueChange`, and the tile hands radio clicks to the radio,
+            // so the checked circle (and Space, a native click) would reach
+            // neither.
+            onRadioClick={() => {
+              picker.toolbar.dropPending();
+            }}
+          />
         </ChoiceTile>
         <ChoiceTile
           data-testid="auto-judge-tile-pick"
@@ -437,8 +452,12 @@ function JudgeTiles(props: JudgeTilesProps): ReactNode {
             onRadioClick={(event) => {
               // A pointer click on the radio opens the picker where choosing
               // the tile does; the click an arrow key synthesizes (Radix
-              // checks the radio it lands on) must not.
-              if (!opensPicker || arrowKeyHeld.current) return;
+              // checks the radio it lands on) must not. A real click is a
+              // tile choice even on the checked radio, which Radix answers
+              // with no `onValueChange`.
+              if (arrowKeyHeld.current) return;
+              picker.toolbar.clearDroppedSwitch();
+              if (!opensPicker) return;
               event.preventDefault();
               picker.open();
             }}
@@ -506,7 +525,9 @@ function useArrowKeyHeld(): RefObject<boolean> {
   return held;
 }
 
-function AutomaticTileContent(props: JudgeTilesProps): ReactNode {
+function AutomaticTileContent(
+  props: JudgeTilesProps & { readonly onRadioClick: () => void },
+): ReactNode {
   const radioId = useId();
   const titleId = useId();
   const descriptionId = useId();
@@ -517,6 +538,7 @@ function AutomaticTileContent(props: JudgeTilesProps): ReactNode {
         id={radioId}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
+        onClick={props.onRadioClick}
       />
       <ChoiceTileTitle id={titleId}>
         <Sparkle aria-hidden className="text-primary" />
@@ -622,21 +644,40 @@ function PickTileContent(
 }
 
 /**
- * The second tile's status line. A provider switch waiting for its models
- * reports here whichever tile is selected, because the pending pick belongs
- * to this tile. Otherwise only while a picked model is selected: the spinner
- * alone while it saves, then what is wrong with the stored pick or, when
- * nothing is, who it bills - each once the host's verdict is current.
+ * The second tile's status line. A provider switch waiting for its models,
+ * or the line one dropped for having none left behind, reports here whichever
+ * tile is selected, because that pick belongs to this tile. Otherwise only
+ * while a picked model is selected: the spinner alone while it saves, then
+ * what is wrong with the stored pick or, when nothing is, who it bills - each
+ * once the host's verdict is current.
  */
 function PickFoot(
   props: JudgeTilesProps & { readonly toolbar: JudgeToolbarStore },
 ): ReactNode {
-  const { verdict } = props;
-  const openProvider = useOpenJudgeProvider();
   const pending = props.toolbar.pendingSwitch;
   if (pending !== null) {
     return <PendingSwitchLine pending={pending} harnesses={props.harnesses} />;
   }
+  // A switch dropped for having no models, or failing to load them, still
+  // says so above whatever the tile now describes.
+  const dropped = props.toolbar.droppedSwitch;
+  return (
+    <>
+      {dropped === null ? null : (
+        <DroppedSwitchLine dropped={dropped} harnesses={props.harnesses} />
+      )}
+      <PickStatus {...props} />
+    </>
+  );
+}
+
+/**
+ * The stored pick's own line, while it is selected: the spinner alone while
+ * it saves, then what is wrong with it or, when nothing is, who it bills.
+ */
+function PickStatus(props: JudgeTilesProps): ReactNode {
+  const { verdict } = props;
+  const openProvider = useOpenJudgeProvider();
   if (props.state.row !== "picked") return null;
   if (props.pick.draft !== null) return <JudgeSavingLine />;
   const stored = verdict?.selection ?? null;

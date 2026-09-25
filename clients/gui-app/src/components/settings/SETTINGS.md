@@ -3971,7 +3971,11 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         once it loads, as in the composer. A click on the provider already
         selected is not a switch: it keeps the model on show, as the
         composer's same click restores that provider's remembered model, so
-        it saves nothing. `selectionMarked` is true only while a pick this
+        it saves nothing. Only while the loaded catalog lists that model
+        (`selectionCatalogConfirmed`), though: a model the machine no longer
+        offers is not one to keep, and keeping it would save a judge that
+        cannot run, so the click lands on the recommended model instead, as
+        a real switch does. `selectionMarked` is true only while a pick this
         build can name is on screen (`judgeSelectionMarked`), so nothing is
         checked before a first pick, and a stored harness this build does not
         know - whose store holds the unpicked seed - checks no unrelated row.
@@ -4071,13 +4075,21 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         failed, or its provider stopped being available - is settled
         whenever the picker is closed: at the close, or later, when a switch
         left loading behind a closed picker stops loading. It re-seeds from
-        what is saved, and the line goes with it, so the tile describes the
-        machine's judge again and the next open starts from it.
-      - Choosing a tile ends the switch first: a click on Automatic (even
-        one already on), or bringing the last pick back, whether by click or
-        by arrow. The latest click wins, so the switch cannot land after it.
-        Opening the picker from the second tile is not a choice, and a
-        switch waiting there survives it.
+        what is saved, so the tile describes the machine's judge again and
+        the next open starts from it.
+      - Choosing a different outcome ends the switch first: Automatic,
+        even one already on and wherever on its tile (the body, the checked
+        circle, or Space on it), or bringing the last pick back, whether by
+        click or by arrow. The latest click wins, so the switch cannot land
+        after it. In Picked, the waiting switch is itself the second tile's
+        choice (flow 1 has it land even after the panel closed), so a second
+        click on that tile is not a new choice and the switch survives it,
+        as it survives opening the picker.
+      - A switch dropped for having no models, or failing to load them,
+        leaves its sentence on the second tile as display state, above
+        whatever the tile now describes, so the tile still says why nothing
+        was saved. It no longer holds the store, and it clears when the
+        picker next opens or a tile is chosen.
       - While the switch waits, a re-derived seed (a harness list or verdict
         settling on a cold host) does not replace it: it is a pick made on
         this card that has not settled.

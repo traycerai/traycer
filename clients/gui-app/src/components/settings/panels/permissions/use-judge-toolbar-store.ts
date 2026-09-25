@@ -56,10 +56,25 @@ export interface JudgePendingSwitch {
   readonly models: JudgePendingModels;
 }
 
+/**
+ * A provider switch that was dropped because its models came back empty or
+ * failed, kept only so the second tile can still say why nothing was saved.
+ * Display state: the store is no longer pending.
+ */
+export interface JudgeDroppedSwitch {
+  readonly harnessId: ProviderId;
+  readonly models: "empty" | "failed";
+}
+
 export interface JudgeToolbarStore {
   readonly store: ComposerToolbarStore;
   /** The switch the store is holding, or `null` when nothing is pending. */
   readonly pendingSwitch: JudgePendingSwitch | null;
+  /**
+   * The last switch dropped for having no models or failing to load them,
+   * until the picker next opens or a tile is chosen; `null` otherwise.
+   */
+  readonly droppedSwitch: JudgeDroppedSwitch | null;
   /**
    * What closing the picker does to the store. A switch still waiting for its
    * models survives, and saves the moment they land; one that can no longer
@@ -71,9 +86,12 @@ export interface JudgeToolbarStore {
   /**
    * Ends a pending provider switch by re-seeding from what is saved. Every
    * choice made on the card itself calls it first: the latest click wins, so
-   * a switch still waiting for its models must not land after it.
+   * a switch still waiting for its models must not land after it. It is a
+   * tile choice, so it clears `droppedSwitch` too.
    */
   readonly dropPending: () => void;
+  /** Clears `droppedSwitch`: a tile was chosen. */
+  readonly clearDroppedSwitch: () => void;
   /** The embedding's `providerSwitchModel`. */
   readonly providerSwitchModel: (harnessId: ProviderId) => string;
 }
@@ -211,10 +229,17 @@ export function useJudgeToolbarStore(input: {
   // as the picker is closed, whenever that happens: at the close, or later,
   // when a switch left loading behind a closed picker stops loading. Held, it
   // would keep an amber line under whatever the machine's judge now is, and
-  // keep every re-derived seed out.
+  // keep every re-derived seed out. One that had no models, or failed to load
+  // them, leaves its sentence behind as display state.
   const abandoned =
     pending &&
     (read === "empty" || read === "failed" || read === "unavailable");
+  const [droppedSwitch, clearDroppedSwitch] = useDroppedSwitch({
+    pickerOpen,
+    abandoned,
+    harnessId,
+    read,
+  });
   const settleAbandoned = useEffectEvent(() => {
     reseed();
   });
@@ -229,16 +254,26 @@ export function useJudgeToolbarStore(input: {
   };
 
   const dropPending = (): void => {
+    clearDroppedSwitch();
     if (store.getState().pendingSettingsEmit) reseed();
   };
 
   // A click on the provider already selected keeps its model, as in the
   // composer, where the same click restores that provider's remembered model.
-  // Only a real switch lands on the provider's recommended judge model.
+  // Only while the loaded catalog lists it, though: a model this machine no
+  // longer offers is not one to keep, and saving it would save a judge that
+  // cannot run (flow 6). Nor an unresolved seed's `""`, which names no model
+  // of its own. Then, and for a real switch, the click lands on the
+  // provider's recommended judge model, else its first.
   const providerSwitchModel = useCallback(
     (next: ProviderId): string => {
-      const current = store.getState().values.selection;
-      if (current.harnessId === next && current.modelSlug.length > 0) {
+      const state = store.getState();
+      const current = state.values.selection;
+      if (
+        current.harnessId === next &&
+        current.modelSlug.length > 0 &&
+        state.selectionCatalogConfirmed
+      ) {
         return current.modelSlug;
       }
       return judgeSwitchModel(harnesses, next);
@@ -249,10 +284,43 @@ export function useJudgeToolbarStore(input: {
   return {
     store,
     pendingSwitch,
+    droppedSwitch,
     settleOnClose,
     dropPending,
+    clearDroppedSwitch,
     providerSwitchModel,
   };
+}
+
+/**
+ * The line a switch dropped for having no models, or failing to load them,
+ * leaves behind: display state, so the tile still says why nothing was saved
+ * (spec flow 1), while the switch itself no longer holds the store. It is
+ * recorded while the abandoned switch waits for its settle and cleared when
+ * the picker next opens - both while rendering, not in an effect - or when a
+ * tile is chosen, through the returned clear.
+ */
+function useDroppedSwitch(input: {
+  readonly pickerOpen: boolean;
+  readonly abandoned: boolean;
+  readonly harnessId: ProviderId;
+  readonly read: JudgePendingModelsRead;
+}): readonly [JudgeDroppedSwitch | null, () => void] {
+  const { pickerOpen, abandoned, harnessId, read } = input;
+  const [dropped, setDropped] = useState<JudgeDroppedSwitch | null>(null);
+  if (pickerOpen) {
+    if (dropped !== null) setDropped(null);
+  } else if (abandoned) {
+    const next: JudgeDroppedSwitch | null =
+      read === "empty" || read === "failed"
+        ? { harnessId, models: read }
+        : null;
+    if (!sameDroppedSwitch(dropped, next)) setDropped(next);
+  }
+  const clear = useCallback(() => {
+    setDropped(null);
+  }, []);
+  return [dropped, clear];
 }
 
 /**
@@ -291,6 +359,14 @@ function useStableSeed(seed: HarnessModelSelection): HarnessModelSelection {
   if (sameSelection(held, seed)) return held;
   setHeld(seed);
   return seed;
+}
+
+function sameDroppedSwitch(
+  a: JudgeDroppedSwitch | null,
+  b: JudgeDroppedSwitch | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.harnessId === b.harnessId && a.models === b.models;
 }
 
 function sameSelection(
