@@ -1801,6 +1801,9 @@ export function NewConversationModalBody(props: {
       // used to opt out and render the desktop row at any width, which made
       // one composer look like two depending on where it was opened from.
       toolbarLayout={isMobile ? "collapsed" : "full"}
+      // Already a sheet of its own; a second one over it would fight the
+      // dialog for the screen.
+      expansion={null}
       draftsControl={null}
       attachmentsStrip={
         <NewConversationModalAttachmentStrip
