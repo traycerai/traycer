@@ -36,6 +36,13 @@ import {
 import { unhydratedRowCount } from "@/stores/chats/transcript-window";
 import { chatFindCoverageMessage } from "@/components/chat/chat-find";
 import {
+  FULLY_LOADED_TRANSCRIPT,
+  chatFindTranscriptPlacement,
+  type ChatFindTranscriptPlacement,
+} from "@/components/chat/chat-find-index";
+import { ChatFindIndexSource } from "@/components/chat/chat-find-index-source";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
   CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
   resolvedScrollBlockId,
   useChatNavigationBlockReveal,
@@ -1874,6 +1881,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     coldRewrittenMessageIds,
     hydrationSequence,
     composerOverlayHeight,
+    epicId,
+    hostId,
     identity,
     instanceId,
     messages,
@@ -2037,9 +2046,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
-  // Read only by find's coverage supplier, and through a ref for the same
-  // reason `messages` is: the window changes identity on every hydration, and
-  // a value dependency would re-register the find adapter each time.
+  // Read only by find's coverage and placement suppliers, and through a ref
+  // for the same reason `messages` is: the window changes identity on every
+  // hydration, and a value dependency would re-register the find adapter each
+  // time.
   const transcriptWindowRef = useRef<TranscriptWindow | null>(transcriptWindow);
   // Ticket 5 / decision #18: LegendList's measured header size (the main
   // component of getTopOffsetAdjustment). Capture folds this into the saved
@@ -3158,11 +3168,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [captureLiveChatTabScrollSnapshot, setTimelineMode],
   );
 
+  // Find's hand-off after it navigated to an older index hit: the landed row
+  // is hydrated, so the client scan can take the exact highlight from there.
+  // Assigned from the find controller, which is created further down.
+  const findLandingSettledRef = useRef<
+    (rowMessageId: string, outcome: ChatScrollRequestOutcome) => void
+  >(() => undefined);
   const settleScrollRequest = useCallback(
     (requestId: number, outcome: ChatScrollRequestOutcome): void => {
       const pending = pendingScrollRequestLandingRef.current;
       if (pending === null || pending.requestId !== requestId) return;
       pendingScrollRequestLandingRef.current = null;
+      findLandingSettledRef.current(pending.messageId, outcome);
       onScrollRequestSettledRef.current?.(requestId, outcome);
     },
     [],
@@ -3696,10 +3713,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (window === null) return null;
     return chatFindCoverageMessage(unhydratedRowCount(window));
   }, []);
+  // Which index hits describe text the rows do not show, and where they sit.
+  // The legacy line holds every record.
+  const getFindPlacement = useCallback((): ChatFindTranscriptPlacement => {
+    const window = transcriptWindowRef.current;
+    return window === null
+      ? FULLY_LOADED_TRANSCRIPT
+      : chatFindTranscriptPlacement(window);
+  }, []);
+  // An older index hit is navigated the way a History hit is: the tile's jump
+  // resolves it - a row id through the skeleton, a message id through the
+  // rows or the host - and hydrates the row. Addressed to this tile, since
+  // the chat may be open in another.
+  const requestFindIndexJump = useCallback(
+    (target: string): void => {
+      if (hostId === null) return;
+      useChatTranscriptJumpStore
+        .getState()
+        .requestTileJump(hostId, taskId, instanceId, {
+          kind: "message",
+          messageId: target,
+        });
+    },
+    [hostId, instanceId, taskId],
+  );
 
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
     scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
+    indexDemand: chatFindIndexDemand,
+    setIndexAnswer: setChatFindIndexAnswer,
+    onTranscriptLandingSettled: onChatFindTranscriptLandingSettled,
   } = useChatFindController({
     instanceId,
     messages,
@@ -3707,12 +3751,23 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
     getFindCoverageMessage,
+    getFindPlacement,
+    requestIndexJump: requestFindIndexJump,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
     cancelManualNavigation: cancelManualNavigationForFind,
     setScrolledActiveUserMessageIdIfChanged,
   });
+  useLayoutEffect(() => {
+    findLandingSettledRef.current = onChatFindTranscriptLandingSettled;
+  }, [onChatFindTranscriptLandingSettled]);
+  // Whether the index has anything to answer moves with hydration only, not
+  // with every streaming token that re-renders the transcript.
+  const chatFindIndexHasUnhydratedRows = useMemo(
+    () => transcriptWindow !== null && unhydratedRowCount(transcriptWindow) > 0,
+    [transcriptWindow],
+  );
 
   // Viewport-driven hydration (slice C of the windowed line): translate the
   // list's visible ROW indexes into the ordinal range they cover and report
@@ -3965,10 +4020,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             />
           ) : null}
         </div>
+        {hostId !== null && transcriptWindow !== null ? (
+          <ChatFindIndexSource
+            hostId={hostId}
+            epicId={epicId}
+            chatId={taskId}
+            demandSource={chatFindIndexDemand}
+            hasUnhydratedRows={chatFindIndexHasUnhydratedRows}
+            onAnswer={setChatFindIndexAnswer}
+          />
+        ) : null}
         <ChatLiveAnnouncements
-          epicId={props.epicId}
+          epicId={epicId}
           chatId={taskId}
-          hostId={props.hostId}
+          hostId={hostId}
           messages={messages}
           baselineEpoch={baselineEpoch}
           hydrationSequence={hydrationSequence}

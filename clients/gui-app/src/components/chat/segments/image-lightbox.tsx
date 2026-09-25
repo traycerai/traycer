@@ -25,6 +25,7 @@ import {
   performImageAction,
 } from "@/lib/images/perform-image-action";
 
+import { ZoomableImageDialogBody } from "../zoomable-image-dialog-body";
 import { ImageActions } from "./image-actions";
 
 interface ImageLightboxProps {
@@ -139,33 +140,26 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         }}
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {/* The minimum reserves room for the absolutely positioned action
-            bar, so no image aspect ratio can collapse the wrapper and clip
-            the actions under overflow-hidden; the 90vh clamp keeps the floor
-            inside the wrapper's own max height. */}
-        <div className="relative flex max-h-[90vh] min-h-[min(6rem,90vh)] w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
-          {props.mediaType === "image/svg+xml" ? (
-            <div className="h-[min(88vh,52rem)] w-full">
-              <Suspense
-                fallback={
-                  <div className="size-full animate-pulse bg-foreground/10 motion-reduce:animate-none" />
-                }
-              >
-                <UntrustedSvgLightbox src={props.src} alt={alt} />
-              </Suspense>
+        {props.mediaType === "image/svg+xml" ? (
+          <div className="relative h-[min(88vh,52rem)] w-full overflow-hidden rounded-lg bg-foreground/3">
+            <Suspense
+              fallback={
+                <div className="size-full animate-pulse bg-foreground/10 motion-reduce:animate-none" />
+              }
+            >
+              <UntrustedSvgLightbox src={props.src} alt={alt} />
+            </Suspense>
+            <div className="absolute bottom-safe-bottom-gutter right-3">
+              {actions}
             </div>
-          ) : (
-            <img
-              src={props.src}
-              alt={alt}
-              className="block max-h-[min(88vh,52rem)] max-w-full object-contain"
-              draggable={false}
-            />
-          )}
-          <div className="absolute bottom-safe-bottom-gutter right-3">
-            {actions}
           </div>
-        </div>
+        ) : (
+          <ZoomableImageDialogBody
+            src={props.src}
+            alt={alt}
+            actions={actions}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

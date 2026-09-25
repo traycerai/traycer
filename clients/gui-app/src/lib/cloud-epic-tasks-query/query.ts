@@ -1,3 +1,8 @@
+import type {
+  CloudListTasksRequest,
+  CloudTaskFilters,
+} from "@traycer/protocol/host/organization/schemas";
+import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { queryOptions, replaceEqualDeep } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -45,7 +50,7 @@ const REQUEST_CONTEXT_WAIT_TIMEOUT_MS = 15_000;
  * the same list, merely at different freshness points.
  */
 export type ListCloudTasksRequest = Omit<
-  ListTasksRequest,
+  CloudListTasksRequest,
   "cursor" | "localFirstPhase"
 >;
 
@@ -234,7 +239,13 @@ export function listCloudTasksRequestForHistorySearch(
     search.repos.flatMap(parseRepoLabel),
   );
   const query = search.query.trim();
-  const filters: NonNullable<ListTasksRequest["filters"]> = {};
+  const filters: CloudTaskFilters = {};
+  if (search.labelNames?.length) {
+    filters.labelNames = [...search.labelNames].sort();
+    filters.labelMatchMode = search.labelMode ?? "any";
+  }
+  if (search.groupIds?.length) filters.groupIds = [...search.groupIds].sort();
+  if (search.includeUngrouped) filters.includeUngrouped = true;
   if (query.length > 0) filters.query = query;
   if (repoIdentifiers.length > 0) {
     filters.repoIdentifiers = repoIdentifiers;
@@ -382,6 +393,8 @@ async function dispatchScopedPageWithCurrentRequestContext(
     throw new CloudEpicTasksVerdictWithdrawnError();
   }
   const request = buildListTasksRequest(options.request, options.cursor);
+  if (hasOrganizationFilters(options.request.filters))
+    return fetchOrganizationHistory(client, options, admission);
   if (options.localFirstPhase === undefined) {
     return client.requestWithSignal(
       "epic.listTasks",
@@ -432,6 +445,37 @@ async function dispatchScopedPageWithCurrentRequestContext(
       }
       throw cause;
     });
+}
+
+function hasOrganizationFilters(filters: CloudTaskFilters | null): boolean {
+  return Boolean(
+    filters?.labelNames?.length ||
+    filters?.groupIds?.length ||
+    filters?.includeUngrouped,
+  );
+}
+function fetchOrganizationHistory(
+  client: HostClient<HostRpcRegistry>,
+  options: FetchCloudEpicTasksScopedPageOptions,
+  admission: DispatchAdmission,
+): Promise<ListTasksResponse> {
+  const hostId = client.getActiveHostId();
+  if (
+    admission !== "authorized" ||
+    hostId === null ||
+    !getNegotiatedHostMethods(hostId)?.has("organization.history")
+  )
+    return Promise.reject(
+      new Error("Update this device to filter by labels or groups."),
+    );
+  return client.requestWithSignal(
+    "organization.history",
+    {
+      ...options.request,
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+    },
+    options.abortSignal,
+  );
 }
 
 function hasMatchingRequestContext(

@@ -14,6 +14,7 @@ import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
+import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
@@ -36,6 +37,15 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostClient: () => null,
 }));
 
+// The host Overview re-provides a scoped STREAM binding for its import and
+// migration rows, and the real hook reads the auth service of a host runtime
+// this executor does not stand up. Under a connecting scope there is nothing
+// to bind anyway - `null` is what the real hook answers there too - and the
+// rows that ride the stream are withheld until the host is usable.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
   useRateLimitResolveHostScope: () => ({
     scope: hostScopeFixture({}),
@@ -43,10 +53,12 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
   }),
 }));
 
-// Permissions is the one executor panel that reads a host scope: its tab bar
-// and Modes row sit outside `HostScopeGate`, so the contract mounts it under a
-// `connecting` scope - the state where every gated body is withheld - and the
-// fixture's `hostScope` says which state to serve. The ref is set per test.
+// Permissions and the host Overview are the executor panels that read a host
+// scope: Permissions' tab bar and Modes row sit outside `HostScopeGate`, and
+// the Overview's header and tab bar render in every host state, so the
+// contract mounts both under a `connecting` scope - the state where every
+// host-backed body is withheld - and the fixture's `hostScope` says which
+// state to serve. The ref is set per test.
 const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
   current: null,
 }));
@@ -99,6 +111,7 @@ const MOUNTS: {
   browser: <BrowserSettingsPanel />,
   "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
+  host: <HostSettingsPanel />,
 };
 
 const executed = new Set<string>();

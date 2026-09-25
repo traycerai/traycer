@@ -785,6 +785,15 @@ export interface ChatMessage {
    */
   pausedSinceMs?: number | null;
   persistentMessageId: string | null;
+  /**
+   * Every persisted record this assistant row's turn folds, in fold order,
+   * when there is more than one. A turn split across several records
+   * (subagent flows, legacy and migrated snapshots) renders under ONE
+   * `persistentMessageId` - the last record's - so a reference that starts
+   * from an earlier record (a History hit, a find index hit) resolves here.
+   * Absent on a single-record turn and on every other row.
+   */
+  turnMessageIds?: ReadonlyArray<string>;
   senderLabel: string | null;
   assistantMeta: AssistantTurnMeta | null;
   statusLabel: string | null;

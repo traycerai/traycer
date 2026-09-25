@@ -534,6 +534,39 @@ function maxScrollTopFor(scrollNode: HTMLElement): number {
   return Math.max(0, scrollNode.scrollHeight - scrollNode.clientHeight);
 }
 
+/** A row's absolute position minus DOM `scrollTop` - stays constant when
+ *  pixel-stable, even if `scrollTop` itself legitimately moves. */
+function viewportOffsetForKey(key: string): number {
+  const list = legendListRefHolder.current;
+  if (list === null) {
+    throw new Error("LegendList ref is not mounted");
+  }
+  const position = list.getState().positionByKey(key);
+  if (position === undefined) {
+    throw new Error(`${key} is not a known row`);
+  }
+  return position - getScrollNode().scrollTop;
+}
+
+/** The message id at the top of the current render window - via
+ *  LegendList's own `start` index, not a geometry guess. */
+function firstVisibleRowId(messages: ReadonlyArray<ChatMessageModel>): string {
+  const list = legendListRefHolder.current;
+  if (list === null) {
+    throw new Error("LegendList ref is not mounted");
+  }
+  const message = messages.at(list.getState().start);
+  if (message === undefined) {
+    throw new Error(`no message at render-window start`);
+  }
+  return message.id;
+}
+
+/** Precondition: the row is actually mounted, not just estimated. */
+function assertRowMounted(id: string): void {
+  expect(screen.queryByTestId(`mock-message-${id}`)).not.toBeNull();
+}
+
 /** True-bottom geometry: DOM is at max scroll AND LegendList reports isAtEnd. */
 function assertTrueBottomGeometry(): void {
   const scrollNode = getScrollNode();
@@ -5666,15 +5699,25 @@ describe("ChatMessages scroll policy", () => {
       const readerPark = getScrollNode().scrollTop;
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(readerPark).not.toBe(rawAnchorScrollTop);
+      // The actual row visible at park - prepending 150 earlier rows moves
+      // it, and `scrollTop`, by +13500px (150 * 90) to keep it in place;
+      // check that offset, not a frozen `scrollTop`.
+      const visibleAnchorId = firstVisibleRowId(partialMessages);
+      assertRowMounted(visibleAnchorId);
+      const offsetBeforeGrowth = viewportOffsetForKey(visibleAnchorId);
 
-      // Same mount: full transcript arrives after supersession - no jump back.
       setLegendListScrollContainerScrollHeightOverride(
         LEGEND_LIST_HEADER_PX + fullMessages.length * 90 + 40,
       );
       first.rerenderMessages(fullMessages);
       await settleLegendList();
       await settleLegendList();
-      expect(getScrollNode().scrollTop).toBe(readerPark);
+      assertRowMounted(visibleAnchorId);
+      const offsetAfterGrowth = viewportOffsetForKey(visibleAnchorId);
+      expect(offsetAfterGrowth, visibleAnchorId).toBeCloseTo(
+        offsetBeforeGrowth,
+        0,
+      );
       expect(getScrollNode().scrollTop).not.toBe(rawAnchorScrollTop);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
@@ -6040,15 +6083,23 @@ describe("ChatMessages scroll policy", () => {
           });
           await settleLegendList();
 
-          let parked = 0;
+          let awayAnchorId: string | null = null;
+          let offsetBefore = 0;
           if (atEdge) {
             assertTrueBottomGeometry();
           } else {
-            parked = await enterFreeScrollingNearEnd(
+            await enterFreeScrollingNearEnd(
               40,
               DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
             );
             await waitForPillVisible();
+            // The row actually at the top of the reader's viewport, not
+            // just any row that survives the mutation - a survives-but-
+            // offscreen row (e.g. the transcript's last row) can sit below
+            // what's mounted.
+            awayAnchorId = firstVisibleRowId(base);
+            assertRowMounted(awayAnchorId);
+            offsetBefore = viewportOffsetForKey(awayAnchorId);
           }
 
           const result = mutation.apply(base);
@@ -6081,11 +6132,24 @@ describe("ChatMessages scroll policy", () => {
             await waitFor(() => {
               assertTrueBottomGeometry();
             });
-            expect(isJumpPillVisible()).toBe(false);
+            expect(isJumpPillVisible(), mutation.label).toBe(false);
           } else {
-            expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
-            expect(getScrollNode().scrollTop).toBe(parked);
-            expect(isJumpPillVisible()).toBe(true);
+            if (awayAnchorId === null) {
+              throw new Error("no away anchor captured");
+            }
+            expect(getScrollNode().dataset.scrollMode, mutation.label).toBe(
+              "free-scrolling",
+            );
+            // Not a raw `scrollTop === parked` freeze: setup-card-weave and
+            // disclosure-size insert/grow content above the reader, which
+            // can legitimately move `scrollTop`; footer-inset grows
+            // trailing space below the content instead. The offset check
+            // below covers both without assuming which way, if any,
+            // `scrollTop` needs to move.
+            assertRowMounted(awayAnchorId);
+            const offsetAfter = viewportOffsetForKey(awayAnchorId);
+            expect(offsetAfter, mutation.label).toBeCloseTo(offsetBefore, 0);
+            expect(isJumpPillVisible(), mutation.label).toBe(true);
           }
         }
       }

@@ -323,7 +323,12 @@ const RETAINED_BADGE_WORD: Record<FleetUpdateViewKind, string | null> = {
   unknown: null,
 };
 
-function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
+/**
+ * Exported for the Overview's live update pill, which states a retained phase
+ * in the picker's own words ("Last seen: updating") so the two surfaces cannot
+ * describe one unreachable host differently.
+ */
+export function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
   return RETAINED_BADGE_WORD[kind];
 }
 

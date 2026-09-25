@@ -40,6 +40,14 @@ export interface HostBusyForceDeferDialogProps {
   readonly detail: string | null;
   readonly isForcing: boolean;
   readonly forceLabel: string;
+  /**
+   * Whether Force is destructive-styled. True wherever it ENDS running work
+   * (Force restart, Force update), which is every caller but one: the
+   * Overview's bound activation offer, whose button is "Restart host" and
+   * stays an ordinary button, as Restart does everywhere else on that page.
+   * Required rather than defaulted, so each caller states which it is.
+   */
+  readonly forceDestructive: boolean;
   readonly onForce: () => void;
   readonly onDefer: () => void;
 }
@@ -100,7 +108,7 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
           </Button>
           <Button
             type="button"
-            variant="default"
+            variant={props.forceDestructive ? "destructive" : "default"}
             size="sm"
             disabled={props.isForcing}
             onClick={props.onForce}

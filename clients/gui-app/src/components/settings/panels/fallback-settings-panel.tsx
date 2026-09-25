@@ -70,6 +70,17 @@ import { providerSupportsManagedProfiles } from "@/components/settings/panels/pr
 import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fallback-ladder-editor";
 import { FallbackBehaviorGroup } from "@/components/settings/panels/fallback/fallback-behavior-group";
 import { FallbackOverridesMatrix } from "@/components/settings/panels/fallback/fallback-overrides-matrix";
+import type { HostNotificationStoppedReason } from "@traycer/protocol/host/notifications/payloads";
+import {
+  clearPolicyOverride,
+  clearPolicyOverrides,
+  restorePolicyOverrides,
+} from "@/components/settings/panels/fallback/fallback-overrides-model";
+import {
+  overrideChangesSaved,
+  overrideResetUndoState,
+  type OverrideReset,
+} from "@/components/settings/panels/fallback/fallback-overrides-reset";
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 import {
@@ -353,6 +364,14 @@ function FallbackPolicyEditor(props: {
    * only one of them would have to be read as covering the other.
    */
   const [readBackInFlight, setReadBackInFlight] = useState(false);
+  const [overrideSavePolicy, setOverrideSavePolicy] =
+    useState<FallbackPolicy | null>(null);
+  const [overrideReset, setOverrideReset] = useState<OverrideReset | null>(
+    null,
+  );
+  const [overrideOrigins, setOverrideOrigins] = useState<
+    ReadonlyMap<number, HostNotificationStoppedReason>
+  >(() => new Map());
   /**
    * The latest reducer state, for the handlers that run LONG after the render
    * that created them.
@@ -427,6 +446,8 @@ function FallbackPolicyEditor(props: {
       field: FallbackPolicyField,
       keyedTierGroups: readonly KeyedGroup[] | null,
     ): void => {
+      setOverrideReset(null);
+      setOverrideSavePolicy(null);
       dispatch({ type: "edited", policy: next, field, keyedTierGroups });
     },
     [],
@@ -474,9 +495,11 @@ function FallbackPolicyEditor(props: {
       // defaulted: the groups editor is the only thing that can say which row
       // an insert, a removal or a move produced.
       keyedTierGroups: readonly KeyedGroup[] | null,
-    ): void => {
+    ): number | null => {
+      setOverrideReset(null);
+      setOverrideSavePolicy(null);
       dispatch({ type: "edited", policy: next, field, keyedTierGroups });
-      if (validateFallbackPolicyDraft(next).kind === "invalid") return;
+      if (validateFallbackPolicyDraft(next).kind === "invalid") return null;
       // Minted here rather than read back off the reducer: the `edited` above
       // has not been applied yet, so the revision this request carries is not
       // observable from this side. The id is the handle the reducer pairs with
@@ -486,6 +509,9 @@ function FallbackPolicyEditor(props: {
       void setMutation
         .mutateAsync({ policy: next })
         .then((response) => {
+          setOverrideOrigins(
+            (origins) => new Map([...origins].filter(([id]) => id > requestId)),
+          );
           dispatch({
             type: "save-succeeded",
             requestId,
@@ -501,6 +527,13 @@ function FallbackPolicyEditor(props: {
             field,
             outcome: failure.outcome,
           });
+          if (failure.outcome !== "unknown") {
+            setOverrideOrigins((origins) => {
+              const nextOrigins = new Map(origins);
+              nextOrigins.delete(requestId);
+              return nextOrigins;
+            });
+          }
           if (failure.outcome === "unknown") {
             void reconcileUnknownSave(requestId).catch(() => {
               // Deliberately nothing. A read-back that fails leaves the notice
@@ -519,9 +552,55 @@ function FallbackPolicyEditor(props: {
             });
           }
         });
+      return requestId;
     },
     [setMutation, reconcileUnknownSave],
   );
+
+  const changeOverrides = useCallback(
+    (
+      next: FallbackPolicy,
+      reason: HostNotificationStoppedReason | null,
+    ): number | null => {
+      const requestId = commit(next, "overrides", null);
+      setOverrideSavePolicy(requestId === null ? null : next);
+      if (requestId !== null && reason !== null) {
+        setOverrideOrigins((origins) =>
+          new Map(origins).set(requestId, reason),
+        );
+      }
+      return requestId;
+    },
+    [commit],
+  );
+
+  const resetOverrides = useCallback(
+    (reason: HostNotificationStoppedReason | null): void => {
+      const previous = stateRef.current.draft;
+      const next =
+        reason === null
+          ? clearPolicyOverrides(previous)
+          : clearPolicyOverride(previous, reason);
+      const requestId = changeOverrides(next, reason);
+      if (requestId !== null)
+        setOverrideReset({ requestId, reason, previous, next });
+    },
+    [changeOverrides],
+  );
+
+  const undoOverrides = useCallback((): void => {
+    const current = stateRef.current;
+    const undo = overrideResetUndoState(current, overrideReset);
+    if (overrideReset === null || undo === null || undo.disabled) return;
+    changeOverrides(
+      restorePolicyOverrides(
+        current.draft,
+        overrideReset.previous,
+        overrideReset.reason,
+      ),
+      overrideReset.reason,
+    );
+  }, [changeOverrides, overrideReset]);
 
   /**
    * "Undo" on a removal toast: the inverse of that one removal, applied to the
@@ -610,6 +689,8 @@ function FallbackPolicyEditor(props: {
    * subsequent read would produce and the editor can take it directly.
    */
   const restoreDefaultGroups = useCallback((): void => {
+    setOverrideReset(null);
+    setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
     // groups - so it must not make the displayed values count as dispatched
@@ -672,6 +753,8 @@ function FallbackPolicyEditor(props: {
    * cleared.
    */
   const resetAll = useCallback((): void => {
+    setOverrideReset(null);
+    setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // As the restore above: a reset sends DEFAULTS, not the values on screen,
     // so "what's on screen was sent" must stay unsupported by it (D339), and a
@@ -1048,14 +1131,55 @@ function FallbackPolicyEditor(props: {
             // does not contain can still be turned ON for one failure, and it has
             // to land where the user put it rather than at the end.
             rungOrder={state.displayOrder}
-            onChange={(next) => {
-              commit(next, "overrides", null);
-            }}
-            status={saveStatusFor("overrides", "mt-3")}
+            onChange={changeOverrides}
+            onReset={resetOverrides}
+            onUndo={undoOverrides}
+            undo={overrideResetUndoState(state, overrideReset)}
+            attentionReason={
+              state.unknownSave === null
+                ? null
+                : (overrideOrigins.get(state.unknownSave.requestId) ?? null)
+            }
+            previewUnconfirmed={
+              state.unknownSave !== null ||
+              state.unrefreshedReset !== null ||
+              state.unverifiedHostRow !== null
+            }
+            status={
+              <OverrideSaveConfirmation
+                state={state}
+                submittedPolicy={overrideSavePolicy}
+                reset={overrideReset}
+                fallback={saveStatusFor("overrides", "text-ui-xs")}
+              />
+            }
           />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/** Confirm the submitted choices, not a different policy restored by read-back. */
+function OverrideSaveConfirmation(props: {
+  readonly state: FallbackPolicyDraftState;
+  readonly submittedPolicy: FallbackPolicy | null;
+  readonly reset: OverrideReset | null;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const { state, submittedPolicy, reset, fallback } = props;
+  if (
+    submittedPolicy === null ||
+    reset !== null ||
+    !fallbackPolicyValuesEqual(state.draft, submittedPolicy) ||
+    !overrideChangesSaved(state)
+  ) {
+    return fallback;
+  }
+  return (
+    <p role="status" className="text-ui-xs text-muted-foreground">
+      Changes saved
+    </p>
   );
 }
 
@@ -1076,6 +1200,7 @@ function FallbackPolicyEditor(props: {
  * elsewhere: it is the fact the toggle DECISION turns on, and a keyboard user
  * landing on the switch had no way to hear it.
  */
+
 function MasterFallbackToggle(props: {
   readonly checked: boolean;
   readonly onCheckedChange: (next: boolean) => void;

@@ -1,11 +1,23 @@
+import {
+  NotificationDeliveryReceipts,
+  projectNotificationFeedDisplay,
+} from "@traycer-clients/shared/notifications/feed-delivery";
+import type {
+  DesktopNotificationFeedOccurrence,
+  DesktopNotificationShowOutcome,
+  DesktopNotificationLegacyShowOutcome,
+  DesktopNotificationForegroundDisplay,
+} from "../ipc-contracts/notification-types";
 import { BrowserWindow, Notification } from "electron";
-import type { DesktopNotificationShowOutcome } from "../ipc-contracts/notification-types";
 import { log } from "./app/logger";
 
 const MAX_REPLACEABLE_NOTIFICATIONS = 100;
 const MAX_DELIVERED_NOTIFICATION_KEYS = 5_000;
 const replaceableNotifications = new Map<string, Notification>();
 const deliveredNotificationKeys = new Set<string>();
+const feedDeliveryReceipts = new NotificationDeliveryReceipts(
+  MAX_DELIVERED_NOTIFICATION_KEYS,
+);
 
 export interface NativeNotificationOptions {
   readonly title: string;
@@ -31,7 +43,7 @@ export interface NativeNotificationOptions {
  */
 export function showNativeNotification(
   options: NativeNotificationOptions,
-): DesktopNotificationShowOutcome {
+): DesktopNotificationLegacyShowOutcome {
   if (
     options.deliveryKey !== null &&
     deliveredNotificationKeys.has(options.deliveryKey)
@@ -84,6 +96,44 @@ export function showNativeNotification(
   notification.show();
   rememberDeliveredNotificationKey(options.deliveryKey);
   return "presented";
+}
+
+/** Deduplicate individual occurrences before projecting native batch content. */
+export function showNativeFeedNotification(
+  occurrences: ReadonlyArray<DesktopNotificationFeedOccurrence>,
+  onClick: (payload: unknown) => void,
+  onForegroundSuppressed: (
+    display: DesktopNotificationForegroundDisplay,
+  ) => void,
+): DesktopNotificationShowOutcome {
+  const seen = new Set<string>();
+  const fresh = occurrences.filter((occurrence) => {
+    if (feedDeliveryReceipts.has(occurrence.key) || seen.has(occurrence.key)) {
+      return false;
+    }
+    seen.add(occurrence.key);
+    return true;
+  });
+  const display = projectNotificationFeedDisplay(fresh);
+  if (display === null) return "duplicate";
+  let relayed = false;
+  const outcome = showNativeNotification({
+    title: display.title,
+    body: display.body,
+    replaceKey: display.replaceKey,
+    // Per-occurrence receipts above own deduplication. A batch key cannot
+    // reconcile the same rows arriving separately or in different batches.
+    deliveryKey: null,
+    onClick: () => onClick(display.payload),
+    onForegroundSuppressed: () => {
+      onForegroundSuppressed({ ...display, foregroundAppLocal: null });
+      relayed = true;
+    },
+  });
+  // A throwing relay/show has not delivered anything and remains retryable.
+  for (const occurrence of fresh) feedDeliveryReceipts.record(occurrence.key);
+  if (outcome === "duplicate") return outcome;
+  return { kind: "feed", outcome, display: relayed ? null : display };
 }
 
 function closeReplacement(replaceKey: string | null): void {

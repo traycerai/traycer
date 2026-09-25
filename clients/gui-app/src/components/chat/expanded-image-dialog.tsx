@@ -21,6 +21,7 @@ import {
 } from "@/lib/images/perform-image-action";
 
 import { ImageActions } from "./segments/image-actions";
+import { ZoomableImageDialogBody } from "./zoomable-image-dialog-body";
 
 export type ExpandedImageState =
   | { readonly status: "loading" }
@@ -66,28 +67,18 @@ export function ExpandedImageDialogContent(props: {
     );
   } else {
     body = (
-      // The minimum reserves room for the absolutely positioned action bar,
-      // so no image aspect ratio (tiny icon, extreme panorama) can collapse
-      // the wrapper and clip Copy/Download under overflow-hidden; the 90vh
-      // clamp keeps the floor inside the wrapper's own max height.
-      <div className="relative flex max-h-[90vh] min-h-[min(6rem,90vh)] w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
-        <img
-          src={image.src}
-          alt={props.alt}
-          // w-full expands small images to a usable preview and keeps the
-          // wrapper tall enough that the action bar is never clipped.
-          className="block max-h-[min(88vh,52rem)] w-full max-w-full object-contain"
-          draggable={false}
-        />
-        <div className="absolute bottom-safe-bottom-gutter right-3">
+      <ZoomableImageDialogBody
+        src={image.src}
+        alt={props.alt}
+        actions={
           <ExpandedImageActionBar
             src={image.src}
             mediaType={image.mediaType}
             alt={props.alt}
             suggestedName={props.suggestedName}
           />
-        </div>
-      </div>
+        }
+      />
     );
   }
 

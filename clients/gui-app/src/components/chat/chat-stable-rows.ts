@@ -132,6 +132,9 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   pausedSinceMs: (a, b) => a.pausedSinceMs === b.pausedSinceMs,
   persistentMessageId: (a, b) =>
     a.persistentMessageId === b.persistentMessageId,
+  // Rebuilt every pass for a multi-record turn, so compared by content: an
+  // identity check would re-render that turn's rows on every token.
+  turnMessageIds: (a, b) => sameMessageIds(a.turnMessageIds, b.turnMessageIds),
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,
@@ -143,6 +146,17 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
 };
 
 const CHAT_MESSAGE_FIELD_CHECKS = Object.values(CHAT_MESSAGE_FIELD_UNCHANGED);
+
+function sameMessageIds(
+  a: ReadonlyArray<string> | undefined,
+  b: ReadonlyArray<string> | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) {
+    return false;
+  }
+  return a.every((id, index) => id === b[index]);
+}
 
 /** Shallow field comparison - avoids the cost of a deep equality check. */
 function isChatMessageUnchanged(a: ChatMessage, b: ChatMessage): boolean {

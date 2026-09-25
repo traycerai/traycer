@@ -1,3 +1,7 @@
+import type {
+  NotificationFeedDeliveryResult,
+  NotificationFeedOccurrence,
+} from "../notifications/feed-delivery";
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
 import type {
@@ -1490,11 +1494,15 @@ export interface ITokenStore {
  *   not a rejection, deliberately: rejection semantics are load-bearing for
  *   retry loops (see `drainPendingNotifications`), and an unsupported
  *   platform must not retry forever.
+ * - Structured feed results authorize only the returned occurrence subset.
+ *   A null display means the focused renderer received that subset by relay.
+ *   Feed callers must await this decision before showing a toast or chiming.
  */
 export type NotificationShowOutcome =
   | "presented"
   | "duplicate"
-  | "undeliverable";
+  | "undeliverable"
+  | NotificationFeedDeliveryResult;
 
 /**
  * Which feed produced the notification being shown - delivery provenance,
@@ -1521,6 +1529,7 @@ export interface INotificationHost {
     deliveryKey: string | null,
     feedSource: NotificationFeedSource | null,
     foregroundAppLocal: NotificationForegroundAppLocal | null,
+    feedOccurrences: ReadonlyArray<NotificationFeedOccurrence> | null,
   ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
   onForegroundDisplay(
@@ -1546,6 +1555,7 @@ export interface NotificationForegroundAppLocal {
 /** Plain-data main -> renderer relay used instead of an OS notification while
  * another Traycer window is focused. */
 export interface NotificationForegroundDisplay {
+  readonly feedOccurrences?: ReadonlyArray<NotificationFeedOccurrence>;
   readonly title: string;
   readonly body: string;
   readonly payload: unknown;

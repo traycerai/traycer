@@ -2265,14 +2265,15 @@ describe("RemoteSession reconnect ladder accounting", () => {
         expect(line).toBeDefined();
         const total = Number(/reattached in (\d+)ms/.exec(line ?? "")?.[1]);
         const wait = Number(/wait=(\d+)ms/.exec(line ?? "")?.[1]);
-        // `wait` is the difference between integer-millisecond `Date.now()`
-        // stamps, while the real timer may be armed from the event loop's
-        // clock sample taken one tick before the loss handler's stamp. A
-        // genuine 1,000ms timer can therefore log 999ms; one millisecond is
-        // the full possible skew because both printed stamps have 1ms units.
-        // The exact 1,000ms arm is asserted above, independently of this
-        // observation boundary.
-        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS - 1);
+        // `wait` is the production's own wall-clock delta between two
+        // `Date.now()` stamps, while the real timer runs on the event loop's
+        // cached clock, which can be several milliseconds staler than either
+        // stamp: a correct 1,000ms timer can log well under 1,000ms, so no
+        // fixed millisecond tolerance is sound. The regression this guards (the
+        // backoff excluded from the clock) logs a few milliseconds, and half
+        // the rung still separates the two by about 500ms. The exact 1,000ms
+        // arm is asserted above.
+        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS / 2);
         expect(total).toBeGreaterThanOrEqual(wait);
       } finally {
         session.close();
@@ -7715,6 +7716,12 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     const lease = new MutableBearerLease("valid-token", "user-1");
     let firstDialTaken = false;
     const redialTimestamps: number[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // The delays armed since the drop (or the previous redial), one list per
+    // redial. Asserted where the timer is armed: a wall-clock gap between two
+    // dials is measured on a different clock than the one the timer runs on.
+    const armedBeforeRedial: (number | undefined)[][] = [];
+    let armedSince = 0;
     const succeedOnceThenFail: IStreamWebSocketFactory = {
       create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (!firstDialTaken) {
@@ -7722,6 +7729,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
           return relay.factory.create(url, priority);
         }
         redialTimestamps.push(Date.now());
+        armedBeforeRedial.push(
+          setTimeoutSpy.mock.calls.slice(armedSince).map((call) => call[1]),
+        );
+        armedSince = setTimeoutSpy.mock.calls.length;
         const socket = new FakeSocket(
           () => undefined,
           () => undefined,
@@ -7743,6 +7754,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         interval: 20,
       });
 
+      // Marked at the drop: the ready boundary armed a 30s probation timer,
+      // which is not the reconnect timer under test.
+      setTimeoutSpy.mockClear();
+      armedSince = 0;
       const droppedAt = Date.now();
       relay.dropCurrentConnection();
       await vi.waitFor(
@@ -7750,22 +7765,23 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         { timeout: 8_000, interval: 20 },
       );
 
+      // Rung 0 armed a 0ms timer and did not wait the backoff.
+      expect(armedBeforeRedial[0]).toContain(0);
+      expect(armedBeforeRedial[0]).not.toContain(RECONNECT_INITIAL_BACKOFF_MS);
+      // Rung 1: the real INITIAL_BACKOFF_MS, exactly once, proving the rung-0
+      // special case does not leak into later rungs.
+      expect(
+        armedBeforeRedial[1].filter(
+          (delay) => delay === RECONNECT_INITIAL_BACKOFF_MS,
+        ),
+      ).toHaveLength(1);
+      expect(armedBeforeRedial[1]).not.toContain(0);
       // Rung 0: the redial after losing a HEALTHY session is immediate -
       // allow scheduling jitter, not a full second.
       expect(redialTimestamps[0] - droppedAt).toBeLessThan(200);
-      // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
-      // case does not leak into later rungs.
-      const secondGap = redialTimestamps[1] - redialTimestamps[0];
-      // 1 ms below the backoff is allowed: both stamps are whole-millisecond
-      // `Date.now()` reads, while the timer runs on the event loop's own
-      // truncated clock, so a 1000 ms timer can measure as 999 here. The
-      // point is that this rung waits the backoff rather than 0 ms.
-      expect(secondGap).toBeGreaterThanOrEqual(
-        RECONNECT_INITIAL_BACKOFF_MS - 1,
-      );
-      expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
     } finally {
       session.close();
+      setTimeoutSpy.mockRestore();
     }
   }, 12_000);
 
@@ -7777,25 +7793,50 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     // that reads those attempts. Two evidence-classification tests in this
     // file fail if this regresses, which is the coupling that makes this
     // behaviour load-bearing rather than cosmetic.
+    //
+    // The delay is asserted where it is ARMED, not measured between two dials:
+    // Node arms a timer from libuv's cached loop time, which can be several
+    // milliseconds staler than a `Date.now()` stamped in the dial hook, so a
+    // correct 1000ms timer can fire 999ms or less after the previous stamp. The
+    // armed delay is the same number the timer was given, and no tolerance
+    // constant is needed.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("valid-token", "user-1");
-    const createTimestamps: number[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // The delays armed since the previous dial, one list per dial.
+    const armedBeforeDial: (number | undefined)[][] = [];
+    let armedSince = 0;
     const session = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
       webSocketFactory: alwaysFailFactory(() => {
-        createTimestamps.push(Date.now());
+        armedBeforeDial.push(
+          setTimeoutSpy.mock.calls.slice(armedSince).map((call) => call[1]),
+        );
+        armedSince = setTimeoutSpy.mock.calls.length;
       }),
     });
     try {
       session.start();
       await vi.waitFor(
-        () => expect(createTimestamps.length).toBeGreaterThanOrEqual(2),
+        () => expect(armedBeforeDial.length).toBeGreaterThanOrEqual(2),
         { timeout: 8_000, interval: 20 },
       );
-      const firstGap = createTimestamps[1] - createTimestamps[0];
-      expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      // The premise: the claim is "not 0ms", which means nothing if the
+      // initial backoff is itself 0.
+      expect(RECONNECT_INITIAL_BACKOFF_MS).toBeGreaterThan(0);
+      // Between dial 1 and dial 2 the reconnect timer was armed with the
+      // initial backoff, exactly once.
+      expect(
+        armedBeforeDial[1].filter(
+          (delay) => delay === RECONNECT_INITIAL_BACKOFF_MS,
+        ),
+      ).toHaveLength(1);
+      // ...and no immediate (0ms) arm sits beside it: the first failure of a
+      // never-ready session does not take the immediate rung.
+      expect(armedBeforeDial[1]).not.toContain(0);
     } finally {
       session.close();
+      setTimeoutSpy.mockRestore();
     }
   }, 10_000);
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {

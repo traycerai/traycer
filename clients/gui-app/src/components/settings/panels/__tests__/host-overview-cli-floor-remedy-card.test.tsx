@@ -18,7 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
+import { HostOverviewVersionCard } from "@/components/settings/panels/host-overview-updates";
 import {
   describeCliFloorRemedy,
   type CliFloorRemedy,
@@ -101,6 +101,7 @@ function summary(remedy: CliFloorRemedy): HostOverviewUpdatesSummary {
   return {
     hostName: "build-host",
     description: remedy.sentence,
+    answerKind: "available",
     failureDescription: null,
     remedy,
     checking: false,
@@ -118,11 +119,17 @@ function regionElement(
 ): ReactElement {
   return (
     <TooltipProvider>
-      <HostOverviewUpdatesRegion
-        summary={summary(remedy)}
-        degrade={null}
-        desktopBridge={bridge}
-        onInstallationHelp={vi.fn()}
+      <HostOverviewVersionCard
+        version="1.2.0"
+        tag={null}
+        answer={{
+          summary: summary(remedy),
+          degrade: null,
+          desktopBridge: bridge,
+          onInstallationHelp: vi.fn(),
+        }}
+        inFlight={false}
+        autoUpdate={null}
       />
     </TooltipProvider>
   );
@@ -155,7 +162,7 @@ afterEach(() => {
   useDesktopDialogStore.getState().close();
 });
 
-describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
+describe("HostOverviewVersionCard CLI floor remedy", () => {
   beforeEach(() => {
     clipboardWriteText.mockClear();
     Object.defineProperty(navigator, "clipboard", {
