@@ -191,7 +191,7 @@ export function LandingComposer(props: LandingComposerProps) {
       expanded: composerExpanded,
       onExpandedChange: setComposerExpanded,
     }),
-    [composerExpanded],
+    [composerExpanded, setComposerExpanded],
   );
 
   useEffect(() => {
@@ -651,7 +651,15 @@ export function LandingComposer(props: LandingComposerProps) {
     );
     if (refusal === null) setComposerExpanded(false);
     return refusal === null;
-  }, [actions, canSubmit, draftId, pickerStore, raiseHostNotice, toolbarStore]);
+  }, [
+    actions,
+    canSubmit,
+    draftId,
+    pickerStore,
+    raiseHostNotice,
+    setComposerExpanded,
+    toolbarStore,
+  ]);
 
   const dispatchStartTerminal = useCallback(
     (launch: TerminalAgentLaunch): boolean => {

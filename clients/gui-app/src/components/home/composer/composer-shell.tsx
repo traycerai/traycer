@@ -10,7 +10,9 @@ import {
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 
 const FILE_DROP_OVERLAY_CONTENT = {
@@ -80,6 +82,15 @@ function ComposerAreaImpl({
   expansion,
 }: ComposerAreaProps): ReactNode {
   const expanded = expansion?.expanded === true;
+  // A BROWSER's keyboard (iOS Safari overlays it and leaves `--keyboard-inset`
+  // at 0, so the surface still runs under it): the sheet's bottom is lifted
+  // by the measured cover. The installed app measures the same cover but its
+  // shell already subtracts it, so there this stays out of the way.
+  const browserKeyboardInset = useVirtualKeyboardInset();
+  const sheetStyle =
+    expanded && !isMobileApp() && browserKeyboardInset > 0
+      ? { bottom: `calc(${browserKeyboardInset}px + 1rem)` }
+      : undefined;
   return (
     <div className="relative">
       <ComposerMenu pickerStore={pickerStore} />
@@ -98,6 +109,7 @@ function ComposerAreaImpl({
       <div
         data-composer-shell=""
         data-composer-expanded={expanded ? "" : undefined}
+        style={sheetStyle}
         className={cn(
           "relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
           // The sheet fills the SURFACE the card sits on: `fixed`, so it does

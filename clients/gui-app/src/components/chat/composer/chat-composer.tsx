@@ -641,7 +641,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       expanded: composerExpanded,
       onExpandedChange: setComposerExpanded,
     }),
-    [composerExpanded],
+    [composerExpanded, setComposerExpanded],
   );
   // Whether a Cmd+Enter here would steer (vs queue), gating the discovery hints
   // (decisions 8, 9). Capability comes from the host; the setting is the opt-out.
@@ -698,7 +698,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       submitDraft(source);
       if (canSubmit) setComposerExpanded(false);
     },
-    [canSubmit, submitDraft],
+    [canSubmit, setComposerExpanded, submitDraft],
   );
   const handleSubmitFromButton = useCallback((): void => {
     handleSubmitDraft("enter");
