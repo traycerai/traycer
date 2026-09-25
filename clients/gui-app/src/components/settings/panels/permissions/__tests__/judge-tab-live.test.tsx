@@ -80,6 +80,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     method === "autoJudge.get" ? true : null,
   useHostSupportsMethod: (_hostId: string | null, method: string) =>
     method === "autoJudge.set",
+  useHostMethodSchemaVersion: () => ({ major: 9, minor: 1 }),
 }));
 const toastSpy = vi.hoisted(() =>
   vi.fn<(error: unknown, title: string) => void>(),

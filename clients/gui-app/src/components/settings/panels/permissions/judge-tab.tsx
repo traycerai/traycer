@@ -45,8 +45,8 @@ import {
   AutoModeHostGate,
   AutoModeUnsupportedLine,
 } from "@/components/settings/panels/permissions/auto-mode-host-gate";
+import { BuiltInReviewerPointer } from "@/components/settings/panels/permissions/built-in-reviewer-pointer";
 import { JudgeModelField } from "@/components/settings/panels/permissions/judge-model-field";
-import { ProviderJudgeSwitch } from "@/components/settings/panels/permissions/provider-judge-switch";
 import { COPILOT_PREMIUM_REQUESTS_PER_HOUR } from "@/lib/auto-mode/auto-judge-billing";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -62,7 +62,8 @@ const COPILOT_HARNESS_ID = providerIdToGuiHarnessId("copilot");
 
 /**
  * Settings ▸ Permissions ▸ Judge: which model reviews commands in Auto mode on
- * this machine, and which providers review their own.
+ * this machine, and a pointer to any provider set to review its own, whose
+ * switch lives on Providers ▸ {provider} ▸ Permissions.
  */
 export function JudgeTab(): ReactNode {
   return (
@@ -83,7 +84,7 @@ export function JudgeTab(): ReactNode {
           >
             <AutoJudgeControls hostId={hostId} />
           </SettingsGroup>
-          <BuiltInReviewers />
+          <BuiltInReviewerPointer hostId={hostId} />
         </div>
       )}
     </AutoModeHostGate>
@@ -741,62 +742,4 @@ function ProviderBlockerSentence(props: {
         </>
       );
   }
-}
-
-/**
- * "Providers with a built-in reviewer": one row per catalog row that can
- * review its own commands, each the same `ProviderJudgeSwitch` the provider's
- * own Permissions tab renders. Omitted when no such provider exists here.
- */
-function BuiltInReviewers(): ReactNode {
-  const harnesses = useGuiHarnessesQuery({ enabled: true, subscribed: true })
-    .data?.harnesses;
-  const providers = useProvidersList({ enabled: true, subscribed: true }).data
-    ?.providers;
-  const rows = (harnesses ?? []).flatMap((row) => {
-    if (!row.nativeAutoJudge) return [];
-    const state = providerForHarness(providers, row.id);
-    return state === undefined ? [] : [{ row, state }];
-  });
-  if (rows.length === 0) return null;
-  return (
-    <SettingsGroup
-      group={PERMISSIONS.definitions.builtInReviewers}
-      showTitle
-      tone="default"
-      dataTestId="auto-judge-built-in-reviewers"
-      fill={false}
-    >
-      <p className="px-5 pt-4 text-ui-sm text-muted-foreground">
-        {PERMISSIONS.definitions.builtInReviewers.description}
-      </p>
-      {rows.map(({ row, state }) => (
-        <div
-          key={row.id}
-          className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-4"
-        >
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="font-medium text-foreground">{row.label}</div>
-            <p className="text-ui-sm text-muted-foreground">
-              Reviews with {classifierOwner(row.id, row.label)}&apos;s
-              classifier, inside the conversation.
-            </p>
-          </div>
-          <div className="w-full sm:w-auto sm:min-w-[40%]">
-            <ProviderJudgeSwitch key={state.providerId} state={state} />
-          </div>
-        </div>
-      ))}
-    </SettingsGroup>
-  );
-}
-
-/**
- * Whose classifier a built-in reviewer is, as the row says it: Claude Code's
- * is Claude's (the spec's wording); any other provider's is its own.
- */
-function classifierOwner(harnessId: string, label: string): string {
-  return harnessId === providerIdToGuiHarnessId("claude-code")
-    ? "Claude"
-    : label;
 }

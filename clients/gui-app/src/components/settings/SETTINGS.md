@@ -2917,18 +2917,25 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     `ProviderJudgeSwitch` (`panels/permissions/provider-judge-switch.tsx`),
     then an "All permission settings" link to Permissions ▸ Judge. The link
     passes `hostId: null` because Settings is already scoped to the machine
-    this tab shows. The switch is the SAME component Permissions ▸ Judge lists
-    under "Providers with a built-in reviewer", so the two surfaces cannot
-    disagree. Only the switch is per provider. Which model Traycer's judge
+    this tab shows. **This tab is the switch's only home.** Permissions ▸
+    Judge used to mirror it in a "Providers with a built-in reviewer" card,
+    so one setting had two places to change it; that card is gone, and the
+    Judge tab keeps only a pointer line that links here (see Permissions ▸
+    Judge). Only the switch is per provider. Which model Traycer's judge
     runs on, and the rules it follows, belong to one machine and one account,
     so they live on the Permissions page and this card only links there.
     Labelled by provider because THIS is the choice that wins
     (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone);
     the provider name is interpolated, which renders "Who reviews Claude
     Code's commands" today and does not lie if a second provider ever reports
-    `nativeAutoJudge`. That choosing the classifier skips Traycer's judge AND
-    your rules is said once, in the Judge tab's "Providers with a built-in
-    reviewer" description, where both reviewers are in view.
+    `nativeAutoJudge`. The switch also carries what choosing the classifier
+    costs, since no other surface says it any more (see the `Select` rendering
+    below).
+    Settings search reaches this tab through the Providers page's own
+    keywords ("classifier", "who reviews commands", "built-in reviewer", "own
+    classifier"), and lands at the top of that page like every per-provider
+    concept, because the per-provider tabs exist only once a host answers.
+    The Judge tab's pointer line is the direct route to one provider's tab.
     The switch has four renderings, each a line of its own:
     - A provider whose `useGuiHarnessesQuery` row does not report
       `nativeAutoJudge` gets "Reviewed by Traycer's judge. Change it under
@@ -2949,6 +2956,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       as `autoJudge` in `provider-overrides.json`, beside `terminalAgentArgs`,
       so it takes that neighbour's scoping and invalidation (`providers.list`
       only; a judge choice cannot change availability).
+      Under it, whatever is selected, one line says what the classifier costs:
+      "Faster and free, but your rules don't apply to it, and it replaces
+      Traycer's judge for this provider's conversations." Only this rendering
+      has it, and only a `nativeAutoJudge` provider reaches this rendering.
       Nothing renders until the catalog and the setter's handshake have
       answered, so a read-only line never flashes at a provider about to get the
       switch. Drawing the switch is not the same as the provider judging: the
@@ -3991,13 +4002,29 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         change or is not what the controls show. An uncommitted pick's own
         line (above) is the one shown then. The line is also silent under
         Automatic, whose status line speaks for it.
-    - **Providers with a built-in reviewer** has one row per catalog row that
-      reports `nativeAutoJudge`: "Reviews with {provider}'s classifier, inside
-      the conversation." beside the same `ProviderJudgeSwitch` the provider's
-      own Permissions tab renders (see Providers). The group's description is
-      where the precedence is said: the built-in reviewer wins over the judge
-      above, and your rules don't apply to it. The group is omitted when no such
-      provider exists here.
+    - **The built-in reviewer pointer** (`built-in-reviewer-pointer.tsx`) is
+      one line under the judge card. The tab has no reviewer switch of its
+      own: the per-provider switch lives only on Providers ▸ {provider} ▸
+      Permissions (see Providers), which also says what choosing it costs.
+      - It names each provider set to review its own commands: catalog rows
+        with `nativeAutoJudge` whose `providers.list` state reads
+        `"provider"` through `providerAutoJudgeFor`, the switch's own read
+        path and value.
+      - It is gated like the switch and never states a guess. It renders
+        nothing while either list is loading, and nothing while the negotiated
+        `providers.list` line cannot report `autoJudge`
+        (`providersListReportsAutoJudge` false), where every provider would
+        read `"traycer"` whatever is stored.
+      - One provider: "{Provider} conversations are checked by {owner}'s own
+        reviewer, not this judge." The owner is "Claude" for Claude Code, else
+        the provider's label. Two or more: "{A} and {B} conversations are
+        checked by their own reviewers, not this judge."
+      - Then one "Change in Providers ▸ {Provider}" link per provider. A link
+        sets the providers focus store's `focusHarnessId` to that provider and
+        its `focusTab` to `"permissions"`, then opens Providers with
+        `hostId: null`, since Settings is already scoped to this machine. The
+        Providers page consumes both once on mount, and has the Permissions
+        tab whenever this line can render.
   - **Rules** (`rules-tab.tsx`) edits the ACCOUNT's Auto mode policy in place,
     over `autoPolicy.get` / `autoPolicy.set`. It shows four sections in
     Traycer's order (Environment, Always allow, Ask first, Never allow), plus

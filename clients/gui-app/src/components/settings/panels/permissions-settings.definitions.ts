@@ -133,21 +133,6 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
       "copilot",
     ],
   },
-  builtInReviewers: {
-    kind: "group",
-    search: { contributesTo: "judgeTab" },
-    label: "Providers with a built-in reviewer",
-    description:
-      "Some providers can review their own commands. Faster and free, but your rules don't apply to them, and for their conversations the built-in reviewer wins over the judge above.",
-    breadcrumb: "Judge",
-    availableWhen: alwaysAvailable,
-    keywords: [
-      "built-in reviewer",
-      "classifier",
-      "claude code",
-      "own classifier",
-    ],
-  },
   ruleSections: {
     kind: "group",
     search: { contributesTo: "rulesTab" },

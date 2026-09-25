@@ -7,7 +7,6 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import {
@@ -64,11 +63,19 @@ const support = vi.hoisted((): { get: boolean | null; set: boolean } => ({
   get: true,
   set: true,
 }));
+// `providers.list` line the pointer reads. `{ major: 9, minor: 1 }` is the
+// only version that can report `autoJudge`; 9.0 and `null` must hide it.
+const providersListVersion = vi.hoisted(
+  (): { current: { major: number; minor: number } | null } => ({
+    current: { major: 9, minor: 1 },
+  }),
+);
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "autoJudge.get" ? support.get : null,
   useHostSupportsMethod: (_hostId: string | null, method: string) =>
     method === "autoJudge.set" ? support.set : false,
+  useHostMethodSchemaVersion: () => providersListVersion.current,
 }));
 
 // ---- queries --------------------------------------------------------------
@@ -123,10 +130,15 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 const providersState = vi.hoisted(
-  (): { current: ReadonlyArray<ProviderCliState> } => ({ current: [] }),
+  (): { current: ReadonlyArray<ProviderCliState> | undefined } => ({
+    current: [],
+  }),
 );
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({ data: { providers: providersState.current } }),
+  useProvidersList: () =>
+    providersState.current === undefined
+      ? { data: undefined }
+      : { data: { providers: providersState.current } },
 }));
 
 const openSettingsMock = vi.hoisted(() =>
@@ -143,19 +155,6 @@ const openSettingsMock = vi.hoisted(() =>
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: openSettingsMock }),
 }));
-
-// One row per built-in reviewer is `ProviderJudgeSwitch`, which has its own
-// suite; here it is a marker so the LIST is what is under test.
-vi.mock(
-  "@/components/settings/panels/permissions/provider-judge-switch",
-  () => ({
-    ProviderJudgeSwitch: (props: {
-      readonly state: ProviderCliState;
-    }): ReactNode => (
-      <div data-testid={`judge-switch-${props.state.providerId}`} />
-    ),
-  }),
-);
 
 // ---- fixtures -------------------------------------------------------------
 
@@ -261,6 +260,7 @@ const CLAUDE_STORED: AutoJudgeSelection = {
 beforeEach(() => {
   support.get = true;
   support.set = true;
+  providersListVersion.current = { major: 9, minor: 1 };
   judgeRecord.current = { selection: null };
   setJudgeMutate.mockReset();
   catalogState.current = "answered";
@@ -282,7 +282,7 @@ beforeEach(() => {
     provider("codex", [profile("ambient", "ambient")]),
   ];
   openSettingsMock.mockReset();
-  useProvidersFocusStore.setState({ focusHarnessId: null });
+  useProvidersFocusStore.setState({ focusHarnessId: null, focusTab: null });
 });
 
 afterEach(cleanup);
@@ -629,27 +629,217 @@ describe("JudgeTab", () => {
     });
   });
 
-  describe("Providers with a built-in reviewer", () => {
-    it("lists only providers whose catalog row has a native judge", () => {
-      render(<JudgeTab />);
+  describe("the built-in reviewer pointer", () => {
+    const CLAUDE_POINTER =
+      "Claude Code conversations are checked by Claude's own reviewer, not this judge.";
+    const CODEX_POINTER =
+      "Codex conversations are checked by Codex's own reviewer, not this judge.";
+    const PLURAL_POINTER =
+      "Claude Code and Codex conversations are checked by their own reviewers, not this judge.";
+    const OPEN_PROVIDERS = {
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    } as const;
 
-      const list = screen.getByTestId("auto-judge-built-in-reviewers");
-      expect(within(list).getByText("Claude Code")).not.toBeNull();
-      expect(
-        within(list).getByTestId("judge-switch-claude-code"),
-      ).not.toBeNull();
-      expect(within(list).queryByText("Codex")).toBeNull();
-      expect(within(list).queryByTestId("judge-switch-codex")).toBeNull();
-    });
+    function claudeWithJudge(
+      autoJudge: ProviderCliState["autoJudge"],
+    ): ProviderCliState {
+      return {
+        ...provider("claude-code", [profile("ambient", "ambient")]),
+        autoJudge,
+      };
+    }
 
-    it("is omitted when no provider has a built-in reviewer", () => {
+    function selfReviewingClaude(): void {
+      providersState.current = [
+        claudeWithJudge("provider"),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+    }
+
+    it("is hidden when no provider has a native reviewer", () => {
       catalog.harnesses = catalog.harnesses.map((row) => ({
         ...row,
         nativeAutoJudge: false,
       }));
+      selfReviewingClaude();
       render(<JudgeTab />);
 
-      expect(screen.queryByTestId("auto-judge-built-in-reviewers")).toBeNull();
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("is hidden when the native provider is set to Traycer's judge", () => {
+      providersState.current = [
+        claudeWithJudge("traycer"),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("is hidden when the native provider's autoJudge is absent", () => {
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("is hidden on a providers.list 9.0 line even when the state says provider", () => {
+      providersListVersion.current = { major: 9, minor: 0 };
+      selfReviewingClaude();
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("is hidden when the providers.list version is unknown even when the state says provider", () => {
+      providersListVersion.current = null;
+      selfReviewingClaude();
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("is hidden while the harness catalog is pending", () => {
+      catalogState.current = "pending";
+      selfReviewingClaude();
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("is hidden while providers.list is loading", () => {
+      selfReviewingClaude();
+      providersState.current = undefined;
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("auto-judge-reviewer-pointer")).toBeNull();
+    });
+
+    it("names Claude as the owner for a single Claude Code reviewer", () => {
+      selfReviewingClaude();
+      render(<JudgeTab />);
+
+      const pointer = screen.getByTestId("auto-judge-reviewer-pointer");
+      expect(pointer.textContent).toBe(
+        `${CLAUDE_POINTER} Change in Providers ▸ Claude Code`,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Change in Providers ▸ Claude Code",
+        }),
+      ).not.toBeNull();
+      expect(
+        screen.getByTestId("auto-judge-reviewer-pointer-claude"),
+      ).not.toBeNull();
+    });
+
+    it("names the provider's own label as the owner for a non-Claude native reviewer", () => {
+      catalog.harnesses = [
+        harness({ id: "claude", label: "Claude Code", nativeAutoJudge: false }),
+        harness({
+          id: "codex",
+          label: "Codex",
+          nativeAutoJudge: true,
+          judgeDefaultModel: "gpt-mini",
+        }),
+      ];
+      providersState.current = [
+        provider("claude-code", [profile("ambient", "ambient")]),
+        {
+          ...provider("codex", [profile("ambient", "ambient")]),
+          autoJudge: "provider",
+        },
+      ];
+      render(<JudgeTab />);
+
+      expect(
+        screen.getByTestId("auto-judge-reviewer-pointer").textContent,
+      ).toContain(CODEX_POINTER);
+      expect(
+        screen.getByRole("button", { name: "Change in Providers ▸ Codex" }),
+      ).not.toBeNull();
+    });
+
+    it("lists each self-reviewing provider in catalog order, with one link apiece", () => {
+      catalog.harnesses = [
+        harness({ id: "claude", label: "Claude Code", nativeAutoJudge: true }),
+        harness({
+          id: "codex",
+          label: "Codex",
+          nativeAutoJudge: true,
+          judgeDefaultModel: "gpt-mini",
+        }),
+      ];
+      providersState.current = [
+        claudeWithJudge("provider"),
+        {
+          ...provider("codex", [profile("ambient", "ambient")]),
+          autoJudge: "provider",
+        },
+      ];
+      render(<JudgeTab />);
+
+      const pointer = screen.getByTestId("auto-judge-reviewer-pointer");
+      expect(pointer.textContent).toBe(
+        `${PLURAL_POINTER} Change in Providers ▸ Claude Code · Change in Providers ▸ Codex`,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Change in Providers ▸ Claude Code",
+        }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Change in Providers ▸ Codex" }),
+      ).not.toBeNull();
+    });
+
+    it("opens Providers on the Permissions tab focused on the named provider", () => {
+      selfReviewingClaude();
+      render(<JudgeTab />);
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Change in Providers ▸ Claude Code",
+        }),
+      );
+
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBe("claude");
+      expect(useProvidersFocusStore.getState().focusTab).toBe("permissions");
+      expect(openSettingsMock).toHaveBeenCalledTimes(1);
+      expect(openSettingsMock).toHaveBeenCalledWith(OPEN_PROVIDERS);
+    });
+
+    it("opens the second provider's Permissions tab from its own link", () => {
+      catalog.harnesses = [
+        harness({ id: "claude", label: "Claude Code", nativeAutoJudge: true }),
+        harness({
+          id: "codex",
+          label: "Codex",
+          nativeAutoJudge: true,
+          judgeDefaultModel: "gpt-mini",
+        }),
+      ];
+      providersState.current = [
+        claudeWithJudge("provider"),
+        {
+          ...provider("codex", [profile("ambient", "ambient")]),
+          autoJudge: "provider",
+        },
+      ];
+      render(<JudgeTab />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Change in Providers ▸ Codex" }),
+      );
+
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBe("codex");
+      expect(useProvidersFocusStore.getState().focusTab).toBe("permissions");
+      expect(openSettingsMock).toHaveBeenCalledTimes(1);
+      expect(openSettingsMock).toHaveBeenCalledWith(OPEN_PROVIDERS);
     });
   });
 
