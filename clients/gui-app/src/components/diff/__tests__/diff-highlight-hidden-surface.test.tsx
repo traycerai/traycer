@@ -160,7 +160,7 @@ function DiffSurface(props: {
 function body(container: HTMLElement): string {
   const node = container.querySelector("[data-testid='body']");
   if (node === null) throw new Error("no body rendered");
-  return node.textContent ?? "";
+  return node.textContent;
 }
 
 describe("diff highlight gates on a hidden surface", () => {
@@ -205,7 +205,7 @@ describe("diff highlight gates on a hidden surface", () => {
     expect(spy.terminate).not.toHaveBeenCalled();
 
     await act(async () => {
-      vi.advanceTimersByTime(IDLE_MS);
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
     });
 
     expect(spy.terminate).toHaveBeenCalledTimes(1);
@@ -230,7 +230,7 @@ describe("diff highlight gates on a hidden surface", () => {
       />,
     );
     await act(async () => {
-      vi.advanceTimersByTime(IDLE_MS);
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
     });
     expect(getDiffWorkerPool()).toBeUndefined();
 
@@ -241,7 +241,7 @@ describe("diff highlight gates on a hidden surface", () => {
     await act(async () => {});
 
     expect(spy.create).toHaveBeenCalledTimes(2);
-    const rebuilt = spy.managers[1];
+    const rebuilt = spy.managers.at(1);
     if (rebuilt === undefined) throw new Error("no rebuilt manager");
     expect(getDiffWorkerPool()).toBeDefined();
     expect(rebuilt.primeDiffHighlightCache).toHaveBeenCalledWith(FILE_DIFFS[0]);
@@ -252,6 +252,7 @@ describe("diff highlight gates on a hidden surface", () => {
 
     await act(async () => {
       spy.flushPrimes();
+      await Promise.resolve();
     });
     expect(body(rendered.container)).toBe("diff");
   });
@@ -276,7 +277,7 @@ describe("diff highlight gates on a hidden surface", () => {
       />,
     );
     await act(async () => {
-      vi.advanceTimersByTime(IDLE_MS / 2);
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
     });
     expect(body(rendered.container)).toBe("loader");
 
@@ -306,7 +307,7 @@ describe("diff highlight gates on a hidden surface", () => {
     const manager = getDiffWorkerPool();
 
     await act(async () => {
-      vi.advanceTimersByTime(IDLE_MS * 20);
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 20);
     });
 
     expect(spy.terminate).not.toHaveBeenCalled();
@@ -330,7 +331,7 @@ describe("diff highlight gates on a hidden surface", () => {
       <DiffSurface visible={false} selected editing fileDiffs={FILE_DIFFS} />,
     );
     await act(async () => {
-      vi.advanceTimersByTime(IDLE_MS * 20);
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 20);
     });
 
     // Dropping the body is the ONLY way to release the lease, and this body
@@ -359,7 +360,7 @@ describe("diff highlight gates on a hidden surface", () => {
       />,
     );
     await act(async () => {
-      vi.advanceTimersByTime(IDLE_MS);
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
     });
 
     expect(body(rendered.container)).toBe("loader");
@@ -375,7 +376,7 @@ describe("diff highlight gates on a hidden surface", () => {
       <DiffSurface visible selected editing={false} fileDiffs={FILE_DIFFS} />,
     );
     await act(async () => {});
-    const manager = spy.managers[0];
+    const manager = spy.managers.at(0);
     if (manager === undefined) throw new Error("no manager");
     manager.primeDiffHighlightCache.mockClear();
 
@@ -423,7 +424,7 @@ describe("diff highlight gates on a hidden surface", () => {
       />,
     );
     await act(async () => {
-      vi.advanceTimersByTime(60 * 60_000);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
     });
 
     // Desktop re-highlights would be visible jank on every tab switch, and the
