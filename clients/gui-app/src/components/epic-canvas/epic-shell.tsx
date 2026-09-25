@@ -23,7 +23,10 @@ import {
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import {
+  PhoneEpicResourcesFallbackMount,
+  ResourcesStreamMount,
+} from "@/providers/resources-stream-mount";
 import { isMobileApp } from "@/lib/mobile-app";
 import {
   EpicSessionPresentationContext,
@@ -142,8 +145,13 @@ function EpicShellSessionBody(
       {props.active ? <EpicConnectionToasts epicId={props.epicId} /> : null}
       {/* The installed app shows this epic's resource chips only inside the
           tab switcher sheet, which holds its own lease while open
-          (`MobileTabSwitcherMount`), so the pane itself opens no stream. */}
-      {isMobileApp() ? null : <ResourcesStreamMount epicId={props.epicId} />}
+          (`MobileTabSwitcherMount`), so the pane opens a stream only to feed
+          an old host's global fallback while a global monitor is up. */}
+      {isMobileApp() ? (
+        <PhoneEpicResourcesFallbackMount epicId={props.epicId} />
+      ) : (
+        <ResourcesStreamMount epicId={props.epicId} />
+      )}
       <CanvasColumn
         statusRow={
           <EpicShellStatusRow

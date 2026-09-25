@@ -5,7 +5,14 @@ import {
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useGlobalResourcesPreCheckUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
+import {
+  useGlobalResourcesPreCheckUnsupported,
+  useGlobalResourcesUnsupported,
+} from "@/hooks/resources/use-global-resources-unsupported";
+import {
+  holdGlobalResourcesConsumer,
+  useGlobalResourcesConsumerPresent,
+} from "@/stores/resources/global-resources-consumers";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
@@ -94,9 +101,38 @@ export function ResourcesStreamMount(
   return null;
 }
 
+/**
+ * The installed app's per-epic lease: held only while a global consumer is on
+ * screen AND the host cannot serve a global subscribe.
+ *
+ * The phone shows an epic's own chips only inside the tab switcher sheet,
+ * which leases the epic while open, so the pane holds no stream of its own.
+ * That leaves one reader the sheet does not cover: an `@1.0` host answers the
+ * global monitor through the registry's per-epic FALLBACK, which aggregates
+ * whatever epic entries exist. With no pane lease there would be none, and the
+ * panel (or an opted-in readout) would wait for data forever. So the pane
+ * supplies its entry for exactly that window.
+ *
+ * The verdict is the full one - the pre-check for a local host, and the live
+ * global stream's own negotiation for a remote one - read against the ambient
+ * host this pane's lease would be opened on.
+ */
+export function PhoneEpicResourcesFallbackMount(
+  props: ResourcesStreamMountProps,
+): ReactNode {
+  const consumerPresent = useGlobalResourcesConsumerPresent();
+  const hostId = useStreamHostId();
+  const globalUnsupported = useGlobalResourcesUnsupported(hostId);
+  if (!consumerPresent || !globalUnsupported) return null;
+  return <ResourcesStreamMount epicId={props.epicId} />;
+}
+
 export function GlobalResourcesStreamMount(
   props: GlobalResourcesStreamMountProps,
 ): ReactNode {
+  // Registered for as long as this consumer is mounted, independent of whether
+  // its stream can open - see `global-resources-consumers.ts`.
+  useEffect(() => holdGlobalResourcesConsumer(), []);
   const wsStreamClient = useWsStreamClient();
   // Taken from the SAME binding as the client above, never from a prop or a
   // scope model: the host id republished on the projection is what a scoped

@@ -95,6 +95,9 @@ vi.mock("@/providers/resources-stream-mount", () => ({
   ResourcesStreamMount: (props: { readonly epicId: string }) => (
     <div data-testid="resources-stream" data-epic-id={props.epicId} />
   ),
+  PhoneEpicResourcesFallbackMount: (props: { readonly epicId: string }) => (
+    <div data-testid="resources-fallback" data-epic-id={props.epicId} />
+  ),
 }));
 
 interface ControlledStream {
@@ -303,7 +306,7 @@ describe("<EpicShell />", () => {
     queryClient.clear();
   });
 
-  it("opens no pane resources stream on the installed app", async () => {
+  it("holds only the old-host fallback lease on the installed app", async () => {
     setMobileApp(true);
     try {
       installControlledFactory();
@@ -312,6 +315,9 @@ describe("<EpicShell />", () => {
       await waitForSessionReady();
 
       expect(screen.queryByTestId("resources-stream")).toBeNull();
+      expect(
+        screen.getByTestId("resources-fallback").getAttribute("data-epic-id"),
+      ).toBe(EPIC_ID);
       queryClient.clear();
     } finally {
       setMobileApp(false);

@@ -22,8 +22,9 @@ import {
  * On the installed app it is also where this epic's `resources.subscribe`
  * stream lives: the sheet's agent and terminal rows are the only place the
  * phone shows the epic's resource chips, so the stream is held while the sheet
- * is open and released when it closes (`EpicShell` opens none there). Off the
- * app the pane's own mount already holds it, and this adds nothing.
+ * is open and released when it closes (`EpicShell` opens one there only for an
+ * old host's global fallback). Off the app the pane's own mount already holds
+ * it, and this adds nothing.
  */
 export function MobileTabSwitcherMount(props: {
   readonly epicId: string;
