@@ -54,6 +54,20 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, platform: () => mocks.platform };
 });
 
+// This suite pins `withStopIntent`'s write and clear ordering, not the Linux
+// cgroup self-protection guard. Every wrapped route calls
+// `assertNotInsideHostUnit()` first (`service/index.ts`), and the POSIX
+// restart case below pins `node:os` to "linux", so the real guard would read
+// `/proc/self/cgroup`, which is absent on any non-Linux machine.
+// `stop-intent-cgroup-guard.test.ts` owns the guard's refusals and its pass
+// case on all five routes, the absent-`/proc` refusal included, so here the
+// guard answers "not inside a host unit" and every other export stays real.
+vi.mock("../../host/cgroup-relocation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/cgroup-relocation")>();
+  return { ...actual, assertNotInsideHostUnit: async () => undefined };
+});
+
 const { withStopIntent } = await import("../index");
 
 // Declared types rather than stubs laundered through `unknown`: a shape that
