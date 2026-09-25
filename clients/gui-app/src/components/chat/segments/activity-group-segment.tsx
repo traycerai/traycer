@@ -99,12 +99,20 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
     );
   }, []);
   const forgetFocus = useCallback((event: FocusEvent<HTMLElement>) => {
-    if (
-      event.relatedTarget instanceof Node &&
-      !event.currentTarget.contains(event.relatedTarget)
-    ) {
-      focusedTurnRef.current = null;
+    if (event.relatedTarget instanceof Node) {
+      if (!event.currentTarget.contains(event.relatedTarget)) {
+        focusedTurnRef.current = null;
+      }
+      return;
     }
+    const blurred = event.target;
+    const container = event.currentTarget;
+    queueMicrotask(() => {
+      if (!blurred.isConnected) return;
+      if (!container.contains(document.activeElement)) {
+        focusedTurnRef.current = null;
+      }
+    });
   }, []);
   useLayoutEffect(() => {
     if (groupHidden && !wasGroupHiddenRef.current && focusedTurnRef.current) {

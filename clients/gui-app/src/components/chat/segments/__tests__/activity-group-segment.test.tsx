@@ -497,6 +497,140 @@ describe("<ActivityGroupSegment /> live window", () => {
     );
   });
 
+  const focusGroup: ActivityGroupModel = {
+    ...SOLE_REASONING_GROUP,
+    segments: [
+      {
+        ...REASONING_SEGMENT,
+        markdown:
+          "[First](https://example.com/first) [Second](https://example.com/second)",
+        isStreaming: false,
+        durationMs: 2100,
+      },
+    ],
+    isActive: false,
+    isStreaming: false,
+    followedByText: false,
+    label: "Thought for 2s",
+    summary: "Thought for 2s",
+  };
+  const visibleFocusGroup = (
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <div data-assistant-turn>
+          <button type="button" data-chat-intermediate-trigger="true">
+            Earlier activity
+          </button>
+          <ActivityGroupSegment group={focusGroup} />
+        </div>
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  );
+  const hiddenFocusGroup = (
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <div data-assistant-turn>
+          <button type="button" data-chat-intermediate-trigger="true">
+            Earlier activity
+          </button>
+          <ActivityGroupSegment
+            group={{ ...focusGroup, followedByText: true }}
+            collapseOnText
+            hideWhenCollapsed
+          />
+        </div>
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  );
+  const visibleFocusGroupWithoutLink = (
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <div data-assistant-turn>
+          <button type="button" data-chat-intermediate-trigger="true">
+            Earlier activity
+          </button>
+          <ActivityGroupSegment
+            group={{
+              ...focusGroup,
+              segments: [
+                {
+                  ...REASONING_SEGMENT,
+                  markdown: "Earlier reasoning",
+                  isStreaming: false,
+                  durationMs: 2100,
+                },
+              ],
+            }}
+          />
+        </div>
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  );
+
+  it("does not reclaim focus after a null blur to the document body", async () => {
+    const { rerender } = render(visibleFocusGroup);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const link = screen.getByRole("link", { name: "First" });
+    link.focus();
+    link.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    await act(async () => {});
+    rerender(hiddenFocusGroup);
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("hands focus to Earlier activity when removal blurs with no related target", async () => {
+    const { rerender } = render(visibleFocusGroup);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const link = screen.getByRole("link", { name: "First" });
+    link.focus();
+    fireEvent.blur(link, { relatedTarget: null });
+
+    rerender(visibleFocusGroupWithoutLink);
+    await act(async () => {});
+    rerender(hiddenFocusGroup);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Earlier activity" }),
+    );
+  });
+
+  it("does not reclaim focus after a blur to a named outside target", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      const { rerender } = render(visibleFocusGroup);
+      fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+      const link = screen.getByRole("link", { name: "First" });
+      link.focus();
+      fireEvent.blur(link, { relatedTarget: outside });
+      outside.focus();
+
+      rerender(hiddenFocusGroup);
+
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("keeps the focus handoff when focus moves within the group", () => {
+    const { rerender } = render(visibleFocusGroup);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const first = screen.getByRole("link", { name: "First" });
+    const second = screen.getByRole("link", { name: "Second" });
+    first.focus();
+    fireEvent.blur(first, { relatedTarget: second });
+
+    rerender(hiddenFocusGroup);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Earlier activity" }),
+    );
+  });
+
   it("keeps focus in a manually reopened body across later text updates", () => {
     const linkReasoning: ReasoningSegment = {
       ...REASONING_SEGMENT,

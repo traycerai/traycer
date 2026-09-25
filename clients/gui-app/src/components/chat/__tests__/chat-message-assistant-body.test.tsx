@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render as rtlRender,
@@ -302,6 +303,65 @@ function ReleaseEarlierActivityButton() {
   );
 }
 
+const FOCUS_EARLY_TEXT_SEGMENT: MessageSegment = {
+  ...TEXT_SEGMENT,
+  id: "text-early",
+  markdown:
+    "[First](https://example.test/first) [Second](https://example.test/second)",
+};
+const FOCUS_FINAL_TEXT_SEGMENT: MessageSegment = {
+  ...TEXT_SEGMENT,
+  id: "text-final",
+  markdown: "Final answer",
+};
+const INTERMEDIATE_RUNNING_VIEW = (
+  <TooltipProvider delayDuration={0}>
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({
+            segments: [FOCUS_EARLY_TEXT_SEGMENT],
+            runState: "running",
+          })}
+        />
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  </TooltipProvider>
+);
+const INTERMEDIATE_RUNNING_WITHOUT_LINK_VIEW = (
+  <TooltipProvider delayDuration={0}>
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({
+            segments: [
+              { ...FOCUS_EARLY_TEXT_SEGMENT, markdown: "Earlier update" },
+            ],
+            runState: "running",
+          })}
+        />
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  </TooltipProvider>
+);
+const INTERMEDIATE_COMPLETE_VIEW = (
+  <TooltipProvider delayDuration={0}>
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({
+            segments: [FOCUS_EARLY_TEXT_SEGMENT, FOCUS_FINAL_TEXT_SEGMENT],
+            runState: null,
+          })}
+        />
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  </TooltipProvider>
+);
+
 describe("AssistantMessageBody autonomous resume rendering", () => {
   it("does not render an elapsed footer for an autonomous-resume notification without completion", () => {
     render(
@@ -586,6 +646,66 @@ describe("AssistantMessageBody intermediate text", () => {
     screen.getByRole("link", { name: "Open detail" }).focus();
 
     rerender(view([early, final], null));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Show earlier activity" }),
+    );
+  });
+
+  it("does not reclaim focus after a null blur to the document body", async () => {
+    const { rerender } = rtlRender(INTERMEDIATE_RUNNING_VIEW);
+    const link = screen.getByRole("link", { name: "First" });
+    link.focus();
+    link.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    await act(async () => {});
+    rerender(INTERMEDIATE_COMPLETE_VIEW);
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("hands focus to Earlier activity when removal blurs with no related target", async () => {
+    const { rerender } = rtlRender(INTERMEDIATE_RUNNING_VIEW);
+    const link = screen.getByRole("link", { name: "First" });
+    link.focus();
+    fireEvent.blur(link, { relatedTarget: null });
+
+    rerender(INTERMEDIATE_RUNNING_WITHOUT_LINK_VIEW);
+    await act(async () => {});
+    rerender(INTERMEDIATE_COMPLETE_VIEW);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Show earlier activity" }),
+    );
+  });
+
+  it("does not reclaim focus after a blur to a named outside target", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      const { rerender } = rtlRender(INTERMEDIATE_RUNNING_VIEW);
+      const link = screen.getByRole("link", { name: "First" });
+      link.focus();
+      fireEvent.blur(link, { relatedTarget: outside });
+      outside.focus();
+
+      rerender(INTERMEDIATE_COMPLETE_VIEW);
+
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("keeps the focus handoff when focus moves within intermediate content", () => {
+    const { rerender } = rtlRender(INTERMEDIATE_RUNNING_VIEW);
+    const first = screen.getByRole("link", { name: "First" });
+    const second = screen.getByRole("link", { name: "Second" });
+    first.focus();
+    fireEvent.blur(first, { relatedTarget: second });
+
+    rerender(INTERMEDIATE_COMPLETE_VIEW);
 
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: "Show earlier activity" }),

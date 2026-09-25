@@ -1159,13 +1159,22 @@ function IntermediateTimelineItem(props: {
         );
       }}
       onBlurCapture={(event) => {
-        if (
-          event.relatedTarget instanceof Node &&
-          !event.currentTarget.contains(event.relatedTarget)
-        ) {
-          focusedContentRef.current = false;
-          focusedTurnRef.current = null;
+        if (event.relatedTarget instanceof Node) {
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            focusedContentRef.current = false;
+            focusedTurnRef.current = null;
+          }
+          return;
         }
+        const blurred = event.target;
+        const container = event.currentTarget;
+        queueMicrotask(() => {
+          if (!blurred.isConnected) return;
+          if (!container.contains(document.activeElement)) {
+            focusedContentRef.current = false;
+            focusedTurnRef.current = null;
+          }
+        });
       }}
       className="contents"
     >
