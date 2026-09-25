@@ -5,33 +5,28 @@
  * `judge-tab.test.tsx` replaces both hooks wholesale and calls `onSuccess` /
  * `onError` by hand, so it cannot see what the real stack does around a write
  * (the mutation writes the cache BEFORE the per-call settle runs, and
- * TanStack fires per-call callbacks for the latest `mutate` only), and its model
- * catalog answers synchronously, so the path that WAITS on a catalog was never
- * driven. Here `autoJudge.set` is held per call, and the model catalog starts
- * pending and is answered by the test.
+ * TanStack fires per-call callbacks for the latest `mutate` only). Here
+ * `autoJudge.set` is held per call, the REAL `HarnessModelPicker` makes the
+ * picks, and a provider's model catalog starts pending and is answered by the
+ * test.
  */
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   act,
   cleanup,
-  fireEvent,
   render,
   screen,
+  fireEvent,
   waitFor,
 } from "@testing-library/react";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { useSyncExternalStore, type ReactNode } from "react";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import {
-  guiAgentModelOptionSchema,
-  guiHarnessOptionSchema,
-  type GuiAgentModelOption,
-} from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type {
   AutoJudgeBlocked,
   AutoJudgeEffective,
@@ -39,14 +34,23 @@ import type {
   AutoJudgeSetRequest,
   AutoJudgeSetResponse,
 } from "@traycer/protocol/host/auto-mode/contracts";
-import type {
-  ProviderCliState,
-  ProviderId,
-  ProviderProfile,
-} from "@traycer/protocol/host/provider-schemas";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import {
+  judgeModelsFailedLine,
+  judgeNoModelsLine,
+} from "@/components/settings/panels/auto-judge-selection";
 import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
+import {
+  harness,
+  judgeCatalog,
+  model,
+  profile,
+  provider,
+  resetModels,
+  setModels,
+} from "@/components/settings/panels/permissions/__tests__/judge-test-support";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -106,167 +110,50 @@ vi.mock("@/lib/host", async (importOriginal) => {
     },
   };
 });
-
-// ---- the catalog, providers and settings navigation -----------------------
-
-type ModelsState =
-  | { readonly kind: "pending" }
-  | {
-      readonly kind: "ready";
-      readonly models: ReadonlyArray<GuiAgentModelOption>;
-    }
-  | { readonly kind: "error" };
-
-// The model catalog per harness, answered by the test: it starts pending, then
-// becomes a list (possibly empty) or an error.
-const modelsStore = vi.hoisted(() => {
-  const pending: ModelsState = { kind: "pending" };
-  let states: Record<string, ModelsState> = {};
-  const listeners = new Set<() => void>();
-  return {
-    get: (harnessId: string): ModelsState => states[harnessId] ?? pending,
-    set: (harnessId: string, next: ModelsState): void => {
-      states = { ...states, [harnessId]: next };
-      for (const listener of listeners) listener();
-    },
-    reset: (): void => {
-      states = {};
-      for (const listener of listeners) listener();
-    },
-    subscribe: (listener: () => void): (() => void) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  };
-});
-
-const harnessesState = vi.hoisted(
-  (): { current: ReadonlyArray<GuiHarnessOption> } => ({ current: [] }),
+// The catalog, the providers list and the host plumbing the REAL
+// `HarnessModelPicker` reads, all answering from `judge-test-support`.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
+  (await import("./judge-test-support")).guiHarnessCatalogModuleMock(),
 );
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({ data: { harnesses: harnessesState.current } }),
-  useGuiHarnessModelsQuery: (harnessId: string) => {
-    const state = useSyncExternalStore(modelsStore.subscribe, () =>
-      modelsStore.get(harnessId),
-    );
-    return {
-      data: state.kind === "ready" ? { models: state.models } : undefined,
-      isError: state.kind === "error",
-      isPending: state.kind === "pending",
-    };
-  },
-}));
-
-const providersState = vi.hoisted(
-  (): { current: ReadonlyArray<ProviderCliState> } => ({ current: [] }),
+vi.mock("@/hooks/providers/use-providers-list-query", async () =>
+  (await import("./judge-test-support")).providersListModuleMock(),
 );
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({ data: { providers: providersState.current } }),
-}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.clientForHostId(),
+);
+vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
+  (
+    await import("./judge-test-support")
+  ).pickerHostMocks.reactiveHostReadiness(),
+);
+vi.mock("@/hooks/agent/use-host-reachability", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.hostReachability(),
+);
+vi.mock("@/hooks/host/use-addressable-host-id", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.addressableHostId(),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.hostDirectoryList(),
+);
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.ensurePack(),
+);
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async () =>
+    (await import("./judge-test-support")).pickerHostMocks.setProfileEnabled(),
+);
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.profileUsage(),
+);
+vi.mock("react-virtuoso", async () =>
+  (await import("./judge-test-support")).pickerHostMocks.virtuoso(),
+);
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: () => undefined }),
 }));
-vi.mock(
-  "@/components/settings/panels/permissions/provider-judge-switch",
-  () => ({ ProviderJudgeSwitch: (): ReactNode => null }),
-);
 
 // ---- fixtures -------------------------------------------------------------
-
-function harness(overrides: Partial<GuiHarnessOption>): GuiHarnessOption {
-  return guiHarnessOptionSchema.parse({
-    id: "claude",
-    label: "Claude Code",
-    available: true,
-    error: null,
-    modes: ["gui"],
-    requiresApiKey: false,
-    ...overrides,
-  });
-}
-
-function model(
-  harnessId: string,
-  slug: string,
-  label: string,
-): GuiAgentModelOption {
-  return guiAgentModelOptionSchema.parse({
-    harnessId,
-    slug,
-    label,
-    description: null,
-    contextWindow: null,
-    maxOutputTokens: null,
-    defaultReasoningEffort: null,
-    supportedReasoningEfforts: [],
-    metadata: {},
-  });
-}
-
-function profile(
-  profileId: string,
-  kind: ProviderProfile["kind"],
-): ProviderProfile {
-  return {
-    profileId,
-    enabled: true,
-    kind,
-    authType: "oauth",
-    label: profileId,
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    identity: null,
-    usageUpdatedAt: null,
-    rateLimitStatus: "unknown",
-    rateLimitLimitedScopes: null,
-    duplicateOfProfileId: null,
-    ambientDriftNotice: null,
-    accentColor: null,
-  };
-}
-
-function provider(
-  providerId: ProviderId,
-  profiles: ProviderProfile[],
-): ProviderCliState {
-  return {
-    providerId,
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "bundled" },
-    candidates: [],
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    managedInstallState: null,
-    versionVisibility: null,
-    advisory: null,
-    profiles,
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    nativeCapabilities: {
-      supportedTabs: ["general", "env", "usage"],
-      mcp: null,
-      plugins: null,
-      skills: null,
-      modelProviders: null,
-    },
-  };
-}
 
 const CLAUDE_STORED: AutoJudgeSelection = {
   harnessId: "claude",
@@ -278,6 +165,7 @@ const CLAUDE_STORED: AutoJudgeSelection = {
 interface JudgeAnswer {
   readonly selection: AutoJudgeSelection | null;
   readonly effective: AutoJudgeEffective;
+  readonly lastSelection?: AutoJudgeSelection | null;
 }
 
 /** One `autoJudge.get` the host has received and not yet answered. */
@@ -326,6 +214,9 @@ function createFixture(): JudgeFixture {
   const queryClient = createAppQueryClient();
   let requestSeq = 0;
   let stored: AutoJudgeSelection | null = CLAUDE_STORED;
+  // What the host keeps as the last pick: the selection a switch to Automatic
+  // cleared, as a 1.2 host does.
+  let lastStored: AutoJudgeSelection | null = null;
   let getCalls = 0;
   let getGate: Promise<void> | null = null;
   let releaseGate: () => void = () => undefined;
@@ -348,6 +239,7 @@ function createFixture(): JudgeFixture {
         // The answer is what the host stores WHEN THE REQUEST ARRIVES.
         const answer = {
           selection: stored,
+          lastSelection: lastStored,
           effective,
           blocked,
         };
@@ -356,7 +248,11 @@ function createFixture(): JudgeFixture {
             heldGets.push({
               succeed: (next) => {
                 stored = next.selection;
-                resolve({ ...next, blocked: null });
+                resolve({
+                  ...next,
+                  lastSelection: next.lastSelection ?? lastStored,
+                  blocked: null,
+                });
               },
               fail: () => reject(new Error("get refused")),
             });
@@ -374,8 +270,11 @@ function createFixture(): JudgeFixture {
                 selection: params.selection,
                 effective: { source: "fallback" },
               };
+              if (params.selection === null && stored !== null) {
+                lastStored = stored;
+              }
               stored = answer.selection;
-              resolve({ ...answer, blocked: null });
+              resolve({ ...answer, lastSelection: lastStored, blocked: null });
             },
             refuse: () => reject(new Error("refused")),
           });
@@ -449,7 +348,11 @@ function sentModels(fixture: JudgeFixture): ReadonlyArray<string | null> {
 function renderTab(fixture: JudgeFixture): void {
   render(
     <QueryClientProvider client={fixture.queryClient}>
-      <JudgeTab />
+      <SurfaceActivityProvider active>
+        <TooltipProvider delayDuration={0}>
+          <JudgeTab />
+        </TooltipProvider>
+      </SurfaceActivityProvider>
     </QueryClientProvider>,
   );
 }
@@ -466,45 +369,55 @@ async function flush(): Promise<void> {
   });
 }
 
+function face(): HTMLElement {
+  return screen.getByTestId("auto-judge-model-face");
+}
+
+function faceText(): string {
+  return face().textContent;
+}
+
+function faceDimmed(): boolean {
+  return face().closest(".opacity-45") !== null;
+}
+
 async function storedJudgeShown(): Promise<void> {
   await waitFor(() => {
-    expect(screen.getByTestId("judge-provider-select").textContent).toContain(
-      "Claude Code",
-    );
+    expect(faceText()).toContain("Claude Sonnet");
   });
 }
 
-function chooseProvider(label: string): void {
-  fireEvent.click(screen.getByTestId("judge-provider-select"));
-  fireEvent.click(screen.getByRole("option", { name: label }));
+function pickerOpen(): boolean {
+  return screen.queryByRole("dialog", { name: "Select model" }) !== null;
 }
 
-function chooseAccount(name: RegExp): void {
-  fireEvent.click(screen.getByTestId("judge-account-select"));
-  fireEvent.click(screen.getByRole("option", { name }));
+async function openPicker(user: UserEvent): Promise<void> {
+  if (pickerOpen()) return;
+  await user.click(face());
+  await screen.findByRole("dialog", { name: "Select model" });
 }
 
-const NO_MODELS_LINE =
-  "Codex offers no models on this machine. Pick another provider.";
-const FAILED_LINE =
-  "Couldn't load Codex's models. Reopen Settings to try again, or pick another provider.";
-
-function providerText(): string {
-  return screen.getByTestId("judge-provider-select").textContent;
+/** Opens the picker and clicks a provider on its rail. */
+async function switchProvider(user: UserEvent, name: RegExp): Promise<void> {
+  await openPicker(user);
+  await user.click(await screen.findByRole("tab", { name }));
 }
+
+const NO_MODELS_LINE = judgeNoModelsLine("Codex");
+const FAILED_LINE = judgeModelsFailedLine("Codex");
 
 /**
- * Records the Provider trigger's text after EVERY DOM mutation, so a frame
- * that shows a superseded selection is caught even when the end state is right.
+ * Records the face's text after EVERY DOM mutation, so a frame that shows a
+ * superseded selection is caught even when the end state is right.
  */
-function watchProviderText(): {
+function watchFaceText(): {
   readonly history: string[];
   readonly stop: () => void;
 } {
   const history: string[] = [];
   const record = (): void => {
     const trigger = document.querySelector(
-      '[data-testid="judge-provider-select"]',
+      '[data-testid="auto-judge-model-face"]',
     );
     if (trigger !== null) history.push(trigger.textContent);
   };
@@ -521,26 +434,24 @@ function watchProviderText(): {
 
 beforeEach(() => {
   toastSpy.mockReset();
-  modelsStore.reset();
-  harnessesState.current = [
+  resetModels();
+  judgeCatalog.harnessesStatus = "answered";
+  judgeCatalog.harnesses = [
     harness({ id: "claude", label: "Claude Code", nativeAutoJudge: true }),
     harness({ id: "codex", label: "Codex", judgeDefaultModel: "gpt-mini" }),
     harness({ id: "traycer", label: "Traycer" }),
   ];
-  modelsStore.set("traycer", {
+  setModels("traycer", {
     kind: "ready",
     models: [model("traycer", "traycer-fast", "Traycer Fast")],
   });
-  modelsStore.set("claude", {
+  setModels("claude", {
     kind: "ready",
     models: [model("claude", "sonnet", "Claude Sonnet")],
   });
-  providersState.current = [
+  judgeCatalog.providers = [
     provider("claude-code", [profile("ambient", "ambient")]),
-    provider("codex", [
-      profile("ambient", "ambient"),
-      profile("work", "managed"),
-    ]),
+    provider("codex", [profile("ambient", "ambient")]),
   ];
 });
 
@@ -552,17 +463,18 @@ afterEach(() => {
 describe("JudgeTab against the real query stack", () => {
   it("a: after a pick's write succeeds, no frame before the refetch answers shows the old selection", async () => {
     const fixture = createFixture();
-    modelsStore.set("codex", {
+    setModels("codex", {
       kind: "ready",
       models: [model("codex", "gpt-mini", "GPT Mini")],
     });
     renderTab(fixture);
     await storedJudgeShown();
-    const watch = watchProviderText();
+    const user = userEvent.setup();
+    const watch = watchFaceText();
 
-    chooseProvider("Codex");
+    await switchProvider(user, /Codex/);
     await waitFor(() => expect(fixture.held).toHaveLength(1));
-    expect(providerText()).toContain("Codex");
+    expect(faceText()).toContain("GPT Mini");
 
     // The refetch the write's revalidation starts is HELD, so the window
     // between the write settling and the record answering is observable.
@@ -576,11 +488,15 @@ describe("JudgeTab against the real query stack", () => {
       expect(fixture.getCalls()).toBeGreaterThan(getsBeforeSettle),
     );
     await flush();
-    expect(providerText()).toContain("Codex");
-    const firstPick = watch.history.findIndex((text) => text.includes("Codex"));
+    expect(faceText()).toContain("GPT Mini");
+    const firstPick = watch.history.findIndex((text) =>
+      text.includes("GPT Mini"),
+    );
     expect(firstPick).toBeGreaterThanOrEqual(0);
     expect(
-      watch.history.slice(firstPick).filter((text) => !text.includes("Codex")),
+      watch.history
+        .slice(firstPick)
+        .filter((text) => !text.includes("GPT Mini")),
     ).toEqual([]);
 
     await act(async () => {
@@ -590,15 +506,17 @@ describe("JudgeTab against the real query stack", () => {
     await flush();
     watch.stop();
 
-    expect(providerText()).toContain("Codex");
+    expect(faceText()).toContain("GPT Mini");
     expect(
-      watch.history.slice(firstPick).filter((text) => !text.includes("Codex")),
+      watch.history
+        .slice(firstPick)
+        .filter((text) => !text.includes("GPT Mini")),
     ).toEqual([]);
   });
 
-  it("b: two rapid picks, the first written and the second refused, leave the controls on the first", async () => {
+  it("b: two rapid picks, the first written and the second refused, leave the tile on the first and toast", async () => {
     const fixture = createFixture();
-    modelsStore.set("codex", {
+    setModels("codex", {
       kind: "ready",
       models: [
         model("codex", "gpt-mini", "GPT Mini"),
@@ -607,10 +525,11 @@ describe("JudgeTab against the real query stack", () => {
     });
     renderTab(fixture);
     await storedJudgeShown();
+    const user = userEvent.setup();
 
-    chooseProvider("Codex");
-    fireEvent.click(screen.getByTestId("judge-model-combobox"));
-    fireEvent.click(screen.getByText("GPT Big"));
+    await switchProvider(user, /Codex/);
+    await openPicker(user);
+    await user.click(await screen.findByRole("option", { name: /GPT Big/ }));
     await waitFor(() => expect(fixture.held).toHaveLength(1));
 
     await act(async () => {
@@ -618,106 +537,160 @@ describe("JudgeTab against the real query stack", () => {
       await Promise.resolve();
     });
     await waitFor(() => expect(fixture.held).toHaveLength(2));
+    expect(toastSpy).not.toHaveBeenCalled();
     await act(async () => {
       heldAt(fixture, 1).refuse();
       await Promise.resolve();
     });
     await flush();
 
-    expect(providerText()).toContain("Codex");
-    expect(screen.getByTestId("judge-model-combobox").textContent).toContain(
-      "GPT Mini",
-    );
+    // Snapped back to what the host holds, and said so.
+    expect(faceText()).toContain("GPT Mini");
+    expect(faceText()).not.toContain("GPT Big");
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused write snaps the tiles back to the stored record and toasts", async () => {
+    const fixture = createFixture();
+    renderTab(fixture);
+    await storedJudgeShown();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Automatic/ }));
+    await waitFor(() => expect(fixture.held).toHaveLength(1));
+    expect(
+      screen
+        .getByRole("radio", { name: /Automatic/ })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(toastSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      heldAt(fixture, 0).refuse();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(
+      screen
+        .getByRole("radio", { name: /A model you pick/ })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(faceText()).toContain("Claude Sonnet");
+    expect(faceDimmed()).toBe(false);
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("switching to Automatic keeps the cleared pick on the second tile, dimmed, through the write and its refetch", async () => {
+    const fixture = createFixture();
+    renderTab(fixture);
+    await storedJudgeShown();
+    const watch = watchFaceText();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Automatic/ }));
+    await waitFor(() => expect(fixture.held).toHaveLength(1));
+    expect(faceText()).toContain("Claude Sonnet");
+    expect(faceDimmed()).toBe(true);
+
+    await act(async () => {
+      heldAt(fixture, 0).succeed();
+      await Promise.resolve();
+    });
+    await flush();
+    watch.stop();
+
+    // The host moved the pick into `lastSelection`; no frame on the way said
+    // "Choose a model".
+    expect(faceText()).toContain("Claude Sonnet");
+    expect(faceDimmed()).toBe(true);
+    expect(
+      watch.history.filter((text) => text.includes("Choose a model")),
+    ).toEqual([]);
   });
 
   describe("a provider with no default model", () => {
     beforeEach(() => {
-      harnessesState.current = [
+      judgeCatalog.harnesses = [
         harness({ id: "claude", label: "Claude Code", nativeAutoJudge: true }),
         harness({ id: "codex", label: "Codex", judgeDefaultModel: null }),
       ];
     });
 
-    it("c: an empty catalog then an account choice never sends an empty model", async () => {
+    it("c: an empty catalog, then closing the picker, sends nothing and re-seeds to the stored pick", async () => {
       const fixture = createFixture();
       renderTab(fixture);
       await storedJudgeShown();
+      const user = userEvent.setup();
 
-      chooseProvider("Codex");
+      await switchProvider(user, /Codex/);
       act(() => {
-        modelsStore.set("codex", { kind: "ready", models: [] });
+        setModels("codex", { kind: "ready", models: [] });
       });
       await flush();
-      chooseAccount(/work/);
+      await user.keyboard("{Escape}");
       await flush();
 
-      // The client refuses a `model: ""` before it reaches the messenger
-      // (`min(1)` in the contract), so the request log alone cannot see the
-      // attempt: the refusal is the "Couldn't save" toast.
-      expect(sentModels(fixture)).not.toContain("");
+      expect(sentModels(fixture)).toEqual([]);
       expect(toastSpy).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
+      expect(faceText()).toContain("Claude Sonnet");
     });
 
-    it("d: a failed catalog read sends no empty model and says so, never Loading models", async () => {
+    it("d: a failed catalog read sends no empty model and says so, never a spinner", async () => {
       const fixture = createFixture();
       renderTab(fixture);
       await storedJudgeShown();
+      const user = userEvent.setup();
 
-      chooseProvider("Codex");
+      await switchProvider(user, /Codex/);
       act(() => {
-        modelsStore.set("codex", { kind: "error" });
+        setModels("codex", { kind: "error" });
       });
-      await flush();
-      chooseAccount(/work/);
-      await flush();
-      fireEvent.click(screen.getByTestId("judge-model-combobox"));
       await flush();
 
       expect(sentModels(fixture)).not.toContain("");
+      expect(fixture.held).toHaveLength(0);
       expect(toastSpy).not.toHaveBeenCalled();
-      expect(screen.queryByText("Loading models…")).toBeNull();
-      expect(screen.getByTestId("auto-judge-pick-warning").textContent).toBe(
+      expect(screen.getByTestId("auto-judge-pending-switch").textContent).toBe(
         FAILED_LINE,
       );
-      // The line under the fields, and the one in the open Model popover.
-      expect(screen.getAllByText(FAILED_LINE)).toHaveLength(2);
     });
 
-    it("e: an empty catalog says so, and how to fix it, in the line and in the Model popover", async () => {
+    it("e: an empty catalog says so, and how to fix it, on the second tile", async () => {
       const fixture = createFixture();
       renderTab(fixture);
       await storedJudgeShown();
+      const user = userEvent.setup();
 
-      chooseProvider("Codex");
+      await switchProvider(user, /Codex/);
       act(() => {
-        modelsStore.set("codex", { kind: "ready", models: [] });
+        setModels("codex", { kind: "ready", models: [] });
       });
       await flush();
 
-      expect(screen.getByTestId("auto-judge-pick-warning").textContent).toBe(
+      expect(screen.getByTestId("auto-judge-pending-switch").textContent).toBe(
         NO_MODELS_LINE,
       );
-      fireEvent.click(screen.getByTestId("judge-model-combobox"));
-      await flush();
-
-      // The warning line has it too, so the popover makes two.
-      expect(screen.getAllByText(NO_MODELS_LINE)).toHaveLength(2);
-      expect(screen.queryByText("No matching models.")).toBeNull();
+      expect(fixture.held).toHaveLength(0);
     });
 
-    it("f: an uncommitted pick commits once, on the model the catalog names, when it answers", async () => {
+    it("f: a switch made while the catalog is pending commits once, on the model the catalog names, when it answers", async () => {
       const fixture = createFixture();
       renderTab(fixture);
       await storedJudgeShown();
+      const user = userEvent.setup();
 
-      // Both choices are made while the catalog is still pending.
-      chooseProvider("Codex");
-      chooseAccount(/work/);
+      await switchProvider(user, /Codex/);
       await flush();
       expect(fixture.held).toHaveLength(0);
+      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
+
+      // Close the picker: the switch survives, still waiting.
+      await user.keyboard("{Escape}");
+      await flush();
+      expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
 
       act(() => {
-        modelsStore.set("codex", {
+        setModels("codex", {
           kind: "ready",
           models: [model("codex", "gpt-x", "GPT X")],
         });
@@ -725,16 +698,8 @@ describe("JudgeTab against the real query stack", () => {
       await waitFor(() => expect(fixture.held).toHaveLength(1));
       await flush();
 
-      const workProfile = providersState.current
-        .flatMap((state) => state.profiles)
-        .find((candidate) => candidate.profileId === "work");
-      if (workProfile === undefined) throw new Error("no work profile");
       expect(heldAt(fixture, 0).request).toEqual({
-        selection: {
-          harnessId: "codex",
-          model: "gpt-x",
-          profileId: profileCommitId(workProfile),
-        },
+        selection: { harnessId: "codex", model: "gpt-x", profileId: null },
       });
       expect(sentModels(fixture)).toEqual(["gpt-x"]);
       expect(sentModels(fixture)).not.toContain("");
@@ -747,6 +712,8 @@ describe("JudgeTab against the real query stack", () => {
       harnessId: "traycer",
       model: "traycer-fast",
     };
+    const FALLBACK_LINE =
+      "Now: each conversation's own model · on your account there";
 
     /** The app's own reaction to a catalog change, run from the test. */
     function invalidateVerdict(fixture: JudgeFixture): Promise<void> {
@@ -782,7 +749,7 @@ describe("JudgeTab against the real query stack", () => {
         expect(effectiveText()).toContain("Traycer Fast on Traycer"),
       );
       expect(effectiveText()).toBe(
-        "Now: Traycer Fast on Traycer · uses credits",
+        "Now: Traycer Fast on Traycer · uses Traycer credits",
       );
 
       fixture.interceptGets(true);
@@ -810,11 +777,7 @@ describe("JudgeTab against the real query stack", () => {
         await invalidateVerdict(fixture);
       });
       await pending;
-      await waitFor(() =>
-        expect(effectiveText()).toBe(
-          "Now: the conversation's own provider · your account",
-        ),
-      );
+      await waitFor(() => expect(effectiveText()).toBe(FALLBACK_LINE));
     });
 
     it("i: a stored judge's blocked verdict is withheld while the re-read is pending or refused, and the next verdict shows once it answers", async () => {
@@ -920,11 +883,7 @@ describe("JudgeTab against the real query stack", () => {
           await Promise.resolve();
         });
         await flush();
-        await waitFor(() =>
-          expect(effectiveText()).toBe(
-            "Now: the conversation's own provider · your account",
-          ),
-        );
+        await waitFor(() => expect(effectiveText()).toBe(FALLBACK_LINE));
       });
     });
   });
