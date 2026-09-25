@@ -93,6 +93,7 @@ vi.mock(
 
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map<string, boolean>(),
+  useRetryUnansweredTaskPinReading: () => () => undefined,
 }));
 
 // Partial: `tab-strip.tsx` also imports `epicPinDispatchAdmitted` from here,
