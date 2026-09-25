@@ -53,6 +53,10 @@ make dev-desktop VERSION=1.2.3
 
 Details: [`docs/DEVELOPMENT.md`](../../docs/DEVELOPMENT.md).
 
+`compile`, `build` and `test` above are whole-project runs. The commit hook
+compiles, and CI builds and tests; run one yourself only to diagnose its
+failure (see the root `AGENTS.md`).
+
 **Commits:** don't manually run `compile` / `build` / `lint` / `format` before
 committing — repo-root `pre-commit` already runs the affected checks (see root
 `AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
