@@ -1319,9 +1319,11 @@ describe("chat find projection", () => {
     expect(text).not.toContain("/repo/work");
   });
 
-  // The notice row paints the host's text and nothing else, so that text is
-  // exactly what find indexes - under the segment's own anchor.
-  it("indexes an auto-mode judge notice by the host's text", () => {
+  // The segment now paints nothing (see `chat-message.tsx`): a legacy row
+  // still on disk from before the judge stopped writing this notice is still
+  // PROJECTED (so windows and anchors do not renumber), but it has no text a
+  // find hit could be painted onto, so it contributes no units at all.
+  it("indexes nothing for a legacy auto-mode judge notice row", () => {
     const message =
       "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.";
     const synthesized: ChatMessageModel = {
@@ -1343,10 +1345,7 @@ describe("chat find projection", () => {
       new Set(),
     )[0];
 
-    expect(row.units.map((unit) => unit.unitId)).toEqual([
-      chatFindSegmentUnitId("notice-1"),
-    ]);
-    expect(rowSearchText(row)).toBe(message);
+    expect(row.units).toEqual([]);
   });
 });
 

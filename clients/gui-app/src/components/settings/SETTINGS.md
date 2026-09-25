@@ -3917,16 +3917,39 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - `null` → "No judge can run here · Auto mode asks you"
       - `fallback` → "Now: the conversation's own provider · your account"
       - `default` → "Now: {model} on Traycer · uses credits", where the model
-        is the catalog label for the slug when one exists
+        is the catalog label for the slug when one exists, with the stored
+        selection's reasoning effort appended in parentheses when it carries
+        one and the model still names that effort's label (`EffectiveModelLabel`,
+        e.g. "Grok 4.7 Build Fast (Low)").
         A host too old to report `effective` gets no status line. When Copilot
         is enabled, a hint quotes Traycer's own measured rate (60–350 premium
         requests per hour of Auto mode), which cannot go stale when GitHub
         reprices. The figure is `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
         (`lib/auto-mode/auto-judge-billing.ts`). The composer's meta line
         quotes the same constant, so the two cannot drift.
-    - **A specific model** is three fields: Provider, Account (drawn only for
-      more than one profile) and Model. Model is a searchable combobox, not a
-      menu, because a catalog can be long.
+    - **A specific model** is up to four fields: Provider, Account (drawn only
+      for more than one profile), Model and Effort (drawn only once the chosen
+      model advertises at least one, and only on a host whose negotiated
+      `autoJudge.set` is `1.2` or later - `useHostMethodSchemaVersion`, since a
+      `1.1` host resets the field on write anyway). Model is a searchable
+      combobox, not a menu, because a catalog can be long.
+      - Effort's options are sorted low-to-high by the shared
+        `sortReasoningEffortOptions` (`reasoning-effort-order.ts`), not by
+        whatever order the harness's own catalog lists them in - Grok's
+        catalog lists Extra High first. Its first option is always the host's
+        DEFAULT for that model - the canonical lowest - labelled with that
+        effort's own name ("Default (Low)") rather than a generic word, so
+        picking "the default" and picking that level explicitly read as the
+        one thing they resolve to. `null` on the wire means this default, and
+        `effectiveJudgeReasoningEffort` is the one place both this label and
+        the Automatic status line's own effort parenthetical resolve it, so
+        they cannot disagree with what the host actually runs.
+      - Choosing a different Model resets Effort to `null` unless the newly
+        chosen model still advertises the same effort id, mirroring the
+        Fallback Profile card's own `ModelSelect` → `EffortControl` rule
+        (`fallback-tier-group-card.tsx`): a level valid for the old model and
+        not the new one would otherwise be sent and silently dropped at
+        resolution.
       - A provider that cannot judge is listed as a disabled option with its
         reason ("Turned off", "Signed out", "Not installed", "Not available").
         A listbox holds options and nothing else, so no control sits inside

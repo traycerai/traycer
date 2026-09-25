@@ -123,8 +123,12 @@ export const providersSetAutoJudgeV10 = defineRpcContract({
  * first, and the conversation's own harness when Traycer cannot answer. The
  * record is unchanged; `effective` on the `1.1` response says which one a host
  * would use.
+ *
+ * FROZEN at this shape for the `1.0` and `1.1` lines, which bind it by
+ * identity through their request and response objects. The live selection
+ * below extends it; do not add fields here.
  */
-export const autoJudgeSelectionSchema = lazySchema(() =>
+export const autoJudgeSelectionSchemaPreEffort = lazySchema(() =>
   z.object({
     harnessId: z.string().min(1),
     model: z.string().min(1),
@@ -132,14 +136,57 @@ export const autoJudgeSelectionSchema = lazySchema(() =>
     profileId: z.string().nullable(),
   }),
 );
+export type AutoJudgeSelectionPreEffort = z.infer<
+  typeof autoJudgeSelectionSchemaPreEffort
+>;
+
+/**
+ * The live selection (`1.2`): the frozen triple plus the reasoning effort the
+ * judge runs the model at.
+ *
+ * `reasoningEffort` is one of the ids the model's catalog row advertises under
+ * `supportedReasoningEfforts`, as a checked string for the same reason
+ * `harnessId` is one: written by the host, read by whatever client connects.
+ * `null` means "the host's default for this model", which is the LOWEST effort
+ * the row advertises - a stage-1 verdict is a short classification, and the
+ * measured difference on Grok 4.7 was 8 s at low against 14 s at the model's
+ * own default - and the model's own default when it advertises none. A `1.1`
+ * peer's write arrives as `null` (see the request upgrade), so a save from an
+ * older desktop resets the effort to the default rather than inventing one.
+ */
+export const autoJudgeSelectionSchema = lazySchema(() =>
+  autoJudgeSelectionSchemaPreEffort.extend({
+    reasoningEffort: z.string().nullable(),
+  }),
+);
 export type AutoJudgeSelection = z.infer<typeof autoJudgeSelectionSchema>;
+
+/** The `1.0` / `1.1` reading of a live selection: the effort dropped. */
+export function projectAutoJudgeSelectionPreEffort(
+  selection: AutoJudgeSelection | null,
+): AutoJudgeSelectionPreEffort | null {
+  if (selection === null) return null;
+  return {
+    harnessId: selection.harnessId,
+    model: selection.model,
+    profileId: selection.profileId,
+  };
+}
+
+/** A `1.0` / `1.1` selection read as live: no effort was ever chosen. */
+export function upgradeAutoJudgeSelectionFromPreEffort(
+  selection: AutoJudgeSelectionPreEffort | null,
+): AutoJudgeSelection | null {
+  if (selection === null) return null;
+  return { ...selection, reasoningEffort: null };
+}
 
 // ─── The released `1.0` response ──────────────────────────────────────────
 //
 // FROZEN: `autoJudge.get@1.0` and `autoJudge.set@1.0` shipped in
 // `host-v1.3.2-staging.39`. They bind these `...V10` objects by identity, and
-// the canonical names below belong to the `1.1` head, which is the line host
-// resolvers answer and clients read. Do not add fields here.
+// the canonical names further down belong to the `1.2` head, which is the line
+// host resolvers answer and clients read. Do not add fields here.
 
 export const autoJudgeEffectiveSchemaV10 = lazySchema(() =>
   z.object({
@@ -163,7 +210,7 @@ export type AutoJudgeGetRequest = z.infer<typeof autoJudgeGetRequestSchema>;
 
 export const autoJudgeGetResponseSchemaV10 = lazySchema(() =>
   z.object({
-    selection: autoJudgeSelectionSchema.nullable(),
+    selection: autoJudgeSelectionSchemaPreEffort.nullable(),
     // Widened in place while 1.0 was unreleased, like autoPolicy.get.readState.
     // Older hosts omit these fields; readers preserve their existing copy then.
     effective: autoJudgeEffectiveSchemaV10.nullable().optional(),
@@ -181,17 +228,20 @@ export const autoJudgeGetV10 = defineRpcContract({
   responseSchema: autoJudgeGetResponseSchemaV10,
 });
 
-export const autoJudgeSetRequestSchema = lazySchema(() =>
+/** The `1.0` / `1.1` request: a selection with no effort field. */
+export const autoJudgeSetRequestSchemaPreEffort = lazySchema(() =>
   z.object({
     /** `null` clears the selection and restores the catalog default. */
-    selection: autoJudgeSelectionSchema.nullable(),
+    selection: autoJudgeSelectionSchemaPreEffort.nullable(),
   }),
 );
-export type AutoJudgeSetRequest = z.infer<typeof autoJudgeSetRequestSchema>;
+export type AutoJudgeSetRequestPreEffort = z.infer<
+  typeof autoJudgeSetRequestSchemaPreEffort
+>;
 
 export const autoJudgeSetResponseSchemaV10 = lazySchema(() =>
   z.object({
-    selection: autoJudgeSelectionSchema.nullable(),
+    selection: autoJudgeSelectionSchemaPreEffort.nullable(),
     effective: autoJudgeEffectiveSchemaV10.nullable().optional(),
     blocked: autoJudgeBlockedSchemaV10.nullable().optional(),
   }),
@@ -203,13 +253,17 @@ export type AutoJudgeSetResponseV10 = z.infer<
 export const autoJudgeSetV10 = defineRpcContract({
   method: "autoJudge.set",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: autoJudgeSetRequestSchema,
+  requestSchema: autoJudgeSetRequestSchemaPreEffort,
   responseSchema: autoJudgeSetResponseSchemaV10,
 });
 
-// ─── `autoJudge.get@1.1` / `autoJudge.set@1.1` (the head) ─────────────────
+// ─── `autoJudge.get@1.1` / `autoJudge.set@1.1` ────────────────────────────
 //
 // `1.1` changes the RESPONSE only; both requests are the `1.0` ones.
+//
+// FROZEN: `1.1` shipped in `host-v1.3.2-staging.5x`. Its response objects are
+// the `...V11` ones below, on the pre-effort selection; the canonical names
+// belong to the `1.2` head.
 
 /**
  * The judge a host would use, as the `1.1` line reports it.
@@ -258,12 +312,62 @@ export const autoJudgeBlockedSchema = lazySchema(() =>
 );
 export type AutoJudgeBlocked = z.infer<typeof autoJudgeBlockedSchema>;
 
-export const autoJudgeGetResponseSchema = lazySchema(() =>
+export const autoJudgeGetResponseSchemaV11 = lazySchema(() =>
   z.object({
-    selection: autoJudgeSelectionSchema.nullable(),
+    selection: autoJudgeSelectionSchemaPreEffort.nullable(),
     // Still optional, as on `1.0`: a `1.0` host that predates these fields
     // omits them, and the `1.0 -> 1.1` upgrade cannot invent them. Absent
     // means "this host did not say", which readers keep distinct from `null`.
+    effective: autoJudgeEffectiveSchema.nullable().optional(),
+    blocked: autoJudgeBlockedSchema.nullable().optional(),
+  }),
+);
+export type AutoJudgeGetResponseV11 = z.infer<
+  typeof autoJudgeGetResponseSchemaV11
+>;
+
+export const autoJudgeSetResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    selection: autoJudgeSelectionSchemaPreEffort.nullable(),
+    effective: autoJudgeEffectiveSchema.nullable().optional(),
+    blocked: autoJudgeBlockedSchema.nullable().optional(),
+  }),
+);
+export type AutoJudgeSetResponseV11 = z.infer<
+  typeof autoJudgeSetResponseSchemaV11
+>;
+
+export const autoJudgeGetV11 = defineRpcContract({
+  method: "autoJudge.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: autoJudgeGetRequestSchema,
+  responseSchema: autoJudgeGetResponseSchemaV11,
+});
+
+export const autoJudgeSetV11 = defineRpcContract({
+  method: "autoJudge.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: autoJudgeSetRequestSchemaPreEffort,
+  responseSchema: autoJudgeSetResponseSchemaV11,
+});
+
+// ─── `autoJudge.get@1.2` / `autoJudge.set@1.2` (the head) ─────────────────
+//
+// `1.2` adds `reasoningEffort` to the selection, on the `set` REQUEST and on
+// both responses' `selection` echo. `effective` and `blocked` are the `1.1`
+// objects, unchanged.
+
+export const autoJudgeSetRequestSchema = lazySchema(() =>
+  z.object({
+    /** `null` clears the selection and restores the catalog default. */
+    selection: autoJudgeSelectionSchema.nullable(),
+  }),
+);
+export type AutoJudgeSetRequest = z.infer<typeof autoJudgeSetRequestSchema>;
+
+export const autoJudgeGetResponseSchema = lazySchema(() =>
+  z.object({
+    selection: autoJudgeSelectionSchema.nullable(),
     effective: autoJudgeEffectiveSchema.nullable().optional(),
     blocked: autoJudgeBlockedSchema.nullable().optional(),
   }),
@@ -279,18 +383,52 @@ export const autoJudgeSetResponseSchema = lazySchema(() =>
 );
 export type AutoJudgeSetResponse = z.infer<typeof autoJudgeSetResponseSchema>;
 
-export const autoJudgeGetV11 = defineRpcContract({
+export const autoJudgeGetV12 = defineRpcContract({
   method: "autoJudge.get",
-  schemaVersion: { major: 1, minor: 1 } as const,
+  schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: autoJudgeGetRequestSchema,
   responseSchema: autoJudgeGetResponseSchema,
 });
 
-export const autoJudgeSetV11 = defineRpcContract({
+export const autoJudgeSetV12 = defineRpcContract({
   method: "autoJudge.set",
-  schemaVersion: { major: 1, minor: 1 } as const,
+  schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: autoJudgeSetRequestSchema,
   responseSchema: autoJudgeSetResponseSchema,
+});
+
+// No `1.2 -> 1.1` projection: `reasoningEffort` is a KEY, and a `1.1` caller's
+// non-strict decode drops it. The `1.0` projections below strip it themselves
+// because they re-parse through the frozen `1.0` schema.
+
+export const autoJudgeGetUpgradeV11ToV12 = defineUpgradePath<
+  typeof autoJudgeGetV11,
+  typeof autoJudgeGetV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    selection: upgradeAutoJudgeSelectionFromPreEffort(response.selection),
+  }),
+});
+
+export const autoJudgeSetUpgradeV11ToV12 = defineUpgradePath<
+  typeof autoJudgeSetV11,
+  typeof autoJudgeSetV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  // A `1.1` desktop cannot name an effort, so its save resets the effort to
+  // the host's default rather than keeping a value it never saw.
+  upgradeRequest: (request) => ({
+    selection: upgradeAutoJudgeSelectionFromPreEffort(request.selection),
+  }),
+  upgradeResponse: (response) => ({
+    ...response,
+    selection: upgradeAutoJudgeSelectionFromPreEffort(response.selection),
+  }),
 });
 
 /**
@@ -341,7 +479,7 @@ export function projectAutoJudgeGetResponseToV10(
   response: AutoJudgeGetResponse,
 ): AutoJudgeGetResponseV10 {
   return autoJudgeGetResponseSchemaV10.parse({
-    selection: response.selection,
+    selection: projectAutoJudgeSelectionPreEffort(response.selection),
     ...projectAutoJudgeVerdictToV10(response),
   });
 }
@@ -351,7 +489,7 @@ export function projectAutoJudgeSetResponseToV10(
   response: AutoJudgeSetResponse,
 ): AutoJudgeSetResponseV10 {
   return autoJudgeSetResponseSchemaV10.parse({
-    selection: response.selection,
+    selection: projectAutoJudgeSelectionPreEffort(response.selection),
     ...projectAutoJudgeVerdictToV10(response),
   });
 }

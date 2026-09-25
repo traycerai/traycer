@@ -4,12 +4,25 @@
  */
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type {
-  AutoJudgeGetResponse,
-  AutoJudgeSelection,
+  AgentReasoningEffortOption,
+  GuiAgentModelOption,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  autoJudgeSetV12,
+  type AutoJudgeGetResponse,
+  type AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import {
+  readableModelMatch,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
+import {
+  effectiveJudgeReasoningEffort,
+  sortReasoningEffortOptions,
+} from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -21,7 +34,10 @@ import {
 } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { autoJudgeModelLabel } from "@/hooks/auto-mode/use-auto-judge-billing";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSchemaVersion,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
 import {
   useGuiHarnessModelsQuery,
   useGuiHarnessesQuery,
@@ -59,6 +75,40 @@ const PREDATES_AUTO_MODE =
 const IDLE_MODELS_HARNESS_ID = providerIdToGuiHarnessId("traycer");
 
 const COPILOT_HARNESS_ID = providerIdToGuiHarnessId("copilot");
+
+/**
+ * Whether the host's negotiated `autoJudge.set` line can even store a
+ * reasoning effort - the `1.2` line that added the field. Below it, `set`
+ * upgrades the request and resets the effort to the model's default, so an
+ * Effort field would write something the host silently discards; the tab
+ * hides it instead.
+ */
+function judgeSetKnowsReasoningEffort(version: SchemaVersion | null): boolean {
+  if (version === null) return false;
+  const line = autoJudgeSetV12.schemaVersion;
+  if (version.major !== line.major) return false;
+  return version.minor >= line.minor;
+}
+
+/**
+ * The chosen model's own advertised efforts, resolved the same way the rest
+ * of this tab resolves a stored slug (`resolveModelBySlug`, which also
+ * matches an entitlement-decorated alias), in the CANONICAL low-to-high order
+ * (`sortReasoningEffortOptions`) rather than a harness's own catalog order -
+ * Grok's live catalog lists Extra High first, and this field's first option
+ * is always named as the default, so it has to be the one the host actually
+ * runs by default. Empty while the catalog has not answered or the slug
+ * matches nothing in it.
+ */
+function effortOptionsForModel(
+  models: ReadonlyArray<GuiAgentModelOption> | undefined,
+  modelSlug: string,
+): ReadonlyArray<AgentReasoningEffortOption> {
+  if (models === undefined) return [];
+  const row = readableModelMatch(resolveModelBySlug(models, modelSlug));
+  if (row === null) return [];
+  return sortReasoningEffortOptions(row.supportedReasoningEfforts);
+}
 
 /**
  * Settings ▸ Permissions ▸ Judge: which model reviews commands in Auto mode on
@@ -159,6 +209,9 @@ function providerPick(input: {
       harnessId: input.row.id,
       model: "",
       profileId: firstOfferedJudgeProfileId(input.provider),
+      // Uncommitted (empty model), so there is no model to run an effort
+      // against yet either; the field resolves it once the catalog answers.
+      reasoningEffort: null,
     }
   );
 }
@@ -253,6 +306,11 @@ function AutoJudgeControls(props: {
   const query = useAutoJudgeQuery();
   const verdict = useAutoJudgeVerdict();
   const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
+  const judgeSetVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "autoJudge.set",
+  );
+  const showEffort = judgeSetKnowsReasoningEffort(judgeSetVersion);
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
     subscribed: true,
@@ -318,6 +376,7 @@ function AutoJudgeControls(props: {
                 provider.providerId === "copilot" && provider.enabled,
             ) ?? false
           }
+          hostRunsEffort={showEffort}
         />
         <SpecificOption
           open={mode === "specific"}
@@ -326,6 +385,7 @@ function AutoJudgeControls(props: {
           harnesses={harnesses}
           providers={providers}
           disabled={disabled}
+          showEffort={showEffort}
         />
       </RadioGroup>
     </div>
@@ -338,6 +398,8 @@ function AutomaticOption(props: {
   readonly pick: JudgePick;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly copilotEnabled: boolean;
+  /** See `AutomaticStatus.hostRunsEffort`. */
+  readonly hostRunsEffort: boolean;
 }): ReactNode {
   const { verdict, pick } = props;
   const writing = pick.draft !== null && !pick.uncommitted;
@@ -351,7 +413,11 @@ function AutomaticOption(props: {
         {verdict !== undefined &&
         verdict.selection === null &&
         pick.draft === null ? (
-          <AutomaticStatus record={verdict} harnesses={props.harnesses} />
+          <AutomaticStatus
+            record={verdict}
+            harnesses={props.harnesses}
+            hostRunsEffort={props.hostRunsEffort}
+          />
         ) : null}
         {writing && pick.displayed === null ? <MutedAgentSpinner /> : null}
       </div>
@@ -378,6 +444,8 @@ function SpecificOption(props: {
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
   readonly disabled: boolean;
+  /** Whether the host's negotiated `autoJudge.set` can store an effort. */
+  readonly showEffort: boolean;
 }): ReactNode {
   const { pick, providers } = props;
   const { displayed } = pick;
@@ -389,6 +457,10 @@ function SpecificOption(props: {
     harnesses: props.harnesses,
     providers,
   });
+  const effortOptions =
+    displayed === null
+      ? []
+      : effortOptionsForModel(pick.models, displayed.model);
   return (
     <JudgeOption
       value="specific"
@@ -411,6 +483,9 @@ function SpecificOption(props: {
             selection={displayed}
             models={pick.models}
             modelsFailed={pick.modelsFailed}
+            effortOptions={effortOptions}
+            effort={displayed?.reasoningEffort ?? null}
+            showEffort={props.showEffort}
             openProvidersFor={openProvidersTarget(pick, cause)}
             disabled={props.disabled}
             onProvider={(row) => {
@@ -427,7 +502,26 @@ function SpecificOption(props: {
               if (displayed !== null) pick.request({ ...displayed, profileId });
             }}
             onModel={(model) => {
-              if (displayed !== null) pick.request({ ...displayed, model });
+              if (displayed === null) return;
+              // Keep the picked effort only while the NEW model still offers
+              // that id - one valid for the old model and not for this one
+              // would otherwise be sent and then silently dropped at
+              // resolution, which is the defect the reset avoids.
+              const efforts = effortOptionsForModel(pick.models, model);
+              const storedEffort = displayed.reasoningEffort;
+              const keepsEffort =
+                storedEffort !== null &&
+                efforts.some((option) => option.id === storedEffort);
+              pick.request({
+                ...displayed,
+                model,
+                reasoningEffort: keepsEffort ? storedEffort : null,
+              });
+            }}
+            onEffort={(effort) => {
+              if (displayed !== null) {
+                pick.request({ ...displayed, reasoningEffort: effort });
+              }
             }}
             onOpenProvider={openProvider}
           />
@@ -571,6 +665,12 @@ function JudgeOption(props: {
 function AutomaticStatus(props: {
   readonly record: AutoJudgeGetResponse;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
+  /**
+   * Whether this host runs the judge at an effort of its own (the `1.2`
+   * line). Below it the host runs the model's default and the label must not
+   * name an effort the host does not apply - the composer's rule too.
+   */
+  readonly hostRunsEffort: boolean;
 }): ReactNode {
   const effective = props.record.effective;
   if (effective === undefined) return null;
@@ -608,7 +708,12 @@ function AutomaticStatus(props: {
         {row === undefined ? (
           effective.model
         ) : (
-          <EffectiveModelLabel row={row} slug={effective.model} />
+          <EffectiveModelLabel
+            row={row}
+            slug={effective.model}
+            reasoningEffort={props.record.selection?.reasoningEffort ?? null}
+            hostRunsEffort={props.hostRunsEffort}
+          />
         )}{" "}
         on Traycer
       </span>{" "}
@@ -617,15 +722,35 @@ function AutomaticStatus(props: {
   );
 }
 
+/**
+ * The effective judge's model label, with its reasoning effort appended in
+ * parentheses when the stored selection carries one - e.g. "Grok 4.7 Build
+ * Fast (Low)". Silent about effort when there is none to name: the host's
+ * default applies, or the model no longer offers the stored id.
+ */
 function EffectiveModelLabel(props: {
   readonly row: GuiHarnessOption;
   readonly slug: string;
+  readonly reasoningEffort: string | null;
+  readonly hostRunsEffort: boolean;
 }): ReactNode {
   const models = useGuiHarnessModelsQuery(props.row.id, null, {
     enabled: true,
     subscribed: true,
   }).data?.models;
-  return autoJudgeModelLabel(models, props.slug) ?? props.slug;
+  const modelLabel = autoJudgeModelLabel(models, props.slug) ?? props.slug;
+  // The same resolution the host itself runs (`effectiveJudgeReasoningEffort`):
+  // the stored effort when the model still advertises it, else the model's
+  // own lowest - so this label and the host's actual run never disagree.
+  const effortLabel =
+    models === undefined || !props.hostRunsEffort
+      ? null
+      : (effectiveJudgeReasoningEffort(
+          models,
+          props.slug,
+          props.reasoningEffort,
+        )?.label ?? null);
+  return effortLabel === null ? modelLabel : `${modelLabel} (${effortLabel})`;
 }
 
 /**

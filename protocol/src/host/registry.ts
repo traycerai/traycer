@@ -827,12 +827,16 @@ import {
 } from "@traycer/protocol/host/session-import/scan";
 import {
   autoJudgeGetUpgradeV10ToV11,
+  autoJudgeGetUpgradeV11ToV12,
   autoJudgeGetV10,
   autoJudgeGetV11,
+  autoJudgeGetV12,
   autoJudgeListRecentV10,
   autoJudgeSetUpgradeV10ToV11,
+  autoJudgeSetUpgradeV11ToV12,
   autoJudgeSetV10,
   autoJudgeSetV11,
+  autoJudgeSetV12,
   autoPolicyGetV10,
   autoPolicySetV10,
   providersSetAutoJudgeV10,
@@ -5010,7 +5014,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       // @1.0 is RELEASED (`host-v1.3.2-staging.39` advertised it), so the
       // Automatic judge's `{ source: "fallback" }` answer opens @1.1 rather
       // than widening it in place.
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: autoJudgeGetV10,
@@ -5028,6 +5032,14 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // never to the Traycer pocket a 1.0 desktop would bill it to.
           responseGrowthProjectionGated: true,
         },
+        2: {
+          contract: autoJudgeGetV12,
+          upgradeFromPreviousVersion: autoJudgeGetUpgradeV11ToV12,
+          // `selection` gains the `reasoningEffort` KEY (the judge's effort).
+          // A new key is structural growth, not value growth: a ≤1.1 caller's
+          // non-strict decode drops it, and the 1.0 projection strips it on
+          // its way down, so no gate is declared here.
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -5037,7 +5049,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     1: {
       // Same line, same reason, as `autoJudge.get`: the echo reports the
       // judge the new selection resolves to.
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: autoJudgeSetV10,
@@ -5049,6 +5061,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // See `autoJudge.get@1.1`; the projection is
           // `projectAutoJudgeSetResponseToV10`.
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: autoJudgeSetV12,
+          upgradeFromPreviousVersion: autoJudgeSetUpgradeV11ToV12,
+          // See `autoJudge.get@1.2`. The request grows by the same key: a
+          // ≤1.1 save is upgraded with `reasoningEffort: null`, the host's
+          // default for the model.
         },
       },
       downgradePathsFromLatest: {},

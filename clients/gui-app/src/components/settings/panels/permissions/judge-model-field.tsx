@@ -5,7 +5,10 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { ChevronsUpDown } from "lucide-react";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type {
+  AgentReasoningEffortOption,
+  GuiAgentModelOption,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -67,6 +70,16 @@ export function JudgeModelField(props: {
   /** The chosen provider's catalog read failed, so `models` is not coming. */
   readonly modelsFailed: boolean;
   /**
+   * The chosen model's own advertised efforts, in canonical low-to-high order
+   * (its first entry is the lowest, whatever order the harness's own catalog
+   * lists them in). Empty while the model is unknown or advertises none.
+   */
+  readonly effortOptions: ReadonlyArray<AgentReasoningEffortOption>;
+  /** `null` is the host's default for the model - its lowest effort. */
+  readonly effort: string | null;
+  /** Whether the host's negotiated `autoJudge.set` can even store an effort. */
+  readonly showEffort: boolean;
+  /**
    * The chosen provider when it cannot run here and nothing else on the tab
    * already links to its fix; `null` otherwise.
    */
@@ -75,17 +88,17 @@ export function JudgeModelField(props: {
   readonly onProvider: (row: GuiHarnessOption) => void;
   readonly onAccount: (profileId: string | null) => void;
   readonly onModel: (slug: string) => void;
+  readonly onEffort: (effort: string | null) => void;
   readonly onOpenProvider: (row: GuiHarnessOption) => void;
 }): ReactNode {
   const { selection } = props;
   const profiles = props.provider?.profiles ?? [];
   const showAccount = selection !== null && profiles.length > 1;
+  const showEffort = props.showEffort && props.effortOptions.length > 0;
+  const fieldCount = 2 + (showAccount ? 1 : 0) + (showEffort ? 1 : 0);
   return (
     <div
-      className={cn(
-        "grid grid-cols-1 gap-3",
-        showAccount ? "sm:grid-cols-3" : "sm:grid-cols-2",
-      )}
+      className={cn("grid grid-cols-1 gap-3", fieldColumnsClass(fieldCount))}
       data-testid="judge-model-field"
     >
       <ProviderField
@@ -107,15 +120,19 @@ export function JudgeModelField(props: {
       <ModelField
         models={props.models}
         modelsFailed={props.modelsFailed}
-        providerLabel={
-          selection === null
-            ? ""
-            : judgeProviderLabel(props.harnesses, selection.harnessId)
-        }
+        providerLabel={selectedProviderLabel(props.harnesses, selection)}
         value={selection?.model ?? null}
         disabled={props.disabled || selection === null}
         onModel={props.onModel}
       />
+      {showEffort ? (
+        <EffortField
+          effortOptions={props.effortOptions}
+          effort={props.effort}
+          disabled={props.disabled || selection === null}
+          onEffort={props.onEffort}
+        />
+      ) : null}
     </div>
   );
 }
@@ -407,6 +424,85 @@ function ModelField(props: {
           </Command>
         </PopoverContent>
       </Popover>
+    </div>
+  );
+}
+
+/** One column per field from `sm` up; the fields stack below it. */
+function fieldColumnsClass(fieldCount: number): string {
+  if (fieldCount === 4) return "sm:grid-cols-4";
+  if (fieldCount === 3) return "sm:grid-cols-3";
+  return "sm:grid-cols-2";
+}
+
+/** The chosen provider's label for the Model field's copy; `""` with none. */
+function selectedProviderLabel(
+  harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+  selection: AutoJudgeSelection | null,
+): string {
+  return selection === null
+    ? ""
+    : judgeProviderLabel(harnesses, selection.harnessId);
+}
+
+/**
+ * The `Select`'s stand-in for `null` - the host's default effort for the
+ * chosen model, its lowest advertised one. A sentinel rather than `""`
+ * because Radix reads an empty string as "nothing selected" and would show
+ * the placeholder for a choice the user made; it never reaches the wire, and
+ * it cannot collide with a real effort id, which is a provider's own
+ * vocabulary.
+ */
+const DEFAULT_EFFORT_VALUE = "__judge-default-effort__";
+
+/**
+ * The reasoning effort the judge model runs at, alongside Provider/Account/
+ * Model. Rendered only by the caller, and only once the chosen model
+ * advertises at least one effort - a model with none has nothing to pick
+ * from and no "default" to name either.
+ *
+ * The first option is always the host's default, labelled with the actual
+ * lowest effort's own label (`Default (Low)`) rather than a generic word, so
+ * choosing "the default" and choosing that level explicitly read as the same
+ * thing they resolve to.
+ */
+function EffortField(props: {
+  readonly effortOptions: ReadonlyArray<AgentReasoningEffortOption>;
+  readonly effort: string | null;
+  readonly disabled: boolean;
+  readonly onEffort: (effort: string | null) => void;
+}): ReactNode {
+  const labelId = useId();
+  const { effortOptions } = props;
+  const lowestLabel = effortOptions.at(0)?.label;
+  const defaultLabel =
+    lowestLabel === undefined ? "Default (lowest)" : `Default (${lowestLabel})`;
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <FieldLabel id={labelId}>Effort</FieldLabel>
+      <Select
+        value={props.effort ?? DEFAULT_EFFORT_VALUE}
+        disabled={props.disabled}
+        onValueChange={(next) => {
+          props.onEffort(next === DEFAULT_EFFORT_VALUE ? null : next);
+        }}
+      >
+        <SelectTrigger
+          aria-labelledby={labelId}
+          className="w-full min-w-0"
+          data-testid="judge-effort-select"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={DEFAULT_EFFORT_VALUE}>{defaultLabel}</SelectItem>
+          {effortOptions.map((option) => (
+            <SelectItem key={option.id} value={option.id}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

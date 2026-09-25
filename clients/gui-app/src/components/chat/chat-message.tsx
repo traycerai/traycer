@@ -12,7 +12,6 @@ import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
 import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattended-denial-segment";
-import { AutoJudgeNoticeSegment } from "./segments/auto-judge-notice-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
@@ -178,14 +177,13 @@ function renderSingleSpecialSegment(
     );
   }
   if (segment.kind === "auto-judge-notice") {
-    return (
-      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
-        <AutoJudgeNoticeSegment
-          marker={segment.marker}
-          message={segment.message}
-        />
-      </div>
-    );
+    // A row hosts no longer write and this build no longer paints: the judge's
+    // reason lives on the approval card it escalated to, and a durable line
+    // that outlived the condition read as a present fault long after the mode
+    // was switched. Rows already on disk keep their ordinal (the projection
+    // still materialises them, so windows and anchors do not renumber) and
+    // paint nothing.
+    return null;
   }
   return null;
 }

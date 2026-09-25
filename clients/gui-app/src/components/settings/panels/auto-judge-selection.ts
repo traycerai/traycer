@@ -127,6 +127,9 @@ export function judgeSelectionForProvider(input: {
     harnessId: input.row.id,
     model,
     profileId: firstOfferedJudgeProfileId(input.provider),
+    // The host's default for the model (its lowest advertised effort); the
+    // Judge tab's effort field is where a person raises it.
+    reasoningEffort: null,
   };
 }
 

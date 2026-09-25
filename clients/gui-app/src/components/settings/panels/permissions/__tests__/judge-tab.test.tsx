@@ -13,8 +13,10 @@ import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import {
   guiAgentModelOptionSchema,
   guiHarnessOptionSchema,
+  type AgentReasoningEffortOption,
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   AutoJudgeGetResponse,
   AutoJudgeSelection,
@@ -59,16 +61,29 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
 }));
 
 // Whether the host advertises `autoJudge.get` (tri-state, as the real hook is)
-// and `autoJudge.set`.
-const support = vi.hoisted((): { get: boolean | null; set: boolean } => ({
-  get: true,
-  set: true,
-}));
+// and `autoJudge.set`, plus the NEGOTIATED VERSION of `autoJudge.set` - the
+// Effort field's own gate, independent of whether the method exists at all.
+const support = vi.hoisted(
+  (): {
+    get: boolean | null;
+    set: boolean;
+    setVersion: SchemaVersion | null;
+  } => ({
+    get: true,
+    set: true,
+    // `1.2`: the line that added `reasoningEffort`, so the Effort field
+    // shows by default and individual tests dial it back to `1.1` (or
+    // `null`, unknown) to prove it hides.
+    setVersion: { major: 1, minor: 2 },
+  }),
+);
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "autoJudge.get" ? support.get : null,
   useHostSupportsMethod: (_hostId: string | null, method: string) =>
     method === "autoJudge.set" ? support.set : false,
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "autoJudge.set" ? support.setVersion : null,
 }));
 
 // ---- queries --------------------------------------------------------------
@@ -175,6 +190,7 @@ function model(
   harnessId: string,
   slug: string,
   label: string,
+  supportedReasoningEfforts: ReadonlyArray<AgentReasoningEffortOption>,
 ): GuiAgentModelOption {
   return guiAgentModelOptionSchema.parse({
     harnessId,
@@ -184,9 +200,13 @@ function model(
     contextWindow: null,
     maxOutputTokens: null,
     defaultReasoningEffort: null,
-    supportedReasoningEfforts: [],
+    supportedReasoningEfforts,
     metadata: {},
   });
+}
+
+function effortOption(id: string, label: string): AgentReasoningEffortOption {
+  return { id, label, description: null };
 }
 
 function profile(
@@ -256,11 +276,13 @@ const CLAUDE_STORED: AutoJudgeSelection = {
   harnessId: "claude",
   model: "sonnet",
   profileId: null,
+  reasoningEffort: null,
 };
 
 beforeEach(() => {
   support.get = true;
   support.set = true;
+  support.setVersion = { major: 1, minor: 2 };
   judgeRecord.current = { selection: null };
   setJudgeMutate.mockReset();
   catalogState.current = "answered";
@@ -274,8 +296,8 @@ beforeEach(() => {
     }),
   ];
   catalog.models = {
-    claude: [model("claude", "sonnet", "Claude Sonnet")],
-    codex: [model("codex", "gpt-mini", "GPT Mini")],
+    claude: [model("claude", "sonnet", "Claude Sonnet", [])],
+    codex: [model("codex", "gpt-mini", "GPT Mini", [])],
   };
   providersState.current = [
     provider("claude-code", [profile("ambient", "ambient")]),
@@ -368,7 +390,53 @@ describe("JudgeTab", () => {
 
     it("names the model on Traycer, with credits, for the hosted default", () => {
       catalog.harnesses = [harness({ id: "traycer", label: "Traycer" })];
-      catalog.models = { traycer: [model("traycer", "haiku", "Claude Haiku")] };
+      catalog.models = {
+        traycer: [model("traycer", "haiku", "Claude Haiku", [])],
+      };
+      judgeRecord.current = {
+        selection: null,
+        effective: { source: "default", harnessId: "traycer", model: "haiku" },
+      };
+      render(<JudgeTab />);
+
+      expect(screen.getByTestId("auto-judge-effective").textContent).toBe(
+        "Now: Claude Haiku on Traycer · uses credits",
+      );
+    });
+
+    it("appends the model's lowest effort on a 1.2 host whose default model advertises one", () => {
+      support.setVersion = { major: 1, minor: 2 };
+      catalog.harnesses = [harness({ id: "traycer", label: "Traycer" })];
+      catalog.models = {
+        traycer: [
+          model("traycer", "haiku", "Claude Haiku", [
+            effortOption("low", "Low"),
+            effortOption("medium", "Medium"),
+          ]),
+        ],
+      };
+      judgeRecord.current = {
+        selection: null,
+        effective: { source: "default", harnessId: "traycer", model: "haiku" },
+      };
+      render(<JudgeTab />);
+
+      expect(screen.getByTestId("auto-judge-effective").textContent).toBe(
+        "Now: Claude Haiku (Low) on Traycer · uses credits",
+      );
+    });
+
+    it("names no effort on a 1.1 host, even when the default model advertises one", () => {
+      support.setVersion = { major: 1, minor: 1 };
+      catalog.harnesses = [harness({ id: "traycer", label: "Traycer" })];
+      catalog.models = {
+        traycer: [
+          model("traycer", "haiku", "Claude Haiku", [
+            effortOption("low", "Low"),
+            effortOption("medium", "Medium"),
+          ]),
+        ],
+      };
       judgeRecord.current = {
         selection: null,
         effective: { source: "default", harnessId: "traycer", model: "haiku" },
@@ -416,7 +484,12 @@ describe("JudgeTab", () => {
       chooseProvider("Codex");
 
       expect(setJudgeMutate.mock.calls[0][0]).toEqual({
-        selection: { harnessId: "codex", model: "gpt-mini", profileId: null },
+        selection: {
+          harnessId: "codex",
+          model: "gpt-mini",
+          profileId: null,
+          reasoningEffort: null,
+        },
       });
       const combobox = screen.getByTestId("judge-model-combobox");
       expect(combobox.hasAttribute("disabled")).toBe(false);
@@ -450,8 +523,8 @@ describe("JudgeTab", () => {
       catalog.models = {
         ...catalog.models,
         claude: [
-          model("claude", "sonnet", "Claude Sonnet"),
-          model("claude", "opus", "Claude Opus"),
+          model("claude", "sonnet", "Claude Sonnet", []),
+          model("claude", "opus", "Claude Opus", []),
         ],
       };
       render(<JudgeTab />);
@@ -460,7 +533,12 @@ describe("JudgeTab", () => {
       fireEvent.click(screen.getByText("Claude Opus"));
 
       expect(setJudgeMutate.mock.calls[0][0]).toEqual({
-        selection: { harnessId: "claude", model: "opus", profileId: null },
+        selection: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+          reasoningEffort: null,
+        },
       });
     });
   });
@@ -546,7 +624,12 @@ describe("JudgeTab", () => {
 
     it("links Providers from the warning line for a stored blocked provider, with no second link", () => {
       judgeRecord.current = {
-        selection: { harnessId: "codex", model: "gpt-mini", profileId: null },
+        selection: {
+          harnessId: "codex",
+          model: "gpt-mini",
+          profileId: null,
+          reasoningEffort: null,
+        },
       };
       render(<JudgeTab />);
 
@@ -568,7 +651,12 @@ describe("JudgeTab", () => {
         harness({ id: "codex", label: "Codex", authStatus: "unauthenticated" }),
       ];
       judgeRecord.current = {
-        selection: { harnessId: "codex", model: "gpt-mini", profileId: null },
+        selection: {
+          harnessId: "codex",
+          model: "gpt-mini",
+          profileId: null,
+          reasoningEffort: null,
+        },
         blocked: { reason: "unsupported-harness" },
       };
       render(<JudgeTab />);
@@ -626,6 +714,133 @@ describe("JudgeTab", () => {
       render(<JudgeTab />);
 
       expect(screen.getByTestId("judge-account-select")).not.toBeNull();
+    });
+  });
+
+  describe("the Effort field", () => {
+    const LOW = effortOption("low", "Low");
+    const MEDIUM = effortOption("medium", "Medium");
+
+    beforeEach(() => {
+      catalog.models = {
+        ...catalog.models,
+        claude: [
+          model("claude", "sonnet", "Claude Sonnet", [LOW, MEDIUM]),
+          model("claude", "opus", "Claude Opus", []),
+        ],
+      };
+      judgeRecord.current = { selection: CLAUDE_STORED };
+    });
+
+    it("shows 'Default (Low)' plus the model's advertised efforts on a 1.2 host", () => {
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-effort-select"));
+
+      expect(
+        screen.getByRole("option", { name: "Default (Low)" }),
+      ).not.toBeNull();
+      expect(screen.getByRole("option", { name: "Low" })).not.toBeNull();
+      expect(screen.getByRole("option", { name: "Medium" })).not.toBeNull();
+    });
+
+    it("calls autoJudge.set with the picked effort", () => {
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-effort-select"));
+      fireEvent.click(screen.getByRole("option", { name: "Medium" }));
+
+      expect(setJudgeMutate.mock.calls[0][0]).toEqual({
+        selection: {
+          harnessId: "claude",
+          model: "sonnet",
+          profileId: null,
+          reasoningEffort: "medium",
+        },
+      });
+    });
+
+    it("is absent on a host negotiated below autoJudge.set@1.2", () => {
+      support.setVersion = { major: 1, minor: 1 };
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("judge-effort-select")).toBeNull();
+    });
+
+    it("is absent when the negotiated version is unknown", () => {
+      support.setVersion = null;
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("judge-effort-select")).toBeNull();
+    });
+
+    it("is absent when the chosen model advertises no efforts", () => {
+      judgeRecord.current = {
+        selection: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+          reasoningEffort: null,
+        },
+      };
+      render(<JudgeTab />);
+
+      expect(screen.queryByTestId("judge-effort-select")).toBeNull();
+    });
+
+    it("resets the effort to null when the model changes and the new model drops it", () => {
+      judgeRecord.current = {
+        selection: {
+          harnessId: "claude",
+          model: "sonnet",
+          profileId: null,
+          reasoningEffort: "medium",
+        },
+      };
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-model-combobox"));
+      fireEvent.click(screen.getByText("Claude Opus"));
+
+      expect(setJudgeMutate.mock.calls[0][0]).toEqual({
+        selection: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+          reasoningEffort: null,
+        },
+      });
+    });
+
+    it("keeps the effort when the new model still advertises the same id", () => {
+      catalog.models = {
+        ...catalog.models,
+        claude: [
+          model("claude", "sonnet", "Claude Sonnet", [LOW, MEDIUM]),
+          model("claude", "opus", "Claude Opus", [LOW, MEDIUM]),
+        ],
+      };
+      judgeRecord.current = {
+        selection: {
+          harnessId: "claude",
+          model: "sonnet",
+          profileId: null,
+          reasoningEffort: "medium",
+        },
+      };
+      render(<JudgeTab />);
+
+      fireEvent.click(screen.getByTestId("judge-model-combobox"));
+      fireEvent.click(screen.getByText("Claude Opus"));
+
+      expect(setJudgeMutate.mock.calls[0][0]).toEqual({
+        selection: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+          reasoningEffort: "medium",
+        },
+      });
     });
   });
 

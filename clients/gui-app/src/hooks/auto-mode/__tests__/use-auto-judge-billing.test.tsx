@@ -10,6 +10,7 @@ import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import {
   guiAgentModelOptionSchema,
   guiHarnessOptionSchema,
+  type AgentReasoningEffortOption,
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
@@ -60,6 +61,13 @@ const providersListVersion = vi.hoisted(() => ({
 const listHarnessesVersion = vi.hoisted(() => ({
   current: { major: 9, minor: 1 } as { major: number; minor: number } | null,
 }));
+// `null` (unset) unless a test negotiates a line explicitly - every case that
+// does not name one keeps today's behaviour: `autoJudgeGetKnowsReasoningEffort`
+// reads `null` as "not knowable" and every billing answer's `effortLabel`
+// stays `null`.
+const judgeGetVersion = vi.hoisted(() => ({
+  current: null as { major: number; minor: number } | null,
+}));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: (hostId: string | null, method: string) =>
@@ -68,6 +76,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (method === "providers.list") return providersListVersion.current;
     if (method === "agent.gui.listHarnesses")
       return listHarnessesVersion.current;
+    if (method === "autoJudge.get") return judgeGetVersion.current;
     return null;
   },
 }));
@@ -139,6 +148,26 @@ function judgeModelRow(
     defaultReasoningEffort: null,
     supportedReasoningEfforts: [],
     metadata: resolvedModel === null ? {} : { resolvedModel },
+  });
+}
+
+/** A judge model row that advertises reasoning efforts, for the effort tests. */
+function judgeModelRowWithEfforts(
+  slug: string,
+  efforts: ReadonlyArray<string>,
+): GuiAgentModelOption {
+  const supportedReasoningEfforts: ReadonlyArray<AgentReasoningEffortOption> =
+    efforts.map((id) => ({ id, label: id, description: null }));
+  return guiAgentModelOptionSchema.parse({
+    harnessId: CLAUDE_HARNESS_ID,
+    slug,
+    label: slug,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts,
+    metadata: {},
   });
 }
 
@@ -231,6 +260,7 @@ afterEach(() => {
   vi.clearAllMocks();
   providersListVersion.current = { major: 9, minor: 1 };
   listHarnessesVersion.current = { major: 9, minor: 1 };
+  judgeGetVersion.current = null;
   useHostSupportsMethodMock.mockImplementation(() => true);
   autoJudgeGetData = undefined;
   providersListData = undefined;
@@ -356,6 +386,7 @@ describe("useAutoJudgeBilling", () => {
     expect(result.current).toEqual({
       kind: "traycer",
       modelLabel: JUDGE_MODEL_SLUG,
+      effortLabel: null,
     });
   });
 
@@ -365,6 +396,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         model: "claude-sonnet",
         profileId: null,
+        reasoningEffort: null,
       },
       blocked: { reason: "provider-disabled" },
     };
@@ -383,6 +415,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         model: "claude-sonnet",
         profileId: null,
+        reasoningEffort: null,
       },
       effective: null,
       blocked: undefined,
@@ -402,6 +435,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         model: "claude-sonnet",
         profileId: "removed-profile",
+        reasoningEffort: null,
       },
     };
     providersListData = {
@@ -423,6 +457,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         model: "claude-sonnet",
         profileId: "kept-profile",
+        reasoningEffort: null,
       },
     };
     providersListData = {
@@ -440,6 +475,7 @@ describe("useAutoJudgeBilling", () => {
       harnessId: "claude",
       harnessLabel: "Claude Code",
       modelLabel: "claude-sonnet",
+      effortLabel: null,
     });
   });
 
@@ -449,6 +485,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         model: "gone-model",
         profileId: null,
+        reasoningEffort: null,
       },
     };
     providersListData = {
@@ -471,6 +508,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         model: "kept-model",
         profileId: null,
+        reasoningEffort: null,
       },
     };
     providersListData = {
@@ -489,6 +527,7 @@ describe("useAutoJudgeBilling", () => {
       harnessId: "claude",
       harnessLabel: "Claude Code",
       modelLabel: "kept-model",
+      effortLabel: null,
     });
   });
 
@@ -532,6 +571,7 @@ describe("useAutoJudgeBilling", () => {
       expect(result.current).toEqual({
         kind: "traycer",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
 
@@ -578,6 +618,7 @@ describe("useAutoJudgeBilling", () => {
       expect(result.current).toEqual({
         kind: "traycer",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
   });
@@ -620,6 +661,7 @@ describe("useAutoJudgeBilling", () => {
       expect(result.current).toEqual({
         kind: "traycer",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
 
@@ -650,6 +692,7 @@ describe("useAutoJudgeBilling", () => {
       expect(result.current).toEqual({
         kind: "traycer",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
   });
@@ -708,6 +751,7 @@ describe("useAutoJudgeBilling", () => {
       expect(result.current).toEqual({
         kind: "traycer",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
   });
@@ -765,6 +809,7 @@ describe("useAutoJudgeBilling", () => {
           harnessId: "claude",
           model: "claude-sonnet",
           profileId: null,
+          reasoningEffort: null,
         },
       };
       providersListData = { providers: [] };
@@ -786,6 +831,7 @@ describe("useAutoJudgeBilling", () => {
           harnessId: "claude",
           model: "claude-sonnet",
           profileId: null,
+          reasoningEffort: null,
         },
       };
       providersListData = { providers: [] };
@@ -802,6 +848,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "claude",
         harnessLabel: "Claude Code",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
 
@@ -811,6 +858,7 @@ describe("useAutoJudgeBilling", () => {
           harnessId: "claude",
           model: "claude-sonnet",
           profileId: null,
+          reasoningEffort: null,
         },
       };
       providersListData = {
@@ -851,6 +899,7 @@ describe("useAutoJudgeBilling", () => {
       expect(result.current).toEqual({
         kind: "traycer",
         modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
       });
     });
   });
@@ -862,6 +911,7 @@ describe("useAutoJudgeBilling", () => {
           harnessId: "some-future-harness",
           model: "some-future-model",
           profileId: null,
+          reasoningEffort: null,
         },
       };
       providersListData = { providers: [] };
@@ -875,6 +925,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: "some-future-harness",
         harnessLabel: "some-future-harness",
         modelLabel: "some-future-model",
+        effortLabel: null,
       });
     });
 
@@ -884,6 +935,7 @@ describe("useAutoJudgeBilling", () => {
           harnessId: "claude",
           model: "some-future-model",
           profileId: null,
+          reasoningEffort: null,
         },
       };
       providersListData = { providers: [] };
@@ -922,6 +974,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: CLAUDE_HARNESS_ID,
         harnessLabel: "Claude Code",
         modelLabel: "claude-fallback-default",
+        effortLabel: null,
       });
     });
 
@@ -945,6 +998,7 @@ describe("useAutoJudgeBilling", () => {
         harnessId: CLAUDE_HARNESS_ID,
         harnessLabel: "Claude Code",
         modelLabel: "composer-model",
+        effortLabel: null,
       });
     });
 
@@ -960,6 +1014,72 @@ describe("useAutoJudgeBilling", () => {
       );
 
       expect(result.current).toBeNull();
+    });
+  });
+
+  // The billing's `effortLabel` rides the NEGOTIATED `autoJudge.get` line, not
+  // merely the model's own catalog: `autoJudgeGetKnowsReasoningEffort` gates
+  // it off below `1.2`, so the same catalog and selection must answer
+  // differently depending only on which line the host negotiated.
+  describe("effortLabel rides the negotiated autoJudge.get line", () => {
+    it("carries the model's lowest advertised effort label when the negotiated line is 1.2 and the selection names no effort", () => {
+      judgeGetVersion.current = { major: 1, minor: 2 };
+      autoJudgeGetData = {
+        selection: {
+          harnessId: CLAUDE_HARNESS_ID,
+          model: JUDGE_MODEL_SLUG,
+          profileId: null,
+          reasoningEffort: null,
+        },
+      };
+      providersListData = { providers: [] };
+      judgeModelsQueryMock.mockReturnValue(
+        judgeModelsAnswered([
+          judgeModelRowWithEfforts(JUDGE_MODEL_SLUG, ["high", "low"]),
+        ]),
+      );
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+        modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: "low",
+      });
+    });
+
+    it("carries no effort label when the negotiated line is 1.1, even though the model advertises efforts", () => {
+      judgeGetVersion.current = { major: 1, minor: 1 };
+      autoJudgeGetData = {
+        selection: {
+          harnessId: CLAUDE_HARNESS_ID,
+          model: JUDGE_MODEL_SLUG,
+          profileId: null,
+          reasoningEffort: null,
+        },
+      };
+      providersListData = { providers: [] };
+      judgeModelsQueryMock.mockReturnValue(
+        judgeModelsAnswered([
+          judgeModelRowWithEfforts(JUDGE_MODEL_SLUG, ["high", "low"]),
+        ]),
+      );
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+        modelLabel: JUDGE_MODEL_SLUG,
+        effortLabel: null,
+      });
     });
   });
 });

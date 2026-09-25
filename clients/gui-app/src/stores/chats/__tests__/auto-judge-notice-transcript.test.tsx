@@ -25,6 +25,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { ChatMessage } from "@/components/chat/chat-message";
+import { buildChatFindRows } from "@/components/chat/chat-find-projection";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -41,10 +42,19 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 /**
  * # The auto-mode judge notices, end to end through the windowed store
  *
- * The host journals each notice as a `permission.blocked` event and nothing
- * else. Until the transcript projection gave that event a row, the notice
- * reached this store and was drawn nowhere - including the one that tells a
- * user Automatic moved their judge's billing to the conversation's provider.
+ * The host no longer writes this notice at all (`AutoJudgeService` escalates
+ * through `unavailable(...)` only; policy facts are WARN log lines). But a
+ * chat opened before that change can still have `permission.blocked` events
+ * with `metadata.autoJudge` on disk, and `autoJudgeNoticeRowSource` /
+ * `AUTO_JUDGE_NOTICE_MARKERS` (protocol) keep giving them a row so the
+ * ordinals around them do not renumber - a window or an anchor computed
+ * against the old row count must still land on the same message.
+ *
+ * So this suite now proves two things about a LEGACY row: it is still
+ * PROJECTED at its ordinal (`rendered-messages.ts` is unchanged), and
+ * rendering it paints nothing (`chat-message.tsx`'s `auto-judge-notice` case
+ * returns `null`) and contributes no find units
+ * (`chat-find-projection.ts`'s `segmentSearchText` returns `[]` for it).
  *
  * The HOST half here is played by the protocol's own producers - the same
  * `buildRowSkeleton`, `sliceTranscriptTail` and `sliceTranscriptRange` the
@@ -80,7 +90,11 @@ function userMessage(messageId: string, timestamp: number): Message {
   };
 }
 
-/** A notice exactly as the host's `emitAutoJudgeNotice` journals it. */
+/**
+ * A notice exactly as a pre-removal host used to journal it - the shape a
+ * `permission.blocked` event with an `autoJudge` marker still has when it is
+ * read off disk from a chat that predates the change.
+ */
 function noticeEvent(input: {
   readonly eventId: string;
   readonly marker: string;
@@ -318,7 +332,14 @@ function drawnRows(handle: ChatSessionStoreHandle) {
   });
 }
 
-function drawnNotices(handle: ChatSessionStoreHandle): Array<{
+/**
+ * The legacy notice rows the store PROJECTS - which still happens
+ * unconditionally, since `rendered-messages.ts` and the protocol's row
+ * ordinals are unchanged. Named `projected`, not `drawn`: whether one of
+ * these actually paints anything is exactly what the tests below check
+ * separately, by rendering `model` and asserting nothing appears.
+ */
+function projectedNotices(handle: ChatSessionStoreHandle): Array<{
   readonly ordinal: number | null;
   readonly marker: string;
   readonly message: string;
@@ -357,7 +378,7 @@ afterEach(() => {
 });
 
 describe("auto-mode judge notices in the windowed transcript", () => {
-  it("reopen: a snapshot tail the host slices from the persisted transcript draws every notice at its ordinal, with the host's text", () => {
+  it("reopen: a snapshot tail the host slices from the persisted transcript still projects every legacy notice at its ordinal, but paints and indexes nothing", () => {
     const rows = projectTranscriptRows(PERSISTED);
     const tail = sliceTranscriptTail(
       rows,
@@ -375,7 +396,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         .onWindowedSnapshot(snapshot({ rowCount: rows.length, tail }));
       harness.callbacks().onSkeletonChunk(skeletonChunk());
 
-      const drawn = drawnNotices(harness.handle);
+      const drawn = projectedNotices(harness.handle);
       expect(
         drawn.map(({ ordinal, marker, message }) => ({
           ordinal,
@@ -388,15 +409,20 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       const fallback = drawn.find((notice) => notice.marker === "fallback");
       if (fallback === undefined) throw new Error("fallback notice not drawn");
       renderRow(fallback.model);
-      const note = screen.getByRole("note");
-      expect(note.textContent).toBe(FALLBACK_TEXT);
-      expect(note.getAttribute("data-auto-judge-notice")).toBe("fallback");
+      // But rendering it paints nothing: `chat-message.tsx`'s
+      // `auto-judge-notice` case returns `null`.
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(screen.queryByText(FALLBACK_TEXT)).toBeNull();
+      // And it contributes no find units either.
+      expect(
+        buildChatFindRows([fallback.model], "tile-notice", new Set())[0]?.units,
+      ).toEqual([]);
     } finally {
       harness.handle.dispose();
     }
   });
 
-  it("reopen: notices outside the tail hydrate through loadRange, answered by the host's range slicer", () => {
+  it("reopen: legacy notices outside the tail still hydrate through loadRange, answered by the host's range slicer, but paint nothing", () => {
     const rows = projectTranscriptRows(PERSISTED);
     const lookup = buildTranscriptRecordLookup(
       PERSISTED.messages,
@@ -411,7 +437,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         );
       harness.callbacks().onSkeletonChunk(skeletonChunk());
       // Nothing drawn yet: every ordinal is a placeholder.
-      expect(drawnNotices(harness.handle)).toEqual([]);
+      expect(projectedNotices(harness.handle)).toEqual([]);
 
       const request = harness.rangeRequests.at(-1);
       if (request === undefined) throw new Error("expected a loadRange");
@@ -444,7 +470,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         },
       });
 
-      const drawn = drawnNotices(harness.handle);
+      const drawn = projectedNotices(harness.handle);
       expect(
         drawn.map(({ ordinal, marker, message }) => ({
           ordinal,
@@ -454,15 +480,20 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       ).toEqual(EXPECTED_NOTICES);
 
       for (const notice of drawn) renderRow(notice.model);
-      expect(
-        screen.getAllByRole("note").map((note) => note.textContent),
-      ).toEqual([FALLBACK_TEXT, UNAVAILABLE_TEXT, POLICY_TEXT]);
+      // Nothing paints for any of the three, whichever sender wrote it.
+      expect(screen.queryAllByRole("note")).toHaveLength(0);
+      for (const notice of drawn) {
+        expect(screen.queryByText(notice.message)).toBeNull();
+        expect(
+          buildChatFindRows([notice.model], "tile-notice", new Set())[0]?.units,
+        ).toEqual([]);
+      }
     } finally {
       harness.handle.dispose();
     }
   });
 
-  it("live: a notice appended to an open chat is drawn the moment it arrives", () => {
+  it("live: a legacy-shaped notice event appended to an open chat is projected the moment it arrives, but paints nothing", () => {
     const opened: TranscriptRowProjectionInput = {
       messages: [userMessage("u-1", 1000)],
       events: [],
@@ -483,7 +514,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
           ),
         }),
       );
-      expect(drawnNotices(harness.handle)).toEqual([]);
+      expect(projectedNotices(harness.handle)).toEqual([]);
 
       harness.callbacks().onEventAppended({
         kind: "eventAppended",
@@ -499,14 +530,19 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         }),
       });
 
-      const drawn = drawnNotices(harness.handle);
+      const drawn = projectedNotices(harness.handle);
       expect(drawn.map(({ marker, message }) => ({ marker, message }))).toEqual(
         [{ marker: "fallback", message: FALLBACK_TEXT }],
       );
       const live = drawn.at(0);
       if (live === undefined) throw new Error("live notice not drawn");
       renderRow(live.model);
-      expect(screen.getByRole("note").textContent).toBe(FALLBACK_TEXT);
+      // Still paints nothing, exactly like a rehydrated legacy row.
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(screen.queryByText(FALLBACK_TEXT)).toBeNull();
+      expect(
+        buildChatFindRows([live.model], "tile-notice", new Set())[0]?.units,
+      ).toEqual([]);
     } finally {
       harness.handle.dispose();
     }
