@@ -378,6 +378,23 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
   try {
     written = inflateSync(compressed, { out }).length;
   } catch (error) {
+    // The OTHER shape of over-expansion. fflate never resizes a
+    // caller-supplied buffer: its Huffman path writes past the end silently
+    // (typed-array writes out of range are dropped), but a STORED block copies
+    // with `buf.set(..., bt)`, which throws `RangeError` once the output
+    // position is already past the buffer - so a frame whose Huffman blocks
+    // overran the declaration and which then carries a stored block (even an
+    // empty one, as a sync flush writes) arrives here instead of at the
+    // length check below. With the buffer sized to the declaration plus one,
+    // a `RangeError` can only mean the output ran past it: fflate reports
+    // every malformed-stream condition through its own coded errors, never
+    // `RangeError`. Classified as over-expansion so it takes the same
+    // session-level route; anything else is a per-stream decode fault.
+    if (error instanceof RangeError) {
+      throw new MuxFrameOverExpansionError(
+        `compressed frame inflated to more than ${plainLength} bytes, declared ${plainLength}`,
+      );
+    }
     throw new MuxFrameDecodeError(
       `compressed frame payload failed to inflate: ${error instanceof Error ? error.message : String(error)}`,
     );

@@ -1,4 +1,4 @@
-import { deflateSync, Inflate, inflateSync } from "fflate";
+import { Deflate, deflateSync, Inflate, inflateSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("fflate", async (importOriginal) => {
@@ -596,6 +596,77 @@ describe("body compression round-trip (T5)", () => {
       } finally {
         push.mockRestore();
       }
+    });
+
+    it("classifies a stored block landing past the bounded buffer as over-expansion, not a per-stream decode fault", () => {
+      // fflate's Huffman path drops writes past a caller-supplied buffer, but
+      // a STORED block copies with `buf.set`, which throws `RangeError` once
+      // the output position is already past the end. A sync flush after a
+      // run of zeros is the minimal stream with that shape: a Huffman block
+      // that over-expands, then an empty stored block. Without the
+      // classification this surfaced as "failed to inflate" - a plain
+      // `MuxFrameDecodeError`, routed per-stream and repeatable.
+      const parts: Uint8Array[] = [];
+      const deflater = new Deflate({ level: 6 });
+      deflater.ondata = (chunk) => {
+        parts.push(chunk);
+      };
+      deflater.push(new Uint8Array(60_000), false);
+      deflater.flush(true);
+      deflater.push(new Uint8Array(0), true);
+      const deflated = concatBytes(...parts);
+      const declaredPlainLength = 4 + deflated.length + 1;
+      // Positive control on the fixture itself: fflate DOES throw a
+      // RangeError for it, so the test below is exercising the catch.
+      expect(() =>
+        inflateSync(deflated, { out: new Uint8Array(declaredPlainLength + 1) }),
+      ).toThrow(RangeError);
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, declaredPlainLength);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 6,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, deflated),
+        }),
+      );
+      expect(() => new ChunkReassembler(undefined).accept(frame)).toThrow(
+        MuxFrameOverExpansionError,
+      );
+    });
+
+    it("keeps a garbage compressed payload a per-stream decode fault, not over-expansion", () => {
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, 64);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 7,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, new Uint8Array([9, 9, 9, 9, 9, 9, 9, 9])),
+        }),
+      );
+      let thrown: unknown = null;
+      try {
+        new ChunkReassembler(undefined).accept(frame);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
+      expect(thrown).not.toBeInstanceOf(MuxFrameOverExpansionError);
     });
 
     it("rejects an under-declared compressed bomb from ONE bounded inflateSync call", () => {
