@@ -1,6 +1,14 @@
 import * as Y from "yjs";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
@@ -769,6 +777,105 @@ describe("cap eviction defers to the activity plane's own health", () => {
 
     expect(registry.size()).toBe(5);
     expect(handles[0].disposed).toBe(true);
+  });
+});
+
+// ── Teammate cap-exemption cases, read through the deduplicated epic sink ──
+describe("cap walk names the exemption holding each entry over cap", () => {
+  const CAP_EXEMPTION_MESSAGE = "[open-epic-session-registry] cap exemption";
+
+  function capLines(
+    debug: MockInstance,
+    epicIds: readonly string[],
+  ): unknown[] {
+    return debug.mock.calls
+      .filter(
+        (call: unknown[]) =>
+          call[0] === CAP_EXEMPTION_MESSAGE &&
+          epicIds.includes((call[1] as { epic: string }).epic),
+      )
+      .map((call: unknown[]) => call[1]);
+  }
+
+  let debug: MockInstance;
+  beforeEach(() => {
+    debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    debug.mockRestore();
+  });
+
+  it("names mounted demand, unsynced edits and a turn, without retaining background-only work", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const turn = buildTestHandle("e-turn", false);
+    const background = buildTestHandle("e-bg", false);
+    markAgentWorking(turn, "chat-turn");
+    markAgentBackgroundOnly(background, "chat-shell");
+
+    registry.acquireMounted("e-mounted", () =>
+      h(buildTestHandle("e-mounted", false)),
+    );
+    registry.acquire("e-dirty", () => h(buildTestHandle("e-dirty", true)));
+    registry.acquire("e-turn", () => h(turn));
+    registry.acquire("e-bg", () => h(background));
+
+    expect(background.disposed).toBe(true);
+    expect(capLines(debug, ["e-mounted", "e-dirty", "e-turn", "e-bg"])).toEqual(
+      expect.arrayContaining([
+        { epic: "e-mounted", reason: "demand", resident: 2, cap: 1 },
+        { epic: "e-dirty", reason: "unsynced-edits", resident: 2, cap: 1 },
+        { epic: "e-turn", reason: "agent-working", resident: 3, cap: 1 },
+      ]),
+    );
+    expect(registry.capExemptionTelemetry().current).toMatchObject({
+      demand: 1,
+      "unsynced-edits": 1,
+      "agent-working": 1,
+    });
+  });
+
+  it("names a blind activity plane", () => {
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "closed",
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    registry.acquire("e0", () => h(buildTestHandle("e0", false)));
+    registry.acquire("e1", () => h(buildTestHandle("e1", false)));
+
+    expect(capLines(debug, ["e0", "e1"])).toEqual([
+      { epic: "e0", reason: "activity-plane-blind", resident: 2, cap: 1 },
+      { epic: "e1", reason: "activity-plane-blind", resident: 2, cap: 1 },
+    ]);
+  });
+
+  it("names a host the serving union does not cover", () => {
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityHealthForTests("host-serving", {
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 0 });
+    registry.acquire("e-elsewhere", () =>
+      h(withHostId(buildTestHandle("e-elsewhere", false), "host-elsewhere")),
+    );
+
+    expect(capLines(debug, ["e-elsewhere"])).toEqual([
+      { epic: "e-elsewhere", reason: "host-uncovered", resident: 1, cap: 0 },
+    ]);
+  });
+
+  it("logs nothing when the walk evicts down to the cap", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const clean = buildTestHandle("e-clean", false);
+    registry.acquire("e-dirty", () => h(buildTestHandle("e-dirty", true)));
+    registry.acquire("e-clean", () => h(clean));
+    registry.acquire("e-next", () => h(buildTestHandle("e-next", true)));
+
+    expect(clean.disposed).toBe(true);
+    expect(registry.size()).toBe(2);
+    expect(capLines(debug, ["e-dirty", "e-clean", "e-next"])).toEqual([]);
   });
 });
 

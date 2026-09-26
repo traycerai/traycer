@@ -689,6 +689,9 @@ function createFakeSessionPolicy(): SessionRegistryPolicy<FakeSession> {
     hasActiveWork(session: FakeSession): boolean {
       return session.busy;
     },
+    activeWorkReason(): string {
+      return "busy";
+    },
     isEvictable(session: FakeSession): boolean {
       return session.clean;
     },
@@ -805,6 +808,9 @@ function createTrackedPolicy(config: PolicyConfig): TrackedPolicy {
     retainWhenIdle: config.retainWhenIdle,
     hasActiveWork(session: RegSession): boolean {
       return session.busy;
+    },
+    activeWorkReason(): string {
+      return "busy";
     },
     isEvictable(session: RegSession): boolean {
       return session.evictable;

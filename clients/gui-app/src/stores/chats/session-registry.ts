@@ -134,6 +134,8 @@ export class ChatSessionRegistry {
         retainWhenIdle: () => true,
         hasActiveWork: (handle) =>
           hasActiveChatWork(handle) || holdsUnrecordedPrompt(handle),
+        activeWorkReason: (handle) =>
+          hasActiveChatWork(handle) ? "chat-work" : "unrecorded-prompt",
         // NOTHING is gated here, and that is the correction rather than an
         // omission. This read `!holdsUnrecordedPrompt(handle)`, on the premise
         // that the two eviction routes do not share a gate - the warm-cap walk
