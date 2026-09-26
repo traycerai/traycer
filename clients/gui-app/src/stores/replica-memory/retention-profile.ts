@@ -1,7 +1,7 @@
 import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
 
 /**
- * The four count caps that decide how much of the app stays RESIDENT while
+ * The caps that decide how much of the app stays RESIDENT while
  * the user is elsewhere, chosen once per shell.
  *
  * All four used to be bare module constants with no platform branch, so the
@@ -32,7 +32,39 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /**
+   * How long an open epic may go with no visible pane before it is parked
+   * (`lib/epics/epic-parking.ts`). See {@link PARK_HIDDEN_EPIC_AFTER_MS}.
+   */
+  readonly parkHiddenEpicAfterMs: number;
 }
+
+/**
+ * How long an epic must have had NO visible pane in ANY window before its tabs
+ * are parked on the desktop - every host subscription they cause released, the
+ * tabs themselves left open (plan C, decisions C1/C3/C6).
+ *
+ * A TIME cap beside the four count caps, and it belongs with them: the counts
+ * bound how much stays resident while the user is elsewhere, this bounds how
+ * LONG the thing they are looking away from keeps paying for itself. The counts
+ * only reclaim under pressure - five live epics is five live epics whether or
+ * not anyone has looked at four of them in an hour - so no count can free a
+ * hidden epic on a machine that never reaches a cap.
+ *
+ * Per-profile like the counts. The window reads as a statement about attention,
+ * but what it costs is residency: every second of it is an epic's worker,
+ * replica and subscriptions held for a screen nobody is looking at. The phone
+ * shows one surface at a time and has half the ceiling, and a user who has
+ * navigated away there has usually moved on, so it takes the shorter
+ * {@link MOBILE_PARK_HIDDEN_EPIC_AFTER_MS}. Eligibility does not change with
+ * the window: a dirty or busy epic is refused on either profile.
+ *
+ * Exported for tests, which pin both arms of the threshold.
+ */
+export const PARK_HIDDEN_EPIC_AFTER_MS = 5 * 60_000;
+
+/** The installed app's park window; see {@link PARK_HIDDEN_EPIC_AFTER_MS}. */
+export const MOBILE_PARK_HIDDEN_EPIC_AFTER_MS = 45_000;
 
 /** Electron desktop and the browser: the numbers the app has always run. */
 export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
@@ -40,6 +72,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  parkHiddenEpicAfterMs: PARK_HIDDEN_EPIC_AFTER_MS,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -48,30 +81,11 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  parkHiddenEpicAfterMs: MOBILE_PARK_HIDDEN_EPIC_AFTER_MS,
 });
 
-/**
- * How long an epic must have had NO visible pane in ANY window before its tabs
- * are parked - every host subscription they cause released, the tabs themselves
- * left open (plan C, decisions C1/C3/C6).
- *
- * A TIME cap beside the four count caps above, and it belongs with them: the
- * counts bound how much stays resident while the user is elsewhere, this bounds
- * how LONG the thing they are looking away from keeps paying for itself. The
- * counts only reclaim under pressure - five live epics is five live epics
- * whether or not anyone has looked at four of them in an hour - so nothing
- * above this line can free a hidden epic on a machine that never reaches a cap.
- *
- * NOT per-profile, unlike the counts. The window is a statement about attention
- * ("no pane of this epic has been on screen for five minutes"), which does not
- * change with the size of the device's memory; what a smaller profile changes
- * is how many epics may be resident at once, and it already says so above.
- *
- * Exported for tests, which pin both arms of the threshold.
- */
-export const PARK_HIDDEN_EPIC_AFTER_MS = 5 * 60_000;
-
 let activeProfile: RetentionProfile = DESKTOP_RETENTION_PROFILE;
+const profileListeners = new Set<() => void>();
 
 /**
  * Selects the profile for this shell. Called by the Capacitor entry's
@@ -79,7 +93,23 @@ let activeProfile: RetentionProfile = DESKTOP_RETENTION_PROFILE;
  * run the desktop profile. Tests may set and reset it.
  */
 export function setRetentionProfile(profile: RetentionProfile): void {
+  if (profile === activeProfile) return;
   activeProfile = profile;
+  for (const listener of Array.from(profileListeners)) listener();
+}
+
+/**
+ * Watch profile switches. For the one consumer that holds a value derived from
+ * the profile rather than reading it lazily: a park window already armed when
+ * the profile changes (the mobile entry selects its profile at bootstrap, AFTER
+ * gui-app's modules have evaluated and may have armed windows for restored
+ * tabs) has to be re-timed against the new window.
+ */
+export function subscribeRetentionProfile(listener: () => void): () => void {
+  profileListeners.add(listener);
+  return () => {
+    profileListeners.delete(listener);
+  };
 }
 
 export function getRetentionProfile(): RetentionProfile {

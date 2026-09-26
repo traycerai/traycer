@@ -3,6 +3,7 @@ import { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
 import {
   DESKTOP_RETENTION_PROFILE,
   MOBILE_RETENTION_PROFILE,
+  PARK_HIDDEN_EPIC_AFTER_MS,
   getRetentionProfile,
   setRetentionProfile,
 } from "@/stores/replica-memory/retention-profile";
@@ -52,6 +53,17 @@ describe("RetentionProfile", () => {
     expect(MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals).toBeLessThan(
       DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals,
     );
+    expect(MOBILE_RETENTION_PROFILE.parkHiddenEpicAfterMs).toBeLessThan(
+      DESKTOP_RETENTION_PROFILE.parkHiddenEpicAfterMs,
+    );
+  });
+
+  it("the desktop park window is still five minutes, and mobile's is 45 s", () => {
+    expect(DESKTOP_RETENTION_PROFILE.parkHiddenEpicAfterMs).toBe(
+      PARK_HIDDEN_EPIC_AFTER_MS,
+    );
+    expect(PARK_HIDDEN_EPIC_AFTER_MS).toBe(5 * 60_000);
+    expect(MOBILE_RETENTION_PROFILE.parkHiddenEpicAfterMs).toBe(45_000);
   });
 
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {

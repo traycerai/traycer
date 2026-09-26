@@ -104,8 +104,8 @@ export type EpicSessionTransportCloseTrigger =
   | "construction-failed"
   /**
    * Renderer parking: no pane of this epic has been visible in any window for
-   * `PARK_HIDDEN_EPIC_AFTER_MS`, so its subscriptions are released while the
-   * tab stays open. Distinct from `prune` (which is the cap reclaiming an
+   * the retention profile's `parkHiddenEpicAfterMs`, so its subscriptions are
+   * released while the tab stays open. Distinct from `prune` (which is the cap reclaiming an
    * epic nothing is mounted on) and from `tab-close` (which ends the tab), and
    * the distinction is the whole point of the label: a parked epic is expected
    * back, and staging reads this to tell an attention-driven close apart from

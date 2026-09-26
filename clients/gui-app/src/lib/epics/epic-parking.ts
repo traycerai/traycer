@@ -124,7 +124,10 @@ import {
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
-import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import {
+  getRetentionProfile,
+  subscribeRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 import { useCallback, useSyncExternalStore } from "react";
 import type { RuntimeTimer } from "@traycer-clients/shared/replica-runtime";
 
@@ -227,10 +230,18 @@ function scheduleParkCheck(
   });
 }
 
+/**
+ * The active profile's window, read on every use rather than captured, so a
+ * profile the shell selects after this module evaluates still governs it.
+ */
+function parkWindowMs(): number {
+  return getRetentionProfile().parkHiddenEpicAfterMs;
+}
+
 function armParkWindow(epicId: string, entry: EpicParkingEntry): void {
   entry.timer?.cancel();
   entry.hiddenSinceMs = environment.clock.now();
-  scheduleParkCheck(epicId, entry, PARK_HIDDEN_EPIC_AFTER_MS);
+  scheduleParkCheck(epicId, entry, parkWindowMs());
 }
 
 function parkWindowElapsed(epicId: string, entry: EpicParkingEntry): void {
@@ -239,6 +250,7 @@ function parkWindowElapsed(epicId: string, entry: EpicParkingEntry): void {
   if (isEpicVisibleAnywhere(epicId)) return;
   const nowMs = environment.clock.now();
   const elapsedMs = nowMs - hiddenSinceMs;
+  const windowMs = parkWindowMs();
   // A clock that stepped BACKWARD - an NTP correction, a resume from sleep,
   // the user setting the clock - leaves a baseline in the future. Re-base it
   // and start a fresh window from the corrected clock.
@@ -248,19 +260,19 @@ function parkWindowElapsed(epicId: string, entry: EpicParkingEntry): void {
   // bounds ONE re-arm: the baseline stays in the future, so the next callback
   // reads a negative elapsed again and arms another full window, and another,
   // until the clock catches up. A one-hour backward step therefore delays a
-  // park by about an hour in five-minute rounds, where re-basing delays it by
+  // park by about an hour in window-sized rounds, where re-basing delays it by
   // one window. The registry's clamp is sound for a ten-minute TTL that also
   // re-arms from a demand transition; nothing re-arms this one but the clock.
   if (elapsedMs < 0) {
     entry.hiddenSinceMs = nowMs;
-    scheduleParkCheck(epicId, entry, PARK_HIDDEN_EPIC_AFTER_MS);
+    scheduleParkCheck(epicId, entry, windowMs);
     return;
   }
   // The remainder, never a fresh window: a background tab's throttled timer
   // fires late as often as early, and re-arming the full window on an early
   // fire would double the time an unwatched epic stays resident.
-  if (elapsedMs < PARK_HIDDEN_EPIC_AFTER_MS) {
-    scheduleParkCheck(epicId, entry, PARK_HIDDEN_EPIC_AFTER_MS - elapsedMs);
+  if (elapsedMs < windowMs) {
+    scheduleParkCheck(epicId, entry, windowMs - elapsedMs);
     return;
   }
   attemptPark(epicId, entry);
@@ -371,11 +383,11 @@ function retryDeferredEpicParksOnce(): void {
  * Reachable in one narrow order and worth naming, because the alternative is
  * silent: the release happens when the window elapses, and a session acquired
  * AFTER it - a host that only answered once the epic had already sat unwatched
- * for five minutes - is a live subscription under a parked flag. The provider
- * re-asserts the release for that case; when the re-assertion is refused (the
- * epic became dirty or busy in the same gap) the signal has to come back down,
- * or every gate reading it would stay shut over a session that is still
- * streaming.
+ * for the whole window - is a live subscription under a parked flag. The
+ * provider re-asserts the release for that case; when the re-assertion is
+ * refused (the epic became dirty or busy in the same gap) the signal has to
+ * come back down, or every gate reading it would stay shut over a session that
+ * is still streaming.
  *
  * Withdrawing, not deferring: the retry belongs to the eligibility watch, which
  * is armed here and fires on the registry's own signal.
@@ -532,6 +544,20 @@ subscribeDocumentVisibility(() => {
 // cover one of its chats' hosts, has nothing that would ever tell it the plane
 // recovered. The plane failing closed is deliberate; staying deferred after it
 // reopens is not.
+// A profile switch re-times every window already counting. The window is read
+// fresh at each check, but an ARMED timer was scheduled for the old profile's
+// length, so without this a window armed under the desktop profile - by a tab
+// restored while gui-app's modules evaluate, before the mobile entry selects its
+// profile - would not be looked at again for five minutes. Re-armed for the
+// remainder from the same baseline, never a fresh window.
+subscribeRetentionProfile(() => {
+  for (const [epicId, entry] of Array.from(entries)) {
+    if (entry.timer === null) continue;
+    entry.timer.cancel();
+    entry.timer = null;
+    parkWindowElapsed(epicId, entry);
+  }
+});
 subscribeAgentActivity(() => {
   retryDeferredEpicParks();
 });
