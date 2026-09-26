@@ -1,5 +1,6 @@
-// T2: the Status tab and the header's live update pill. Three layers, tested
-// at the layer that actually decides the thing:
+// T2: the notices strip (`host-overview-notices.tsx`) that replaced the
+// Status tab and the header's live update pill/phone strip. Three layers,
+// tested at the layer that actually decides the thing:
 //  - pure model (`host-overview-status-model.ts`): `inFlightUpdateKind`,
 //    `deriveHostOverviewVersionTag`, `describeHostOfflineNotice`;
 //  - standalone components, rendered with hand-built props rather than
@@ -7,9 +8,9 @@
 //    (the version card's in-flight button hiding, the destructive-styled
 //    force controls);
 //  - the full panel, through the same harness `host-overview-tabs.test.tsx`
-//    uses, for a decision only the panel makes (the pill's placement and
-//    absence, the drain-gate/operation-card "one wait" rule, the completion
-//    acknowledgement living above the tab that mounts the card).
+//    uses, for a decision only the panel makes (the strip's placement and
+//    absence on every tab, the drain-gate/operation-card "one wait" rule,
+//    the completion acknowledgement living above the tabs entirely).
 
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
@@ -59,6 +60,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import {
@@ -233,7 +235,6 @@ describe("deriveHostOverviewVersionTag", () => {
     readonly offline: boolean;
     readonly unmanaged: boolean;
     readonly view: FleetUpdateView | null;
-    readonly cliFloorBlocked: boolean;
     readonly answerKind: HostOverviewAnswerKind | null;
   }): HostOverviewVersionTag | null {
     return deriveHostOverviewVersionTag(input);
@@ -245,7 +246,6 @@ describe("deriveHostOverviewVersionTag", () => {
         offline: true,
         unmanaged: false,
         view: view("downloading", {}),
-        cliFloorBlocked: true,
         answerKind: "available",
       }),
     ).toBe("last-reported");
@@ -257,77 +257,25 @@ describe("deriveHostOverviewVersionTag", () => {
         offline: false,
         unmanaged: true,
         view: null,
-        cliFloorBlocked: false,
         answerKind: "available",
       }),
     ).toBeNull();
   });
 
-  it("wears the in-flight tag for each in-flight kind", () => {
-    const expected: Record<
-      | "updating"
-      | "downloading"
-      | "preparing"
-      | "applying"
-      | "restarting"
-      | "reconnecting"
-      | "verifying",
-      HostOverviewVersionTag
-    > = {
-      updating: "updating",
-      downloading: "updating",
-      preparing: "updating",
-      applying: "updating",
-      restarting: "updating",
-      reconnecting: "updating",
-      verifying: "updating",
-    };
-    for (const [kind, tag] of Object.entries(expected) as Array<
-      [keyof typeof expected, HostOverviewVersionTag]
-    >) {
+  it("wears no tag for every in-flight kind, whatever the answer would otherwise say — the notices strip's card is the one place that narrates it", () => {
+    for (const kind of IN_FLIGHT_KINDS) {
       expect(
         derive({
           offline: false,
           unmanaged: false,
           view: view(kind, {}),
-          cliFloorBlocked: false,
-          answerKind: null,
+          answerKind: "available",
         }),
-      ).toBe(tag);
+      ).toBeNull();
     }
-    expect(
-      derive({
-        offline: false,
-        unmanaged: false,
-        view: view("waiting-to-activate", {}),
-        cliFloorBlocked: false,
-        answerKind: null,
-      }),
-    ).toBe("restart-to-finish");
   });
 
-  it("wears waiting-on-work for a park with no floor, and needs-cli when the floor blocks it", () => {
-    expect(
-      derive({
-        offline: false,
-        unmanaged: false,
-        view: view("waiting-for-work", {}),
-        cliFloorBlocked: false,
-        answerKind: null,
-      }),
-    ).toBe("waiting-on-work");
-    expect(
-      derive({
-        offline: false,
-        unmanaged: false,
-        view: view("waiting-for-work", {}),
-        cliFloorBlocked: true,
-        answerKind: null,
-      }),
-    ).toBe("needs-cli");
-  });
-
-  it("wears no tag for a phase the page can no longer vouch for, though the phase still counts as in flight", () => {
+  it("wears no tag for a retained in-flight phase either, though the phase still counts as in flight", () => {
     const retained: FleetUpdateView = {
       ...UNKNOWN_FLEET_UPDATE_VIEW,
       lastKnownKind: "downloading",
@@ -336,35 +284,19 @@ describe("deriveHostOverviewVersionTag", () => {
     for (const demoted of [retained, qualifiedPark]) {
       // Still in flight: the buttons stay hidden...
       expect(inFlightUpdateKind(demoted)).not.toBeNull();
-      // ...but the card makes no present-tense claim about it.
+      // ...and the card makes no present-tense claim about it either.
       expect(
         derive({
           offline: false,
           unmanaged: false,
           view: demoted,
-          cliFloorBlocked: false,
           answerKind: "available",
         }),
       ).toBeNull();
     }
   });
 
-  it("keeps needs-cli for a retained park, because the floor is a live fact about the catalog", () => {
-    expect(
-      derive({
-        offline: false,
-        unmanaged: false,
-        view: {
-          ...UNKNOWN_FLEET_UPDATE_VIEW,
-          lastKnownKind: "waiting-for-work",
-        },
-        cliFloorBlocked: true,
-        answerKind: null,
-      }),
-    ).toBe("needs-cli");
-  });
-
-  it("falls back to the answer's tag once nothing is in flight, and to null with no answer", () => {
+  it("falls back to the answer's tag once nothing is in flight, restart-to-finish and needs-cli included, and to null with no answer", () => {
     for (const [answer, tag] of [
       ["latest", "latest"],
       ["available", "available"],
@@ -372,6 +304,7 @@ describe("deriveHostOverviewVersionTag", () => {
       ["not-installable", null],
       ["checking", "checking"],
       ["unreachable", null],
+      ["check-failed", null],
       ["restart-to-finish", "restart-to-finish"],
       ["needs-cli", "needs-cli"],
     ] as ReadonlyArray<
@@ -382,7 +315,6 @@ describe("deriveHostOverviewVersionTag", () => {
           offline: false,
           unmanaged: false,
           view: null,
-          cliFloorBlocked: false,
           answerKind: answer,
         }),
       ).toBe(tag);
@@ -392,7 +324,6 @@ describe("deriveHostOverviewVersionTag", () => {
         offline: false,
         unmanaged: false,
         view: null,
-        cliFloorBlocked: false,
         answerKind: null,
       }),
     ).toBeNull();
@@ -412,7 +343,6 @@ describe("deriveHostOverviewVersionTag", () => {
           offline: false,
           unmanaged: false,
           view: view(kind, {}),
-          cliFloorBlocked: false,
           answerKind: null,
         }),
       ).toBeNull();
@@ -522,7 +452,6 @@ describe("<HostOverviewVersionCard/> hides Update now / Check now while in fligh
         tag={null}
         answer={answerWithUpdatable()}
         inFlight={false}
-        autoUpdate={null}
       />,
     );
     expect(screen.getByTestId("host-overview-update-now")).not.toBeNull();
@@ -533,10 +462,9 @@ describe("<HostOverviewVersionCard/> hides Update now / Check now while in fligh
     render(
       <HostOverviewVersionCard
         version="1.5.0"
-        tag="updating"
+        tag={null}
         answer={answerWithUpdatable()}
         inFlight
-        autoUpdate={null}
       />,
     );
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
@@ -1005,34 +933,8 @@ afterEach(() => {
   useHostUpdateBannerStore.setState({ landingDismissedAttemptIds: [] });
 });
 
-describe("the header pill and the phone strip", () => {
-  it("shows the pill on the header health line on a non-Status tab, and clicking it selects Status", async () => {
-    const fixture = buildOverviewHostFixture({
-      hostId: "host-a",
-      isLocalMachine: true,
-      overrideHandlers: { "host.status": () => DOWNLOADING_STATUS },
-    });
-    record("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = bindingWith(fixture.client);
-    scopeOverrides.current = scopeFrom("host-a", fixture, {});
-    renderPanel();
-    await selectHostOverviewTab("ports");
-
-    const pill = await screen.findByTestId("host-overview-update-pill");
-    expect(pill.textContent).toContain("Downloading");
-    expect(pill.getAttribute("data-tone")).toBe("info");
-
-    fireEvent.click(pill);
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("host-overview-tab-panel-status")
-          .getAttribute("data-state"),
-      ).toBe("active");
-    });
-  });
-
-  it("shows no pill on Status itself, where the update card is the answer", async () => {
+describe("the notices strip: on every tab, not just one", () => {
+  it("shows the operation card on the default Installation tab and still after switching to Ports, with no pill or strip testid anywhere", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1043,33 +945,13 @@ describe("the header pill and the phone strip", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture, {});
     renderPanel();
 
-    await screen.findByTestId("host-overview-operation-card");
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Downloading");
     expect(screen.queryByTestId("host-overview-update-pill")).toBeNull();
-  });
+    expect(screen.queryByTestId("host-overview-update-strip")).toBeNull();
 
-  it("shows no pill while the health word reads Restarting…, even with a downloading view retained", async () => {
-    const fixture = buildOverviewHostFixture({
-      hostId: "host-a",
-      isLocalMachine: true,
-      overrideHandlers: { "host.status": () => DOWNLOADING_STATUS },
-    });
-    record("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = bindingWith(fixture.client);
-    scopeOverrides.current = scopeFrom("host-a", fixture, {
-      health: {
-        state: "restarting",
-        label: "Restarting…",
-        detail: "Expected restart — reconnecting.",
-        tone: "idle",
-        live: false,
-      },
-    });
-    renderPanel();
     await selectHostOverviewTab("ports");
-
-    await waitFor(() => {
-      expect(screen.getByText("Restarting…")).not.toBeNull();
-    });
+    expect(screen.getByTestId("host-overview-operation-card")).not.toBeNull();
     expect(screen.queryByTestId("host-overview-update-pill")).toBeNull();
   });
 
@@ -1079,7 +961,7 @@ describe("the header pill and the phone strip", () => {
       window.innerWidth = initialInnerWidth;
     });
 
-    it("draws no header pill; draws the strip directly above the section Select on a non-Status tab; tapping it selects Status", async () => {
+    it("draws the notices strip directly above the section Select on a non-default tab, with no pill or strip testid", async () => {
       window.innerWidth = 500;
       const fixture = buildOverviewHostFixture({
         hostId: "host-a",
@@ -1098,46 +980,22 @@ describe("the header pill and the phone strip", () => {
       });
       renderPanel();
 
-      const strip = await screen.findByTestId("host-overview-update-strip");
+      const notices = await screen.findByTestId("host-overview-notices");
       expect(screen.queryByTestId("host-overview-update-pill")).toBeNull();
+      expect(screen.queryByTestId("host-overview-update-strip")).toBeNull();
       const select = screen.getByTestId("host-overview-tab-select");
       // The strip sits directly above the Select in DOM order: the strip
       // PRECEDES the Select node.
       expect(
-        strip.compareDocumentPosition(select) &
+        notices.compareDocumentPosition(select) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
-
-      fireEvent.click(strip);
-      await waitFor(() => {
-        expect(
-          screen
-            .getByTestId("host-overview-tab-panel-status")
-            .getAttribute("data-state"),
-        ).toBe("active");
-      });
-    });
-
-    it("draws no strip on Status", async () => {
-      window.innerWidth = 500;
-      const fixture = buildOverviewHostFixture({
-        hostId: "host-a",
-        isLocalMachine: true,
-        overrideHandlers: { "host.status": () => DOWNLOADING_STATUS },
-      });
-      record("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = bindingWith(fixture.client);
-      scopeOverrides.current = scopeFrom("host-a", fixture, {});
-      renderPanel();
-
-      await screen.findByTestId("host-overview-tab-select");
-      expect(screen.queryByTestId("host-overview-update-strip")).toBeNull();
     });
   });
 });
 
-describe("the completion acknowledgement is lifted to the panel, above the tab that mounts the card", () => {
-  it("keeps 'Updated to vX' on the header pill without ever mounting Status, and clears it after HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS", async () => {
+describe("the update card lives in the notices strip, above the tabs, independent of which one is active", () => {
+  it("shows 'Updated to vX' with no particular tab required, and clears it after HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -1159,27 +1017,21 @@ describe("the completion acknowledgement is lifted to the panel, above the tab t
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-update-pill").textContent).toBe(
-        "Updated to v2.1.0",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Updated to v2.1.0");
     });
-    // Status was never visited: Radix still renders the (hidden) pane
-    // wrapper for every tab, but a never-visited pane's own children are not
-    // mounted, so the card this text would otherwise live on never mounted —
-    // this text can only be coming from panel-level state.
-    expect(screen.queryByTestId("host-overview-status-tab")).toBeNull();
-    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     await vi.advanceTimersByTimeAsync(
       HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS + 100,
     );
 
     await waitFor(() => {
-      expect(screen.queryByTestId("host-overview-update-pill")).toBeNull();
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
   });
 
-  it("a manual dismiss on the card (once Status IS visited) clears both the card and the header pill together", async () => {
+  it("a manual dismiss on the card clears it, whichever tab is active", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1199,9 +1051,8 @@ describe("the completion acknowledgement is lifted to the panel, above the tab t
       hostId: null,
     });
     renderPanel();
-    await screen.findByTestId("host-overview-update-pill");
+    await screen.findByTestId("host-overview-operation-card");
 
-    await selectHostOverviewTab("status");
     fireEvent.click(
       await screen.findByTestId("host-overview-operation-dismiss"),
     );
@@ -1209,9 +1060,9 @@ describe("the completion acknowledgement is lifted to the panel, above the tab t
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
-    // The pill is off Status regardless, so re-select a non-Status tab to see it clear too.
-    await selectHostOverviewTab("ports");
-    expect(screen.queryByTestId("host-overview-update-pill")).toBeNull();
+    // Still cleared after switching tabs — not per-tab state.
+    await selectHostOverviewTab("data");
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
 });
 
@@ -1333,7 +1184,7 @@ describe("the offline notice: gated on unreachable-for-a-reason-other-than-resta
     };
     renderPanel();
 
-    await screen.findByTestId("host-overview-status-tab");
+    await screen.findByTestId("host-overview-tab-panel-installation");
     expect(screen.queryByTestId("host-overview-offline-notice")).toBeNull();
   });
 
@@ -1354,8 +1205,8 @@ describe("the offline notice: gated on unreachable-for-a-reason-other-than-resta
   });
 });
 
-describe("the auto-update caption", () => {
-  it("shows on for an auto-policy host, off for a manual one, stays while unreachable, and 'Change in Updates' selects Updates", async () => {
+describe("the auto-update row — no longer a caption on the version card; the switch sits directly below it on Updates", () => {
+  it("shows on for an auto-policy host, off for a manual one, once Updates is selected", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1369,23 +1220,13 @@ describe("the auto-update caption", () => {
       },
     });
     renderPanel();
+    await selectHostOverviewTab("updates");
 
-    const caption = await screen.findByTestId(
-      "host-overview-auto-update-caption",
-    );
-    expect(caption.getAttribute("data-state")).toBe("on");
-
-    fireEvent.click(screen.getByTestId("host-overview-change-in-updates"));
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("host-overview-tab-panel-updates")
-          .getAttribute("data-state"),
-      ).toBe("active");
-    });
+    const row = await screen.findByTestId("host-auto-update-host-a");
+    expect(row.getAttribute("aria-checked")).toBe("true");
   });
 
-  it("stays on the version card while the host is unreachable", async () => {
+  it("stays visible while the host is unreachable — an account write needs no route to the host", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1399,11 +1240,10 @@ describe("the auto-update caption", () => {
       client: null,
     };
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("host-overview-auto-update-caption"),
-      ).not.toBeNull();
+      expect(screen.getByTestId("host-auto-update-host-a")).not.toBeNull();
     });
   });
 
@@ -1416,14 +1256,13 @@ describe("the auto-update caption", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture, { item: null });
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByTestId("host-overview-version-card");
-    expect(
-      screen.queryByTestId("host-overview-auto-update-caption"),
-    ).toBeNull();
+    expect(screen.queryByTestId("host-auto-update-host-a")).toBeNull();
   });
 
-  it("is absent when updates aren't manageable here, even with a registry row — the degrade notice replaces the answer, and Update now/Check now withdraw with it", async () => {
+  it("stays visible when updates aren't manageable here — it is an account write, not a host capability — while the degrade notice replaces the answer and Update now/Check now withdraw", async () => {
     // REMOTE, deliberately: `resolveOverviewMethodDegrade` withholds the
     // degrade when the local maintenance fallback route can still serve the
     // method (`host-overview-panel.tsx`'s `useOverviewCapabilities`), and
@@ -1446,6 +1285,7 @@ describe("the auto-update caption", () => {
       item: registryHostListItem("host-a", "current"),
     });
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     const notice = await screen.findByTestId("host-overview-updates-degraded");
     expect(notice.textContent).toContain(
@@ -1453,14 +1293,12 @@ describe("the auto-update caption", () => {
     );
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
     expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
-    expect(
-      screen.queryByTestId("host-overview-auto-update-caption"),
-    ).toBeNull();
+    expect(screen.getByTestId("host-auto-update-host-a")).not.toBeNull();
   });
 });
 
-describe("'Pick it in Updates' — a stranded answer's link selects the Updates tab", () => {
-  it("renders host-overview-pick-in-updates inside the role=status sentence, and clicking it selects Updates", async () => {
+describe("a stranded answer's sentence points at the version list below it, with no 'Pick it in Updates' link", () => {
+  it("ends the role=status sentence with 'Pick it from the versions below to move.', and renders no host-overview-pick-in-updates element", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1482,22 +1320,13 @@ describe("'Pick it in Updates' — a stranded answer's link selects the Updates 
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture, {});
     renderPanel();
+    await selectHostOverviewTab("updates");
 
-    const link = await screen.findByTestId("host-overview-pick-in-updates");
-    const status = screen.getByRole("status");
-    expect(status.textContent.endsWith("Pick it in Updates to move.")).toBe(
-      true,
-    );
-    expect(status.contains(link)).toBe(true);
-
-    fireEvent.click(link);
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("host-overview-tab-panel-updates")
-          .getAttribute("data-state"),
-      ).toBe("active");
-    });
+    const status = await screen.findByRole("status");
+    expect(
+      status.textContent.endsWith("Pick it from the versions below to move."),
+    ).toBe(true);
+    expect(screen.queryByTestId("host-overview-pick-in-updates")).toBeNull();
   });
 });
 
@@ -1506,7 +1335,7 @@ describe("a refused/failed attempt line shows while an update is in flight, even
     render(
       <HostOverviewVersionCard
         version="1.5.0"
-        tag="waiting-on-work"
+        tag={null}
         answer={{
           summary: {
             hostName: "host-a",
@@ -1527,7 +1356,6 @@ describe("a refused/failed attempt line shows while an update is in flight, even
           onInstallationHelp: vi.fn(),
         }}
         inFlight
-        autoUpdate={null}
       />,
     );
     expect(
@@ -1539,7 +1367,7 @@ describe("a refused/failed attempt line shows while an update is in flight, even
 });
 
 describe("the bound activation offer's auto-open reaches a person who has moved to another tab", () => {
-  it("opens the busy-force-defer dialog with no click, and stays open while a non-Status tab is active", async () => {
+  it("opens the busy-force-defer dialog with no click, and stays open while a non-default tab is active", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let phase: "idle" | "preparing" | "parked" = "idle";
     function operation() {
@@ -1624,6 +1452,9 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture, {});
     renderPanel();
+    // The version card (and its Update now button) lives on Updates now,
+    // rather than on the page's default tab.
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await vi.advanceTimersByTimeAsync(11_000);
@@ -1633,7 +1464,7 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
       ).toContain("Preparing");
     });
 
-    // Move away from Status BEFORE the park is seen.
+    // Move away from Updates BEFORE the park is seen.
     await selectHostOverviewTab("ports");
     expect(
       screen
@@ -1645,7 +1476,9 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
     await vi.advanceTimersByTimeAsync(11_000);
 
     await screen.findByTestId("host-busy-force-defer-dialog");
-    // Still over Ports: the offer opened without forcing the page back to Status.
+    // Still over Ports: the offer opened without forcing the page back to
+    // Updates. The dialog itself comes from the notices strip, which is on
+    // every tab regardless.
     expect(
       screen
         .getByTestId("host-overview-tab-panel-ports")
@@ -1762,5 +1595,71 @@ describe("the staged-wait Force update… dialog dispatches through the same bus
     const force = screen.getByTestId("host-busy-force");
     expect(force.textContent).toContain("Force update");
     expect(force.getAttribute("data-variant")).toBe("destructive");
+  });
+});
+
+describe("regression: activation debt does not narrate 'restart host to finish' twice", () => {
+  it("the notices strip's operation card carries the sentence; the Updates tab's version card shows the version with no tag and no restart-to-finish sentence of its own", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.4.0",
+      installation: {
+        status: "managed" as const,
+        installRecord: {
+          installId: "install-1",
+          version: "1.5.0",
+          runtimeVersion: null,
+          platform: "darwin",
+          arch: "arm64",
+          installedAt: "2026-08-10T00:00:00Z",
+          source: { kind: "registry", value: "1.5.0" },
+          archiveSha256: "a".repeat(64),
+          signatureVerifiedAt: "2026-08-10T00:00:00Z",
+          signatureKeyId: "key-1",
+          sizeBytes: 1024,
+          executablePath: "/tmp/traycer/1.5.0/host",
+          executableSha256: "b".repeat(64),
+        },
+        stagedRecord: null,
+        cliManifest: null,
+      },
+    });
+    record("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture, {});
+    renderPanel();
+
+    // The operation card is in the notices strip, visible on the default
+    // (Installation) tab already — it does not wait for Updates to mount.
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
+    );
+
+    // The version card, on Updates, states only the running version: no tag,
+    // and no repeat of the sentence the strip above the tabs already said.
+    await selectHostOverviewTab("updates");
+    const versionCard = await screen.findByTestId("host-overview-version-card");
+    expect(
+      within(versionCard).queryByTestId("host-overview-version-tag"),
+    ).toBeNull();
+    expect(versionCard.textContent).not.toContain("restart host to finish");
+  });
+});
+
+describe("at rest, the notices strip renders nothing at all", () => {
+  it("has no host-overview-notices element for an idle, reachable host with no drain wait and no registry row", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    record("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture, {});
+    renderPanel();
+
+    await screen.findByTestId("host-overview-tab-panel-installation");
+    expect(screen.queryByTestId("host-overview-notices")).toBeNull();
   });
 });

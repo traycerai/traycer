@@ -76,7 +76,7 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 export function HostSettingsPanel() {
   const scope = useHostScope();
   // The selected tab lives HERE, above the key below, and that split is the
-  // whole host-switch rule: every host has the same five tabs, so the page
+  // whole host-switch rule: every host has the same four tabs, so the page
   // stays on the one the reader chose, while everything open for the previous
   // host dies with the remount.
   const { tab, selectTab, scopePending } = useHostOverviewTabSelection(scope);

@@ -2,13 +2,15 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
-// is not gated. The page's five tab triggers render for every host in every
+// is not gated. The page's four tab triggers render for every host in every
 // state - connecting, restarting, unreachable, stopped - because the header and
 // the tab bar sit outside anything that withholds a body, and each tab body
 // decides for itself what it can show. So each tab anchors on its trigger (on a
 // phone, on the section Select, which carries the active tab's anchor), and a
 // search that lands there opens the tab. The page's own vocabulary is split
-// across the five tabs by the core flows' Search table.
+// across the four tabs by the core flows' Search table; the words about the
+// header (the host itself, its name, its connection, Restart) stay on the page,
+// since the header is on every tab.
 //
 // Everything INSIDE a tab body still folds into the page: its cards come and go
 // with the host's state, so none of them is a stable destination. In the two
@@ -19,24 +21,11 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
   page: {
     label: "Overview",
     description: "The selected host's status, version, and installation.",
-    // Empty on purpose: every word the page used to own now belongs to the tab
-    // that answers it. The entry still carries what folds into it below.
-    keywords: [],
-  },
-  statusTab: {
-    kind: "group",
-    search: { anchor: "host-overview-tab-status" },
-    label: "Status",
-    description:
-      "Whether this host is healthy and current, and the update that keeps it so.",
-    breadcrumb: "Overview",
-    availableWhen: alwaysAvailable,
+    // The header's words: it is drawn over every tab, so a result for any of
+    // them opens the page on whichever tab it is already showing.
     keywords: [
       "host",
       "status",
-      "version",
-      "update",
-      "upgrade",
       "restart",
       "rename",
       "machine",
@@ -49,10 +38,14 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     search: { anchor: "host-overview-tab-updates" },
     label: "Updates",
     description:
-      "Auto-update, release candidates, and installing a specific version.",
+      "The running version, checking for updates, auto-update, and installing a specific version.",
     breadcrumb: "Overview",
     availableWhen: alwaysAvailable,
     keywords: [
+      "version",
+      "update",
+      "upgrade",
+      "check for updates",
       "auto-update",
       "release candidate",
       "pre-release",
@@ -336,18 +329,21 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
 });
 
 /**
- * The page's tabs, in order: most used first, destructive last. The open
- * intent's `tab` names one of these; any other name is ignored.
+ * The page's tabs, in order. The page opens on the first. The open intent's
+ * `tab` names one of these (or a retired name, below); any other name is
+ * ignored.
  */
 export const HOST_OVERVIEW_TABS = [
-  "status",
-  "updates",
-  "ports",
-  "data",
   "installation",
+  "updates",
+  "data",
+  "ports",
 ] as const;
 
 export type HostOverviewTab = (typeof HOST_OVERVIEW_TABS)[number];
+
+/** The tab the page opens on. */
+export const DEFAULT_HOST_OVERVIEW_TAB: HostOverviewTab = HOST_OVERVIEW_TABS[0];
 
 export function isHostOverviewTab(
   value: string | null,
@@ -355,13 +351,34 @@ export function isHostOverviewTab(
   return HOST_OVERVIEW_TABS.some((tab) => tab === value);
 }
 
+/**
+ * Tab names the page no longer has, and the tab that now answers each. Status
+ * was folded away: its update card, the account's wait and the offline notice
+ * sit above the tab bar, and its version card leads Updates. A link that
+ * still names it asked for the version and the update, so it lands on Updates
+ * rather than being ignored.
+ */
+const RETIRED_HOST_OVERVIEW_TABS: ReadonlyMap<string, HostOverviewTab> =
+  new Map([["status", "updates"]]);
+
+/**
+ * The tab an open intent's `tab` selects: one of the page's tabs, a retired
+ * name's replacement, or `null` for any other name, which moves nothing.
+ */
+export function hostOverviewTabForIntent(
+  value: string | null,
+): HostOverviewTab | null {
+  if (value === null) return null;
+  if (isHostOverviewTab(value)) return value;
+  return RETIRED_HOST_OVERVIEW_TABS.get(value) ?? null;
+}
+
 /** The tab-trigger group each tab anchors on. */
 export const HOST_OVERVIEW_TAB_GROUPS = {
-  status: HOST_OVERVIEW.definitions.statusTab,
-  updates: HOST_OVERVIEW.definitions.updatesTab,
-  ports: HOST_OVERVIEW.definitions.portsTab,
-  data: HOST_OVERVIEW.definitions.dataTab,
   installation: HOST_OVERVIEW.definitions.installationTab,
+  updates: HOST_OVERVIEW.definitions.updatesTab,
+  data: HOST_OVERVIEW.definitions.dataTab,
+  ports: HOST_OVERVIEW.definitions.portsTab,
 } as const;
 
 /**

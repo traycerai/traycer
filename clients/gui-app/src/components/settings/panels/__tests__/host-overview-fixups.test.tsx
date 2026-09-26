@@ -153,12 +153,16 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
-    fireEvent.click(await waitForButton("Check now"));
-
+    // The check fires on mount now (no click needed to reach it), and this
+    // fixture answers cli-unavailable from the very first call - so the
+    // region is already retired by the time the tab is visited, taking
+    // Check-now with it before there is ever a click to make.
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
     ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
     });
@@ -199,9 +203,9 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
@@ -234,9 +238,9 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
@@ -274,9 +278,9 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
@@ -514,6 +518,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
       </QueryClientProvider>
     );
     const view = render(makeUi());
+    await selectHostOverviewTab("updates");
 
     // No click: mounting the page IS the request now. It parks on the gate.
     await screen.findByText("Checking for updates…");
@@ -598,9 +603,9 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
       </QueryClientProvider>
     );
     const view = render(makeUi());
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
     await waitFor(() => {
       expect(armedHostCalls).toBe(0); // still parked on the gate
