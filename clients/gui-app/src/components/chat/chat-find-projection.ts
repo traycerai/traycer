@@ -2,12 +2,15 @@ import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  isCollapsedIntermediateTimelineItem,
+  lastAssistantTextSegmentId,
   reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
   deriveA2ASendCollapsibleKey,
   deriveActivityGroupCollapsibleKey,
+  deriveEarlierActivityCollapsibleKey,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
   deriveSubagentCollapsibleKey,
@@ -166,11 +169,32 @@ function chatFindUnitsForMessage(
   promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
-    const turnState = message.runState === null ? "complete" : "active";
-    return buildChatActivityTimeline(message.segments, {
+    const turnComplete = message.turnComplete ?? message.runState === null;
+    const turnState = turnComplete ? "complete" : "active";
+    const timeline = buildChatActivityTimeline(message.segments, {
       turnState,
       promotedToolBlockIds,
-    }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
+    });
+    const finalTextId = lastAssistantTextSegmentId(message.segments);
+    const finalTextIndex = timeline.findIndex(
+      (item) => item.kind === "segment" && item.id === finalTextId,
+    );
+    const hasLaterAssistantText = message.hasLaterAssistantText ?? false;
+    const earlierActivityKey = deriveEarlierActivityCollapsibleKey(
+      tileInstanceId,
+      message.id,
+    );
+    return timeline.flatMap((item, index) =>
+      timelineItemSearchUnits({
+        item,
+        index,
+        tileInstanceId,
+        finalTextIndex,
+        hasLaterAssistantText,
+        isComplete: turnComplete,
+        earlierActivityKey,
+      }),
+    );
   }
 
   if (message.role === "user" && message.agentSenderInfo !== null) {
@@ -192,7 +216,7 @@ function chatFindUnitsForMessage(
   // singleSpecialSegment predicate), so index the segment.
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
-    return segmentSearchUnits(specialSegment, tileInstanceId);
+    return segmentSearchUnits(specialSegment, tileInstanceId, []);
   }
 
   // Every other user/system message renders its whole body as ONE anchor
@@ -216,29 +240,63 @@ function chatFindUnitsForMessage(
   ]);
 }
 
+interface TimelineItemSearchUnitsArgs {
+  readonly item: ChatActivityTimelineItem;
+  readonly index: number;
+  readonly tileInstanceId: string;
+  readonly finalTextIndex: number;
+  readonly hasLaterAssistantText: boolean;
+  readonly isComplete: boolean;
+  readonly earlierActivityKey: ChatCollapsibleKey;
+}
+
 function timelineItemSearchUnits(
-  item: ChatActivityTimelineItem,
-  tileInstanceId: string,
+  args: TimelineItemSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
+  const {
+    earlierActivityKey,
+    finalTextIndex,
+    hasLaterAssistantText,
+    index,
+    isComplete,
+    item,
+    tileInstanceId,
+  } = args;
+  const isEarlierActivityOwned =
+    isComplete &&
+    isCollapsedIntermediateTimelineItem(
+      item,
+      index,
+      finalTextIndex,
+      hasLaterAssistantText,
+    );
+  const parentChain = isEarlierActivityOwned ? [earlierActivityKey] : [];
   if (item.kind === "segment") {
-    return segmentSearchUnits(item.segment, tileInstanceId);
+    return segmentSearchUnits(item.segment, tileInstanceId, parentChain);
   }
   if (item.kind === "promoted_subagent") {
     const renderId = derivePromotedSubagentRenderId(item.segment.id);
     return subagentSegmentSearchUnits({
       segment: item.segment,
       renderId,
-      parentChain: [],
+      parentChain,
       ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
       tileInstanceId,
     });
   }
-  return activityGroupSearchUnits(item.group, tileInstanceId);
+  return activityGroupSearchUnits(
+    item.group,
+    tileInstanceId,
+    hasLaterAssistantText || item.group.followedByText,
+    parentChain,
+  );
 }
 
 function activityGroupSearchUnits(
   group: ActivityGroupModel,
   tileInstanceId: string,
+  summaryOwnedByGroup: boolean,
+  parentChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
   // Hoisted: a group property, not a per-child one, and computing it inside the
@@ -248,7 +306,9 @@ function activityGroupSearchUnits(
     chatFindUnit({
       unitId: chatFindActivityGroupSummaryUnitId(group.id),
       text: group.label,
-      owningChain: [],
+      owningChain: summaryOwnedByGroup
+        ? [...parentChain, groupKey]
+        : parentChain,
     }),
     // A reveal force-opens the group, and every child that renders a header
     // renders it in both the live window and the expanded body, so each of
@@ -260,7 +320,7 @@ function activityGroupSearchUnits(
       activityGroupChildSearchUnits({
         segment,
         groupId: group.id,
-        groupChain: [groupKey],
+        groupChain: [...parentChain, groupKey],
         tileInstanceId,
         headerlessReasoning,
       }),
@@ -338,6 +398,7 @@ function compactUnits(
 function segmentSearchUnits(
   segment: MessageSegment,
   tileInstanceId: string,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   if (segment.kind === "interview") {
     return interviewSearchUnits(segment, tileInstanceId);
@@ -347,7 +408,7 @@ function segmentSearchUnits(
     return subagentSegmentSearchUnits({
       segment,
       renderId,
-      parentChain: [],
+      parentChain: owningChain,
       ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
       tileInstanceId,
     });
@@ -357,7 +418,10 @@ function segmentSearchUnits(
       chatFindUnit({
         unitId: chatFindA2ASendBodyUnitId(segment.id),
         text: markdownToChatSearchText(segment.agentMessageSend.message),
-        owningChain: [deriveA2ASendCollapsibleKey(tileInstanceId, segment.id)],
+        owningChain: [
+          ...owningChain,
+          deriveA2ASendCollapsibleKey(tileInstanceId, segment.id),
+        ],
       }),
     ]);
   }
@@ -366,7 +430,7 @@ function segmentSearchUnits(
     chatFindUnit({
       unitId: chatFindSegmentUnitId(segment.id),
       text: segmentSearchText(segment).join("\n"),
-      owningChain: [],
+      owningChain,
     }),
   ]);
 }

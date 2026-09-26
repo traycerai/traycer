@@ -705,6 +705,7 @@ export interface ChatMessage {
    * row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
+  turnComplete?: boolean;
   /**
    * The host turn this assistant row belongs to. Absent on user rows, on
    * synthesized event rows, and on records persisted before `turnId` existed.
@@ -722,6 +723,7 @@ export interface ChatMessage {
    * renders no actions rather than the wrong ones.
    */
   turnId?: string;
+  hasLaterAssistantText?: boolean;
   /**
    * The id of the ONE error segment on this row that carries the manual
    * recovery actions (Retry / Switch… / Wait), or absent when this row carries

@@ -4,8 +4,10 @@ import {
   deriveA2ASendCollapsibleKey,
   deriveActivityGroupCollapsibleKey,
   deriveActivityGroupRenderId,
+  deriveEarlierActivityCollapsibleKey,
   derivePromotedSubagentRenderId,
   deriveSubagentCollapsibleKey,
+  deriveTextCollapsibleKey,
   serializeChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 
@@ -32,10 +34,22 @@ describe("chat collapsible keys", () => {
       kind: "activity-group",
       id: "activity:command-1",
     });
+    expect(
+      deriveEarlierActivityCollapsibleKey(tileInstanceId, "assistant:turn-1"),
+    ).toEqual({
+      tileInstanceId,
+      kind: "activity-group",
+      id: "earlier-activity:assistant:turn-1",
+    });
     expect(deriveA2ASendCollapsibleKey(tileInstanceId, "tool-1")).toEqual({
       tileInstanceId,
       kind: "a2a-send",
       id: "tool-1",
+    });
+    expect(deriveTextCollapsibleKey(tileInstanceId, "text-1")).toEqual({
+      tileInstanceId,
+      kind: "text",
+      id: "text:text-1",
     });
     expect(
       deriveA2AReceivedCollapsibleKey(tileInstanceId, "message-1"),

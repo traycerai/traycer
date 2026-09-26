@@ -132,6 +132,14 @@ export function scrollChatBlockIntoView(
   if (messageRoot === null) return "row-absent";
   const blockRoot = queryMountedChatBlock(messageRoot, blockId);
   if (blockRoot === null) return "block-absent";
+  if (blockRoot.dataset.chatBlockCollapsed === "true") {
+    const turnRoot = blockRoot.closest<HTMLElement>("[data-assistant-turn]");
+    const trigger = turnRoot?.querySelector<HTMLButtonElement>(
+      "[data-chat-intermediate-trigger]",
+    );
+    trigger?.click();
+    return "block-absent";
+  }
   blockRoot.scrollIntoView({
     block: "center",
     inline: "nearest",
@@ -273,6 +281,8 @@ export function useChatNavigationBlockReveal(args: {
  */
 export function ChatBlockNavigationAnchor(props: {
   readonly blockId: string;
+  readonly className?: string;
+  readonly collapsed?: boolean;
   readonly children: ReactNode;
 }): ReactElement {
   const highlighted = useIsNavigationHighlightedBlock(props.blockId);
@@ -280,9 +290,11 @@ export function ChatBlockNavigationAnchor(props: {
     <div
       data-block-id={props.blockId}
       data-navigation-highlighted={highlighted ? "true" : undefined}
+      data-chat-block-collapsed={props.collapsed ? "true" : undefined}
       className={cn(
         "rounded-md transition-[background-color,box-shadow] duration-300",
         highlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+        props.className,
       )}
     >
       {props.children}

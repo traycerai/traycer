@@ -91,8 +91,10 @@ function Body({
   return (
     <AssistantMessageBody
       segments={segments}
+      hasLaterAssistantText={false}
       backgroundToolBlockIds={new Set()}
       runState={null}
+      turnComplete
       messageId="assistant:turn-fallback"
       turnId="turn-fallback"
       // Both fixtures are `provider_notice` segments, so the anchor predicate

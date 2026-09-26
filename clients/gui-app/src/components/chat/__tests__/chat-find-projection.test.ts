@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
+  chatFindA2ASendBodyUnitId,
   chatFindActivityGroupChildHeaderUnitId,
   chatFindActivityGroupSummaryUnitId,
   chatFindMessageContentUnitId,
@@ -11,9 +12,13 @@ import {
   type ChatFindRow,
 } from "@/components/chat/chat-find";
 import {
+  deriveA2ASendCollapsibleKey,
+  deriveActivityGroupCollapsibleKey,
   deriveActivityGroupRenderId,
+  deriveEarlierActivityCollapsibleKey,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
+  deriveSubagentCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
@@ -485,6 +490,31 @@ describe("chat find projection", () => {
     expect(rowSearchText(row)).not.toContain("private chain of thought");
   });
 
+  it("keeps an active split assistant slice searchable when runState is null", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(5, "assistant"),
+      runState: null,
+      turnComplete: false,
+      hasLaterAssistantText: true,
+      segments: [
+        {
+          id: "text-before-steer",
+          kind: "text",
+          markdown: "Early update",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    expect(rowSearchText(row)).toContain("Early update");
+    expect(
+      row.units.find((unit) => unit.unitId === "segment:text-before-steer")
+        ?.owningChain,
+    ).toEqual([]);
+  });
+
   it("indexes only the Thinking label for streaming reasoning, not the live tail", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(5, "assistant"),
@@ -811,6 +841,93 @@ describe("chat find projection", () => {
     expect(bodyUnit?.text).toContain("Reading");
     expect(bodyUnit?.text).toContain("Investigate the flake");
     expect(bodyUnit?.text).toContain("All clear.");
+  });
+
+  it("chains subagent and delegated cards through Earlier activity", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(7, "assistant"),
+      segments: [
+        {
+          id: "subagent-before-final",
+          kind: "subagent",
+          name: "PR correctness review",
+          agentType: "review",
+          task: "Review the change",
+          progressUpdates: [],
+          result: "Review complete",
+          isStreaming: false,
+          endState: null,
+          stopped: false,
+          startedAt: 1,
+          durationMs: 1200,
+          spawnToolCallId: null,
+          parentId: null,
+          workflowMeta: null,
+          children: [],
+        },
+        {
+          id: "a2a-before-final",
+          kind: "tool",
+          toolName: "traycer_a2a/traycer_send_message",
+          inputSummary: "Delegate request",
+          inputDetail: null,
+          taskTodoItems: null,
+          error: null,
+          agentMessageSend: {
+            receiverAgentId: "agent-receiver-1",
+            message: "Delegate request",
+            responseId: null,
+            expectReply: false,
+          },
+          managedCommand: null,
+          agentMessageReceipt: null,
+          isStreaming: false,
+          endState: null,
+          stopped: false,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          startedAt: 1,
+          durationMs: null,
+          parentId: null,
+          imageResults: [],
+        },
+        {
+          id: "assistant-final",
+          kind: "text",
+          markdown: "Final answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const earlierKey = deriveEarlierActivityCollapsibleKey(
+      TILE_INSTANCE_ID,
+      assistant.id,
+    );
+    const subagentRenderId = derivePromotedSubagentRenderId(
+      "subagent-before-final",
+    );
+    const subagentHeader = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentHeaderUnitId(subagentRenderId),
+    );
+    const subagentBody = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentBodyUnitId(subagentRenderId),
+    );
+    const delegatedBody = row.units.find(
+      (unit) => unit.unitId === chatFindA2ASendBodyUnitId("a2a-before-final"),
+    );
+
+    expect(subagentHeader?.owningChain).toEqual([earlierKey]);
+    expect(subagentBody?.owningChain).toEqual([
+      earlierKey,
+      deriveSubagentCollapsibleKey(TILE_INSTANCE_ID, subagentRenderId),
+    ]);
+    expect(delegatedBody?.owningChain).toEqual([
+      earlierKey,
+      deriveA2ASendCollapsibleKey(TILE_INSTANCE_ID, "a2a-before-final"),
+    ]);
   });
 
   it("indexes a workflow card's Intent/Activity/Result in the same order the card renders them", () => {
@@ -1253,9 +1370,92 @@ describe("chat find projection", () => {
     expect(countOccurrences(rowSearchText(row), "app")).toBe(2);
   });
 
-  // Guard the fix's exception: a synthesized single-special-segment row
-  // (setup-card / forked-chat-link) renders that segment's OWN anchor and no
-  // content block, so the projection must keep emitting the segment unit.
+  it("owns an intermediate assistant text unit by Earlier activity", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(34, "assistant"),
+      segments: [
+        {
+          id: "assistant-text-early",
+          kind: "text",
+          markdown: "intermediate update",
+          isStreaming: false,
+        },
+        {
+          id: "assistant-text-final",
+          kind: "text",
+          markdown: "final answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const early = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("assistant-text-early"),
+    );
+    const final = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("assistant-text-final"),
+    );
+
+    expect(early?.owningChain).toEqual([
+      deriveEarlierActivityCollapsibleKey(TILE_INSTANCE_ID, assistant.id),
+    ]);
+    expect(final?.owningChain).toEqual([]);
+  });
+
+  it("owns a hidden activity summary by its group", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(35, "assistant"),
+      segments: [
+        {
+          id: "assistant-reasoning-early",
+          kind: "reasoning",
+          markdown: "private reasoning",
+          isStreaming: false,
+          durationMs: 2100,
+        },
+        {
+          id: "assistant-text-final",
+          kind: "text",
+          markdown: "final answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const groupId = deriveActivityGroupRenderId("assistant-reasoning-early");
+    const summary = row.units.find(
+      (unit) => unit.unitId === chatFindActivityGroupSummaryUnitId(groupId),
+    );
+
+    expect(summary?.owningChain).toEqual([
+      deriveEarlierActivityCollapsibleKey(TILE_INSTANCE_ID, assistant.id),
+      deriveActivityGroupCollapsibleKey(TILE_INSTANCE_ID, groupId),
+    ]);
+  });
+
+  it("owns a text unit when a later assistant row has text", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(35, "assistant"),
+      hasLaterAssistantText: true,
+      segments: [
+        {
+          id: "assistant-text-only",
+          kind: "text",
+          markdown: "earlier row answer",
+          isStreaming: false,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+
+    expect(row.units[0]?.owningChain).toEqual([
+      deriveEarlierActivityCollapsibleKey(TILE_INSTANCE_ID, assistant.id),
+    ]);
+  });
+
   it("still projects a synthesized single forked-chat-link segment as its own unit", () => {
     const synthesized: ChatMessageModel = {
       ...makeMessage(33, "system"),

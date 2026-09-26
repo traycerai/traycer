@@ -11,6 +11,7 @@ import type {
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import type {
   ChatActiveTurn,
   ChatQueuedPromptItem,
@@ -1098,10 +1099,10 @@ describe("useRenderedMessages", () => {
       }),
       {
         type: "steer",
-        blockId: "steer:codex-retry",
+        blockId: "steer:queue-1",
         status: "completed",
         timestamp: 2002,
-        queueItemId: "queue-codex-retry",
+        queueItemId: "queue-1",
         messageId: "message-codex-retry-steer",
         mode: "safe_point",
         sender: null,
@@ -1592,6 +1593,78 @@ describe("useRenderedMessages", () => {
     });
   });
 
+  it("does not treat browser-session text as later assistant text", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        plainTextBlock("before-steer", 2001, "Before result"),
+        {
+          type: "steer",
+          blockId: "steer:queue-1",
+          status: "completed",
+          timestamp: 2002,
+          queueItemId: "queue-1",
+          messageId: "message-queue-1",
+          mode: "safe_point",
+          sender: null,
+          content: CONTENT,
+        },
+        {
+          type: "text",
+          blockId: "browser-text",
+          text: "Browser session",
+          status: "completed",
+          timestamp: 2003,
+          providerNotice: null,
+          browserSession: {
+            hostId: "host-1",
+            sessionId: "session-1",
+            tabId: "tab-1",
+            profile: "primary",
+          },
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+
+    expect(result.current[0]?.role).toBe("assistant");
+    expect(result.current[0]?.hasLaterAssistantText).toBe(false);
+  });
+
+  it("does not treat whitespace-only text as later assistant text", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        plainTextBlock("before-steer", 2001, "Before result"),
+        {
+          type: "steer",
+          blockId: "steer:queue-1",
+          status: "completed",
+          timestamp: 2002,
+          queueItemId: "queue-1",
+          messageId: "message-queue-1",
+          mode: "safe_point",
+          sender: null,
+          content: CONTENT,
+        },
+        {
+          type: "text",
+          blockId: "whitespace-text",
+          text: "  ",
+          status: "completed",
+          timestamp: 2004,
+          providerNotice: null,
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+
+    expect(result.current[0]?.role).toBe("assistant");
+    expect(result.current[0]?.hasLaterAssistantText).toBe(false);
+  });
+
   it("splits assistant output around steered user bubbles", () => {
     const content = {
       type: "doc" as const,
@@ -1606,11 +1679,19 @@ describe("useRenderedMessages", () => {
       ...assistantMessage("turn-1", 2000),
       blocks: [
         {
-          type: "text",
+          type: "reasoning",
           blockId: "before",
-          text: "Before steer",
+          content: "Before steer",
           status: "completed",
           timestamp: 2001,
+          startedAt: 2000,
+        },
+        {
+          type: "text",
+          blockId: "before-text",
+          text: "Before steer result",
+          status: "completed",
+          timestamp: 2002,
           providerNotice: null,
         },
         {
@@ -1646,6 +1727,11 @@ describe("useRenderedMessages", () => {
 
     const { result } = renderRenderedMessages({
       messages: [assistant, steered],
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        turnId: assistantTurnKey(assistant),
+      },
+      runStatus: "running",
     });
 
     expect(result.current.map((message) => message.role)).toEqual([
@@ -1654,8 +1740,11 @@ describe("useRenderedMessages", () => {
       "assistant",
     ]);
     expect(result.current[0]?.segments).toMatchObject([
-      { kind: "text", markdown: "Before steer" },
+      { kind: "reasoning", markdown: "Before steer" },
+      { kind: "text", markdown: "Before steer result" },
     ]);
+    expect(result.current[0]?.hasLaterAssistantText).toBe(true);
+    expect(result.current[0]?.turnComplete).toBe(false);
     expect(result.current[1]).toMatchObject({
       id: "message-queue-1",
       role: "user",
@@ -1666,6 +1755,8 @@ describe("useRenderedMessages", () => {
     expect(result.current[2]?.segments).toMatchObject([
       { kind: "text", markdown: "After steer" },
     ]);
+    expect(result.current[2]?.turnComplete).toBe(false);
+    expect(result.current[2]?.hasLaterAssistantText).toBe(false);
   });
 
   it("renders persisted steered user messages at the steer point", () => {
@@ -1838,8 +1929,8 @@ describe("useRenderedMessages", () => {
       blocks: [
         {
           type: "text",
-          blockId: "text-1",
-          text: "Thinking aloud",
+          blockId: "before",
+          text: "Before steer",
           status: "streaming",
           timestamp: 2001,
           providerNotice: null,
@@ -1861,12 +1952,8 @@ describe("useRenderedMessages", () => {
       ...streamingAssistant,
       blocks: [
         {
-          type: "text",
-          blockId: "text-1",
-          text: "Thinking aloud",
+          ...streamingAssistant.blocks[0],
           status: "completed",
-          timestamp: 2003,
-          providerNotice: null,
         },
         streamingAssistant.blocks[1],
       ],

@@ -2,7 +2,9 @@ import {
   useCallback,
   useLayoutEffect,
   useRef,
+  type FocusEventHandler,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,9 @@ interface LiveActivityWindowProps {
    * so the height transition has something to animate.
    */
   readonly shown: boolean;
+  readonly containerRef?: RefObject<HTMLDivElement | null>;
+  readonly onFocusCapture?: FocusEventHandler<HTMLDivElement>;
+  readonly onBlurCapture?: FocusEventHandler<HTMLDivElement>;
   readonly children: ReactNode;
 }
 
@@ -62,7 +67,8 @@ interface LiveActivityWindowProps {
  *    sized by its descendants and this transition is tracked as it runs.
  */
 export function LiveActivityWindow(props: LiveActivityWindowProps) {
-  const { shown, children } = props;
+  const { containerRef, onBlurCapture, onFocusCapture, shown, children } =
+    props;
   // Same hook `ActivityGroupSegment` reads, deliberately called twice rather
   // than lifted into a prop. Both calls take the identical `shown` value in the
   // identical commit, so they enter and leave together; keeping this one here
@@ -157,6 +163,9 @@ export function LiveActivityWindow(props: LiveActivityWindowProps) {
     // `1fr` as rows arrive, and a transition only fires on a specified-value
     // change - so rows still appear instantly.
     <div
+      ref={containerRef}
+      onFocusCapture={onFocusCapture}
+      onBlurCapture={onBlurCapture}
       data-testid="activity-live-window"
       data-shown={String(shown)}
       style={{ transitionDuration: `${LIVE_ACTIVITY_WINDOW_EXIT_MS}ms` }}

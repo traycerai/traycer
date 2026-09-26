@@ -277,6 +277,42 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSameTurn).toBe(state);
   });
 
+  it("treats hasLaterAssistantText changes as row changes", () => {
+    const base: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      hasLaterAssistantText: false,
+    };
+    const state = computeStableChatTimelineRows(
+      [base],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    const changed: ChatMessage = { ...base, hasLaterAssistantText: true };
+    const changedState = computeStableChatTimelineRows([changed], state);
+    const unchangedState = computeStableChatTimelineRows([{ ...base }], state);
+
+    expect(changedState.result[0]).toBe(changed);
+    expect(unchangedState.result[0]).toBe(base);
+    expect(unchangedState).toBe(state);
+  });
+
+  it("treats turnComplete changes as row changes", () => {
+    const base: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      turnComplete: false,
+    };
+    const state = computeStableChatTimelineRows(
+      [base],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    const changed: ChatMessage = { ...base, turnComplete: true };
+    const changedState = computeStableChatTimelineRows([changed], state);
+    const unchangedState = computeStableChatTimelineRows([{ ...base }], state);
+
+    expect(changedState.result[0]).toBe(changed);
+    expect(unchangedState.result[0]).toBe(base);
+    expect(unchangedState).toBe(state);
+  });
+
   // F11's projection seam (`withManualRungAnchor`) writes this field on the
   // ROW, so it needs the same positive/control pair `turnId` above got - the
   // compile-exhaustive field table forced its addition, but nothing had

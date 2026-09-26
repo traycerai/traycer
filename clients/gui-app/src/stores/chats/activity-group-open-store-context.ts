@@ -2,9 +2,18 @@ import { createContext, use } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 
+export type ActivityGroupTextCollapseState =
+  | "text-collapsed"
+  | "user-open-after-text";
+
 export interface ActivityGroupOpenState {
   readonly openIds: ReadonlySet<string>;
   readonly setOpen: (groupId: string, open: boolean) => void;
+  readonly textCollapseStates: ReadonlyMap<
+    string,
+    ActivityGroupTextCollapseState
+  >;
+  readonly collapseForText: (groupId: string) => void;
   /**
    * Groups that have RENDERED a nested reasoning header at least once.
    *
@@ -86,6 +95,18 @@ export function useSetActivityGroupOpen(): (
 ) => void {
   const store = useActivityGroupStoreFromContext();
   return store.getState().setOpen;
+}
+
+export function useActivityGroupTextCollapseState(
+  groupId: string,
+): ActivityGroupTextCollapseState | undefined {
+  const store = useActivityGroupStoreFromContext();
+  return useStore(store, (state) => state.textCollapseStates.get(groupId));
+}
+
+export function useCollapseActivityGroupForText(): (groupId: string) => void {
+  const store = useActivityGroupStoreFromContext();
+  return store.getState().collapseForText;
 }
 
 /**

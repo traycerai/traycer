@@ -32,6 +32,7 @@ import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-op
 import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
 // A file-change body lazy-fetches its before/after by hash and renders a themed
 // diff. Stub both so an expanded one renders synchronously, without a
@@ -86,6 +87,7 @@ const GROUP: ActivityGroupModel = {
   segments: [COMMAND_SEGMENT],
   isActive: false,
   isStreaming: false,
+  followedByText: false,
   label: "Ran 1 command",
   summary: "Ran 1 command",
   activeStartedAt: null,
@@ -132,6 +134,64 @@ describe("<ActivityGroupSegment />", () => {
     fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
 
     expect(screen.queryByText("echo hi")).toBeNull();
+  });
+
+  it("collapses an opened tool-only group when later text arrives", () => {
+    const view = (group: ActivityGroupModel, collapseOnText: boolean) => (
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ActivityGroupSegment group={group} collapseOnText={collapseOnText} />
+      </ChatExpansionTestProviders>
+    );
+    const { rerender } = render(view(GROUP, false));
+
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+    expect(screen.getByText("echo hi")).toBeTruthy();
+
+    rerender(view({ ...GROUP, followedByText: true }, true));
+
+    expect(
+      screen
+        .getByRole("button", { name: /Ran 1 command/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(screen.queryByText("echo hi")).toBeNull();
+  });
+
+  it("hides a settled collapsed group when the turn completes", () => {
+    render(
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ActivityGroupSegment
+          group={{ ...GROUP, followedByText: true }}
+          collapseOnText
+          hideWhenCollapsed
+        />
+      </ChatExpansionTestProviders>,
+    );
+
+    expect(screen.queryByRole("button", { name: /Ran 1 command/ })).toBeNull();
+    expect(screen.queryByText("echo hi")).toBeNull();
+  });
+
+  it("keeps a hidden completed group hidden when find force is active", () => {
+    render(
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ForceActivityGroupButton
+          label="Force activity group"
+          groupId={GROUP_ID}
+        />
+        <ActivityGroupSegment
+          group={{ ...GROUP, followedByText: true }}
+          collapseOnText
+          hideWhenCollapsed
+        />
+      </ChatExpansionTestProviders>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Force activity group" }),
+    );
+
+    expect(screen.queryByRole("button", { name: /Ran 1 command/ })).toBeNull();
   });
 
   it("opens through find-force and releases on manual collapse", () => {
@@ -200,6 +260,7 @@ const SOLE_REASONING_GROUP: ActivityGroupModel = {
   segments: [REASONING_SEGMENT],
   isActive: true,
   isStreaming: true,
+  followedByText: false,
   label: "Thinking",
   summary: "Thinking",
   activeStartedAt: null,
@@ -238,6 +299,401 @@ describe("<ActivityGroupSegment /> live window", () => {
     // CollapsibleContent now owns the row. Two copies would double-count in
     // find and paint a highlight the projection never counted.
     expect(screen.getAllByText("echo hi")).toHaveLength(1);
+  });
+
+  it("collapses an opened thought when assistant text follows and preserves later manual expansion", () => {
+    vi.useFakeTimers();
+    try {
+      const beforeText: ActivityGroupModel = {
+        ...SOLE_REASONING_GROUP,
+        followedByText: false,
+      };
+      const afterText: ActivityGroupModel = {
+        ...beforeText,
+        segments: [
+          {
+            ...REASONING_SEGMENT,
+            isStreaming: false,
+            durationMs: 2100,
+          },
+        ],
+        isActive: false,
+        isStreaming: false,
+        followedByText: true,
+        label: "Thought for 2s",
+        summary: "Thought for 2s",
+      };
+      const { rerender } = render(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={beforeText} />
+        </ChatExpansionTestProviders>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Thinking" }));
+      expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+
+      rerender(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={afterText} />
+        </ChatExpansionTestProviders>,
+      );
+
+      const trigger = screen.getByRole("button", { name: "Thought for 2s" });
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      act(() => {
+        vi.advanceTimersByTime(LIVE_ACTIVITY_WINDOW_EXIT_MS);
+      });
+      expect(screen.queryByText("Weighing the two approaches")).toBeNull();
+
+      fireEvent.click(trigger);
+      expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+
+      rerender(
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={afterText} />
+        </ChatExpansionTestProviders>,
+      );
+
+      expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("collapses after an unmounted row receives later text and preserves a later manual reopen", () => {
+    const store = createActivityGroupOpenStore(null, null);
+    const beforeText: ActivityGroupModel = {
+      ...SOLE_REASONING_GROUP,
+      followedByText: false,
+    };
+    const afterText: ActivityGroupModel = {
+      ...beforeText,
+      segments: [
+        {
+          ...REASONING_SEGMENT,
+          isStreaming: false,
+          durationMs: 2100,
+        },
+      ],
+      isActive: false,
+      isStreaming: false,
+      label: "Thought for 2s",
+      summary: "Thought for 2s",
+    };
+    const mount = (collapseOnText: boolean) => (
+      <ChatOpenStoreScopeProvider value="activity-group-remount-text-tile">
+        <ActivityGroupOpenStoreProvider store={store}>
+          <ChatFindForceStoreProvider tileInstanceId="activity-group-remount-text-tile">
+            <ActivityGroupSegment
+              group={afterText}
+              collapseOnText={collapseOnText}
+            />
+          </ChatFindForceStoreProvider>
+        </ActivityGroupOpenStoreProvider>
+      </ChatOpenStoreScopeProvider>
+    );
+
+    const firstMount = render(mount(false));
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+    firstMount.unmount();
+
+    const secondMount = render(mount(true));
+    expect(screen.queryByText("Weighing the two approaches")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+    secondMount.unmount();
+
+    render(mount(true));
+    expect(screen.getByText("Weighing the two approaches")).toBeTruthy();
+  });
+
+  it("moves focus from the collapsed body to the group trigger", () => {
+    const linkReasoning: ReasoningSegment = {
+      ...REASONING_SEGMENT,
+      markdown: "[Open detail](https://example.com)",
+      isStreaming: false,
+      durationMs: 2100,
+    };
+    const beforeText: ActivityGroupModel = {
+      ...SOLE_REASONING_GROUP,
+      segments: [linkReasoning],
+      isActive: false,
+      isStreaming: false,
+      label: "Thought for 2s",
+      summary: "Thought for 2s",
+    };
+    const { rerender } = render(
+      <WithTestQueryClient>
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={beforeText} />
+        </ChatExpansionTestProviders>
+      </WithTestQueryClient>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const link = screen.getByRole("link", { name: "Open detail" });
+    link.focus();
+    expect(document.activeElement).toBe(link);
+
+    rerender(
+      <WithTestQueryClient>
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment
+            group={{ ...beforeText, followedByText: true }}
+          />
+        </ChatExpansionTestProviders>
+      </WithTestQueryClient>,
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Thought for 2s" }),
+    );
+  });
+
+  it("hands focus to Earlier activity when a completed group is hidden", () => {
+    const linkReasoning: ReasoningSegment = {
+      ...REASONING_SEGMENT,
+      markdown: "[Open detail](https://example.com)",
+      isStreaming: false,
+      durationMs: 2100,
+    };
+    const beforeText: ActivityGroupModel = {
+      ...SOLE_REASONING_GROUP,
+      segments: [linkReasoning],
+      isActive: false,
+      isStreaming: false,
+      label: "Thought for 2s",
+      summary: "Thought for 2s",
+    };
+    const view = (hideWhenCollapsed: boolean) => (
+      <WithTestQueryClient>
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <div data-assistant-turn>
+            <button type="button" data-chat-intermediate-trigger="true">
+              Earlier activity
+            </button>
+            <ActivityGroupSegment
+              group={{
+                ...beforeText,
+                followedByText: hideWhenCollapsed,
+              }}
+              collapseOnText={hideWhenCollapsed}
+              hideWhenCollapsed={hideWhenCollapsed}
+            />
+          </div>
+        </ChatExpansionTestProviders>
+      </WithTestQueryClient>
+    );
+    const { rerender } = render(view(false));
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    screen.getByRole("link", { name: "Open detail" }).focus();
+
+    rerender(view(true));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Earlier activity" }),
+    );
+  });
+
+  const focusGroup: ActivityGroupModel = {
+    ...SOLE_REASONING_GROUP,
+    segments: [
+      {
+        ...REASONING_SEGMENT,
+        markdown:
+          "[First](https://example.com/first) [Second](https://example.com/second)",
+        isStreaming: false,
+        durationMs: 2100,
+      },
+    ],
+    isActive: false,
+    isStreaming: false,
+    followedByText: false,
+    label: "Thought for 2s",
+    summary: "Thought for 2s",
+  };
+  const visibleFocusGroup = (
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <div data-assistant-turn>
+          <button type="button" data-chat-intermediate-trigger="true">
+            Earlier activity
+          </button>
+          <ActivityGroupSegment group={focusGroup} />
+        </div>
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  );
+  const hiddenFocusGroup = (
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <div data-assistant-turn>
+          <button type="button" data-chat-intermediate-trigger="true">
+            Earlier activity
+          </button>
+          <ActivityGroupSegment
+            group={{ ...focusGroup, followedByText: true }}
+            collapseOnText
+            hideWhenCollapsed
+          />
+        </div>
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  );
+  const visibleFocusGroupWithoutLink = (
+    <WithTestQueryClient>
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <div data-assistant-turn>
+          <button type="button" data-chat-intermediate-trigger="true">
+            Earlier activity
+          </button>
+          <ActivityGroupSegment
+            group={{
+              ...focusGroup,
+              segments: [
+                {
+                  ...REASONING_SEGMENT,
+                  markdown: "Earlier reasoning",
+                  isStreaming: false,
+                  durationMs: 2100,
+                },
+              ],
+            }}
+          />
+        </div>
+      </ChatExpansionTestProviders>
+    </WithTestQueryClient>
+  );
+
+  it("does not reclaim focus after a null blur to the document body", async () => {
+    const { rerender } = render(visibleFocusGroup);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const link = screen.getByRole("link", { name: "First" });
+    link.focus();
+    link.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    await act(async () => {});
+    rerender(hiddenFocusGroup);
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("hands focus to Earlier activity when removal blurs with no related target", async () => {
+    const { rerender } = render(visibleFocusGroup);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const link = screen.getByRole("link", { name: "First" });
+    link.focus();
+    fireEvent.blur(link, { relatedTarget: null });
+
+    rerender(visibleFocusGroupWithoutLink);
+    await act(async () => {});
+    rerender(hiddenFocusGroup);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Earlier activity" }),
+    );
+  });
+
+  it("does not reclaim focus after a blur to a named outside target", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      const { rerender } = render(visibleFocusGroup);
+      fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+      const link = screen.getByRole("link", { name: "First" });
+      link.focus();
+      fireEvent.blur(link, { relatedTarget: outside });
+      outside.focus();
+
+      rerender(hiddenFocusGroup);
+
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("keeps the focus handoff when focus moves within the group", () => {
+    const { rerender } = render(visibleFocusGroup);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const first = screen.getByRole("link", { name: "First" });
+    const second = screen.getByRole("link", { name: "Second" });
+    first.focus();
+    fireEvent.blur(first, { relatedTarget: second });
+
+    rerender(hiddenFocusGroup);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Earlier activity" }),
+    );
+  });
+
+  it("keeps focus in a manually reopened body across later text updates", () => {
+    const linkReasoning: ReasoningSegment = {
+      ...REASONING_SEGMENT,
+      markdown: "[Open detail](https://example.com)",
+      isStreaming: false,
+      durationMs: 2100,
+    };
+    const afterText: ActivityGroupModel = {
+      ...SOLE_REASONING_GROUP,
+      segments: [linkReasoning],
+      isActive: false,
+      isStreaming: false,
+      followedByText: true,
+      label: "Thought for 2s",
+      summary: "Thought for 2s",
+    };
+    const view = (group: ActivityGroupModel) => (
+      <WithTestQueryClient>
+        <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+          <ActivityGroupSegment group={group} />
+        </ChatExpansionTestProviders>
+      </WithTestQueryClient>
+    );
+    const { rerender } = render(view(afterText));
+
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 2s" }));
+    const link = screen.getByRole("link", { name: "Open detail" });
+    link.focus();
+    expect(document.activeElement).toBe(link);
+
+    rerender(
+      view({
+        ...afterText,
+        segments: [{ ...linkReasoning, durationMs: 3100 }],
+        label: "Thought for 3s",
+        summary: "Thought for 3s",
+      }),
+    );
+
+    expect(document.activeElement).toBe(link);
+  });
+
+  it("moves focus from the exiting live window to the group trigger", () => {
+    const { rerender } = render(
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ActivityGroupSegment group={SOLE_REASONING_GROUP} />
+      </ChatExpansionTestProviders>,
+    );
+    const childTrigger = screen.getByRole("button", {
+      name: "Thinking - open in the full activity view",
+    });
+    childTrigger.focus();
+    expect(document.activeElement).toBe(childTrigger);
+
+    rerender(
+      <ChatExpansionTestProviders tileInstanceId="activity-group-test-tile">
+        <ActivityGroupSegment group={SOLE_REASONING_GROUP} collapseOnText />
+      </ChatExpansionTestProviders>,
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Thinking" }),
+    );
   });
 
   it("keeps the window mounted through its exit so the fold-away can animate, then unmounts", () => {
@@ -854,7 +1310,7 @@ describe("<ActivityGroupSegment /> live window", () => {
   // remount - the same defect, just past a threshold nobody would hit while
   // testing.
   it("keeps a header latched past the open-id cap", () => {
-    const store = createActivityGroupOpenStore(null);
+    const store = createActivityGroupOpenStore(null, null);
     const mount = (group: ActivityGroupModel) => (
       <ChatOpenStoreScopeProvider value="activity-group-cap-tile">
         <ActivityGroupOpenStoreProvider store={store}>
@@ -885,7 +1341,7 @@ describe("<ActivityGroupSegment /> live window", () => {
   // reasoning in it never renders one, so marking it is meaningless - and while
   // the set was capped, it was unrelated activity spending a real latch's budget.
   it("does not mark a group that has no reasoning header to show", () => {
-    const store = createActivityGroupOpenStore(null);
+    const store = createActivityGroupOpenStore(null, null);
     render(
       <ChatOpenStoreScopeProvider value="activity-group-mark-tile">
         <ActivityGroupOpenStoreProvider store={store}>
@@ -914,7 +1370,7 @@ describe("<ActivityGroupSegment /> live window", () => {
     // does (the registry hands the tile back its existing store, decision #17).
     // `ChatExpansionTestProviders` passes `store={null}` and would hand out a
     // fresh one, hiding the whole defect.
-    const store = createActivityGroupOpenStore(null);
+    const store = createActivityGroupOpenStore(null, null);
     const mount = (group: ActivityGroupModel) => (
       <ChatOpenStoreScopeProvider value="activity-group-remount-tile">
         <ActivityGroupOpenStoreProvider store={store}>
@@ -1042,6 +1498,7 @@ describe("<ActivityGroupSegment /> shared child ids", () => {
       segments: [SHARED_TOOL, SHARED_APPROVAL],
       isActive: false,
       isStreaming: false,
+      followedByText: false,
       label: "Ran 1 command",
       summary: "Ran 1 command",
       activeStartedAt: null,

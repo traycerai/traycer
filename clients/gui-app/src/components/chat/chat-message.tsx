@@ -193,8 +193,10 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
     >
       <AssistantMessageBody
         segments={message.segments}
+        hasLaterAssistantText={message.hasLaterAssistantText ?? false}
         backgroundToolBlockIds={backgroundToolBlockIds}
         runState={message.runState}
+        turnComplete={message.turnComplete ?? message.runState === null}
         messageId={message.id}
         elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
         turnHasOnlyAutonomousResumeSegments={
