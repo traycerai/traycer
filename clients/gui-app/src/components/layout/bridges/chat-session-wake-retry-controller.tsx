@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { subscribeWarmChatSleepOnResume } from "@/lib/chats/chat-session-resume-sleep";
 import { subscribeChatSessionWakeRetry } from "@/lib/chats/chat-session-wake-retry";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
@@ -13,11 +14,20 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * module-global registry): warm sessions outlive the gate, so the listener
  * must too, or a wake landing during a host-unavailable window is silently
  * missed and never replayed.
+ *
+ * On the installed mobile app it also keeps a long background from re-dialing
+ * warm chats nobody holds (`subscribeWarmChatSleepOnResume`): the same resume
+ * edge, the same registry, and the other half of which chats a wake reaches.
  */
 export function ChatSessionWakeRetryController() {
   const runnerHost = useRunnerHostOrNull();
   useEffect(() => {
-    return subscribeChatSessionWakeRetry(runnerHost);
+    const disposeWakeRetry = subscribeChatSessionWakeRetry(runnerHost);
+    const disposeResumeSleep = subscribeWarmChatSleepOnResume(runnerHost);
+    return () => {
+      disposeResumeSleep();
+      disposeWakeRetry();
+    };
   }, [runnerHost]);
   return null;
 }

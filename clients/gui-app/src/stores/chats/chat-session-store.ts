@@ -1039,6 +1039,15 @@ export interface ChatSessionState {
   readonly chatId: string;
   readonly connectionStatus: StreamConnectionStatus;
   /**
+   * Whether {@link sleep} closed this session's stream while keeping the
+   * store. A sleeping session reads `connectionStatus: "closed"` with no
+   * `fatalClose` - no live authority, and none lost - and holds no transport,
+   * so no wake pulse reaches it. It reconnects through `retry()`, which the
+   * registry runs when a tile next leases it; `retry()` is also what clears
+   * this.
+   */
+  readonly asleep: boolean;
+  /**
    * Set when the host terminates the `chat.subscribe` stream with a
    * `fatalError` (e.g. `CHAT_INVALID` or `CHAT_NOT_VISIBLE`, each sent under
    * its own code). Drives the tile's error state instead of an indefinite
@@ -1757,6 +1766,18 @@ export interface ChatSessionState {
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   retry: () => void;
+  /**
+   * Close this session's stream and keep its store: the transcript, the
+   * snapshot and the recovery ledgers stay, and the socket, its wake
+   * subscriptions and the host-side chat lease go.
+   *
+   * For a session nobody is looking at, across the app's background
+   * episode. The caller decides eligibility - the registry sleeps only lease-free sessions
+   * with no unsettled work - because a stream closed under a turn in progress
+   * or an unacknowledged action would lose the frames that settle it. A no-op
+   * once disposed, when no stream is open, and after a fatal close.
+   */
+  sleep: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
    * when - this chat's own transport reports itself SILENT.
@@ -9250,6 +9271,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       epicId: options.epicId,
       chatId: options.chatId,
       connectionStatus: "connecting",
+      asleep: false,
       fatalClose: null,
       snapshotLoaded: false,
       preSnapshotRetries: null,
@@ -9385,6 +9407,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         const prior = get();
         set({
           connectionStatus: "connecting",
+          asleep: false,
           steerProtocolSupported: false,
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
@@ -9418,6 +9441,28 @@ export function createChatSessionStoreWithNotificationDependencies(
           });
           throw cause;
         }
+      },
+      sleep: () => {
+        if (disposed) return;
+        if (streamClient === null) return;
+        // A fatally closed session has nothing live to release and its error
+        // is what the tile shows. Sleeping it would either erase that error or
+        // mark it asleep beside it, and a later lease would then re-dial a chat
+        // the host refused. It stays as it is until a deliberate retry.
+        if (get().fatalClose !== null) return;
+        closeStreamClient();
+        clearBufferedDeltas();
+        // `closeStreamClient` retires the stream's generation, so its own
+        // `closed` status never lands and nothing recomputes these: the same
+        // hand-retired set `retry()` and `dispose()` clear.
+        set({
+          connectionStatus: "closed",
+          asleep: true,
+          steerProtocolSupported: false,
+          draftBlobBridgeSupported: false,
+          interviewDeliveryRetryProtocolSupported: false,
+          autoPermissionModeProtocolSupported: null,
+        });
       },
       refreshMissingWorktreePaths: (update) => {
         if (disposed) return;

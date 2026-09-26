@@ -396,3 +396,53 @@ describe("subscribeChatSessionWakeRetry", () => {
     dispose();
   });
 });
+
+describe("sleeping sessions (app suspend)", () => {
+  it("retryClosedChatSessions skips a session put to sleep", () => {
+    const harness = createHarness(CHAT_ID);
+    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.handle.store.getState().sleep();
+    expect(harness.handle.store.getState().connectionStatus).toBe("closed");
+
+    const attempted = retryClosedChatSessions([harness.handle], "wake-resume");
+
+    expect(attempted).toEqual([]);
+    expect(harness.factoryRuns()).toBe(1);
+    expect(harness.handle.store.getState().asleep).toBe(true);
+    harness.handle.dispose();
+  });
+
+  it("the resume pulse leaves a slept warm session asleep", () => {
+    const runnerHost = makeRunnerHost();
+    let capturedResume: ((event: SystemResumeEvent) => void) | null = null;
+    vi.spyOn(runnerHost, "onSystemResumed").mockImplementation((listener) => {
+      capturedResume = listener;
+      return { dispose: () => undefined };
+    });
+    const fireResume = (): void => {
+      if (capturedResume === null) throw new Error("Expected resume listener");
+      capturedResume({ backgroundedForMs: 10 * 60 * 1_000 });
+    };
+    const registry = __getChatSessionRegistryForTests();
+    const harness = createHarness(CHAT_ID);
+    registry.acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-scope",
+      },
+      () => harness.handle,
+    );
+    harness.callbacks().onConnectionStatus("open", null, null);
+    registry.release(EPIC_ID, CHAT_ID, HOST_ID);
+    const dispose = subscribeChatSessionWakeRetry(runnerHost);
+
+    expect(registry.sleepIdleWarmSessions()).toBe(1);
+    fireResume();
+
+    expect(harness.factoryRuns()).toBe(1);
+    expect(harness.handle.store.getState().asleep).toBe(true);
+    dispose();
+  });
+});
