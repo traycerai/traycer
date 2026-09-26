@@ -5,7 +5,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 // A local desktop's preparation channel, not a browser inventory or a native
 // lifecycle route. The ordinary browser.sessions handshake still admits tabs.
 const textFrame = { hasBinaryPayload: z.literal(false) };
-const requestId = z.string().min(1).max(128);
+const requestId = lazySchema(() => z.string().min(1).max(128));
 
 export const browserDesktopControlOpenSchema = lazySchema(() =>
   z.object({}).strict(),
