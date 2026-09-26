@@ -460,24 +460,43 @@ export async function putDraftBlobsWithProgress(input: {
   // callers. Each digest still settles into this call's own progress count.
   const fanOut = Promise.all(
     pending.map(async (sha256) => {
-      const slot = acquireUploadSlot(hostId);
-      if (slot !== null) await slot;
-      try {
-        // Checked once the slot is held rather than only on the throw: a
-        // joined upload can be the one that discovers the host withholds the
-        // methods, and its joiner sees that only through this flag. Every
-        // digest still waiting stops at the same signal, so the remaining
-        // ones are never sent.
-        if (
-          !blobUnsupportedHosts.has(hostId) &&
-          (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) &&
-          !settled
-        ) {
-          confirmed.push(sha256);
+      let acknowledged = false;
+      // A flight already going up for this digest is joined WITHOUT a slot:
+      // the slot is the initiator's for the flight's duration, and a joiner
+      // holding a second one would charge the host's limit for a request it
+      // never sends - three joiners of one flight would fill the gate and
+      // park a fourth caller's genuinely new digest behind them.
+      const joined = joinBlobUploadInFlight(hostId, sha256, ownerUserId);
+      if (joined !== null) {
+        acknowledged = await joined;
+      } else {
+        const slot = acquireUploadSlot(hostId);
+        if (slot !== null) await slot;
+        try {
+          // Re-checked once the slot is held, all three: while this digest
+          // waited for a slot, another caller's flight for it may have
+          // finished (the memo now holds it - a second multi-megabyte upload
+          // of a confirmed digest is the waste the memo exists to prevent)
+          // or may still be up (joined inside `joinOrStartBlobUpload`), and
+          // a sibling may have learned the host withholds the method - a
+          // joined upload can be the one that discovers that, and its joiner
+          // sees it only through this flag. Every digest still waiting stops
+          // at the same signal, so the remaining ones are never sent.
+          if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
+            acknowledged = true;
+          } else if (!blobUnsupportedHosts.has(hostId)) {
+            acknowledged = await joinOrStartBlobUpload(
+              hostId,
+              client,
+              sha256,
+              ownerUserId,
+            );
+          }
+        } finally {
+          releaseUploadSlot(hostId);
         }
-      } finally {
-        releaseUploadSlot(hostId);
       }
+      if (acknowledged && !settled) confirmed.push(sha256);
       if (blobUnsupportedHosts.has(hostId)) resolveVerdict();
       if (settled) return;
       completed += 1;
@@ -555,9 +574,9 @@ function joinOrStartBlobUpload(
   sha256: string,
   ownerUserId: string | null,
 ): Promise<boolean> {
+  const joined = joinBlobUploadInFlight(hostId, sha256, ownerUserId);
+  if (joined !== null) return joined;
   const key = blobUploadKey(sha256, ownerUserId);
-  const joined = inFlightBlobUploads.get(hostId)?.get(key);
-  if (joined !== undefined) return joined;
   // Never rejects - every failure is contained into `false` - so the cleanup
   // below and the joiners above need no rejection handling of their own.
   const flight = uploadOneDraftBlob(hostId, client, sha256, ownerUserId);
@@ -577,6 +596,18 @@ function joinOrStartBlobUpload(
     if (live.size === 0) inFlightBlobUploads.delete(hostId);
   });
   return flight;
+}
+
+/** The flight already going up for `(host, digest, owner)`, or `null`. */
+function joinBlobUploadInFlight(
+  hostId: string,
+  sha256: string,
+  ownerUserId: string | null,
+): Promise<boolean> | null {
+  return (
+    inFlightBlobUploads.get(hostId)?.get(blobUploadKey(sha256, ownerUserId)) ??
+    null
+  );
 }
 
 /** Resolves `true` when the host acknowledged holding the digest. Never rejects. */

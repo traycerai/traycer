@@ -967,6 +967,41 @@ describe("draft blob transport", () => {
     expect(confirmed.length).toBeLessThan(hashes.length);
   });
 
+  it("a caller joining a flight that holds the gate's last slots neither takes a slot nor re-uploads the digest once the flight lands", async () => {
+    // Call A fills the gate with three distinct digests. Call B asks for one
+    // of them while they are up: it must JOIN that flight - not queue for a
+    // slot behind the flight, which would release only when the flight's
+    // cleanup has already forgotten the in-flight entry, so the waiter would
+    // then start a second multi-megabyte upload of a digest the memo now
+    // holds. Under the fix B issues no request of its own, ever.
+    const x = await putImage(pngBytesTagged(230));
+    const y = await putImage(pngBytesTagged(231));
+    const z = await putImage(pngBytesTagged(232));
+    const { client, releaseOpen, peakConcurrent, totalCalls } =
+      deferredTrackingClient();
+
+    const first = putDraftBlobs(HOST, client, [x, y, z], OWNER);
+    for (let index = 0; index < 20 && peakConcurrent() < 3; index += 1) {
+      await tick();
+    }
+    expect(draftBlobUploadsInFlight(HOST)).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+
+    const second = putDraftBlobs(HOST, client, [x], OWNER);
+    await tick();
+    // Joining charged nothing: the gate still holds exactly the three flights.
+    expect(draftBlobUploadsInFlight(HOST)).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+
+    for (let wave = 0; wave < 10; wave += 1) {
+      releaseOpen();
+      await tick();
+    }
+    expect([...(await first)].sort()).toEqual([x, y, z].sort());
+    expect(await second).toEqual([x]);
+    // Three requests in total: B's answer came from A's flight.
+    expect(totalCalls()).toBe(3);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+  });
+
   it("returns at the capability verdict without waiting for a delayed sibling", async () => {
     // Three distinct digests, one host: the FIRST request answered rejects as
     // "old host" and the other two are parked on a promise this test controls,
@@ -983,10 +1018,21 @@ describe("draft blob transport", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    // The refusal is held until BOTH siblings have entered their requests:
+    // each digest acquires its slot before its bytes are read and encoded,
+    // so a refusal thrown on entry could land while the siblings still hold
+    // slots but have not reached `requestWithOptions` - and the "still on the
+    // wire" assertions below would then be about encodes, not requests.
+    let refuse: () => void = () => undefined;
+    const firstRefusal = new Promise<never>((_resolve, reject) => {
+      refuse = () => {
+        reject(unsupportedError("drafts.putBlob"));
+      };
+    });
     const requestWithOptions = (async (_method, _params) => {
       calls += 1;
       if (calls === 1) {
-        throw unsupportedError("drafts.putBlob");
+        await firstRefusal;
       }
       await gate;
       return { ok: true as const };
@@ -1010,6 +1056,11 @@ describe("draft blob transport", () => {
     }).then((value) => {
       resolved = value;
     });
+
+    await vi.waitFor(() => {
+      expect(calls).toBe(3);
+    });
+    refuse();
 
     // Bounded on the call actually resolving - a regression that awaits the
     // hanging siblings would leave `resolved` null forever and this times out
